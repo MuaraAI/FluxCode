@@ -7,7 +7,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
-    v_flex, Selectable, Sizable,
+    v_flex, Sizable,
 };
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,10 @@ impl Workbench {
     }
 
     pub(crate) fn render_settings(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let close_btn = self.block_button("settings-close", "CLOSE", crate::ui::Kind::Plain, cx, |this, _, cx| {
+            this.settings_open = false;
+            cx.notify();
+        });
         let s = &self.settings;
         let row = |title: &'static str, desc: &'static str, control: AnyElement| {
             h_flex()
@@ -102,8 +106,8 @@ impl Workbench {
                 .max_w(px(720.))
                 .py_3()
                 .gap_4()
-                .border_b_1()
-                .border_color(c(theme::BORDER))
+                .border_b_2()
+                .border_color(c(theme::INK))
                 .child(
                     v_flex()
                         .flex_1()
@@ -127,16 +131,35 @@ impl Workbench {
                 })))
                 .into_any_element()
         };
+        // A chunky block switch; the knob slides with a spring.
         let toggle = |id: &'static str, on: bool, f: fn(&mut Workbench)| {
-            Button::new(id)
-                .label(if on { "On" } else { "Off" })
-                .xsmall()
-                .selected(on)
-                .when_on(on)
-                .on_click(cx.listener(move |this, _, w, cx| {
-                    f(this);
-                    this.apply_settings(w, cx);
-                }))
+            h_flex()
+                .gap_2()
+                .child(div().w(px(28.)).text_xs().font_weight(FontWeight::EXTRA_BOLD).text_color(c(if on { theme::ACCENT } else { theme::FG_DIM })).child(if on { "ON" } else { "OFF" }))
+                .child(
+                    div()
+                        .id(id)
+                        .w(px(46.))
+                        .h(px(24.))
+                        .relative()
+                        .cursor_pointer()
+                        .bg(c(if on { theme::ACCENT } else { theme::BG_ELEVATED }))
+                        .border_2()
+                        .border_color(c(theme::INK))
+                        .shadow(crate::ui::hard_shadow(2., theme::INK))
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(2.))
+                                .size(px(16.))
+                                .bg(c(if on { theme::INK } else { theme::FG_MUTED }))
+                                .with_spring(id, crate::ui::spring().to(if on { 1.0f32 } else { 0.0 }), |el, v| el.left(px(2. + 22. * v))),
+                        )
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            f(this);
+                            this.apply_settings(w, cx);
+                        })),
+                )
                 .into_any_element()
         };
         v_flex()
@@ -151,11 +174,21 @@ impl Workbench {
                     .w_full()
                     .max_w(px(720.))
                     .pb_3()
-                    .child(div().flex_1().text_xl().text_color(c(theme::FG_STRONG)).child("Settings"))
-                    .child(Button::new("settings-close").label("Close").ghost().xsmall().on_click(cx.listener(|this, _, _, cx| {
-                        this.settings_open = false;
-                        cx.notify();
-                    }))),
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .bg(c(theme::ACCENT))
+                            .border_2()
+                            .border_color(c(theme::INK))
+                            .shadow(crate::ui::hard_shadow(4., theme::INK))
+                            .text_color(c(theme::INK))
+                            .text_xl()
+                            .font_weight(FontWeight::BLACK)
+                            .child("SETTINGS"),
+                    )
+                    .child(div().flex_1())
+                    .child(close_btn),
             )
             .child(row("Editor: Font Size", "Font size of the editor and terminal, in pixels.", stepper("fs", format!("{}", s.font_size), |w, d| {
                 w.settings.font_size = (w.settings.font_size + d as f32).clamp(8., 32.)
@@ -179,16 +212,6 @@ impl Workbench {
                     .child(format!("Stored in {}", config_dir().join("settings.json").display())),
             )
             .into_any_element()
-    }
-}
-
-trait WhenOn {
-    fn when_on(self, on: bool) -> Self;
-}
-
-impl WhenOn for Button {
-    fn when_on(self, on: bool) -> Self {
-        if on { self.primary() } else { self }
     }
 }
 

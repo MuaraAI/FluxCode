@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "fluxcode-gpui"
-version = "0.6.0-dev.2026-11-07-1935"
+version = "0.6.0-dev.2026-11-07-2000"
 dependencies = [
  "anyhow",
  "embed-resource",

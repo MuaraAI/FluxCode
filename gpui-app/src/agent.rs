@@ -517,7 +517,7 @@ impl Workbench {
             .pb_2()
             .gap_2()
             .text_xs()
-            .child(div().size(px(8.)).rounded_full().bg(c(dot)))
+            .child(div().size(px(10.)).bg(c(dot)).border_1().border_color(c(theme::INK)))
             .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
             .when(a.status == Status::Busy, |h| {
                 h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
@@ -538,14 +538,16 @@ impl Workbench {
             );
         }
         if let Status::Error(e) = &a.status {
-            log = log.child(div().p_2().rounded(px(4.)).bg(c(0x3a1d1d)).text_xs().text_color(c(0xff7b72)).child(e.clone()));
+            log = log.child(div().p_2().border_2().border_color(c(theme::PINK)).bg(c(0x2a1520)).text_xs().text_color(c(0xff7b72)).child(e.clone()));
         }
         for (i, item) in a.items.iter().enumerate() {
             log = log.child(match item {
                 Item::User(t) => div()
                     .p_2()
-                    .rounded(px(6.))
                     .bg(c(theme::BG_ELEVATED))
+                    .border_2()
+                    .border_color(c(theme::ACCENT))
+                    .shadow(crate::ui::hard_shadow(3., theme::INK))
                     .text_sm()
                     .text_color(c(theme::FG_STRONG))
                     .child(t.clone())
@@ -568,9 +570,9 @@ impl Workbench {
                         .gap_2()
                         .px_2()
                         .py_1()
-                        .rounded(px(4.))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
+                        .bg(c(theme::BG_ELEVATED))
+                        .border_2()
+                        .border_color(c(theme::INK))
                         .text_xs()
                         .child(div().text_color(c(col)).child(mark))
                         .child(div().truncate().text_color(c(theme::FG)).child(title.clone()))
@@ -601,9 +603,9 @@ impl Workbench {
                 .m_3()
                 .p_2()
                 .gap_2()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(0xe5b33d))
+                .border_2()
+                .border_color(c(theme::ACCENT))
+                .shadow(crate::ui::hard_shadow(4., theme::INK))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
                 .child(div().text_color(c(theme::FG_STRONG)).child(format!("Allow: {}?", p.title)))
@@ -621,9 +623,9 @@ impl Workbench {
                 .mb_2()
                 .p_2()
                 .gap_1()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(theme::BORDER))
+                .border_2()
+                .border_color(c(theme::INK))
+                .bg(c(theme::BG_ELEVATED))
                 .text_xs()
                 .child(
                     h_flex()

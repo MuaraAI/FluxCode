@@ -141,14 +141,18 @@ impl Workbench {
             let on = this.panel_tab == which;
             div()
                 .id(id)
-                .px_2()
-                .h_full()
+                .px_3()
+                .h(px(22.))
                 .flex()
                 .items_center()
                 .text_xs()
-                .border_b_1()
-                .border_color(if on { c(theme::FG_STRONG) } else { transparent_black() })
-                .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                .font_weight(FontWeight::EXTRA_BOLD)
+                .cursor_pointer()
+                .border_2()
+                .border_color(if on { c(theme::INK) } else { transparent_black() })
+                .when(on, |d| d.bg(c(theme::ACCENT)).shadow(crate::ui::hard_shadow(2., theme::INK)))
+                .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                .text_color(if on { c(theme::INK) } else { c(theme::FG_MUTED) })
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.panel_tab = which;
@@ -160,9 +164,12 @@ impl Workbench {
             PanelTab::Output => self.out_proc.is_some(),
         };
         let header = h_flex()
-            .h(px(32.))
+            .h(px(36.))
             .px_3()
-            .gap_3()
+            .gap_2()
+            .flex_none()
+            .border_b_2()
+            .border_color(c(theme::INK))
             .child(tab("p-term", "TERMINAL", PanelTab::Terminal, self, cx))
             .child(tab("p-out", "OUTPUT", PanelTab::Output, self, cx))
             .child(div().flex_1())
@@ -196,7 +203,7 @@ impl Workbench {
                         let col = match l.kind {
                             LineKind::Normal => theme::FG,
                             LineKind::Err => 0xff7b72,
-                            LineKind::Cmd => 0x82bfff,
+                            LineKind::Cmd => theme::ACCENT,
                             LineKind::Info => theme::FG_DIM,
                         };
                         div().h(px(18.)).px_3().whitespace_nowrap().text_color(c(col)).child(l.text.clone())
@@ -212,8 +219,8 @@ impl Workbench {
         v_flex()
             .size_full()
             .bg(c(theme::BG_EDITOR))
-            .border_t_1()
-            .border_color(c(theme::BORDER))
+            .border_t_2()
+            .border_color(c(theme::INK))
             .child(header)
             .child(list)
             .when(self.panel_tab == PanelTab::Terminal, |v| {
@@ -226,7 +233,8 @@ impl Workbench {
                         .text_size(px(13.))
                         .child(
                             div()
-                                .text_color(c(0x82bfff))
+                                .text_color(c(theme::ACCENT))
+                                .font_weight(FontWeight::BOLD)
                                 .child(if self.term_proc.is_some() { "stdin>".to_string() } else { format!("{}>", self.term_cwd.display()) }),
                         )
                         .child(div().flex_1().child(Input::new(&self.term_input).appearance(false).small())),

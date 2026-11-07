@@ -24,12 +24,9 @@ impl Workbench {
                 .text_sm()
                 .text_color(c(theme::FG_MUTED))
                 .child("You have not yet opened a folder.")
-                .child(
-                    Button::new("open-folder")
-                        .primary()
-                        .label("Open Folder")
-                        .on_click(cx.listener(|_, _, w, cx| w.dispatch_action(Box::new(OpenFolder), cx))),
-                )
+                .child(self.block_button("x-open-folder", "OPEN FOLDER", crate::ui::Kind::Primary, cx, |_, w, cx| {
+                    w.dispatch_action(Box::new(OpenFolder), cx)
+                }))
                 .into_any_element();
         }
         let view = cx.entity();
@@ -56,10 +53,15 @@ impl Workbench {
                 let (txt, col) = files::badge(&item.label);
                 div()
                     .ml(px(16.))
-                    .w(px(22.))
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
+                    .min_w(px(24.))
+                    .px(px(2.))
+                    .flex()
+                    .justify_center()
+                    .text_size(px(8.))
+                    .font_weight(FontWeight::EXTRA_BOLD)
                     .text_color(c(col))
+                    .border_1()
+                    .border_color(c(col))
                     .child(txt)
                     .into_any_element()
             };
@@ -68,6 +70,8 @@ impl Workbench {
                 .h(px(22.))
                 .px_1()
                 .pl(px(12.) * entry.depth() + px(6.))
+                .border_l_2()
+                .border_color(if is_open || is_sel { c(theme::ACCENT) } else { transparent_black() })
                 .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
                 .child(h_flex().gap_1().text_color(c(theme::FG)).child(lead).child(item.label.clone()))
                 .on_click({
@@ -116,10 +120,12 @@ impl Workbench {
         };
         let ask_name = !matches!(op, PendingOp::Delete(_));
         v_flex()
+            .m_2()
             .p_2()
             .gap_2()
-            .border_b_1()
-            .border_color(c(theme::BORDER))
+            .border_2()
+            .border_color(c(if matches!(op, PendingOp::Delete(_)) { theme::PINK } else { theme::ACCENT }))
+            .shadow(crate::ui::hard_shadow(3., theme::INK))
             .bg(c(theme::BG_ELEVATED))
             .text_xs()
             .child(label)

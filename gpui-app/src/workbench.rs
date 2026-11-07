@@ -6,6 +6,7 @@ use crate::core;
 use crate::files;
 use crate::proc::{ProcEvent, Procs};
 use crate::theme::{self, c};
+use crate::ui;
 use futures::StreamExt;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
@@ -13,9 +14,8 @@ use gpui_kit::component::{
     input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
     menu::{DropdownMenu, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
-    status_bar::StatusBar,
     tree::TreeState,
-    v_flex, Disableable, Icon, IconName, Sizable, TitleBar,
+    v_flex, Icon, IconName, Sizable, TitleBar,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::cell::RefCell;
@@ -156,6 +156,8 @@ pub struct Workbench {
     pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
     #[cfg(not(feature = "embedded-preview"))]
     pub(crate) preview: Option<((), String)>,
+    /// Element under the mouse, for hover lift animations.
+    pub(crate) hovered: Option<SharedString>,
     _subs: Vec<Subscription>,
 }
 
@@ -246,6 +248,7 @@ impl Workbench {
             github: crate::github::load(),
             github_input,
             preview: None,
+            hovered: None,
             _subs: subs,
         };
         let restore = root.is_none() && open.is_empty();
@@ -586,13 +589,14 @@ impl Workbench {
             .dropdown_menu(move |menu, _, _| items(menu.min_w(px(220.))))
     }
 
-    fn render_title_bar(&self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render_title_bar(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let folder = self
             .root
             .as_deref()
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "FluxCode".into());
+            .unwrap_or_else(|| "no folder open".into());
+        let hovered = self.is_hovered("cmd-center");
         TitleBar::new().child(
             h_flex()
                 .w_full()
@@ -601,7 +605,27 @@ impl Workbench {
                 .gap_1()
                 .text_xs()
                 .text_color(c(theme::FG_MUTED))
-                .child(div().px_1().text_color(c(theme::ACCENT)).font_weight(FontWeight::BOLD).child("⚡"))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .mr_2()
+                        .child(
+                            div()
+                                .size(px(20.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(c(theme::ACCENT))
+                                .border_2()
+                                .border_color(c(theme::INK))
+                                .shadow(ui::hard_shadow(2., theme::INK))
+                                .text_color(c(theme::INK))
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::EXTRA_BOLD)
+                                .child("F"),
+                        )
+                        .child(div().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::EXTRA_BOLD).child("FLUXCODE")),
+                )
                 .child(Self::render_menu("m-file", "File", |m| {
                     m.menu("Open File...", Box::new(OpenFile))
                         .menu("Open Folder...", Box::new(OpenFolder))
@@ -651,86 +675,101 @@ impl Workbench {
                 .child(div().flex_1())
                 .child(
                     h_flex()
+                        .id("cmd-center")
                         .w(px(380.))
                         .h(px(24.))
-                        .justify_center()
-                        .rounded(px(6.))
-                        .bg(c(theme::BG_ELEVATED))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
+                        .px_2()
                         .gap_2()
-                        .child(Icon::new(IconName::Search).xsmall())
-                        .child(folder),
+                        .bg(c(if hovered { theme::BG_HOVER } else { theme::BG_SIDE }))
+                        .border_2()
+                        .border_color(c(if hovered { theme::ACCENT } else { theme::BORDER_STRONG }))
+                        .shadow(ui::hard_shadow(2., theme::INK))
+                        .on_hover(self.hover_cb("cmd-center".into(), cx))
+                        .on_click(cx.listener(|this, _, w, cx| this.on_find_in_files(&FindInFiles, w, cx)))
+                        .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::ACCENT)))
+                        .child(div().flex_1().text_color(c(theme::FG)).child(folder))
+                        .child(div().text_color(c(theme::FG_DIM)).child("Ctrl+Shift+F")),
                 )
                 .child(div().flex_1()),
         )
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
-            let active = this.sidebar_open && this.view == view;
+        let item = |id: &'static str, icon: IconName, active: bool, this: &Self, cx: &mut Context<Self>| {
+            let hovered = this.is_hovered(id);
             div()
                 .id(id)
-                .w_full()
-                .h(px(44.))
+                .size(px(38.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .border_l_2()
-                .border_color(if active { c(theme::FG_STRONG) } else { transparent_black() })
-                .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_DIM) })
-                .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                .child(Icon::new(icon).size(px(22.)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.view == view && this.sidebar_open {
-                        this.sidebar_open = false;
-                    } else {
-                        this.view = view;
-                        this.sidebar_open = true;
-                    }
-                    cx.notify();
-                }))
+                .cursor_pointer()
+                .border_2()
+                .when(active, |d| {
+                    d.bg(c(theme::ACCENT)).border_color(c(theme::INK)).text_color(c(theme::INK))
+                })
+                .when(!active, |d| {
+                    d.border_color(if hovered { c(theme::BORDER_STRONG) } else { transparent_black() })
+                        .bg(if hovered { c(theme::BG_ELEVATED) } else { transparent_black() })
+                        .text_color(if hovered { c(theme::FG_STRONG) } else { c(theme::FG_DIM) })
+                })
+                .on_hover(this.hover_cb(id.into(), cx))
+                .child(Icon::new(icon).size(px(20.)))
+                .with_spring(id, ui::spring().to(if hovered || active { 1.0f32 } else { 0.0 }), |el, v| {
+                    el.relative().top(px(-2. * v)).left(px(-2. * v)).shadow(ui::hard_shadow(3. * v, theme::INK))
+                })
+        };
+        let view_item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
+            let active = this.sidebar_open && this.view == view && !this.settings_open;
+            div().id((id, 0usize)).py_1().child(item(id, icon, active, this, cx)).on_click(cx.listener(move |this, _, _, cx| {
+                if this.view == view && this.sidebar_open && !this.settings_open {
+                    this.sidebar_open = false;
+                } else {
+                    this.view = view;
+                    this.sidebar_open = true;
+                    this.settings_open = false;
+                }
+                cx.notify();
+            }))
         };
         v_flex()
-            .w(px(48.))
+            .w(px(56.))
             .h_full()
+            .items_center()
+            .pt_2()
             .bg(c(theme::BG_TITLE))
-            .border_r_1()
-            .border_color(c(theme::BORDER))
-            .child(item("ab-explorer", IconName::FolderOpen, SideView::Explorer, self, cx))
-            .child(item("ab-search", IconName::Search, SideView::Search, self, cx))
-            .child(item("ab-run", IconName::Play, SideView::Run, self, cx))
-            .child(item("ab-agent", IconName::Bot, SideView::Agent, self, cx))
+            .border_r_2()
+            .border_color(c(theme::INK))
+            .child(view_item("ab-explorer", IconName::FolderOpen, SideView::Explorer, self, cx))
+            .child(view_item("ab-search", IconName::Search, SideView::Search, self, cx))
+            .child(view_item("ab-run", IconName::Play, SideView::Run, self, cx))
+            .child(view_item("ab-agent", IconName::Bot, SideView::Agent, self, cx))
             .child(div().flex_1())
             .child(
                 div()
-                    .id("ab-settings")
-                    .h(px(44.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(if self.settings_open { c(theme::FG_STRONG) } else { c(theme::FG_DIM) })
-                    .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                    .child(Icon::new(IconName::Settings).size(px(22.)))
+                    .id(("ab-settings", 0usize))
+                    .pb_3()
+                    .child(item("ab-settings", IconName::Settings, self.settings_open, self, cx))
                     .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx))),
             )
     }
 
     fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let title = match self.view {
-            SideView::Explorer => "EXPLORER",
-            SideView::Search => "SEARCH",
-            SideView::Run => "RUN",
-            SideView::Agent => "OPENCODE",
+        let (title, color) = match self.view {
+            SideView::Explorer => ("EXPLORER", theme::ACCENT),
+            SideView::Search => ("SEARCH", theme::BLUE),
+            SideView::Run => ("RUN", theme::GREEN),
+            SideView::Agent => ("OPENCODE", theme::PINK),
         };
         let header = h_flex()
-            .h(px(35.))
-            .px_4()
-            .gap_1()
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(c(theme::FG_MUTED))
-            .child(div().flex_1().child(title))
+            .h(px(38.))
+            .px_3()
+            .gap_2()
+            .flex_none()
+            .border_b_2()
+            .border_color(c(theme::INK))
+            .child(div().size(px(10.)).bg(c(color)).border_1().border_color(c(theme::INK)))
+            .child(div().flex_1().text_xs().font_weight(FontWeight::EXTRA_BOLD).text_color(c(theme::FG_STRONG)).child(title))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
                 h.child(tool_button("x-newfile", IconName::Plus, "New File", cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
                     .child(tool_button("x-newdir", IconName::FolderClosed, "New Folder", cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
@@ -742,7 +781,14 @@ impl Workbench {
             SideView::Run => self.render_run_view(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
-        v_flex().size_full().bg(c(theme::BG_SIDE)).child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        v_flex()
+            .size_full()
+            .bg(c(theme::BG_SIDE))
+            .border_r_2()
+            .border_color(c(theme::INK))
+            .child(header)
+            .child(ui::enter(div().flex_1().min_h_0().size_full().child(body), ("side", self.view as usize), -14., 0., 260))
+            .into_any_element()
     }
 
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -751,18 +797,14 @@ impl Workbench {
             .p_3()
             .gap_3()
             .text_sm()
-            .child(
-                Button::new("run-file")
-                    .primary()
-                    .label(match &file {
-                        Some(f) => format!("Run {f}"),
-                        None => "Run File".into(),
-                    })
-                    .disabled(file.is_none())
-                    .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx))),
-            )
+            .child(match &file {
+                Some(f) => self
+                    .block_button("run-file", format!("▶  RUN {f}"), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
+                    .into_any_element(),
+                None => div().text_xs().text_color(c(theme::FG_DIM)).child("Open a file to run it.").into_any_element(),
+            })
             .when(self.out_proc.is_some(), |v| {
-                v.child(Button::new("stop-run").label("Stop").on_click(cx.listener(|this, _, w, cx| this.on_stop_run(&StopRun, w, cx))))
+                v.child(self.block_button("stop-run", "■  STOP", ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
             })
             .child(
                 div()
@@ -776,15 +818,17 @@ impl Workbench {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .id("tabs")
-            .h(px(35.))
+            .h(px(38.))
             .w_full()
             .flex_none()
             .bg(c(theme::BG_SIDE))
-            .border_b_1()
-            .border_color(c(theme::BORDER))
+            .border_b_2()
+            .border_color(c(theme::INK))
             .overflow_x_scroll()
             .children(self.docs.iter().enumerate().map(|(ix, d)| {
                 let active = self.active == Some(ix);
+                let key: SharedString = format!("tab-{ix}").into();
+                let hovered = self.is_hovered(&key);
                 let (txt, col) = files::badge(&d.name);
                 h_flex()
                     .id(("tab", ix))
@@ -793,26 +837,47 @@ impl Workbench {
                     .gap_2()
                     .flex_none()
                     .text_sm()
-                    .border_r_1()
-                    .border_color(c(theme::BORDER))
+                    .border_r_2()
+                    .border_color(c(theme::INK))
                     .relative()
+                    .cursor_pointer()
+                    .on_hover(self.hover_cb(key, cx))
                     .when(active, |s| {
-                        s.bg(c(theme::BG_EDITOR))
-                            .child(div().absolute().top_0().left_0().right_0().h(px(1.)).bg(c(theme::ACCENT)))
+                        s.bg(c(theme::BG_EDITOR)).font_weight(FontWeight::BOLD).child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .h(px(3.))
+                                .bg(c(theme::ACCENT))
+                                .with_animation(("tab-bar", ix), Animation::new(std::time::Duration::from_millis(240)).with_easing(ease_out_quint()), |el, t| {
+                                    el.w(relative(t))
+                                }),
+                        )
                     })
+                    .when(!active && hovered, |s| s.bg(c(theme::BG_HOVER)))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                    .child(div().text_size(px(9.)).font_weight(FontWeight::BOLD).text_color(c(col)).child(txt))
+                    .child(
+                        div()
+                            .px_1()
+                            .text_size(px(9.))
+                            .font_weight(FontWeight::EXTRA_BOLD)
+                            .text_color(c(col))
+                            .border_1()
+                            .border_color(c(col))
+                            .child(txt),
+                    )
                     .child(d.name.clone())
                     .child(
                         div()
                             .id(("tab-close", ix))
-                            .w(px(16.))
+                            .size(px(18.))
                             .flex()
+                            .items_center()
                             .justify_center()
-                            .rounded(px(3.))
-                            .text_color(c(theme::FG_MUTED))
-                            .hover(|s| s.bg(c(theme::BG_ELEVATED)))
-                            .child(if d.dirty { "●" } else { "×" })
+                            .text_color(if d.dirty { c(theme::ACCENT) } else { c(theme::FG_MUTED) })
+                            .hover(|s| s.bg(c(theme::PINK)).text_color(c(theme::INK)))
+                            .child(if d.dirty { "●" } else { "✕" })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close(ix, window, cx);
@@ -841,19 +906,52 @@ impl Workbench {
                     ),
                 )
                 .into_any_element(),
-            None => v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .bg(c(theme::BG_EDITOR))
-                .child(div().text_size(px(64.)).text_color(c(0x26282d)).font_weight(FontWeight::BOLD).child("FluxCode"))
-                .child(shortcut("Open Folder", "Ctrl+K Ctrl+O"))
-                .child(shortcut("Open File", "Ctrl+O"))
-                .child(shortcut("Find in Files", "Ctrl+Shift+F"))
-                .child(shortcut("Toggle Terminal", "Ctrl+`"))
-                .child(shortcut("Run File", "F5"))
-                .into_any_element(),
+            None => {
+                let logo = div()
+                    .px_6()
+                    .py_3()
+                    .bg(c(theme::ACCENT))
+                    .border_2()
+                    .border_color(c(theme::INK))
+                    .shadow(ui::hard_shadow(8., theme::INK))
+                    .text_color(c(theme::INK))
+                    .text_size(px(48.))
+                    .font_weight(FontWeight::BLACK)
+                    .child("FLUXCODE")
+                    .with_animation(
+                        "logo-drop",
+                        Animation::new(std::time::Duration::from_millis(700)).with_easing(ui::ease_out_back),
+                        |el, t| el.relative().top(px(-40. * (1. - t))).opacity(t.clamp(0., 1.)),
+                    );
+                v_flex()
+                    .size_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_6()
+                    .bg(c(theme::BG_EDITOR))
+                    .child(logo)
+                    .child(div().text_sm().text_color(c(theme::FG_MUTED)).child("Lightweight. Native. One process."))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(self.block_button("w-open-folder", "OPEN FOLDER", ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
+                            .child(self.block_button("w-open-file", "OPEN FILE", ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                    )
+                    .child(ui::enter(
+                        v_flex()
+                            .gap_2()
+                            .child(shortcut("Find in Files", "Ctrl+Shift+F"))
+                            .child(shortcut("Toggle Terminal", "Ctrl+`"))
+                            .child(shortcut("Run File", "F5"))
+                            .child(shortcut("OpenCode", "Ctrl+Shift+A"))
+                            .child(shortcut("Settings", "Ctrl+,")),
+                        "welcome-keys",
+                        0.,
+                        16.,
+                        600,
+                    ))
+                    .into_any_element()
+            }
         }
     }
 
@@ -867,21 +965,58 @@ impl Workbench {
             None => (String::new(), ""),
         };
         let crlf = self.active.map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
-        let item = |s: SharedString| div().px_2().child(s);
-        StatusBar::new()
-            .left(
+        let running = self.out_proc.is_some() || self.term_proc.is_some();
+        let seg = |s: SharedString| div().h_full().px_2().flex().items_center().border_l_2().border_color(c(theme::INK)).child(s);
+        h_flex()
+            .h(px(26.))
+            .w_full()
+            .flex_none()
+            .bg(c(theme::BG_TITLE))
+            .border_t_2()
+            .border_color(c(theme::INK))
+            .text_xs()
+            .text_color(c(theme::FG_MUTED))
+            .child(
                 div()
-                    .id("sb-panel")
-                    .px_2()
-                    .child(if self.out_proc.is_some() { "▶ running" } else { "⌨ Terminal" })
+                    .id("sb-state")
+                    .h_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .bg(c(if running { theme::GREEN } else { theme::ACCENT }))
+                    .text_color(c(theme::INK))
+                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .cursor_pointer()
+                    .child(if running { "▶ RUNNING" } else { "■ READY" })
                     .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
             )
-            .left(item(self.status.clone()))
-            .right(item(pos.into()))
-            .right(item(crlf.into()))
-            .right(item(if lang.is_empty() { "".into() } else { "UTF-8".into() }))
-            .right(item(lang.into()))
-            .right(item("GPUI".into()))
+            .child(
+                div()
+                    .px_2()
+                    .flex_1()
+                    .truncate()
+                    .text_color(c(theme::FG))
+                    .child(self.status.clone())
+                    .with_animation(ElementId::Name(format!("status-{}", self.status).into()), Animation::new(std::time::Duration::from_millis(900)), |el, t| {
+                        el.text_color(gpui_kit::Hsla::from(rgb(theme::ACCENT)).blend(gpui_kit::Hsla::from(rgb(theme::FG)).opacity(t)))
+                    }),
+            )
+            .when(!pos.is_empty(), |h| {
+                h.child(seg(pos.into())).child(seg(crlf.into())).child(seg("UTF-8".into())).child(seg(lang.into()))
+            })
+            .child(
+                div()
+                    .h_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .bg(c(theme::BLUE))
+                    .text_color(c(theme::INK))
+                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .border_l_2()
+                    .border_color(c(theme::INK))
+                    .child("GPUI"),
+            )
     }
 }
 
@@ -897,10 +1032,22 @@ pub(crate) fn tool_button(
 
 fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
     h_flex()
-        .w(px(300.))
+        .w(px(320.))
+        .gap_2()
         .text_sm()
-        .child(div().flex_1().text_color(c(theme::FG_DIM)).child(label))
-        .child(div().text_color(c(theme::FG_MUTED)).child(keys))
+        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
+        .children(keys.split('+').map(|k| {
+            div()
+                .px_2()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .bg(c(theme::BG_ELEVATED))
+                .border_2()
+                .border_color(c(theme::INK))
+                .shadow(crate::ui::hard_shadow(2., theme::INK))
+                .text_color(c(theme::FG_STRONG))
+                .child(k)
+        }))
 }
 
 /// Keep at most this many lines per panel.
