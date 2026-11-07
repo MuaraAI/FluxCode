@@ -77,17 +77,28 @@ const waitFor = async (expr, ms = 10000) => {
   return null;
 };
 
-const KEYS = {
-  Enter: { code: "Enter", vk: 13, text: "\r" }, Tab: { code: "Tab", vk: 9 }, Escape: { code: "Escape", vk: 27 },
-  F5: { code: "F5", vk: 116 }, "`": { code: "Backquote", vk: 192 }, p: { code: "KeyP", vk: 80 }, z: { code: "KeyZ", vk: 90 },
+// Any key: letters, digits, F-keys and the special keys below. Sent through CDP, so they
+// go through the page's real keyboard pipeline (global shortcuts, CodeMirror keymaps, inputs).
+const SPECIAL = {
+  Enter: [13, "Enter", "\r"], Tab: [9, "Tab"], Escape: [27, "Escape"], Backspace: [8, "Backspace"],
+  "`": [192, "Backquote"], "~": [192, "Backquote"], "/": [191, "Slash"], "=": [187, "Equal"], "-": [189, "Minus"],
+  PageDown: [34, "PageDown"], PageUp: [33, "PageUp"], ArrowUp: [38, "ArrowUp"], ArrowDown: [40, "ArrowDown"],
 };
+function keyInfo(key) {
+  if (SPECIAL[key]) return SPECIAL[key];
+  if (/^F\d{1,2}$/.test(key)) return [111 + +key.slice(1), key];
+  if (/^[a-z]$/i.test(key)) return [key.toUpperCase().charCodeAt(0), `Key${key.toUpperCase()}`];
+  if (/^\d$/.test(key)) return [key.charCodeAt(0), `Digit${key}`];
+  throw new Error(`unknown key ${key}`);
+}
 async function press(key, mods = {}) {
-  const k = KEYS[key];
+  const [vk, code, text] = keyInfo(key);
+  const k = mods.shift && /^[a-z]$/.test(key) ? key.toUpperCase() : key;
   const modifiers = (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.shift ? 8 : 0);
-  const base = { key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk, modifiers };
-  await send("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(k.text && !modifiers ? { text: k.text } : {}) });
+  const base = { key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers };
+  await send("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text && !modifiers ? { text } : {}) });
   await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
-  await sleep(60);
+  await sleep(70);
 }
 const type = (text) => send("Input.insertText", { text });
 
@@ -304,6 +315,200 @@ check("palette: no scattered matches like 'Toggle Word Wrap'", !pal.labels.some(
 check("palette: highlight has no background box", pal.bg === "rgba(0, 0, 0, 0)", pal.bg);
 await shot("07-palette");
 await press("Escape");
+
+// ------------------------------------------------------------- shortcuts
+// Every keyboard shortcut, pressed through the real key pipeline, with its effect checked.
+
+const focusEditor = () => evaluate(`document.querySelector('.cm-content').focus()`);
+const layoutOk = () => evaluate(`(() => {
+  const m = document.querySelector('#main').getBoundingClientRect();
+  const e = document.querySelector('#editor-group').getBoundingClientRect();
+  const sb = document.querySelector('#statusbar').getBoundingClientRect();
+  return m.width > 400 && e.width > 200 && m.left >= 47 && m.right <= innerWidth + 1 && sb.bottom <= innerHeight + 1;
+})()`);
+const sidebarShown = () => evaluate(`!document.querySelector('#workbench').classList.contains('no-sidebar')`);
+const panelShown = () => evaluate(`!document.querySelector('#panel').hidden`);
+const activeTitle = () => evaluate(`document.querySelector('.tab.active')?.title`);
+const cursorStatus = () => evaluate(`document.querySelector('#sb-cursor').textContent`);
+const activeLine = () => evaluate(`document.querySelector('.cm-activeLine')?.textContent`);
+let gotoOpened = true;
+async function gotoLine(n) {
+  await press("g", { ctrl: true });
+  gotoOpened = gotoOpened && !!(await waitFor(`!document.querySelector('#quick-input').hidden && document.querySelector('#qi-input').value === ':'`, 1500));
+  await type(String(n));
+  await press("Enter");
+  await waitFor(`document.querySelector('#sb-cursor').textContent.startsWith('Ln ${n},')`, 2000);
+}
+
+// The reported bug: Ctrl+B with the Live Preview open collapsed the editor.
+check("open web/index.html for shortcut tests", !!(await openFile("web/index.html")));
+await press("F5");
+await waitFor(`!document.querySelector('#preview-pane').hidden`, 5000);
+await focusEditor();
+await press("b", { ctrl: true });
+await sleep(200);
+check("Ctrl+B hides the side bar and the editor keeps its space (preview open)",
+  !(await sidebarShown()) && (await layoutOk()) && (await evaluate(`!document.querySelector('#preview-pane').hidden && document.querySelector('#editor-host').getBoundingClientRect().width > 300`)));
+await shot("11-ctrl-b-sidebar-hidden");
+await press("b", { ctrl: true });
+await sleep(200);
+check("Ctrl+B again brings the side bar back", (await sidebarShown()) && (await layoutOk()));
+await evaluate(`document.querySelector('.ab-item[data-view=explorer]').click()`);
+await sleep(150);
+const hiddenByClick = !(await sidebarShown()) && (await layoutOk());
+await evaluate(`document.querySelector('.ab-item[data-view=explorer]').click()`);
+await sleep(150);
+check("clicking the active activity-bar icon toggles the side bar too", hiddenByClick && (await sidebarShown()));
+await evaluate(`document.querySelector('[data-pv=close]').click()`);
+
+const p0 = await panelShown();
+await focusEditor();
+await press("j", { ctrl: true });
+const p1 = await panelShown();
+await press("j", { ctrl: true });
+const p2 = await panelShown();
+check("Ctrl+J toggles the panel", p1 !== p0 && p2 === p0 && (await layoutOk()));
+
+await focusEditor();
+await press("`", { ctrl: true });
+check("Ctrl+` opens the terminal and focuses its input", !!(await waitFor(`document.activeElement?.classList.contains('ti-input')`, 3000)));
+await press("`", { ctrl: true });
+check("Ctrl+` again (from the terminal) hides the panel", !!(await waitFor(`document.querySelector('#panel').hidden`, 2000)));
+const pills0 = await evaluate(`document.querySelectorAll('.ts-pill').length`);
+await press("~", { ctrl: true, shift: true });
+check("Ctrl+Shift+` opens a new terminal", !!(await waitFor(`document.querySelectorAll('.ts-pill').length === ${pills0 + 1}`, 3000)));
+await type("ping -n 20 127.0.0.1");
+await press("Enter");
+await waitFor(`!!document.querySelector('.term-session:not([hidden]) .tblock.running')`, 5000);
+await press("c", { ctrl: true });
+check("Ctrl+C stops the running terminal command", !!(await waitFor(`!document.querySelector('.term-session:not([hidden]) .tblock.running')`, 6000)));
+await press("l", { ctrl: true });
+check("Ctrl+L clears the terminal", !!(await waitFor(`document.querySelector('.term-session:not([hidden])').children.length === 0`, 2000)));
+await evaluate(`document.querySelector('.ts-pill.on [data-close]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+await press("j", { ctrl: true });
+
+await focusEditor();
+await press("f", { ctrl: true, shift: true });
+check("Ctrl+Shift+F shows Search with its input focused", !!(await waitFor(`!document.querySelector('#search-view').hidden && document.activeElement?.id === 'search-input'`, 2000)));
+await press("e", { ctrl: true, shift: true });
+check("Ctrl+Shift+E shows the Explorer", !!(await waitFor(`!document.querySelector('#explorer').hidden`, 2000)));
+
+await focusEditor();
+await press("p", { ctrl: true });
+check("Ctrl+P opens Go to File", !!(await waitFor(`!document.querySelector('#quick-input').hidden && document.querySelector('#qi-input').value === ''`, 2000)));
+await press("Escape");
+check("Escape closes Go to File", !!(await waitFor(`document.querySelector('#quick-input').hidden`, 1500)));
+await press("p", { ctrl: true, shift: true });
+check("Ctrl+Shift+P opens the Command Palette", !!(await waitFor(`!document.querySelector('#quick-input').hidden && document.querySelector('#qi-input').value === '>'`, 2000)));
+await press("Escape");
+await press("F1");
+check("F1 opens the Command Palette", !!(await waitFor(`!document.querySelector('#quick-input').hidden && document.querySelector('#qi-input').value === '>'`, 2000)));
+await press("Escape");
+await waitFor(`document.querySelector('#quick-input').hidden`, 1500);
+
+check("open python/main.py for editing shortcuts", !!(await openFile("python/main.py")));
+const mainPath = join(EXAMPLES, "python", "main.py");
+const mainOriginal = readFileSync(mainPath, "utf8");
+await gotoLine(17);
+check("Ctrl+G opens Go to Line in the quick input", gotoOpened);
+check("Ctrl+G jumps to a line", (await cursorStatus()).startsWith("Ln 17,"), await cursorStatus());
+
+await press("f", { ctrl: true });
+check("Ctrl+F opens Find", !!(await waitFor(`!!document.querySelector('.cm-search')`, 1500)));
+await press("Escape");
+check("Escape closes Find", !!(await waitFor(`!document.querySelector('.cm-search')`, 1500)));
+await focusEditor();
+await press("h", { ctrl: true });
+check("Ctrl+H opens Find & Replace", !!(await waitFor(`!!document.querySelector('.cm-search [name=replace]')`, 1500)));
+await press("Escape");
+await waitFor(`!document.querySelector('.cm-search')`, 1500);
+await focusEditor();
+
+await press("z", { alt: true });
+const wrapOn = await evaluate(`document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`);
+await press("z", { alt: true });
+const wrapOff = await evaluate(`!document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`);
+check("Alt+Z toggles word wrap", wrapOn && wrapOff);
+
+const dpr0 = await evaluate(`devicePixelRatio`);
+await press("=", { ctrl: true });
+await sleep(350);
+const dpr1 = await evaluate(`devicePixelRatio`);
+await press("-", { ctrl: true });
+await sleep(350);
+const dpr2 = await evaluate(`devicePixelRatio`);
+await press("=", { ctrl: true });
+await press("0", { ctrl: true });
+await sleep(350);
+const dpr3 = await evaluate(`devicePixelRatio`);
+check("Ctrl+= / Ctrl+- / Ctrl+0 zoom in, out and reset", dpr1 > dpr0 && Math.abs(dpr2 - dpr0) < 0.01 && Math.abs(dpr3 - dpr0) < 0.01, JSON.stringify([dpr0, dpr1, dpr2, dpr3]));
+check("layout intact after zooming", await layoutOk());
+
+await gotoLine(3);
+await press("/", { ctrl: true });
+const commented = await activeLine();
+await press("/", { ctrl: true });
+const uncommented = await activeLine();
+check("Ctrl+/ toggles a line comment", commented?.startsWith("# import sys") && uncommented === "import sys", JSON.stringify([commented, uncommented]));
+await press("ArrowDown", { alt: true });
+const movedTo = await cursorStatus();
+await press("ArrowUp", { alt: true });
+check("Alt+↓ / Alt+↑ move the line", movedTo.startsWith("Ln 4,") && (await cursorStatus()).startsWith("Ln 3,") && (await activeLine()) === "import sys");
+await press("d", { ctrl: true });
+await press("d", { ctrl: true });
+check("Ctrl+D adds the next occurrence", /\(12 selected\)/.test(await cursorStatus()), await cursorStatus());
+await press("Escape");
+await gotoLine(3);
+await press("k", { ctrl: true, shift: true });
+const afterDelete = await activeLine();
+await press("z", { ctrl: true });
+check("Ctrl+Shift+K deletes the line and Ctrl+Z brings it back", afterDelete !== "import sys" && (await activeLine()) === "import sys", JSON.stringify(afterDelete));
+await press("a", { ctrl: true });
+check("Ctrl+A selects everything", /selected\)/.test(await cursorStatus()));
+await gotoLine(3);
+await type("#");
+await press("s", { ctrl: true });
+check("Ctrl+S saves right away", !!(await (async () => { for (let i = 0; i < 20; i++) { await sleep(100); if (readFileSync(mainPath, "utf8").includes("#import sys")) return true; } return false; })()));
+await press("z", { ctrl: true });
+await press("k", { ctrl: true });
+await press("s");
+check("Ctrl+K S (save all) writes the undo back", !!(await (async () => { for (let i = 0; i < 20; i++) { await sleep(100); if (readFileSync(mainPath, "utf8") === mainOriginal) return true; } return false; })()));
+
+const tabs0 = await evaluate(`document.querySelectorAll('.tab').length`);
+await focusEditor();
+await press("n", { ctrl: true });
+check("Ctrl+N opens a new untitled file", !!(await waitFor(`document.querySelectorAll('.tab').length === ${tabs0 + 1} && /Untitled/.test(document.querySelector('.tab.active').textContent)`, 2000)));
+await press("w", { ctrl: true });
+check("Ctrl+W closes the editor", !!(await waitFor(`document.querySelectorAll('.tab').length === ${tabs0}`, 2000)));
+
+const t0 = await activeTitle();
+await press("Tab", { ctrl: true });
+const t1 = await activeTitle();
+await press("Tab", { ctrl: true, shift: true });
+const t2 = await activeTitle();
+check("Ctrl+Tab / Ctrl+Shift+Tab switch editors", t1 !== t0 && t2 === t0);
+await press("PageDown", { ctrl: true });
+const t3 = await activeTitle();
+await press("PageUp", { ctrl: true });
+check("Ctrl+PageDown / Ctrl+PageUp switch editors", t3 !== t0 && (await activeTitle()) === t0);
+
+await press("k", { ctrl: true });
+await press("t", { ctrl: true });
+check("Ctrl+K Ctrl+T opens Appearance", !!(await waitFor(`!!document.querySelector('#appearance')`, 3000)));
+await press("Escape");
+check("Escape closes Appearance", !!(await waitFor(`!document.querySelector('#appearance')`, 1500)));
+
+await evaluate(`document.querySelector('[data-menu=file]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+const menuOpen = !!(await waitFor(`!document.querySelector('#menu-popup').hidden`, 1000));
+await press("Escape");
+check("Escape closes an open menu", menuOpen && !!(await waitFor(`document.querySelector('#menu-popup').hidden`, 1000)));
+
+await press("k", { ctrl: true });
+await press("w", { ctrl: true });
+check("Ctrl+K Ctrl+W closes all editors", !!(await waitFor(`document.querySelectorAll('.tab').length === 0`, 3000)));
+check("python/main.py unchanged after the shortcut tests", readFileSync(mainPath, "utf8") === mainOriginal);
+check("layout intact after all shortcuts", await layoutOk());
+await shot("12-after-shortcuts");
 
 // Layout sanity: nothing important outside the window.
 const layout = await evaluate(`(() => {

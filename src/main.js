@@ -1647,7 +1647,7 @@ const bindings = {
   "ctrl+shift+p": "commandPalette", F1: "commandPalette",
   F5: "run", "ctrl+F5": "run", "ctrl+alt+n": "run", "shift+F5": "stop",
   "ctrl+Tab": "nextTab", "ctrl+PageDown": "nextTab", "ctrl+shift+Tab": "prevTab", "ctrl+PageUp": "prevTab",
-  "ctrl+shift+e": "showExplorer", "ctrl+shift+f": "findInFiles", "ctrl+h": "replace", "ctrl+f": "find",
+  "ctrl+shift+e": "showExplorer", "ctrl+shift+f": "findInFiles", "ctrl+h": "replace", "ctrl+f": "find", "ctrl+g": "gotoLine",
   "alt+z": "toggleWordWrap", "ctrl+=": "zoomIn", "ctrl+shift++": "zoomIn", "ctrl++": "zoomIn",
   "ctrl+-": "zoomOut", "ctrl+shift+_": "zoomOut", "ctrl+0": "zoomReset",
 };

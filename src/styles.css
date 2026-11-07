@@ -87,6 +87,13 @@ input { font: inherit; }
 }
 #workbench.no-sidebar { grid-template-columns: 48px 0 0 minmax(0, 1fr); }
 #workbench.no-sidebar #sidebar, #workbench.no-sidebar #sash-sidebar { display: none; }
+/* Every region is pinned to its own column. Without this, hiding the side bar
+   (display: none) lets auto-placement slide the editor into the 0px side-bar
+   column and the whole editor area collapses. */
+#activitybar { grid-column: 1; }
+#sidebar { grid-column: 2; }
+#sash-sidebar { grid-column: 3; }
+#main { grid-column: 4; }
 
 /* ------------------------------------------------------------- title bar */
 #titlebar {
