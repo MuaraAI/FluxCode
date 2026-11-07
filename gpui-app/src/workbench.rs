@@ -31,7 +31,7 @@ actions!(
         Save, SaveAll, CloseTab, OpenFolder, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
-        ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About
+        ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview
     ]
 );
 
@@ -56,6 +56,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-f5", RunFile, None),
         KeyBinding::new("shift-f5", StopRun, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
+        KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
     ]);
@@ -148,6 +149,11 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) agent: crate::agent::AgentState,
+    pub(crate) preview_server: Option<crate::preview::PreviewServer>,
+    #[cfg(feature = "embedded-preview")]
+    pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
+    #[cfg(not(feature = "embedded-preview"))]
+    pub(crate) preview: Option<((), String)>,
     _subs: Vec<Subscription>,
 }
 
@@ -233,6 +239,8 @@ impl Workbench {
             out_proc: None,
             out_scroll: UniformListScrollHandle::new(),
             agent,
+            preview_server: None,
+            preview: None,
             _subs: subs,
         };
         let restore = root.is_none() && open.is_empty();
@@ -373,6 +381,9 @@ impl Workbench {
             Ok(()) => {
                 doc.dirty = false;
                 self.status = format!("Saved {}", doc.name).into();
+                if let Some(s) = &self.preview_server {
+                    s.reload();
+                }
                 true
             }
             Err(e) => {
@@ -623,7 +634,10 @@ impl Workbench {
                         .menu("Output", Box::new(ShowOutput))
                 }))
                 .child(Self::render_menu("m-run", "Run", |m| {
-                    m.menu("Run File", Box::new(RunFile)).menu("Stop", Box::new(StopRun))
+                    m.menu("Run File", Box::new(RunFile))
+                        .menu("Stop", Box::new(StopRun))
+                        .separator()
+                        .menu("Live Preview", Box::new(TogglePreview))
                 }))
                 .child(Self::render_menu("m-term", "Terminal", |m| {
                     m.menu("Toggle Terminal", Box::new(ToggleTerminal))
@@ -934,13 +948,20 @@ impl Render for Workbench {
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
+        let editor_view: AnyElement = match &self.preview {
+            Some(_) => h_resizable("editor-preview-split")
+                .child(resizable_panel().child(self.render_editor_area(window, cx)))
+                .child(resizable_panel().size(px(520.)).size_range(px(240.)..px(1400.)).child(self.render_preview(cx)))
+                .into_any_element(),
+            None => self.render_editor_area(window, cx),
+        };
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
-                .child(resizable_panel().child(self.render_editor_area(window, cx)))
+                .child(resizable_panel().child(editor_view))
                 .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(self.render_panel(window, cx)))
                 .into_any_element()
         } else {
-            self.render_editor_area(window, cx)
+            editor_view
         };
         let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(if self.sidebar_open {
             h_resizable("workbench-split")
@@ -984,6 +1005,8 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_explorer_refresh))
             .on_action(cx.listener(Self::on_copy_path))
             .on_action(cx.listener(Self::on_reveal))
+            .on_action(cx.listener(Self::on_toggle_preview))
+            .on_action(cx.listener(Self::on_reload_preview))
             .child(self.render_title_bar(window, cx))
             .child(main)
             .child(self.render_status_bar(cx))

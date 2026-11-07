@@ -11,6 +11,8 @@ mod core;
 mod explorer;
 mod files;
 mod panel;
+mod preview;
+mod preview_ui;
 mod proc;
 mod search;
 mod settings;
