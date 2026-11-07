@@ -14,6 +14,11 @@ $env:CARGO_TARGET_DIR = "C:/Users/User/.fluxcode-target-gpui"
 cargo run                      # debug (shaders compiled at runtime)
 ```
 
+The default build uses [GPUI Fast](https://github.com/longbridge/gpui-fast) (feature
+`fast`); `cargo build --release --no-default-features` builds on standard GPUI instead.
+GPUI Fast pins a few dependency versions exactly (`taffy 0.15.0`, `unicode-properties
+0.1.3`), which `Cargo.lock` already reflects.
+
 Release builds compile HLSL at build time and normally need `fxc.exe` from the Windows SDK.
 `tools/fxc-shim` is a tiny stand-in that uses Windows' own `d3dcompiler_47.dll`:
 

@@ -227,6 +227,39 @@ median of 5 runs, this repository open; Tauri numbers include every WebView2 pro
 | CPU idle | 10 % | **2 %** | |
 | Executable | **3.9 MB** (+ system WebView2) | 26.4 MB (self-contained) | |
 
+**Look** (Settings → Appearance):
+
+- Four color themes: **FluxDark** (near-black, crimson accent), **FluxCream** (warm paper
+  light), **FluxMono** (grey UI, red only for errors) and **FluxRed** (surfaces tinted deep
+  red). `Ctrl+K Ctrl+T` switches to the next one. The interface's text colors reach WCAG AA
+  4.5:1 on every surface (syntax colors come from gpui-component's highlight themes).
+- **Background image**: any PNG/JPEG/WebP/GIF/BMP from your PC shows through the panels
+  (the file is only referenced, never copied). The code side of the editor lets less of
+  it through than the right edge. *Subtle* and *Balanced* keep all text at 4.5:1 even over
+  a white picture; *Strong* says in Settings that dim text can drop below that.
+- **Interface size** Compact / Medium (default) / Large scales menus, tabs, the explorer,
+  panels and icons; the editor font has its own size.
+- Code reading: indentation guides show how far each block reaches, and spaces can show
+  as faint dots (Settings → Whitespace dots).
+- One outline icon set in the explorer, tabs and search, tinted by file type; folders the
+  explorer does not open (`.git`, `node_modules`, `dist`, …) are listed dimmed.
+
+**GPUI Fast**: the GPUI edition builds on [GPUI Fast](https://github.com/longbridge/gpui-fast)
+(retained mode) by default. Measured against standard GPUI, same source and profile, same
+machine (median of 5 runs, large-file scroll 3 runs; `--no-default-features` builds the
+standard one):
+
+| | GPUI | GPUI Fast |
+| --- | --- | --- |
+| Start to painted UI | 373 ms | 372 ms |
+| Idle memory, private / working set | 99.8 / 105 MB | 100.1 / 105.6 MB |
+| Idle CPU | 2.3 % | **1.2 %** |
+| Scrolling a 30k-line file (highlighted) | 18.7 % | 18.0 % |
+| Executable | 26.6 MB | 27.6 MB |
+
+Most of FluxCode's scrolling cost is the code editor's own text layout, which retained
+mode does not skip, so the gain here is mainly while idle.
+
 Already in the GPUI edition: explorer (new/rename/delete to the Recycle Bin), tabs,
 tree-sitter editor for 20 languages, auto save, find in files, terminal, Run (F5) with
 Output, completion + Emmet, OpenCode panel with Keep/Undo, Live Preview, settings,

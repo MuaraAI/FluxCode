@@ -38,8 +38,12 @@ fn main() {
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();
 
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
+    gpui_kit::application().with_assets(AppAssets).run(move |cx| {
         gpui_kit::init(cx);
+        // The saved theme is active before the first frame, so the window never flashes another one.
+        let saved = settings::Settings::load();
+        theme::set_ui_size(saved.ui_size);
+        theme::set(&saved.theme, saved.background().map(|_| saved.bg_visibility));
         theme::apply(cx);
         workbench::bind_keys(cx);
         cx.activate(true);
@@ -55,4 +59,24 @@ fn main() {
         })
         .expect("failed to open the FluxCode window");
     });
+}
+
+/// gpui-kit's default icons plus the file-type icons the explorer uses.
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if let Some(bytes) = files::FileIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        gpui_kit::assets::Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit::assets::Assets.list(path)?;
+        paths.extend(files::FileIcons.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
 }

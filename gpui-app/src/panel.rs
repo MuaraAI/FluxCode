@@ -139,20 +139,19 @@ impl Workbench {
     pub(crate) fn render_panel(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = |id: &'static str, label: &'static str, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
             let on = this.panel_tab == which;
+            // VS Code's panel tabs: small caps label, a 1px underline on the open one.
             div()
                 .id(id)
-                .px_3()
-                .h(px(22.))
+                .px_1()
+                .h_full()
                 .flex()
                 .items_center()
                 .text_xs()
-                .font_weight(FontWeight::EXTRA_BOLD)
                 .cursor_pointer()
-                .border_2()
-                .border_color(if on { c(theme::INK) } else { transparent_black() })
-                .when(on, |d| d.bg(c(theme::ACCENT)).shadow(crate::ui::hard_shadow(2., theme::INK)))
-                .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
-                .text_color(if on { c(theme::INK) } else { c(theme::FG_MUTED) })
+                .border_b_1()
+                .border_color(if on { c(theme::ACCENT) } else { transparent_black() })
+                .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                .when(!on, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.panel_tab = which;
@@ -164,12 +163,10 @@ impl Workbench {
             PanelTab::Output => self.out_proc.is_some(),
         };
         let header = h_flex()
-            .h(px(36.))
+            .h(theme::u(35.))
             .px_3()
-            .gap_2()
+            .gap_4()
             .flex_none()
-            .border_b_2()
-            .border_color(c(theme::INK))
             .child(tab("p-term", "TERMINAL", PanelTab::Terminal, self, cx))
             .child(tab("p-out", "OUTPUT", PanelTab::Output, self, cx))
             .child(div().flex_1())
@@ -202,11 +199,11 @@ impl Workbench {
                         let l = &lines[i];
                         let col = match l.kind {
                             LineKind::Normal => theme::FG,
-                            LineKind::Err => 0xff7b72,
-                            LineKind::Cmd => theme::ACCENT,
+                            LineKind::Err => theme::DANGER,
+                            LineKind::Cmd => theme::ACCENT_TEXT,
                             LineKind::Info => theme::FG_DIM,
                         };
-                        div().h(px(18.)).px_3().whitespace_nowrap().text_color(c(col)).child(l.text.clone())
+                        div().h(theme::u(18.)).px_3().whitespace_nowrap().text_color(c(col)).child(l.text.clone())
                     })
                     .collect::<Vec<_>>()
             }),
@@ -214,13 +211,13 @@ impl Workbench {
         .track_scroll(&scroll)
         .flex_1()
         .font_family(self.settings.font_family.clone())
-        .text_size(px(13.));
+        .text_size(theme::u(13.));
 
         v_flex()
             .size_full()
             .bg(c(theme::BG_EDITOR))
-            .border_t_2()
-            .border_color(c(theme::INK))
+            .border_t_1()
+            .border_color(c(theme::BORDER))
             .child(header)
             .child(list)
             .when(self.panel_tab == PanelTab::Terminal, |v| {
@@ -230,11 +227,10 @@ impl Workbench {
                         .py_1()
                         .gap_2()
                         .font_family(self.settings.font_family.clone())
-                        .text_size(px(13.))
+                        .text_size(theme::u(13.))
                         .child(
                             div()
-                                .text_color(c(theme::ACCENT))
-                                .font_weight(FontWeight::BOLD)
+                                .text_color(c(theme::ACCENT_TEXT))
                                 .child(if self.term_proc.is_some() { "stdin>".to_string() } else { format!("{}>", self.term_cwd.display()) }),
                         )
                         .child(div().flex_1().child(Input::new(&self.term_input).appearance(false).small())),

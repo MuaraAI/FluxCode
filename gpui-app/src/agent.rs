@@ -507,17 +507,18 @@ impl Workbench {
         let a = &self.agent;
         let (dot, label) = match &a.status {
             Status::Off => (theme::FG_DIM, "Off".to_string()),
-            Status::Starting => (0xe5b33d, "Starting…".into()),
-            Status::Ready => (0x5fd38d, "Ready".into()),
-            Status::Busy => (0x3b8eea, "Working…".into()),
-            Status::Error(_) => (0xff7b72, "Error".into()),
+            Status::Starting => (theme::FG_MUTED, "Starting…".into()),
+            Status::Ready => (theme::GREEN, "Ready".into()),
+            Status::Busy => (theme::BLUE, "Working…".into()),
+            Status::Error(_) => (theme::DANGER, "Error".into()),
         };
+        // The dot marks the agent process's real state (off, starting, ready, working, error).
         let header = h_flex()
             .px_3()
             .pb_2()
             .gap_2()
             .text_xs()
-            .child(div().size(px(10.)).bg(c(dot)).border_1().border_color(c(theme::INK)))
+            .child(div().size(px(8.)).rounded_full().bg(c(dot)))
             .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
             .when(a.status == Status::Busy, |h| {
                 h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
@@ -538,16 +539,16 @@ impl Workbench {
             );
         }
         if let Status::Error(e) = &a.status {
-            log = log.child(div().p_2().border_2().border_color(c(theme::PINK)).bg(c(0x2a1520)).text_xs().text_color(c(0xff7b72)).child(e.clone()));
+            log = log.child(div().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
         }
         for (i, item) in a.items.iter().enumerate() {
             log = log.child(match item {
                 Item::User(t) => div()
                     .p_2()
+                    .rounded(px(6.))
                     .bg(c(theme::BG_ELEVATED))
-                    .border_2()
-                    .border_color(c(theme::ACCENT))
-                    .shadow(crate::ui::hard_shadow(3., theme::INK))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
                     .text_sm()
                     .text_color(c(theme::FG_STRONG))
                     .child(t.clone())
@@ -561,18 +562,19 @@ impl Workbench {
                     .into_any_element(),
                 Item::Tool { title, status, .. } => {
                     let (mark, col) = match status.as_str() {
-                        "completed" => ("✓", 0x5fd38d),
-                        "failed" => ("✕", 0xff7b72),
-                        "in_progress" => ("…", 0x3b8eea),
+                        "completed" => ("✓", theme::GREEN),
+                        "failed" => ("✕", theme::DANGER),
+                        "in_progress" => ("…", theme::BLUE),
                         _ => ("•", theme::FG_DIM),
                     };
                     h_flex()
                         .gap_2()
                         .px_2()
                         .py_1()
+                        .rounded(px(4.))
                         .bg(c(theme::BG_ELEVATED))
-                        .border_2()
-                        .border_color(c(theme::INK))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
                         .text_xs()
                         .child(div().text_color(c(col)).child(mark))
                         .child(div().truncate().text_color(c(theme::FG)).child(title.clone()))
@@ -592,7 +594,7 @@ impl Workbench {
                     .into_any_element(),
                 Item::Note(t, err) => div()
                     .text_xs()
-                    .text_color(c(if *err { 0xff7b72 } else { theme::FG_DIM }))
+                    .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
                     .child(t.clone())
                     .into_any_element(),
             });
@@ -603,9 +605,9 @@ impl Workbench {
                 .m_3()
                 .p_2()
                 .gap_2()
-                .border_2()
+                .rounded(px(6.))
+                .border_1()
                 .border_color(c(theme::ACCENT))
-                .shadow(crate::ui::hard_shadow(4., theme::INK))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
                 .child(div().text_color(c(theme::FG_STRONG)).child(format!("Allow: {}?", p.title)))
@@ -623,8 +625,9 @@ impl Workbench {
                 .mb_2()
                 .p_2()
                 .gap_1()
-                .border_2()
-                .border_color(c(theme::INK))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(c(theme::BORDER))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
                 .child(
