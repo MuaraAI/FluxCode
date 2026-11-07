@@ -459,7 +459,11 @@ async fn resolve_python(workspace: Option<String>) -> Option<Interpreter> {
     let mut candidates: Vec<String> = Vec::new();
     if let Some(ws) = workspace.filter(|w| !w.is_empty()) {
         for venv in [".venv", "venv", "env"] {
-            let p = Path::new(&ws).join(venv).join("Scripts").join("python.exe");
+            let p = if cfg!(windows) {
+                Path::new(&ws).join(venv).join("Scripts").join("python.exe")
+            } else {
+                Path::new(&ws).join(venv).join("bin").join("python")
+            };
             if p.is_file() {
                 candidates.push(p.to_string_lossy().into_owned());
             }
@@ -477,6 +481,28 @@ async fn resolve_python(workspace: Option<String>) -> Option<Interpreter> {
 async fn resolve_node() -> Option<Interpreter> {
     let version = probe_version("node")?;
     version.starts_with('v').then(|| Interpreter { path: "node".into(), version: format!("Node {version}") })
+}
+
+/// Open a URL (http/https only) in the user's default browser.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Only http(s) links can be opened.".into());
+    }
+    let mut cmd = if cfg!(windows) {
+        let mut c = command("explorer.exe");
+        c.arg(&url);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = command("open");
+        c.arg(&url);
+        c
+    } else {
+        let mut c = command("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Folders/files passed on the command line (`fluxcode .`, `fluxcode main.py`).
@@ -560,6 +586,7 @@ pub fn run() {
             resolve_python,
             resolve_node,
             launch_paths,
+            open_url,
             search_files,
             preview::preview_start,
             preview::preview_reload,

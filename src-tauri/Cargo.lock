@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "fluxcode"
-version = "0.5.0-dev.2026-11-07-1420"
+version = "0.5.1-dev.2026-11-07-1500"
 dependencies = [
  "serde",
  "serde_json",

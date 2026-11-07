@@ -1,7 +1,7 @@
 {
   "name": "fluxcode",
   "private": true,
-  "version": "0.5.0-dev.2026-11-07-1420",
+  "version": "0.5.1-dev.2026-11-07-1500",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {

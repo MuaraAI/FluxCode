@@ -165,7 +165,10 @@ pub async fn term_list(access: State<'_, Access>, path: String) -> Result<Vec<Te
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\"))
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }))
 }
 
 /// Resolve what the user typed (`..`, `...`, `~`, `D:`, `src\app`, an absolute
@@ -213,20 +216,33 @@ fn on_path(exe: &str) -> bool {
 /// Home folder, drives and available shells (no process is started for this).
 #[tauri::command]
 pub fn term_env() -> TermEnv {
-    let drives = (b'C'..=b'Z')
-        .map(|c| format!("{}:\\", c as char))
-        .filter(|d| Path::new(d).exists())
-        .collect();
-    let mut shells = vec!["cmd".to_string(), "powershell".to_string()];
-    if on_path("pwsh.exe") {
-        shells.push("pwsh".into());
-    }
+    let (drives, shells) = if cfg!(windows) {
+        let drives = (b'C'..=b'Z')
+            .map(|c| format!("{}:\\", c as char))
+            .filter(|d| Path::new(d).exists())
+            .collect();
+        let mut shells = vec!["cmd".to_string(), "powershell".to_string()];
+        if on_path("pwsh.exe") {
+            shells.push("pwsh".into());
+        }
+        (drives, shells)
+    } else {
+        // Linux / macOS: the root plus mounted volumes; bash, sh and (if installed) zsh / pwsh.
+        let mut drives = vec!["/".to_string()];
+        for base in ["/media", "/mnt", "/run/media", "/Volumes"] {
+            if let Ok(rd) = fs::read_dir(base) {
+                drives.extend(rd.filter_map(Result::ok).map(|e| e.path().to_string_lossy().into_owned()));
+            }
+        }
+        let shells = ["bash", "sh", "zsh", "pwsh"].into_iter().filter(|s| on_path(s)).map(String::from).collect();
+        (drives, shells)
+    };
     TermEnv {
         home: home_dir().to_string_lossy().into_owned(),
         drives,
         shells,
-        user: std::env::var("USERNAME").unwrap_or_default(),
-        computer: std::env::var("COMPUTERNAME").unwrap_or_default(),
+        user: std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default(),
+        computer: std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
     }
 }
 
@@ -234,12 +250,16 @@ pub fn term_env() -> TermEnv {
 /// "go into folder `python`" apart from "run python" without starting anything.
 #[tauri::command]
 pub fn term_is_command(name: String) -> bool {
-    let exts: Vec<String> = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-        .split(';')
-        .filter(|e| !e.is_empty())
-        .map(str::to_lowercase)
-        .collect();
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    } else {
+        vec![String::new()]
+    };
     let Some(path) = std::env::var_os("PATH") else { return false };
     std::env::split_paths(&path).any(|dir| exts.iter().any(|ext| dir.join(format!("{name}{ext}")).is_file()))
 }
@@ -287,12 +307,17 @@ pub fn term_run(
             c.args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &base64(&utf16)]);
             c
         }
+        #[cfg(windows)]
         _ => {
             let mut c = command("cmd.exe");
             // /s keeps the line verbatim; chcp 65001 makes cmd's output UTF-8.
-            #[cfg(windows)]
             c.raw_arg(format!("/d /s /c \"chcp 65001>nul & {line}\""));
-            #[cfg(not(windows))]
+            c
+        }
+        #[cfg(not(windows))]
+        other => {
+            // Linux / macOS: bash by default, or whichever shell the user picked.
+            let mut c = command(if matches!(other, "sh" | "zsh" | "bash") { other } else { "bash" });
             c.args(["-c", &line]);
             c
         }

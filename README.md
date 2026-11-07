@@ -5,7 +5,7 @@ A lightweight code editor for Windows with the VS Code look and feel, built on
 in Windows' built-in WebView2, and everything that touches the machine (files,
 processes, the terminal, the preview server) runs in Rust.
 
-> Status: **development build `0.5.0-dev.2026-11-07-1420`** — not a final
+> Status: **development build `0.5.1-dev.2026-11-07-1500`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -186,11 +186,11 @@ share stays as above.
 | Next occurrence / Comment / Delete line | `Ctrl+D` / `Ctrl+/` / `Ctrl+Shift+K` |
 | Move line / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` |
 
-## Build from source (Windows)
+## Build from source
 
-Requirements: Node.js 22+, Rust (GNU toolchain), MinGW-w64 binutils
-(e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`), WebView2 (built into
-Windows 10/11).
+**Windows.** Requirements: Node.js 22+, Rust (GNU toolchain), MinGW-w64
+binutils (e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`), WebView2
+(built into Windows 10/11).
 
 ```bash
 npm install
@@ -203,6 +203,23 @@ node scripts/test-app.mjs    # end-to-end test of the built exe
 Build output goes to `C:/Users/User/.fluxcode-target` (see
 `src-tauri/.cargo/config.toml`), because MinGW's `windres` can't handle spaces
 in the project path.
+
+**Linux** (Debian/Ubuntu shown; the same code, WebKitGTK instead of WebView2):
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf build-essential curl wget file libssl-dev
+npm install
+CARGO_TARGET_DIR=target npx tauri dev
+CARGO_TARGET_DIR=target npx tauri build --bundles deb,appimage   # bundle/deb/*.deb, bundle/appimage/*.AppImage
+```
+
+`CARGO_TARGET_DIR` overrides the Windows-only path in `.cargo/config.toml`.
+On Linux the terminal runs commands through `bash` (or `sh`/`zsh`/`pwsh` if
+installed), the drive menu lists `/` and mounted volumes, and OpenCode is
+found on PATH or in `~/.opencode/bin`. Not yet exercised on real hardware:
+the Linux build is compiled and bundled by CI (`.github/workflows/build.yml`),
+which produces `.deb` and `.AppImage` artifacts for every push and pull
+request, labelled as development builds.
 
 `scripts/test-app.mjs` drives the real app through WebView2's DevTools
 protocol (no real keyboard/mouse input, throwaway profile): it runs every

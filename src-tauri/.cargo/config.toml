@@ -2,5 +2,6 @@
 # toolchain) breaks on paths with spaces, and this project lives in
 # "Project Pribadi". Build output therefore goes to a path without spaces.
 # Change or remove this if the project moves to a path without spaces.
+# On Linux/macOS (and in CI) set CARGO_TARGET_DIR instead; it overrides this value.
 [build]
 target-dir = "C:/Users/User/.fluxcode-target"

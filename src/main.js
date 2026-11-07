@@ -989,7 +989,7 @@ function ensureAgent() {
       home: () => null,
       activeFile: () => (state.active?.path ? { path: state.active.path, name: state.active.name, text: view.state.doc.toString() } : null),
       openFile: (path, line) => openFile(path, { line }),
-      openExternal: (url) => invoke("spawn_process", { program: "explorer.exe", args: [url], cwd: null }).catch(() => {}),
+      openExternal: (url) => invoke("open_url", { url }).catch(() => {}),
       fileWritten: (path, content) => reloadFromDisk(path, content),
       onStatus: (st) => {
         const el = $("#sb-agent");
@@ -1062,7 +1062,7 @@ async function openSettingsPanel(section) {
       login: async (token) => { await invoke("github_login", { token }); updateGithubStatus(); },
       loginCli: async () => { await invoke("github_login_cli"); updateGithubStatus(); },
       logout: async () => { await invoke("github_logout"); updateGithubStatus(); },
-      openTokenPage: () => invoke("spawn_process", { program: "explorer.exe", args: ["https://github.com/settings/tokens/new?scopes=repo,read:user&description=FluxCode"], cwd: null }).catch(() => {}),
+      openTokenPage: () => invoke("open_url", { url: "https://github.com/settings/tokens/new?scopes=repo,read:user&description=FluxCode" }).catch(() => {}),
     },
     agent: {
       status: async () => ({ ...(await invoke("acp_info")), running: agent?.isRunning() ?? false }),
@@ -1256,7 +1256,7 @@ pane.addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.pv === "close") closePreview();
   else if (b.dataset.pv === "reload") { previewLoading(); invoke("preview_reload").catch(() => {}); }
-  else if (b.dataset.pv === "external" && preview.url) invoke("spawn_process", { program: "explorer.exe", args: [preview.url], cwd: null }).catch(() => {});
+  else if (b.dataset.pv === "external" && preview.url) invoke("open_url", { url: preview.url }).catch(() => {});
 });
 
 // --------------------------------------------------------------- autosave

@@ -56,7 +56,8 @@ pub fn token(app: &AppHandle) -> Option<String> {
 }
 
 fn gh_on_path() -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("gh.exe").is_file()))
+    let exe = if cfg!(windows) { "gh.exe" } else { "gh" };
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(exe).is_file()))
 }
 
 /// Ask api.github.com who the token belongs to. The token goes to curl through
@@ -66,13 +67,13 @@ fn verify(token: &str) -> Result<(String, String), String> {
     if token.is_empty() || token.contains(|c: char| c.is_whitespace() || c == '"') {
         return Err("That doesn't look like a token.".into());
     }
-    let mut child = command("curl.exe")
+    let mut child = command(if cfg!(windows) { "curl.exe" } else { "curl" })
         .args(["-s", "-S", "--max-time", "15", "--config", "-", "https://api.github.com/user"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("curl.exe could not start ({e}). It ships with Windows 10 1803+."))?;
+        .map_err(|e| format!("curl could not start ({e}). It ships with Windows 10 1803+ and most Linux distributions."))?;
     {
         let stdin = child.stdin.as_mut().ok_or("no stdin")?;
         let cfg = format!("header = \"Authorization: Bearer {token}\"\nheader = \"User-Agent: FluxCode\"\nheader = \"Accept: application/vnd.github+json\"\n");

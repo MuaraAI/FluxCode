@@ -45,6 +45,18 @@ pub struct Info {
 /// its exe), the official installer folder, or the npm global folder.
 fn find_opencode() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    if !cfg!(windows) {
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                candidates.push(dir.join("opencode"));
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(Path::new(&home).join(".opencode").join("bin").join("opencode"));
+            candidates.push(Path::new(&home).join(".local").join("bin").join("opencode"));
+        }
+        candidates.push(PathBuf::from("/usr/local/bin/opencode"));
+    }
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             candidates.push(dir.join("opencode.exe"));
@@ -70,13 +82,15 @@ fn opencode_cmd() -> Option<Command> {
     if let Some(exe) = find_opencode() {
         return Some(command(exe.to_string_lossy().as_ref()));
     }
-    // Last resort: whatever `opencode` resolves to through cmd.exe.
-    let on_path = std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("opencode.cmd").is_file() || d.join("opencode.bat").is_file()));
-    if on_path {
-        let mut c = command("cmd.exe");
-        c.args(["/d", "/c", "opencode"]);
-        return Some(c);
+    // Last resort on Windows: whatever `opencode` resolves to through cmd.exe.
+    if cfg!(windows) {
+        let on_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("opencode.cmd").is_file() || d.join("opencode.bat").is_file()));
+        if on_path {
+            let mut c = command("cmd.exe");
+            c.args(["/d", "/c", "opencode"]);
+            return Some(c);
+        }
     }
     None
 }
