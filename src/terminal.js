@@ -34,11 +34,8 @@ function loadJson(key, fallback) {
 
 // ---------------------------------------------------------------- ANSI → DOM
 
-// Flux palette for the 16 ANSI colors (readable on the dark panel).
-const ANSI16 = [
-  "#3b3f47", "#ff6b6b", "#5fd38d", "#e5c07b", "#5ea8ff", "#c792ea", "#4fd1c5", "#cfd2d8",
-  "#6b717c", "#ff8a80", "#7ee2a8", "#ffd68a", "#82bfff", "#dab2ff", "#7ee8dc", "#ffffff",
-];
+// The 16 ANSI colors come from the theme (CSS variables, contrast-adjusted per theme).
+const ANSI16 = Array.from({ length: 16 }, (_, i) => `var(--ansi${i})`);
 const xterm256 = (n) => {
   if (n < 16) return ANSI16[n];
   if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
@@ -285,7 +282,11 @@ export function createTerminal(host, ctx) {
   }
 
   function welcome(s) {
-    if (s.el.querySelector(".tblock")) return;
+    if (s.el.querySelector(".tblock, .tnote")) return;
+    try {
+      if (localStorage.getItem("fluxcode.terminal.welcomed")) return;
+      localStorage.setItem("fluxcode.terminal.welcomed", "1");
+    } catch {}
     const el = document.createElement("div");
     el.className = "tnote";
     el.innerHTML = `${icons.terminal}<span><b>Flux Terminal</b> · type a command or a folder name · <kbd>..</kbd> up · <kbd>ls</kbd> browse · <kbd>Tab</kbd> complete · <kbd>help</kbd></span>`;
@@ -299,11 +300,14 @@ export function createTerminal(host, ctx) {
     session.cwd = target;
     try { localStorage.setItem("fluxcode.terminal.cwd", target); } catch {}
     if (!quiet) {
-      const note = document.createElement("div");
+      // A small "moved to" pill; consecutive moves update the same pill instead of stacking.
+      const last = session.el.lastElementChild;
+      const note = last?.classList.contains("tnav") ? last : document.createElement("div");
       note.className = "tnav";
-      note.innerHTML = `${folderIcon(true)}<span>${esc(target)}</span>`;
+      const parent = target.slice(0, Math.max(0, sepIdx(target.replace(/[\/]$/, ""))));
+      note.innerHTML = `<span class="tnav-pill" title="${esc(target)}">${icons.chevron}${folderIcon(true)}<b>${esc(baseName(target) || target)}</b></span><span class="tnav-parent">${esc(parent)}</span>`;
       note.onclick = () => navigate(target);
-      session.el.append(note);
+      if (note !== last) session.el.append(note);
       trimBlocks(session);
       scrollBottom(true);
     }

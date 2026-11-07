@@ -1,9 +1,9 @@
 [package]
 name = "fluxcode"
-version = "0.3.0-dev.2026-11-07-1100"
+version = "0.4.0-dev.2026-11-07-1135"
 description = "FluxCode - a lightweight code editor with the VS Code look and feel"
 edition = "2021"
-license = "MIT"
+license-file = "../LICENSE"
 
 [lib]
 name = "fluxcode_lib"

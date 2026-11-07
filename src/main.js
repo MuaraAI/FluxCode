@@ -2,6 +2,15 @@
 // output panel, quick open, command palette and status bar.
 // Plain DOM — no UI framework, nothing re-renders that doesn't have to.
 
+// Theme + fonts first, so the very first paint already has the user's look.
+import "@fontsource/jersey-10";
+import "@fontsource/jersey-15";
+import "@fontsource/jersey-20";
+import "@fontsource/jersey-25";
+import { loadAppearance, applyAppearance } from "./theme.js";
+let appearance = loadAppearance();
+applyAppearance(appearance);
+
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1136,6 +1145,7 @@ const COMMANDS = {
   copyLineUp: ["Copy Line Up", "Shift+Alt+Up"],
   copyLineDown: ["Copy Line Down", "Shift+Alt+Down"],
   addNextOccurrence: ["Add Selection to Next Find Match", "Ctrl+D"],
+  appearance: ["Preferences: Appearance (Theme, Colors, Fonts)", "Ctrl+K Ctrl+T"],
   shortcuts: ["Help: Keyboard Shortcuts"],
   about: ["Help: About FluxCode"],
   reload: ["Developer: Reload Window"],
@@ -1146,12 +1156,12 @@ const MENUS = {
   file: ["newFile", "newFolder", "openFile", "openFolder", "-", "save", "saveAs", "saveAll", "toggleAutoSave", "-", "closeEditor", "closeAll", "closeFolder", "-", "exit"],
   edit: ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace", "findInFiles", "-", "toggleComment"],
   selection: ["selectAll", "selectLine", "-", "copyLineUp", "copyLineDown", "moveLineUp", "moveLineDown", "-", "addNextOccurrence"],
-  view: ["commandPalette", "quickOpen", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
+  view: ["commandPalette", "quickOpen", "appearance", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
   run: ["run", "stop", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
   terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "showOutput"],
   help: ["commandPalette", "shortcuts", "-", "about"],
 };
-const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview): /, "");
+const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview|Preferences): /, "");
 // Menu items that show a check mark when on.
 const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave };
 
@@ -1293,6 +1303,10 @@ async function runCommand(id) {
       if (state.tabs.length < 2) return;
       const i = state.tabs.indexOf(tab);
       return activateTab(state.tabs[(i + (id === "nextTab" ? 1 : -1) + state.tabs.length) % state.tabs.length]);
+    }
+    case "appearance": {
+      const { openAppearance } = await import("./appearance.js");
+      return openAppearance({ icons, get: () => appearance, set: (s) => { appearance = s; } });
     }
     case "shortcuts": return showShortcuts();
     case "about":
@@ -1598,7 +1612,7 @@ const bindings = {
   "alt+z": "toggleWordWrap", "ctrl+=": "zoomIn", "ctrl+shift++": "zoomIn", "ctrl++": "zoomIn",
   "ctrl+-": "zoomOut", "ctrl+shift+_": "zoomOut", "ctrl+0": "zoomReset",
 };
-const chordBindings = { "ctrl+o": "openFolder", "ctrl+w": "closeAll", s: "saveAll", "ctrl+s": "saveAll" };
+const chordBindings = { "ctrl+t": "appearance", "ctrl+o": "openFolder", "ctrl+w": "closeAll", s: "saveAll", "ctrl+s": "saveAll" };
 // Keys the WebView would otherwise treat as browser shortcuts (reload, print, devtools, …).
 const blockedBrowserKeys = new Set(["F5", "ctrl+r", "ctrl+shift+r", "ctrl+p", "F3", "F7", "ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c"]);
 

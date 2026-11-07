@@ -1,0 +1,96 @@
+FluxCode Source-Available License, version 1.0
+
+Copyright (c) 2026 MuaraAI. All rights reserved.
+
+This license is NOT an open-source license. You may read the source code and
+help develop FluxCode, but you may not copy it into, or ship it as, your own
+product.
+
+1. Definitions
+
+   "Software" means the source code, build scripts, documentation, icons,
+   images and other material in this repository and in builds of it, except
+   the third-party components listed in THIRD_PARTY_NOTICES.md.
+
+   "Official Repository" means https://github.com/MuaraAI/FluxCode.
+
+   "Licensor" means MuaraAI.
+
+   "Contribution" means a change you submit to the Official Repository, for
+   example as a pull request, patch, issue attachment or suggested edit.
+
+2. What you may do
+
+   a. Read and study the Software.
+
+   b. Download, install and use the official builds that the Licensor
+      publishes (for example on the Official Repository's Releases page) to
+      write your own code, privately or commercially. Code you write with
+      FluxCode is yours; this license does not apply to it.
+
+   c. Clone or fork the Software, and build and run it on your own machine,
+      only to prepare, test and submit Contributions to the Official
+      Repository.
+
+3. What you may not do without the Licensor's prior written permission
+
+   a. Distribute, publish, mirror or share the Software or any modified
+      version of it, in source or binary form, other than by submitting a
+      Contribution to the Official Repository.
+
+   b. Publish or maintain a fork, rebrand or derivative of the Software as a
+      separate project, product or service.
+
+   c. Copy any part of the Software into another product or project.
+
+   d. Sell, rent, sublicense or otherwise commercialize the Software, or offer
+      it to others as a hosted or managed service.
+
+   e. Remove or change this license, copyright notices or attributions.
+
+   f. Use the names "FluxCode" or "MuaraAI", or their logos, to identify a
+      product other than the official one.
+
+   Forking a public repository inside GitHub, as allowed by GitHub's terms of
+   service, does not grant any right beyond section 2.
+
+4. Contributions
+
+   By submitting a Contribution you:
+
+   a. grant the Licensor a perpetual, worldwide, non-exclusive, royalty-free,
+      irrevocable license to use, modify, distribute, sublicense and relicense
+      the Contribution as part of the Software or otherwise;
+
+   b. confirm that you have the right to grant that license and that the
+      Contribution is your own work or properly licensed to you; and
+
+   c. understand that the Licensor may accept, change or reject any
+      Contribution. Accepted Contributions are credited in the project's
+      history.
+
+5. Third-party components
+
+   Third-party components keep their own licenses (see
+   THIRD_PARTY_NOTICES.md). Nothing in this license limits the rights those
+   licenses give you for those components.
+
+6. Termination
+
+   Your rights under this license end automatically if you break it. If you
+   stop the breach within 30 days of becoming aware of it, your rights are
+   restored, unless the Licensor has notified you in writing that they are
+   terminated.
+
+7. No warranty, limitation of liability
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   LICENSOR OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+For permissions beyond this license, contact the Licensor through the
+Official Repository.

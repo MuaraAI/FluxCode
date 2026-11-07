@@ -5,7 +5,7 @@ A lightweight code editor for Windows with the VS Code look and feel, built on
 in Windows' built-in WebView2, and everything that touches the machine (files,
 processes, the terminal, the preview server) runs in Rust.
 
-> Status: **development build `0.3.0-dev.2026-11-07-1100`** — not a final
+> Status: **development build `0.4.0-dev.2026-11-07-1135`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -28,8 +28,18 @@ zip is attached too.
   breadcrumbs, panel (Output + Terminal), status bar
 - Opens inside the monitor's work area (never under the taskbar; maximized
   on small screens) and reopens where you left it
-- FluxCode's own dark theme and **its own icon set** (UI icons, file-type
-  badges, folder icons), drawn for this project
+- **Appearance** (gear in the activity bar, or Ctrl+K Ctrl+T): 8 theme
+  presets (dark and light) or your own **Accent / Background / Text** colors
+  with color pickers. Every other color — panels, borders, selections, syntax
+  highlighting, terminal ANSI colors — is derived from those and, with
+  **auto contrast**, adjusted to meet WCAG contrast ratios (text 7:1, muted
+  text and code 4.5:1), with live contrast scores in the panel
+- **Jersey type scale** (SIL OFL fonts): Jersey 25 for the wordmark, Jersey 20
+  for titles, Jersey 15 for the interface, Jersey 10 for small labels; code
+  stays in a monospace font (Cascadia Code / Consolas, or Jersey 15 if you
+  want it). "System" switches the interface back to Segoe UI
+- **Its own icon set** (UI icons, file-type badges, folder icons), drawn for
+  this project
 - Smooth, cheap animations (opacity/transform only); respects "reduce motion"
 - **Auto Save** (on by default, File → Auto Save): saves 0.7 s after you stop
   typing and when you switch to another app
@@ -142,6 +152,8 @@ src/                     frontend (plain JS + CSS)
   terminal.js            Flux Terminal (lazy-loaded)
   languages.js           lazy language registry
   icons.js               FluxCode icon set + file-type badges
+  theme.js               theme engine: presets, derived palette, auto contrast, fonts
+  appearance.js          Appearance panel (lazy-loaded)
 src-tauri/src/lib.rs     file system, search, process runner, Python/Node detection
 src-tauri/src/terminal.rs    terminal runner, native listing, folder-access grants
 src-tauri/src/preview.rs     Live Preview server
@@ -164,4 +176,9 @@ examples/                python/, js/ (JS + TS), web/ (HTML + CSS + JS)
 
 ## License
 
-MIT
+FluxCode is **source-available**, not open source — see [LICENSE](LICENSE).
+You may read the code, use the official builds, and fork/build it **only to
+contribute back** to this repository (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+Redistributing it, publishing forks or rebrands, or reusing its code in other
+products needs written permission from MuaraAI. Third-party components keep
+their own licenses ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

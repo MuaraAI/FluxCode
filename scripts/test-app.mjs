@@ -203,6 +203,7 @@ check("typing a folder name enters it", !!(await waitFor(`document.querySelector
 await type("..");
 await press("Enter");
 check("'..' goes up", !!(await waitFor(`document.querySelector('.tc.last')?.textContent === 'examples'`, 5000)));
+check("consecutive folder moves share one compact pill", (await evaluate(`document.querySelectorAll('.term-session:not([hidden]) .tnav').length`)) === 1 && !!(await evaluate(`document.querySelector('.tnav-pill b')?.textContent === 'examples'`)));
 const crumbs = await evaluate(`(() => { const c = document.querySelector('.tp-crumbs'); const first = c.querySelector('.tc:not([hidden])'); return { fits: c.scrollWidth <= c.clientWidth + 1, first: first?.textContent, last: c.querySelector('.tc.last')?.textContent }; })()`);
 check("path bar fits (drive and current folder visible)", crumbs.fits && crumbs.first === "C:" && crumbs.last === "examples", JSON.stringify(crumbs));
 measure("terminal used");
@@ -218,6 +219,38 @@ await evaluate(`document.querySelector('[data-pv=close]').click()`);
 await sleep(2500);
 check("closing the preview hides it", await evaluate(`document.querySelector('#preview-pane').hidden`));
 measure("preview closed");
+
+// Appearance: fonts, presets, auto contrast.
+await evaluate(`document.fonts.ready.then(() => true)`);
+check("Jersey fonts load", await evaluate(`Promise.all(['10','15','20','25'].map(n => document.fonts.load('16px "Jersey ' + n + '"'))).then(r => r.every(x => x.length > 0))`));
+const contrastJs = `(() => {
+  const rgb = (c) => c.match(/[\\d.]+/g).slice(0, 3).map(Number);
+  const lum = (c) => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n) => { const d = document.createElement('div'); d.style.color = cs.getPropertyValue(n); document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; };
+  return { text: ratio(v('--fg'), v('--bg-editor')), muted: ratio(v('--fg-muted'), v('--bg-side')), comment: ratio(v('--tk-comment'), v('--bg-editor')), theme: document.documentElement.dataset.theme };
+})()`;
+await evaluate(`document.querySelector('[data-action=appearance]').click()`);
+check("Appearance panel opens", !!(await waitFor(`!!document.querySelector('#appearance .ap-presets')`, 5000)));
+await evaluate(`document.querySelector('[data-preset=flux-light]').click()`);
+await sleep(300);
+const light = await evaluate(contrastJs);
+check("light theme applies and stays readable", light.theme === "light" && light.text >= 7 && light.muted >= 4.5 && light.comment >= 3.8, JSON.stringify(light));
+await shot("08-appearance-light");
+// A deliberately bad pick: mid-gray background and near-gray text.
+await evaluate(`(() => { for (const [k, val] of [['bg', '#777777'], ['text', '#8a8a8a']]) { const i = document.querySelector('[data-color=' + k + ']'); i.value = val; i.dispatchEvent(new Event('input', { bubbles: true })); } })()`);
+await sleep(300);
+const fixed = await evaluate(contrastJs);
+check("auto contrast rescues unreadable picks", fixed.text >= 7 && fixed.muted >= 4.5, JSON.stringify(fixed));
+await evaluate(`document.querySelector('[data-preset=flux-dark]').click()`);
+await sleep(300);
+const darkT = await evaluate(contrastJs);
+check("dark theme readable", darkT.theme === "dark" && darkT.text >= 7 && darkT.comment >= 3.8, JSON.stringify(darkT));
+await shot("09-appearance-dark");
+await press("Escape");
+await sleep(250);
+check("Appearance panel closes", await evaluate(`!document.querySelector('#appearance')`));
 
 // Python GUI app (opens a real window; stopped right after)
 check("open python/gui_app.py", !!(await openFile("python/gui_app.py")));
