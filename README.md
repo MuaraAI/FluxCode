@@ -10,6 +10,15 @@ processes, the terminal, the preview server) runs in Rust.
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
 
+## Install
+
+Download `FluxCode_<version>_x64-setup.exe` from the
+[Releases](https://github.com/MuaraAI/FluxCode/releases) page and run it. It
+installs for your user only (no admin rights) into
+`%LOCALAPPDATA%\FluxCode`, adds FluxCode to the Start Menu, Windows Search and
+the Desktop, and is removed from Settings → Apps → Installed apps. A portable
+zip is attached too.
+
 ## What works now
 
 **Workbench**
@@ -112,6 +121,7 @@ Windows 10/11).
 npm install
 npx tauri dev                # run with hot reload
 npx tauri build --no-bundle  # optimized FluxCode exe
+npx tauri build              # exe + NSIS installer (bundle/nsis/*-setup.exe)
 node scripts/test-app.mjs    # end-to-end test of the built exe
 ```
 
