@@ -37,7 +37,7 @@ BEGIN
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
       VALUE "OriginalFilename", "FluxCode.exe"
-      VALUE "LegalCopyright", "Copyright (c) 2026 MuaraAI"
+      VALUE "LegalCopyright", "Copyright (C) 2026 MuaraAI and contributors. GPL-3.0-or-later"
     END
   END
   BLOCK "VarFileInfo"

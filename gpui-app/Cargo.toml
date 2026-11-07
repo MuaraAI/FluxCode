@@ -3,7 +3,7 @@ name = "fluxcode-gpui"
 version = "0.6.0-dev.2026-11-07-1935"
 description = "FluxCode - native GPUI edition (no WebView)"
 edition = "2021"
-license-file = "../LICENSE"
+license = "GPL-3.0-or-later"
 publish = false
 
 [[bin]]

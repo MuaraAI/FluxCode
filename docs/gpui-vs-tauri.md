@@ -89,9 +89,9 @@ so the extra features cost nothing until they are used.
 
 ## Licensing
 
-`gpui`/`gpui-pre`, `gpui-component`, `gpui-kit`, `gpui-webview`: Apache-2.0. Zed's `editor` and
-`terminal` crates are GPL and are **not** used. Third-party notices need the gpui-kit/Lucide entries
-before a release.
+`gpui`/`gpui-pre`, `gpui-component`, `gpui-kit`, `gpui-webview`: Apache-2.0, compatible with
+FluxCode's GPL-3.0-or-later license. Zed's `editor` and `terminal` crates are not used (they are
+GPL-3.0 and would now be license-compatible, but gpui-component's editor was enough). The GPUI dependencies are listed in THIRD_PARTY_NOTICES.md.
 
 ## Building
 

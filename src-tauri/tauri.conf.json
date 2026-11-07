@@ -21,7 +21,7 @@
     "targets": ["nsis", "deb", "appimage"],
     "shortDescription": "Lightweight code editor for Python and Web",
     "category": "DeveloperTool",
-    "copyright": "Copyright (c) 2026 MuaraAI. All rights reserved.",
+    "copyright": "Copyright (C) 2026 MuaraAI and contributors. GPL-3.0-or-later.",
     "licenseFile": "../LICENSE",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": {
