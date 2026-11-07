@@ -190,6 +190,12 @@ impl Workbench {
         })
         .detach();
 
+        cx.on_app_quit(|this, _| {
+            this.procs.kill_all();
+            async {}
+        })
+        .detach();
+
         let settings = crate::settings::Settings::load();
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
@@ -523,8 +529,8 @@ impl Workbench {
                 } else if Some(id) == self.out_proc {
                     push_text(&mut self.out_lines, &text, kind);
                     self.out_scroll.scroll_to_bottom();
-                } else if let Some(t) = self.agent.on_output(id, &text, err) {
-                    self.agent_message(t, cx);
+                } else if self.agent.owns(id) {
+                    self.agent_on_output(&text, err, cx);
                 }
             }
             ProcEvent::Exit { id, code } => {
@@ -546,8 +552,8 @@ impl Workbench {
                     close_line(&mut self.out_lines);
                     push_line(&mut self.out_lines, &format!("[Done] {}", msg.as_deref().unwrap_or("exit code 0")), LineKind::Info);
                     self.out_scroll.scroll_to_bottom();
-                } else {
-                    self.agent.on_exit(id);
+                } else if self.agent.owns(id) {
+                    self.agent_on_exit(cx);
                 }
             }
         }
@@ -925,6 +931,9 @@ impl Focusable for Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.agent.reloads.is_empty() {
+            self.apply_agent_reloads(window, cx);
+        }
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(self.render_editor_area(window, cx)))

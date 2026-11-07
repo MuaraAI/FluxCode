@@ -121,6 +121,14 @@ impl Procs {
         }
     }
 
+    /// Stop every child (app quit), so no agent or command outlives FluxCode.
+    pub fn kill_all(&mut self) {
+        let ids: Vec<u32> = self.running.keys().copied().collect();
+        for id in ids {
+            self.kill(id);
+        }
+    }
+
     pub fn kill(&mut self, id: u32) {
         if let Some((pid, _)) = self.running.get(&id) {
             #[cfg(windows)]
