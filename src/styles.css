@@ -122,6 +122,7 @@ input { font: inherit; }
 .win-controls button:active { background: color-mix(in srgb, var(--fg-strong) 6%, transparent); }
 #wc-close:hover { background: #c42b1c; color: #fff; }
 #wc-close:active { background: #b2271a; }
+body.platform-linux .win-controls { display: none !important; }
 
 /* ------------------------------------------------------------ menu popup */
 #menu-popup {

@@ -771,6 +771,7 @@ dependencies = [
 name = "fluxcode"
 version = "0.5.1-dev.2026-11-07-1500"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tauri",

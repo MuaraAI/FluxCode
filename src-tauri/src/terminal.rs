@@ -7,7 +7,7 @@
 //! grant the user gave first: the workspace (for the session), a folder they
 //! allowed once or always, or full disk access.
 
-use crate::{command, start_process, Processes};
+use crate::{command, start_process, sys, Processes};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,14 +38,14 @@ pub struct Access {
     file: Option<PathBuf>,
 }
 
-/// Lower-case, backslashes, no trailing separator: `C:\Users\Me`.
 fn norm(path: &str) -> String {
-    path.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+    sys::normalize_path(path)
 }
 
 fn is_under(path: &str, root: &str) -> bool {
-    path == root || (path.starts_with(root) && path[root.len()..].starts_with('\\'))
+    sys::is_path_under(path, root)
 }
+
 
 impl Access {
     pub fn load(app: &AppHandle) -> Self {
@@ -168,7 +168,12 @@ fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }))
+        .unwrap_or_else(|| {
+            #[cfg(windows)]
+            { PathBuf::from("C:\\") }
+            #[cfg(not(windows))]
+            { PathBuf::from("/") }
+        })
 }
 
 /// Resolve what the user typed (`..`, `...`, `~`, `D:`, `src\app`, an absolute
@@ -187,7 +192,7 @@ pub fn term_resolve(cwd: String, input: String) -> Result<String, String> {
             p.push("..");
         }
         p
-    } else if raw.len() == 2 && raw.ends_with(':') {
+    } else if cfg!(windows) && raw.len() == 2 && raw.ends_with(':') {
         PathBuf::from(format!("{raw}\\")) // "D:" means the drive root
     } else {
         Path::new(&cwd).join(raw)
@@ -197,8 +202,12 @@ pub fn term_resolve(cwd: String, input: String) -> Result<String, String> {
         return Err(format!("'{raw}' is not a folder."));
     }
     let s = canon.to_string_lossy();
-    Ok(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
+    #[cfg(windows)]
+    { Ok(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()) }
+    #[cfg(not(windows))]
+    { Ok(s.to_string()) }
 }
+
 
 #[derive(Serialize)]
 pub struct TermEnv {
@@ -207,67 +216,54 @@ pub struct TermEnv {
     shells: Vec<String>,
     user: String,
     computer: String,
-}
-
-fn on_path(exe: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(exe).is_file()))
+    platform: String,
 }
 
 /// Home folder, drives and available shells (no process is started for this).
 #[tauri::command]
 pub fn term_env() -> TermEnv {
-    let (drives, shells) = if cfg!(windows) {
-        let drives = (b'C'..=b'Z')
-            .map(|c| format!("{}:\\", c as char))
-            .filter(|d| Path::new(d).exists())
-            .collect();
-        let mut shells = vec!["cmd".to_string(), "powershell".to_string()];
-        if on_path("pwsh.exe") {
-            shells.push("pwsh".into());
-        }
-        (drives, shells)
-    } else {
-        // Linux / macOS: the root plus mounted volumes; bash, sh and (if installed) zsh / pwsh.
-        let mut drives = vec!["/".to_string()];
-        for base in ["/media", "/mnt", "/run/media", "/Volumes"] {
-            if let Ok(rd) = fs::read_dir(base) {
-                drives.extend(rd.filter_map(Result::ok).map(|e| e.path().to_string_lossy().into_owned()));
-            }
-        }
-        let shells = ["bash", "sh", "zsh", "pwsh"].into_iter().filter(|s| on_path(s)).map(String::from).collect();
-        (drives, shells)
-    };
+    let (user, computer) = sys::get_env_user();
     TermEnv {
         home: home_dir().to_string_lossy().into_owned(),
-        drives,
-        shells,
-        user: std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default(),
-        computer: std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
+        drives: sys::get_system_roots(),
+        shells: sys::get_available_shells(),
+        user,
+        computer,
+        platform: sys::get_platform().to_string(),
     }
 }
 
-/// Is `name` a program on PATH (any PATHEXT extension)? Lets the terminal tell
-/// "go into folder `python`" apart from "run python" without starting anything.
+/// Is `name` a program on PATH (any executable on Unix, or PATHEXT on Windows)?
 #[tauri::command]
 pub fn term_is_command(name: String) -> bool {
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
+    let Some(path) = std::env::var_os("PATH") else { return false };
+    #[cfg(windows)]
+    {
+        let exts: Vec<String> = std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
             .split(';')
             .filter(|e| !e.is_empty())
             .map(str::to_lowercase)
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    let Some(path) = std::env::var_os("PATH") else { return false };
-    std::env::split_paths(&path).any(|dir| exts.iter().any(|ext| dir.join(format!("{name}{ext}")).is_file()))
+            .collect();
+        std::env::split_paths(&path).any(|dir| {
+            exts.iter().any(|ext| sys::is_executable(&dir.join(format!("{name}{ext}"))))
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::split_paths(&path).any(|dir| {
+            sys::is_executable(&dir.join(&name))
+        })
+    }
 }
+
 
 // ------------------------------------------------------------------ running
 
+#[cfg(any(windows, test))]
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+#[cfg(any(windows, test))]
 fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -298,6 +294,7 @@ pub fn term_run(
     if !access.allows(&cwd) {
         return Err("access-denied".into());
     }
+    #[cfg(windows)]
     let mut cmd = match shell.as_str() {
         "powershell" | "pwsh" => {
             // -EncodedCommand avoids every command-line quoting pitfall.
@@ -314,14 +311,21 @@ pub fn term_run(
             c.raw_arg(format!("/d /s /c \"chcp 65001>nul & {line}\""));
             c
         }
-        #[cfg(not(windows))]
-        other => {
-            // Linux / macOS: bash by default, or whichever shell the user picked.
-            let mut c = command(if matches!(other, "sh" | "zsh" | "bash") { other } else { "bash" });
-            c.args(["-c", &line]);
-            c
-        }
     };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let shell_bin = match shell.as_str() {
+            "zsh" => "zsh",
+            "fish" => "fish",
+            "sh" => "sh",
+            "dash" => "dash",
+            _ => "bash",
+        };
+        let mut c = command(shell_bin);
+        c.args(["-c", &line]);
+        c
+    };
+
     cmd.current_dir(&cwd)
         // Ask tools for colors even though stdout is a pipe; the terminal renders ANSI colors.
         .env("FORCE_COLOR", "1")
@@ -347,10 +351,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn grants_cover_subfolders_only() {
         assert!(is_under(&norm("C:\\Users\\Me\\src"), &norm("c:/users/me")));
         assert!(is_under(&norm("C:\\Users\\Me"), &norm("C:\\Users\\Me\\")));
         assert!(!is_under(&norm("C:\\Users\\Mel"), &norm("C:\\Users\\Me")));
         assert!(is_under(&norm("D:\\Games"), &norm("D:\\")));
     }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn grants_cover_subfolders_unix() {
+        assert!(is_under("/home/user/project/src", "/home/user/project"));
+        assert!(is_under("/home/user/project", "/home/user/project/"));
+        assert!(!is_under("/home/user/project2", "/home/user/project"));
+        assert!(is_under("/home/user/project", "/"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn term_resolve_unix() {
+        assert!(term_resolve("/tmp".into(), "..".into()).is_ok());
+        assert!(term_resolve("/tmp".into(), "~".into()).is_ok());
+        assert!(term_resolve("/tmp".into(), "/tmp".into()).is_ok());
+    }
+
 }

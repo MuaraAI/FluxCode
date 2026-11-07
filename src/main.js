@@ -40,7 +40,8 @@ const dirname = (p) => {
   return i < 0 ? "" : p.slice(0, i);
 };
 const join = (dir, name) => (/[\\/]$/.test(dir) ? dir + name : dir + sepOf(dir) + name);
-const samePath = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase(); // Windows: case-insensitive
+const samePath = (a, b) =>
+  !!a && !!b && (document.body.classList.contains("platform-linux") ? a === b : a.toLowerCase() === b.toLowerCase());
 const isInside = (root, p) => !!root && !!p && p.toLowerCase().startsWith(root.toLowerCase());
 const relative = (root, p) => (isInside(root, p) ? p.slice(root.length).replace(/^[\\/]/, "") : p);
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -942,6 +943,8 @@ function releaseOutput() {
 function clearOutput() {
   outputPane?.clear();
 }
+
+
 
 function showPanel(show = true) {
   $("#panel").hidden = !show;
@@ -2062,6 +2065,9 @@ async function boot() {
     VERSION = v;
     $(".tb-badge").hidden = !v.includes("-dev");
     $(".tb-badge").title = `Development build ${v} — not a final release`;
+  }).catch(() => {});
+  invoke("get_platform").then((p) => {
+    if (p === "linux") document.body.classList.add("platform-linux");
   }).catch(() => {});
   $("#panel").dataset.tab = state.panelTab;
   toggleSidebar(true);
