@@ -15,6 +15,9 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 
+/// Files above this size open without syntax highlighting.
+const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
+
 actions!(fluxcode, [Save, CloseTab, OpenFolder, ToggleSidebar, NextTab, PrevTab]);
 
 pub fn bind_keys(cx: &mut App) {
@@ -57,7 +60,7 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(root: Option<PathBuf>, open: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree = cx.new(|cx| TreeState::new(cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -73,6 +76,9 @@ impl Workbench {
         };
         if let Some(root) = root {
             this.open_folder(root, cx);
+        }
+        for path in open {
+            this.open_file(path, window, cx);
         }
         this
     }
@@ -108,7 +114,14 @@ impl Workbench {
             return;
         }
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
-        let lang = files::language_for(&path);
+        // gpui-component's tree-sitter highlighter keeps styles for the whole
+        // document (~+170 MB for a 3.5 MB / 60k-line JS file), so very large
+        // files open as plain text, like VS Code's large-file mode.
+        let large = bytes.len() > LARGE_FILE_BYTES;
+        let lang = if large { "text" } else { files::language_for(&path) };
+        if large {
+            self.status = "Large file: syntax highlighting is off".into();
+        }
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)

@@ -14,14 +14,19 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
-    // `fluxcode-gpui [folder]`; defaults to the current directory.
-    let root = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .and_then(|p| p.canonicalize().ok())
+    // `fluxcode-gpui [folder] [files...]` like the Tauri app; with no
+    // arguments the current directory is opened.
+    let paths: Vec<PathBuf> = std::env::args_os()
+        .skip(1)
+        .filter(|a| !a.to_string_lossy().starts_with('-'))
+        .filter_map(|a| PathBuf::from(a).canonicalize().ok())
         // canonicalize() gives `\\?\C:\...` on Windows; keep the plain form.
-        .map(|p| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\")));
+        .map(|p| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\")))
+        .collect();
+    let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
+    let root = paths.iter().find(|p| p.is_dir()).cloned().or_else(|| {
+        if files.is_empty() { std::env::current_dir().ok() } else { None }
+    });
 
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
@@ -36,7 +41,7 @@ fn main() {
             ..TitleBar::window_options()
         };
         gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| workbench::Workbench::new(root.clone(), window, cx))
+            cx.new(|cx| workbench::Workbench::new(root.clone(), files.clone(), window, cx))
         })
         .expect("failed to open the FluxCode window");
     });
