@@ -1,0 +1,20 @@
+# Maintainer: MuaraAI <team@muaraai.com>
+pkgname=fluxcode-bin
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Lightweight code editor for Python and Web built with Tauri and CodeMirror 6"
+arch=('x86_64' 'aarch64')
+url="https://github.com/MuaraAI/FluxCode"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'libayatana-appindicator' 'openssl')
+provides=('fluxcode')
+conflicts=('fluxcode')
+source_x86_64=("${pkgname}-${pkgver}-x86_64.deb::https://github.com/MuaraAI/FluxCode/releases/download/v${pkgver}/fluxcode_${pkgver}_amd64.deb")
+source_aarch64=("${pkgname}-${pkgver}-aarch64.deb::https://github.com/MuaraAI/FluxCode/releases/download/v${pkgver}/fluxcode_${pkgver}_arm64.deb")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    bsdtar -xf data.tar.* -C "${pkgdir}/"
+    install -Dm755 "${pkgdir}/usr/bin/fluxcode" "${pkgdir}/usr/bin/fluxcode"
+}
