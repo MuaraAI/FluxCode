@@ -5,7 +5,15 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent;
+mod complete;
+mod core;
+mod explorer;
 mod files;
+mod panel;
+mod proc;
+mod search;
+mod settings;
 mod theme;
 mod workbench;
 

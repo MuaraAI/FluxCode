@@ -1613,7 +1613,12 @@ dependencies = [
 name = "fluxcode-gpui"
 version = "0.6.0-dev.2026-11-07-1700"
 dependencies = [
+ "anyhow",
+ "futures",
  "gpui-kit",
+ "lsp-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
