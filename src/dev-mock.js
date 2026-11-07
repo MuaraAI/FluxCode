@@ -7,7 +7,7 @@ const files = {
   "C:\\demo\\main.py": `"""Demo file."""\n\nimport sys\n\n\nclass Greeter:\n    def __init__(self, name: str) -> None:\n        self.name = name\n\n    def greet(self) -> str:\n        # f-strings, numbers and keywords\n        return f"Hello, {self.name}! {42 + 3.14}"\n\n\nif __name__ == "__main__":\n    for i in range(3):\n        if i % 2 == 0:\n            print(Greeter("FluxCode").greet())\n        else:\n            pass\n`,
   "C:\\demo\\utils\\helpers.py": "def add(a, b):\n    return a + b\n",
   "C:\\demo\\README.md": "# Demo\n",
-  "C:\\demo\\web\\index.html": "",
+  "C:\\demo\\web\\index.html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <title>Demo</title>\n</head>\n<body>\n  <p>test halo</p>\n</body>\n</html>\n",
   "C:\\demo\\web\\style.css": "body {\n  margin: 0;\n}\n",
   "C:\\demo\\web\\app.js": "const el = document.querySelector('#app');\n",
   "C:\\demo\\package.json": "{\n  \"name\": \"demo\",\n  \"dependencies\": {\n    \"express\": \"^4.19.2\"\n  }\n}\n",
@@ -81,6 +81,40 @@ mockIPC(
         return null;
       }
       case "kill_process": setTimeout(() => emit("proc-exit", { id: args.id, code: null }), 20); return null;
+      // A fake OpenCode over ACP: answers the handshake and streams a canned reply with a tool call.
+      case "acp_start": return "opencode (mock)";
+      case "acp_stop": return null;
+      case "acp_send": {
+        const msg = JSON.parse(args.line);
+        const line = (o) => setTimeout(() => emit("acp-line", { line: JSON.stringify({ jsonrpc: "2.0", ...o }) }), 30);
+        const update = (sessionId, update, delay) => setTimeout(() => emit("acp-line", { line: JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } }) }), delay);
+        if (msg.method === "initialize") line({ id: msg.id, result: { protocolVersion: 1, agentInfo: { name: "OpenCode", version: "mock" }, agentCapabilities: {} } });
+        else if (msg.method === "session/new") line({ id: msg.id, result: { sessionId: "ses_mock", configOptions: [
+          { id: "model", name: "Model", category: "model", type: "select", currentValue: "opencode/big-pickle", options: [{ value: "opencode/big-pickle", name: "opencode/Big Pickle" }, { value: "opencode/deepseek-v4.1-flash-free", name: "opencode/DeepSeek V4.1 Flash Free" }, { value: "my-ai-gweh/SigmaBoy", name: "my-ai-gweh/SigmaBoy" }] },
+          { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "deep", name: "Deep" }, { value: "fast", name: "Fast" }] },
+          { id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "kerjain", options: [{ value: "kerjain", name: "kerjain", description: "Build: edit files and run commands" }, { value: "planing", name: "planing", description: "Plan only, no edits" }] },
+        ] } });
+        else if (msg.method === "session/set_config_option") line({ id: msg.id, result: {} });
+        else if (msg.method === "session/prompt") {
+          const sid = msg.params.sessionId;
+          update(sid, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Looking at the open file first." } }, 80);
+          update(sid, { sessionUpdate: "plan", entries: [{ content: "Read index.html", status: "completed" }, { content: "Suggest a fix", status: "in_progress" }] }, 150);
+          update(sid, { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read web/index.html", kind: "read", status: "in_progress", locations: [{ path: "C:\\demo\\web\\index.html" }] }, 220);
+          update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", content: [{ type: "content", content: { type: "text", text: "<!DOCTYPE html>…" } }] }, 500);
+          // An edit, written straight to "disk" like the real OpenCode, reported as a diff.
+          const target = "C:\\demo\\web\\index.html";
+          const before = files[target];
+          const after = before.includes("<style>") ? before.replace("<style>\n", "<style>\n      body { background: red; }\n") : before.replace("<head>", "<head>\n  <style>\n    body { background: red; }\n  </style>") .replace("<p>test halo</p>", "<p>halo dunia</p>");
+          update(sid, { sessionUpdate: "tool_call", toolCallId: "t2", title: "edit", kind: "edit", status: "pending" }, 560);
+          setTimeout(() => { files[target] = after; }, 600);
+          update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t2", status: "completed", title: "edit", locations: [{ path: target }], content: [{ type: "content", content: { type: "text", text: "Edited web/index.html (1 replacement)" } }, { type: "diff", path: target, oldText: before, newText: after }] }, 620);
+          const text = "Halo! Berikut ringkasan file **index.html**:\n\n- Ada `<style>` kosong di `<head>`\n- Tag `<body>` ganda\n\n```html\n<body>\n  <p>test halo</p>\n</body>\n```\n\nMau saya rapikan?";
+          let at = 700;
+          for (const chunk of text.match(/[^]{1,12}/g)) { update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: chunk } }, at); at += 25; }
+          setTimeout(() => emit("acp-line", { line: JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } }) }), at + 50);
+        }
+        return null;
+      }
       default: return null;
     }
   },

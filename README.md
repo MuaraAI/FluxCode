@@ -6,7 +6,7 @@ in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
 everything that touches the machine (files, processes, the terminal, the preview server)
 runs in Rust.
 
-> Status: **development build `0.5.1-dev.2026-11-07-1500`** — not a final
+> Status: **development build `0.5.2-dev.2026-11-07-1545`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -152,8 +152,14 @@ once (`npm i -g @opencode/cli`, v2 or newer) and sign in with
   folder; **Stop when idle** (default on) quits it after 10 minutes and the
   next message starts it again
 - Streams the answer, the agent's plan, tool calls (with diffs and output)
-  and thoughts into a light transcript; files the agent writes are reloaded
-  in the editor; its file reads/writes go through FluxCode
+  and thoughts into a light transcript
+- **Live edits, like Cursor**: a file the agent changes opens in the editor
+  at once with the hunks inline — added lines green, removed lines red — and
+  **Keep / Undo** on every hunk. A **Changes** list in the view shows every
+  file touched this session with +/− counts and Keep / Undo per file or for
+  all of them
+- Mode, model and effort are picked from light custom menus (no native
+  `<select>`); the status shows the context tokens used
 - Permission requests appear inline (allow once / always / reject), or set
   **Auto-approve tools** in Settings; modes (build / plan) and `/commands`
   come from OpenCode itself

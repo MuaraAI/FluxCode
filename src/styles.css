@@ -814,21 +814,56 @@ button.sb-item:hover { background: color-mix(in srgb, var(--fg-strong) 8%, trans
 
 /* ------------------------------------------------------------ opencode view */
 #agent-view { display: flex; flex-direction: column; min-height: 0; }
-.ag-head { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px var(--gutter); flex: none; }
+.ag-head { display: flex; align-items: center; gap: 6px; padding: 2px 8px 6px var(--gutter); flex: none; }
 .ag-status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fg-muted); min-width: 0; flex: 1; }
 .ag-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); flex: none; transition: background-color 0.2s; }
 #agent-view[data-status="ready"] .ag-dot { background: var(--ok); }
 #agent-view[data-status="busy"] .ag-dot, #agent-view[data-status="starting"] .ag-dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
 #agent-view[data-status="error"] .ag-dot { background: var(--err); }
-.ag-config { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 var(--gutter) 6px; flex: none; animation: fade-in 0.15s; }
-.ag-config select { flex: 1 1 90px; min-width: 0; height: 24px; padding: 0 20px 0 8px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: 12px var(--font-ui); outline: none; appearance: none; text-overflow: ellipsis; cursor: pointer; background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%), linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%); background-position: calc(100% - 11px) 10px, calc(100% - 7px) 10px; background-size: 4px 4px; background-repeat: no-repeat; transition: border-color 0.12s; }
-.ag-config select:hover { border-color: var(--accent); }
-.ag-config select.ag-mode { color: var(--fg-strong); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ag-config { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 var(--gutter) 8px; flex: none; animation: fade-in 0.15s; }
+.ag-pill { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px 0 8px; border-radius: 12px; max-width: 100%; min-width: 0; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font-size: 12px; transition: border-color 0.12s, background-color 0.12s; }
+.ag-pill small { color: var(--fg-dim); font-size: 10.5px; flex: none; }
+.ag-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.ag-pill .ic { width: 12px; height: 12px; flex: none; color: var(--fg-dim); transform: rotate(90deg); transition: transform 0.15s var(--ease), color 0.12s; }
+.ag-pill:hover, .ag-pill.open { border-color: var(--accent); background: var(--bg-input-hover); color: var(--fg-strong); }
+.ag-pill.open .ic { transform: rotate(-90deg); color: var(--accent); }
+.ag-pill.mode { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--fg-strong); }
+.ag-pill.mode span { color: var(--accent); font-weight: 600; }
+.ag-menu { position: fixed; z-index: 170; min-width: 200px; max-width: min(360px, calc(100vw - 16px)); padding: 4px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); animation: pop-in 0.12s var(--ease); font-family: var(--font-ui); }
+.ag-menu-title { font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--fg-dim); padding: 5px 10px 3px; }
+.ag-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 6px; text-align: left; color: var(--fg); }
+.ag-menu button:hover, .ag-menu button.focus { background: var(--bg-select); color: var(--fg-strong); }
+.ag-menu button.on { color: var(--fg-strong); }
+.ag-menu-check { width: 14px; display: grid; place-items: center; color: var(--accent); flex: none; }
+.ag-menu-check .ic { width: 14px; height: 14px; }
+.ag-menu-text { display: flex; flex-direction: column; min-width: 0; }
+.ag-menu-text b { font-weight: 500; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-menu-text small { color: var(--fg-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-actions { display: flex; gap: 2px; }
 .ag-actions button { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; color: var(--fg-muted); transition: background-color 0.12s, color 0.12s; }
 .ag-actions button:hover { background: var(--bg-hover); color: var(--fg-strong); }
-.ag-log { flex: 1; min-height: 0; overflow-y: auto; padding: 4px var(--gutter) 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
+.ag-changes { flex: none; margin: 0 var(--gutter) 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 5%, transparent); padding: 4px; animation: block-in 0.18s var(--ease); max-height: 180px; overflow-y: auto; }
+.ag-ch-head { display: flex; align-items: center; gap: 5px; padding: 2px 4px 4px 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.ag-ch-head > span:not(.ag-spacer) { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ag-ch-head .ic { width: 13px; height: 13px; color: var(--accent); }
+.ag-ch-head b { color: var(--fg-strong); font-weight: 600; font-size: 11.5px; }
+.ag-ch-head button { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 5px; color: var(--fg); border: 1px solid var(--border-strong); background: var(--bg-input); transition: background-color 0.12s; }
+.ag-ch-head button:hover { background: var(--bg-select); color: var(--fg-strong); }
+.ag-ch-row { display: flex; align-items: center; gap: 2px; border-radius: 6px; }
+.ag-ch-row:hover { background: var(--bg-hover); }
+.ag-ch-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px; text-align: left; color: var(--fg); font-size: 12.5px; border-radius: 6px; }
+.ag-ch-open span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-ch-open em { font-style: normal; font-size: 11px; flex: none; }
+.ag-ch-open i { font-style: normal; }
+.ag-ch-open i.add { color: var(--ok); }
+.ag-ch-open i.del { color: var(--err); }
+.ag-ch-row > button[data-ch] { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; color: var(--fg-muted); opacity: 0; transition: opacity 0.12s, background-color 0.12s; }
+.ag-ch-row:hover > button[data-ch] { opacity: 1; }
+.ag-ch-row > button[data-ch]:hover { background: var(--bg-select); color: var(--fg-strong); }
+.ag-ch-row > button[data-ch=keep]:hover { color: var(--ok); }
+.ag-ch-row > button[data-ch=undo]:hover { color: var(--err); }
+.ag-log { flex: 1; min-height: 0; overflow-y: auto; padding: 8px var(--gutter) 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; border-top: 1px solid var(--border); }
 .ag-note { display: flex; gap: 8px; align-items: flex-start; color: var(--fg-muted); font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--fg-strong) 2.5%, transparent); animation: block-in 0.2s var(--ease) both; }
 .ag-note .ic { flex: none; margin-top: 2px; color: var(--accent); }
 .ag-note.err .ic { color: var(--err); }
