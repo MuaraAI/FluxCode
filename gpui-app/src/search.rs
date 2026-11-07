@@ -85,7 +85,7 @@ impl Workbench {
                             .map(|i| {
                                 let (f, h) = this.search_rows[i];
                                 let fh = &this.search.files[f];
-                                let row = h_flex().id(("sr", i)).w_full().h(px(22.)).px_2().gap_2().text_sm().hover(|s| s.bg(c(0x232529)));
+                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(22.)).px_2().gap_2().text_sm().hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -95,8 +95,8 @@ impl Workbench {
                                             .and_then(|r| fh.path.parent()?.strip_prefix(r).ok())
                                             .map(|p| p.display().to_string())
                                             .unwrap_or_default();
-                                        let (txt, col) = files::badge(&name);
-                                        row.child(div().text_size(px(9.)).font_weight(FontWeight::BOLD).text_color(c(col)).child(txt))
+                                        let (icon, tint) = files::icon_for(&name);
+                                        row.child(gpui_kit::component::Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint)))
                                             .child(div().text_color(c(theme::FG_STRONG)).child(name))
                                             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(rel))
                                             .child(div().flex_1())

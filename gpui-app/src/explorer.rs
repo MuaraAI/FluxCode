@@ -24,52 +24,49 @@ impl Workbench {
                 .text_sm()
                 .text_color(c(theme::FG_MUTED))
                 .child("You have not yet opened a folder.")
-                .child(
-                    Button::new("open-folder")
-                        .primary()
-                        .label("Open Folder")
-                        .on_click(cx.listener(|_, _, w, cx| w.dispatch_action(Box::new(OpenFolder), cx))),
-                )
+                .child(self.action_button("x-open-folder", "Open folder", crate::ui::Kind::Primary, cx, |_, w, cx| {
+                    w.dispatch_action(Box::new(OpenFolder), cx)
+                }))
                 .into_any_element();
         }
         let view = cx.entity();
         let active_path = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned());
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
         let target = self.ctx_target.clone();
+        let dirs = self.dirs.clone();
         let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
             let item = entry.item();
             let id = item.id.to_string();
             let is_open = active_path.as_deref() == Some(id.as_str());
             let is_sel = selected.as_deref() == Some(id.as_str());
-            let lead: AnyElement = if entry.is_folder() {
-                h_flex()
-                    .gap_1()
-                    .text_color(c(theme::FOLDER))
-                    .child(
-                        Icon::new(if entry.is_expanded() { IconName::ChevronDown } else { IconName::ChevronRight })
-                            .xsmall()
-                            .text_color(c(theme::FG_DIM)),
-                    )
-                    .child(Icon::new(if entry.is_expanded() { IconName::FolderOpen } else { IconName::Folder }).small())
-                    .into_any_element()
+            // Every row: a 12px chevron slot, then one 16px icon from the same outline set.
+            let is_dir = entry.is_folder() || dirs.contains(&id);
+            // Skipped folders (.git, node_modules, ...) are listed but never opened: dimmed, no chevron.
+            let skipped = is_dir && !entry.is_folder();
+            let chevron = div().w(theme::u(12.)).flex().justify_center().when(entry.is_folder(), |d| {
+                d.child(
+                    Icon::new(if entry.is_expanded() { IconName::ChevronDown } else { IconName::ChevronRight })
+                        .xsmall()
+                        .text_color(c(theme::FG_DIM)),
+                )
+            });
+            let icon = if is_dir {
+                Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
+                    .size(theme::u(16.))
+                    .text_color(if skipped { c(theme::FG_DIM) } else { c(theme::FOLDER) })
             } else {
-                let (txt, col) = files::badge(&item.label);
-                div()
-                    .ml(px(16.))
-                    .w(px(22.))
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(c(col))
-                    .child(txt)
-                    .into_any_element()
+                let (icon, tint) = files::icon_for(&item.label);
+                Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint))
             };
+            let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
+            let label_color = if skipped { c(theme::FG_DIM) } else { c(theme::FG) };
             ListItem::new(ix)
                 .w_full()
-                .h(px(22.))
+                .h(theme::u(22.))
                 .px_1()
-                .pl(px(12.) * entry.depth() + px(6.))
+                .pl(theme::u(12.) * entry.depth() + theme::u(6.))
                 .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
-                .child(h_flex().gap_1().text_color(c(theme::FG)).child(lead).child(item.label.clone()))
+                .child(h_flex().gap_1().text_color(label_color).child(lead).child(item.label.clone()))
                 .on_click({
                     let view = view.clone();
                     let item = item.clone();
@@ -77,7 +74,7 @@ impl Workbench {
                         let path = PathBuf::from(item.id.as_ref());
                         view.update(cx, |this, cx| {
                             this.selected = Some(path.clone());
-                            if !item.is_folder() {
+                            if !is_dir {
                                 this.open_file(path, window, cx);
                             }
                             cx.notify();
@@ -116,10 +113,12 @@ impl Workbench {
         };
         let ask_name = !matches!(op, PendingOp::Delete(_));
         v_flex()
+            .m_2()
             .p_2()
             .gap_2()
-            .border_b_1()
-            .border_color(c(theme::BORDER))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(c(if matches!(op, PendingOp::Delete(_)) { theme::DANGER } else { theme::BORDER_STRONG }))
             .bg(c(theme::BG_ELEVATED))
             .text_xs()
             .child(label)

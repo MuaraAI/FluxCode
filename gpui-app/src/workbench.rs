@@ -6,6 +6,7 @@ use crate::core;
 use crate::files;
 use crate::proc::{ProcEvent, Procs};
 use crate::theme::{self, c};
+use crate::ui;
 use futures::StreamExt;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
@@ -13,9 +14,8 @@ use gpui_kit::component::{
     input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
     menu::{DropdownMenu, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
-    status_bar::StatusBar,
     tree::TreeState,
-    v_flex, Disableable, Icon, IconName, Sizable, TitleBar,
+    v_flex, Icon, IconName, Sizable, TitleBar,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::cell::RefCell;
@@ -31,7 +31,8 @@ actions!(
         Save, SaveAll, CloseTab, OpenFolder, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
-        ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview
+        ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
+        NextTheme
     ]
 );
 
@@ -56,6 +57,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-f5", RunFile, None),
         KeyBinding::new("shift-f5", StopRun, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
+        KeyBinding::new("ctrl-k ctrl-t", NextTheme, None),
         KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
@@ -115,6 +117,8 @@ pub(crate) enum PendingOp {
 pub struct Workbench {
     pub(crate) root: Option<PathBuf>,
     pub(crate) tree: Entity<TreeState>,
+    /// Every folder in the tree (by path), including empty and skipped ones.
+    pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
     pub(crate) active: Option<usize>,
     pub(crate) view: SideView,
@@ -211,6 +215,7 @@ impl Workbench {
         let mut this = Self {
             root: None,
             tree,
+            dirs: Rc::default(),
             docs: Vec::new(),
             active: None,
             view: SideView::Explorer,
@@ -275,9 +280,15 @@ impl Workbench {
         let Some(root) = self.root.clone() else { return };
         let tree = self.tree.clone();
         // Walk the folder off the UI thread, then hand the items to the tree.
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             let nodes = cx.background_spawn(async move { files::scan(&root) }).await;
-            _ = tree.update(cx, |state, cx| state.set_items(files::to_items(nodes), cx));
+            let mut dirs = std::collections::HashSet::new();
+            let items = files::to_items(nodes, &mut dirs);
+            _ = tree.update(cx, |state, cx| state.set_items(items, cx));
+            _ = this.update(cx, |this, cx| {
+                this.dirs = Rc::new(dirs);
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -304,12 +315,14 @@ impl Workbench {
             self.status = "Large file: syntax highlighting is off".into();
         }
         let s = &self.settings;
-        let (tab, wrap) = (s.tab_size, s.word_wrap);
+        let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
                 .line_number(true)
+                // Vertical guides show how far each block reaches; spaces show as faint dots.
                 .indent_guides(true)
+                .show_whitespaces(dots)
                 .tab_size(TabSize { tab_size: tab, hard_tabs: false })
                 .soft_wrap(wrap)
                 .default_value(file.text)
@@ -518,6 +531,13 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Ctrl+K Ctrl+T: the next color theme, FluxDark → FluxCream → FluxMono → FluxRed.
+    fn on_next_theme(&mut self, _: &NextTheme, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = theme::PALETTES.iter().position(|p| p.id == theme::palette().id).unwrap_or(0);
+        let next = theme::PALETTES[(ix + 1) % theme::PALETTES.len()].id;
+        self.set_theme(next, window, cx);
+    }
+
     fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
         self.status = format!("FluxCode {} (GPUI edition)", env!("CARGO_PKG_VERSION")).into();
         cx.notify();
@@ -586,13 +606,13 @@ impl Workbench {
             .dropdown_menu(move |menu, _, _| items(menu.min_w(px(220.))))
     }
 
-    fn render_title_bar(&self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render_title_bar(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let folder = self
             .root
             .as_deref()
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "FluxCode".into());
+            .unwrap_or_else(|| "no folder open".into());
         TitleBar::new().child(
             h_flex()
                 .w_full()
@@ -601,7 +621,7 @@ impl Workbench {
                 .gap_1()
                 .text_xs()
                 .text_color(c(theme::FG_MUTED))
-                .child(div().px_1().text_color(c(theme::ACCENT)).font_weight(FontWeight::BOLD).child("⚡"))
+                .child(div().mr_2().text_sm().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child("FluxCode"))
                 .child(Self::render_menu("m-file", "File", |m| {
                     m.menu("Open File...", Box::new(OpenFile))
                         .menu("Open Folder...", Box::new(OpenFolder))
@@ -647,76 +667,84 @@ impl Workbench {
                 .child(Self::render_menu("m-term", "Terminal", |m| {
                     m.menu("Toggle Terminal", Box::new(ToggleTerminal))
                 }))
-                .child(Self::render_menu("m-help", "Help", |m| m.menu("About FluxCode", Box::new(About))))
+                .child(Self::render_menu("m-help", "Help", |m| {
+                    m.menu("Next Color Theme", Box::new(NextTheme)).separator().menu("About FluxCode", Box::new(About))
+                }))
                 .child(div().flex_1())
                 .child(
                     h_flex()
-                        .w(px(380.))
-                        .h(px(24.))
-                        .justify_center()
+                        .id("cmd-center")
+                        .w(theme::u(380.))
+                        .h(theme::u(24.))
+                        .px_2()
+                        .gap_2()
                         .rounded(px(6.))
-                        .bg(c(theme::BG_ELEVATED))
+                        .cursor_pointer()
+                        .bg(c(theme::BG_SIDE))
                         .border_1()
                         .border_color(c(theme::BORDER))
-                        .gap_2()
-                        .child(Icon::new(IconName::Search).xsmall())
-                        .child(folder),
+                        .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
+                        .on_click(cx.listener(|this, _, w, cx| this.on_find_in_files(&FindInFiles, w, cx)))
+                        .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
+                        .child(div().flex_1().text_color(c(theme::FG)).child(folder))
+                        .child(div().text_color(c(theme::FG_DIM)).child("Ctrl+Shift+F")),
                 )
                 .child(div().flex_1()),
         )
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
-            let active = this.sidebar_open && this.view == view;
+        // VS Code's pattern: the active view gets a 2px accent line on the left and full-strength icon.
+        let item = |id: &'static str, icon: IconName, active: bool, _this: &Self, _cx: &mut Context<Self>| {
             div()
                 .id(id)
-                .w_full()
-                .h(px(44.))
+                .relative()
+                .size(theme::u(48.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .border_l_2()
-                .border_color(if active { c(theme::FG_STRONG) } else { transparent_black() })
-                .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_DIM) })
-                .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                .child(Icon::new(icon).size(px(22.)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.view == view && this.sidebar_open {
-                        this.sidebar_open = false;
-                    } else {
-                        this.view = view;
-                        this.sidebar_open = true;
-                    }
-                    cx.notify();
-                }))
+                .cursor_pointer()
+                .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
+                .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
+                .when(active, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).bg(c(theme::ACCENT))))
+                .child(Icon::new(icon).size(theme::u(22.)))
+        };
+        let view_item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
+            let active = this.sidebar_open && this.view == view && !this.settings_open;
+            div().id((id, 0usize)).child(item(id, icon, active, this, cx)).on_click(cx.listener(move |this, _, _, cx| {
+                if this.view == view && this.sidebar_open && !this.settings_open {
+                    this.sidebar_open = false;
+                } else {
+                    this.view = view;
+                    this.sidebar_open = true;
+                    this.settings_open = false;
+                }
+                cx.notify();
+            }))
         };
         v_flex()
-            .w(px(48.))
+            .w(theme::u(48.))
             .h_full()
+            .items_center()
             .bg(c(theme::BG_TITLE))
             .border_r_1()
             .border_color(c(theme::BORDER))
-            .child(item("ab-explorer", IconName::FolderOpen, SideView::Explorer, self, cx))
-            .child(item("ab-search", IconName::Search, SideView::Search, self, cx))
-            .child(item("ab-run", IconName::Play, SideView::Run, self, cx))
-            .child(item("ab-agent", IconName::Bot, SideView::Agent, self, cx))
+            .child(view_item("ab-explorer", IconName::FolderOpen, SideView::Explorer, self, cx))
+            .child(view_item("ab-search", IconName::Search, SideView::Search, self, cx))
+            .child(view_item("ab-run", IconName::Play, SideView::Run, self, cx))
+            .child(view_item("ab-agent", IconName::Bot, SideView::Agent, self, cx))
             .child(div().flex_1())
             .child(
                 div()
-                    .id("ab-settings")
-                    .h(px(44.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(if self.settings_open { c(theme::FG_STRONG) } else { c(theme::FG_DIM) })
-                    .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                    .child(Icon::new(IconName::Settings).size(px(22.)))
+                    .id(("ab-settings", 0usize))
+                    .pb_1()
+                    .child(item("ab-settings", IconName::Settings, self.settings_open, self, cx))
                     .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx))),
             )
     }
 
     fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // Small uppercase view titles follow VS Code, whose layout this workbench mirrors.
         let title = match self.view {
             SideView::Explorer => "EXPLORER",
             SideView::Search => "SEARCH",
@@ -724,13 +752,12 @@ impl Workbench {
             SideView::Agent => "OPENCODE",
         };
         let header = h_flex()
-            .h(px(35.))
-            .px_4()
-            .gap_1()
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(c(theme::FG_MUTED))
-            .child(div().flex_1().child(title))
+            .h(theme::u(35.))
+            .pl_5()
+            .pr_2()
+            .gap_2()
+            .flex_none()
+            .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
                 h.child(tool_button("x-newfile", IconName::Plus, "New File", cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
                     .child(tool_button("x-newdir", IconName::FolderClosed, "New Folder", cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
@@ -742,7 +769,14 @@ impl Workbench {
             SideView::Run => self.render_run_view(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
-        v_flex().size_full().bg(c(theme::BG_SIDE)).child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        v_flex()
+            .size_full()
+            .bg(c(theme::BG_SIDE))
+            .border_r_1()
+            .border_color(c(theme::BORDER))
+            .child(header)
+            .child(div().flex_1().min_h_0().size_full().child(body))
+            .into_any_element()
     }
 
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -751,18 +785,14 @@ impl Workbench {
             .p_3()
             .gap_3()
             .text_sm()
-            .child(
-                Button::new("run-file")
-                    .primary()
-                    .label(match &file {
-                        Some(f) => format!("Run {f}"),
-                        None => "Run File".into(),
-                    })
-                    .disabled(file.is_none())
-                    .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx))),
-            )
+            .child(match &file {
+                Some(f) => self
+                    .action_button("run-file", format!("Run {f}"), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
+                    .into_any_element(),
+                None => div().text_xs().text_color(c(theme::FG_DIM)).child("Open a file to run it.").into_any_element(),
+            })
             .when(self.out_proc.is_some(), |v| {
-                v.child(Button::new("stop-run").label("Stop").on_click(cx.listener(|this, _, w, cx| this.on_stop_run(&StopRun, w, cx))))
+                v.child(self.action_button("stop-run", "Stop", ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
             })
             .child(
                 div()
@@ -776,7 +806,7 @@ impl Workbench {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .id("tabs")
-            .h(px(35.))
+            .h(theme::u(35.))
             .w_full()
             .flex_none()
             .bg(c(theme::BG_SIDE))
@@ -785,33 +815,37 @@ impl Workbench {
             .overflow_x_scroll()
             .children(self.docs.iter().enumerate().map(|(ix, d)| {
                 let active = self.active == Some(ix);
-                let (txt, col) = files::badge(&d.name);
+                let (icon, tint) = files::icon_for(&d.name);
                 h_flex()
                     .id(("tab", ix))
                     .h_full()
-                    .px_3()
+                    .pl_3()
+                    .pr_1()
                     .gap_2()
                     .flex_none()
                     .text_sm()
                     .border_r_1()
                     .border_color(c(theme::BORDER))
                     .relative()
+                    .cursor_pointer()
                     .when(active, |s| {
                         s.bg(c(theme::BG_EDITOR))
                             .child(div().absolute().top_0().left_0().right_0().h(px(1.)).bg(c(theme::ACCENT)))
                     })
+                    .when(!active, |s| s.hover(|s| s.bg(c(theme::BG_HOVER))))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                    .child(div().text_size(px(9.)).font_weight(FontWeight::BOLD).text_color(c(col)).child(txt))
+                    .child(Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint)))
                     .child(d.name.clone())
                     .child(
                         div()
                             .id(("tab-close", ix))
-                            .w(px(16.))
+                            .size(theme::u(20.))
                             .flex()
+                            .items_center()
                             .justify_center()
-                            .rounded(px(3.))
-                            .text_color(c(theme::FG_MUTED))
-                            .hover(|s| s.bg(c(theme::BG_ELEVATED)))
+                            .rounded(px(4.))
+                            .text_color(if d.dirty { c(theme::ACCENT_TEXT) } else { c(theme::FG_MUTED) })
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                             .child(if d.dirty { "●" } else { "×" })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -822,6 +856,26 @@ impl Workbench {
             }))
     }
 
+    /// The active file's path below the tabs: folder › folder › file.
+    fn render_breadcrumbs(&self, ix: usize) -> impl IntoElement {
+        let d = &self.docs[ix];
+        let rel = self.root.as_deref().and_then(|r| d.path.strip_prefix(r).ok()).unwrap_or(&d.path);
+        let parts: Vec<String> = rel.components().map(|p| p.as_os_str().to_string_lossy().into_owned()).collect();
+        let last = parts.len().saturating_sub(1);
+        h_flex()
+            .h(theme::u(22.))
+            .px_3()
+            .gap_1()
+            .flex_none()
+            .text_xs()
+            .text_color(c(theme::FG_MUTED))
+            .children(parts.into_iter().enumerate().flat_map(move |(i, p)| {
+                let sep = (i > 0).then(|| div().text_color(c(theme::FG_DIM)).child("›").into_any_element());
+                let name = div().when(i == last, |d| d.text_color(c(theme::FG))).child(p).into_any_element();
+                sep.into_iter().chain(std::iter::once(name))
+            }))
+    }
+
     fn render_editor_area(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.settings_open {
             return self.render_settings(window, cx);
@@ -829,9 +883,11 @@ impl Workbench {
         match self.active {
             Some(ix) => v_flex()
                 .size_full()
+                .bg(theme::editor_wash())
                 .child(self.render_tabs(cx))
+                .child(self.render_breadcrumbs(ix))
                 .child(
-                    div().flex_1().min_h_0().bg(c(theme::BG_EDITOR)).child(
+                    div().flex_1().min_h_0().child(
                         Editor::new(&self.docs[ix].editor)
                             .bordered(false)
                             .p_0()
@@ -845,14 +901,32 @@ impl Workbench {
                 .size_full()
                 .items_center()
                 .justify_center()
-                .gap_2()
-                .bg(c(theme::BG_EDITOR))
-                .child(div().text_size(px(64.)).text_color(c(0x26282d)).font_weight(FontWeight::BOLD).child("FluxCode"))
-                .child(shortcut("Open Folder", "Ctrl+K Ctrl+O"))
-                .child(shortcut("Open File", "Ctrl+O"))
-                .child(shortcut("Find in Files", "Ctrl+Shift+F"))
-                .child(shortcut("Toggle Terminal", "Ctrl+`"))
-                .child(shortcut("Run File", "F5"))
+                .gap_5()
+                .bg(theme::editor_wash())
+                .child(
+                    v_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().text_size(theme::u(40.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child("FluxCode"))
+                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child("Lightweight. Native. One process.")),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(self.action_button("w-open-folder", "Open folder", ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
+                        .child(self.action_button("w-open-file", "Open file", ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .pt_2()
+                        .child(shortcut("Find in files", "Ctrl+Shift+F"))
+                        .child(shortcut("Toggle terminal", "Ctrl+`"))
+                        .child(shortcut("Run file", "F5"))
+                        .child(shortcut("OpenCode", "Ctrl+Shift+A"))
+                        .child(shortcut("Next color theme", "Ctrl+K Ctrl+T"))
+                        .child(shortcut("Settings", "Ctrl+,")),
+                )
                 .into_any_element(),
         }
     }
@@ -867,21 +941,40 @@ impl Workbench {
             None => (String::new(), ""),
         };
         let crlf = self.active.map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
-        let item = |s: SharedString| div().px_2().child(s);
-        StatusBar::new()
-            .left(
-                div()
-                    .id("sb-panel")
-                    .px_2()
-                    .child(if self.out_proc.is_some() { "▶ running" } else { "⌨ Terminal" })
-                    .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
-            )
-            .left(item(self.status.clone()))
-            .right(item(pos.into()))
-            .right(item(crlf.into()))
-            .right(item(if lang.is_empty() { "".into() } else { "UTF-8".into() }))
-            .right(item(lang.into()))
-            .right(item("GPUI".into()))
+        let running = self.out_proc.is_some() || self.term_proc.is_some();
+        let seg = |s: SharedString| div().h_full().px_2().flex().items_center().child(s);
+        let folder = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
+        h_flex()
+            .h(theme::u(24.))
+            .w_full()
+            .flex_none()
+            .bg(c(theme::BG_TITLE))
+            .border_t_1()
+            .border_color(c(theme::BORDER))
+            .text_xs()
+            .text_color(c(theme::FG_MUTED))
+            .when_some(folder, |h, f| h.child(seg(f.into()).pl_3().text_color(c(theme::FG))))
+            // Only a running program gets a marker: it is the one state worth noticing here.
+            .when(running, |h| {
+                h.child(
+                    h_flex()
+                        .id("sb-running")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .cursor_pointer()
+                        .text_color(c(theme::GREEN))
+                        .hover(|s| s.bg(c(theme::BG_HOVER)))
+                        .child(div().size(px(6.)).rounded_full().bg(c(theme::GREEN)))
+                        .child("Running")
+                        .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
+                )
+            })
+            .child(div().px_2().flex_1().truncate().text_color(c(theme::FG)).child(self.status.clone()))
+            .when(!pos.is_empty(), |h| {
+                h.child(seg(pos.into())).child(seg(crlf.into())).child(seg("UTF-8".into())).child(seg(lang.into()))
+            })
+            .child(seg(theme::palette().name.into()).pr_3())
     }
 }
 
@@ -897,10 +990,21 @@ pub(crate) fn tool_button(
 
 fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
     h_flex()
-        .w(px(300.))
+        .w(theme::u(320.))
+        .gap_2()
         .text_sm()
-        .child(div().flex_1().text_color(c(theme::FG_DIM)).child(label))
-        .child(div().text_color(c(theme::FG_MUTED)).child(keys))
+        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
+        .children(keys.split(['+', ' ']).map(|k| {
+            div()
+                .px_2()
+                .rounded(px(3.))
+                .text_xs()
+                .bg(c(theme::BG_ELEVATED))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG))
+                .text_color(c(theme::FG_STRONG))
+                .child(k)
+        }))
 }
 
 /// Keep at most this many lines per panel.
@@ -953,6 +1057,8 @@ impl Render for Workbench {
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
+        // Interface size: rem-based spacing and text follow this; fixed sizes use theme::u.
+        window.set_rem_size(theme::rem());
         let editor_view: AnyElement = match &self.preview {
             Some(_) => h_resizable("editor-preview-split")
                 .child(resizable_panel().child(self.render_editor_area(window, cx)))
@@ -976,13 +1082,21 @@ impl Render for Workbench {
         } else {
             editor_and_panel
         });
+        // The user's picture, under every panel. Panels turn translucent while it is set
+        // (theme::c), so it shows through each of them at the chosen visibility.
+        let backdrop = self.settings.background().map(|p| {
+            img(p.to_path_buf()).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)
+        });
         v_flex()
             .id("workbench")
             .key_context("Workbench")
             .track_focus(&self.focus)
             .size_full()
-            .bg(c(theme::BG_EDITOR))
+            .relative()
+            .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
             .text_color(c(theme::FG))
+            .children(backdrop)
+            .on_action(cx.listener(Self::on_next_theme))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))
