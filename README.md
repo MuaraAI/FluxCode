@@ -1,9 +1,10 @@
 # FluxCode
 
-A lightweight code editor for Windows with the VS Code look and feel, built on
+A lightweight code editor for Windows and Linux with the VS Code look and feel, built on
 **Tauri 2 (Rust)** + **CodeMirror 6**. There's no bundled Chromium: the UI runs
-in Windows' built-in WebView2, and everything that touches the machine (files,
-processes, the terminal, the preview server) runs in Rust.
+in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
+everything that touches the machine (files, processes, the terminal, the preview server)
+runs in Rust.
 
 > Status: **development build `0.4.2-dev.2026-11-07-1206`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
@@ -12,6 +13,7 @@ processes, the terminal, the preview server) runs in Rust.
 
 ## Install
 
+### Windows
 Download `FluxCode_<version>_x64-setup.exe` from the
 [Releases](https://github.com/MuaraAI/FluxCode/releases) page and run it. It
 installs for your user only (no admin rights) into
@@ -19,6 +21,28 @@ installs for your user only (no admin rights) into
 the Desktop, and is removed from Settings → Apps → Installed apps. A portable
 zip is attached too.
 
+### Linux (Debian, Ubuntu, Arch, CachyOS, ARM64)
+
+Download the binary package for your distro from the [Releases](https://github.com/MuaraAI/FluxCode/releases) page:
+
+- **Debian / Ubuntu (`.deb`)** (x86_64 & arm64):
+  ```bash
+  sudo dpkg -i fluxcode_<version>_amd64.deb # or arm64.deb
+  sudo apt-get install -f # install system runtime dependencies if missing
+  ```
+- **Arch Linux / CachyOS**:
+  Install using the `PKGBUILD` provided in `packages/arch/`:
+  ```bash
+  cd packages/arch
+  makepkg -si
+  ```
+- **Universal Linux (`.AppImage`)** (x86_64 & aarch64):
+  ```bash
+  chmod +x FluxCode_<version>_x86_64.AppImage
+  ./FluxCode_<version>_x86_64.AppImage
+  ```
+
+System dependencies on Linux: `webkit2gtk-4.1`, `libayatana-appindicator`, `openssl`.
 ## What works now
 
 **Workbench**
