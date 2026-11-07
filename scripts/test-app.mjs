@@ -113,7 +113,7 @@ async function openFile(rel) {
   await press("Enter");
   return waitFor(`document.querySelector('.tab.active')?.title.toLowerCase().endsWith(${JSON.stringify(rel.replace(/\//g, "\\").toLowerCase())})`, 5000);
 }
-const outputText = () => evaluate(`document.querySelector('#output').innerText`);
+const outputText = () => evaluate(`document.querySelector('.out-text').innerText`);
 
 // ------------------------------------------------------------------- tests
 
@@ -125,33 +125,33 @@ await shot("00-start");
 // Python
 check("open python/main.py", !!(await openFile("python/main.py")));
 await press("F5");
-check("python prompt shown", !!(await waitFor(`document.querySelector('#output').innerText.includes('Siapa namamu?')`, 15000)));
+check("python prompt shown", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('Siapa namamu?')`, 15000)));
 await type("Budi");
 await press("Enter");
-check("python reads stdin", !!(await waitFor(`document.querySelector('#output').innerText.includes('Halo, Budi!')`)));
-check("python exits 0", !!(await waitFor(`document.querySelector('#output').innerText.includes('exited with code=0')`)));
+check("python reads stdin", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('Halo, Budi!')`)));
+check("python exits 0", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('exited with code=0')`)));
 measure("after python run");
 await shot("01-python");
 
 check("open python/error_demo.py", !!(await openFile("python/error_demo.py")));
 await press("F5");
-await waitFor(`document.querySelector('#output').innerText.includes('exited with code=1')`, 15000);
-check("traceback links", (await evaluate(`document.querySelectorAll('#output a[data-file]').length`)) >= 3);
+await waitFor(`document.querySelector('.out-text').innerText.includes('exited with code=1')`, 15000);
+check("traceback links", (await evaluate(`document.querySelectorAll('.out-text a[data-file]').length`)) >= 3);
 
 // JavaScript (Node)
 check("open js/hello.js", !!(await openFile("js/hello.js")));
 check("js highlighted", (await evaluate(`document.querySelectorAll('.cm-content span').length`)) > 20);
 await press("F5");
-check("node prompt shown", !!(await waitFor(`document.querySelector('#output').innerText.includes('Siapa namamu?')`, 15000)));
+check("node prompt shown", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('Siapa namamu?')`, 15000)));
 await type("Ana");
 await press("Enter");
-check("node reads stdin", !!(await waitFor(`document.querySelector('#output').innerText.includes('Halo, Ana!')`)));
+check("node reads stdin", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('Halo, Ana!')`)));
 measure("after node run");
 await shot("02-node");
 
 check("open js/greet.ts", !!(await openFile("js/greet.ts")));
 await press("F5");
-check("typescript runs on node", !!(await waitFor(`document.querySelector('#output').innerText.includes('total bahasa: 5')`, 15000)), (await outputText()).split("\n").slice(1, 4).join(" | "));
+check("typescript runs on node", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('total bahasa: 5')`, 15000)), (await outputText()).split("\n").slice(1, 4).join(" | "));
 
 // Web: Live Preview + auto save + reload
 check("open web/index.html", !!(await openFile("web/index.html")));
@@ -222,10 +222,10 @@ measure("preview closed");
 // Python GUI app (opens a real window; stopped right after)
 check("open python/gui_app.py", !!(await openFile("python/gui_app.py")));
 await press("F5");
-check("python GUI app starts", !!(await waitFor(`document.querySelector('#output').innerText.includes('Flux Counter window opened')`, 15000)));
+check("python GUI app starts", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('Flux Counter window opened')`, 15000)));
 measure("python GUI app running");
 await press("F5", { shift: true });
-check("stop ends the GUI app", !!(await waitFor(`document.querySelector('#output').innerText.includes('[Done]')`, 8000)));
+check("stop ends the GUI app", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('[Done]')`, 8000)));
 
 // Command palette: clean, contiguous highlights and no scattered matches.
 await press("p", { ctrl: true, shift: true });

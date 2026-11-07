@@ -844,86 +844,47 @@ async function resolvePython(announce = false) {
 
 // ------------------------------------------------------------- run/output
 
-const output = $("#output");
-const OUTPUT_LIMIT = 400_000; // characters kept in the panel (older output is trimmed)
-let pending = [];
-let flushScheduled = false;
-let outputLength = 0;
+// The output pane (text area, stdin row, proc-* listeners, frame batching)
+// lives in ./output.js and exists only while a program runs or its output is
+// still shown. Idle, #output-pane is an empty element and nothing listens.
+let outputPane = null;
+let outputLoading = null;
 
-function appendOutput(text, cls = "") {
-  pending.push([text, cls]);
-  if (!flushScheduled) {
-    flushScheduled = true;
-    requestAnimationFrame(flushOutput);
-  }
+function ensureOutput() {
+  if (outputPane) return Promise.resolve(outputPane);
+  outputLoading ??= import("./output.js").then(({ createOutput }) => {
+    outputLoading = null;
+    outputPane = createOutput($("#output-pane"), {
+      icons, toast,
+      runId: () => state.run?.id ?? null,
+      openFile: (path, line) => openFile(path, { line }),
+      onExit: onRunExit,
+    });
+    return outputPane;
+  });
+  return outputLoading;
 }
 
-function flushOutput() {
-  flushScheduled = false;
-  if (!pending.length) return;
-  const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
-  const frag = document.createDocumentFragment();
-  for (const [text, cls] of pending) {
-    // Merge into the previous span when the style matches: fewer DOM nodes.
-    const last = frag.lastChild ?? output.lastChild;
-    if (last && last.nodeType === 1 && (last.className || "") === cls && !last.dataset.linked) last.append(text);
-    else {
-      const span = document.createElement("span");
-      if (cls) span.className = cls;
-      span.textContent = text;
-      frag.append(span);
-    }
-    outputLength += text.length;
-  }
-  pending = [];
-  output.append(frag);
-  while (outputLength > OUTPUT_LIMIT && output.firstChild) {
-    outputLength -= output.firstChild.textContent.length;
-    output.firstChild.remove();
-  }
-  if (atBottom) output.scrollTop = output.scrollHeight;
+/** Tear the output pane down once nothing runs and it is out of sight. */
+function releaseOutput() {
+  if (!outputPane || state.run) return;
+  outputPane.dispose();
+  outputPane = null;
 }
 
 function clearOutput() {
-  pending = [];
-  outputLength = 0;
-  output.replaceChildren();
+  outputPane?.clear();
 }
-
-/** Turn Python tracebacks and Node stack frames (`C:\x.js:10:5`) into clickable links. */
-function linkifyTracebacks() {
-  const re = /File "([^"]+)", line (\d+)|([A-Za-z]:\\[^\s:()"'<>|]+):(\d+)(?::\d+)?/g;
-  for (const span of [...output.querySelectorAll("span.stderr")]) {
-    const text = span.textContent;
-    if (!/File "|[A-Za-z]:\\/.test(text)) continue;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    for (const m of text.matchAll(re)) {
-      frag.append(text.slice(last, m.index));
-      const a = document.createElement("a");
-      a.textContent = m[0];
-      a.dataset.file = m[1] ?? m[3];
-      a.dataset.line = m[2] ?? m[4];
-      frag.append(a);
-      last = m.index + m[0].length;
-    }
-    frag.append(text.slice(last));
-    span.replaceChildren(frag);
-    span.dataset.linked = "1";
-  }
-}
-
-output.addEventListener("click", (e) => {
-  const a = e.target.closest("a[data-file]");
-  if (a) openFile(a.dataset.file, { line: +a.dataset.line });
-});
 
 function showPanel(show = true) {
   $("#panel").hidden = !show;
   $("#toggle-panel").innerHTML = show ? icons.panelOn : icons.panel;
   $("#toggle-panel").classList.toggle("on", show);
   if (show) showPanelTab(state.panelTab, { focus: false });
-  else if (state.active) view.focus();
+  else {
+    releaseOutput();
+    if (state.active) view.focus();
+  }
 }
 
 // ------------------------------------------------------------- terminal
@@ -993,10 +954,20 @@ function setRunning(running) {
   $("#run-btn").title = running ? "Stop (Shift+F5)" : "Run (F5)";
   $("#run-btn").classList.toggle("running", running);
   $("#statusbar").classList.toggle("running", running);
-  $("#stdin-row").hidden = !running;
+  outputPane?.setRunning(running);
   $(".panel-actions [data-action=stop]").hidden = !running;
-  $(".panel-status").innerHTML = running ? `<span class="spinner"></span>Running ${escapeHtml(state.run?.name ?? "")}` : "";
+  $(".panel-status").innerHTML = running
+    ? `<span class="spinner"></span><span class="ps-label">Running</span><span class="ps-name">${escapeHtml(state.run?.name ?? "")}</span>`
+    : "";
   if (!running) updateRunButton();
+}
+
+function onRunExit(payload) {
+  const secs = ((performance.now() - state.run.start) / 1000).toFixed(3);
+  state.run = null;
+  outputPane?.append(`\n[Done] exited with code=${payload.code ?? "terminated"} in ${secs} seconds\n`, "info");
+  setRunning(false);
+  if ($("#panel").hidden) releaseOutput(); // closed while running: nothing left to show
 }
 
 async function resolveNode() {
@@ -1013,41 +984,33 @@ async function runActive() {
   if ((tab.dirty || !tab.path) && !(await saveTab(tab))) return;
   if (kind === "preview") return openPreview(tab);
 
+  const pane = await ensureOutput();
+  showPanelTab("output", { focus: false });
+  pane.clear();
   let program;
   let args;
   if (kind === "python") {
     if (state.python === undefined) await resolvePython();
     if (!state.python) {
-      showPanelTab("output", { focus: false });
-      clearOutput();
-      appendOutput("Python was not found.\nInstall it from https://www.python.org/downloads/ (tick \"Add python.exe to PATH\"), or create a .venv in this folder, then click the Python item in the status bar.\n", "stderr");
-      return;
+      return pane.append("Python was not found.\nInstall it from https://www.python.org/downloads/ (tick \"Add python.exe to PATH\"), or create a .venv in this folder, then click the Python item in the status bar.\n", "stderr");
     }
     program = state.python.path;
     args = ["-u", tab.path];
   } else {
     const node = await resolveNode();
-    if (!node) {
-      showPanelTab("output", { focus: false });
-      clearOutput();
-      appendOutput("Node.js was not found.\nInstall it from https://nodejs.org/ and make sure `node` is on PATH.\n", "stderr");
-      return;
-    }
+    if (!node) return pane.append("Node.js was not found.\nInstall it from https://nodejs.org/ and make sure `node` is on PATH.\n", "stderr");
     program = node.path;
     args = [tab.path];
   }
-  showPanelTab("output", { focus: false });
-  clearOutput();
   const cwd = isInside(state.root, tab.path) ? state.root : dirname(tab.path);
   const shown = relative(cwd, tab.path);
-  appendOutput(`> ${basename(program)} ${shown.includes(" ") ? `"${shown}"` : shown}\n`, "cmd");
+  pane.append(`> ${basename(program)} ${shown.includes(" ") ? `"${shown}"` : shown}\n`, "cmd");
   try {
     const id = await invoke("spawn_process", { program, args, cwd });
     state.run = { id, start: performance.now(), name: tab.name };
-    setRunning(true);
-    $("#stdin").focus(); // like VS Code focusing the terminal, so input() just works
+    setRunning(true); // shows and focuses the stdin row, so input() just works
   } catch (e) {
-    appendOutput(`${e}\n`, "stderr");
+    pane.append(`${e}\n`, "stderr");
   }
 }
 
@@ -1120,28 +1083,6 @@ function saveAllNow() {
   for (const t of state.tabs) if (t.dirty && t.path) saveTab(t);
 }
 window.addEventListener("blur", saveAllNow); // switching to another app saves too
-
-listen("proc-output", ({ payload }) => {
-  if (payload.id === state.run?.id) appendOutput(payload.data, payload.stream === "stderr" ? "stderr" : "");
-});
-
-listen("proc-exit", ({ payload }) => {
-  if (payload.id !== state.run?.id) return;
-  const secs = ((performance.now() - state.run.start) / 1000).toFixed(3);
-  state.run = null;
-  flushOutput();
-  linkifyTracebacks();
-  appendOutput(`\n[Done] exited with code=${payload.code ?? "terminated"} in ${secs} seconds\n`, "info");
-  setRunning(false);
-});
-
-$("#stdin").addEventListener("keydown", async (e) => {
-  if (e.key !== "Enter" || !state.run) return;
-  const value = e.target.value;
-  e.target.value = "";
-  appendOutput(`${value}\n`, "echo");
-  await invoke("write_stdin", { id: state.run.id, data: `${value}\n` }).catch((err) => toast(`${err}`, "error"));
-});
 
 // --------------------------------------------------------------- commands
 
@@ -1694,7 +1635,7 @@ window.addEventListener(
 
 // The WebView's own context menu only where it helps (editor, inputs, output).
 document.addEventListener("contextmenu", (e) => {
-  if (!e.target.closest(".cm-editor, input, #output, .term-body")) e.preventDefault();
+  if (!e.target.closest(".cm-editor, input, .out-text, .term-body")) e.preventDefault();
 });
 
 // ------------------------------------------------------------------ sashes
@@ -1777,7 +1718,6 @@ function paintIcons() {
   $(".panel-actions [data-action=clearOutput]").innerHTML = icons.clear;
   $(".panel-actions [data-action=clearTerminal]").innerHTML = icons.clear;
   $(".panel-actions [data-action=togglePanel]").innerHTML = icons.close;
-  $(".stdin-prompt").innerHTML = icons.chevron;
   $(".sb-brand").innerHTML = icons.bolt;
   $(".wm-logo").innerHTML = logo;
   $("[data-pv=reload]").innerHTML = icons.refresh;

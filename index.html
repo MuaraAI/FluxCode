@@ -140,13 +140,8 @@
               <button data-action="togglePanel" title="Hide Panel (Ctrl+J)"></button>
             </span>
           </div>
-          <div id="output-pane" class="panel-pane">
-            <pre id="output" tabindex="0"></pre>
-            <div id="stdin-row" hidden>
-              <span class="stdin-prompt"></span>
-              <input id="stdin" placeholder="Type input for the running program, then Enter" spellcheck="false" />
-            </div>
-          </div>
+          <!-- Filled by src/output.js only while a program runs; empty (and free) otherwise. -->
+          <div id="output-pane" class="panel-pane"></div>
           <div id="terminal" class="panel-pane" hidden></div>
         </section>
       </main>
