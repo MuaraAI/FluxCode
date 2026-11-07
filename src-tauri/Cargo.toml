@@ -1,0 +1,32 @@
+[package]
+name = "fluxcode"
+version = "0.2.0-dev.2026-11-07-1026"
+description = "FluxCode - a lightweight code editor with the VS Code look and feel"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "fluxcode_lib"
+# Desktop only: an rlib is enough (staticlib/cdylib are for mobile targets and
+# make the MinGW linker embed the Windows manifest twice).
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Small, fast binary: everything optimized for size + speed, no debug info.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2
