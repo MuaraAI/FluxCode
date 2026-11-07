@@ -20,12 +20,6 @@ mod terminal;
 mod window_state;
 pub(crate) mod sys;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-/// Don't flash a console window for child processes.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Files larger than this are refused instead of freezing the editor.
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -38,11 +32,9 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 pub(crate) fn command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd
+    sys::command(program)
 }
+
 
 // ---------------------------------------------------------------- file system
 
@@ -422,16 +414,9 @@ fn write_stdin(procs: State<'_, Processes>, id: u32, data: String) -> Result<(),
 fn kill_process(procs: State<'_, Processes>, id: u32) -> Result<(), String> {
     let mut running = procs.running.lock().unwrap();
     let Some(proc) = running.get_mut(&id) else { return Ok(()) };
-    #[cfg(windows)]
-    {
-        let pid = proc.child.id().to_string();
-        let status = command("taskkill").args(["/T", "/F", "/PID", &pid]).status();
-        if status.map(|s| s.success()).unwrap_or(false) {
-            return Ok(());
-        }
-    }
-    proc.child.kill().map_err(|e| e.to_string())
+    sys::kill_tree(&mut proc.child)
 }
+
 
 // --------------------------------------------------------------- toolchains
 
@@ -457,19 +442,26 @@ fn probe_version(program: &str) -> Option<String> {
 async fn resolve_python(workspace: Option<String>) -> Option<Interpreter> {
     let mut candidates: Vec<String> = Vec::new();
     if let Some(ws) = workspace.filter(|w| !w.is_empty()) {
-        for venv in [".venv", "venv", "env"] {
-            let p = Path::new(&ws).join(venv).join("Scripts").join("python.exe");
-            if p.is_file() {
-                candidates.push(p.to_string_lossy().into_owned());
-            }
+        if let Some(venv_py) = sys::resolve_venv_python(Path::new(&ws)) {
+            candidates.push(venv_py.to_string_lossy().into_owned());
         }
     }
+    #[cfg(windows)]
     candidates.extend(["python".into(), "py".into(), "python3".into()]);
+    #[cfg(not(windows))]
+    candidates.extend(["python3".into(), "python".into()]);
+
     candidates.into_iter().find_map(|path| {
         let version = probe_version(&path)?;
         version.starts_with("Python").then_some(Interpreter { path, version })
     })
 }
+
+#[tauri::command]
+fn get_platform() -> &'static str {
+    sys::get_platform()
+}
+
 
 /// Node.js for running JavaScript files (`node` on PATH).
 #[tauri::command]
@@ -486,18 +478,22 @@ fn launch_paths() -> Vec<Entry> {
         .filter(|a| !a.starts_with('-'))
         .filter_map(|a| fs::canonicalize(a).ok())
         .map(|p| {
-            // canonicalize() returns a verbatim `\\?\C:\...` path on Windows; show the normal form.
             let s = p.to_string_lossy();
+            #[cfg(windows)]
             let path = s.strip_prefix(r"\\?\").unwrap_or(&s).to_string();
+            #[cfg(not(windows))]
+            let path = s.to_string();
             Entry { name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), is_dir: p.is_dir(), path }
         })
         .collect()
 }
 
+
 // ----------------------------------------------------------------------- app
 
 /// WebView2 switches: turn off browser services an editor never needs
 /// (translate, sync, SmartScreen pings, component updates, …).
+#[cfg(windows)]
 const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,Translate,\
 AutofillServerCommunication,MediaRouter --disable-background-networking --disable-component-update \
 --disable-sync --no-pings";
@@ -512,20 +508,27 @@ AutofillServerCommunication,MediaRouter --disable-background-networking --disabl
 /// The window has no OS frame: FluxCode draws a VS Code-style title bar
 /// (menu, command center, window buttons) itself.
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
-    let gpu = std::env::var("FLUXCODE_GPU").is_ok_and(|v| v == "1");
-    let args = if gpu { WEBVIEW_ARGS.to_string() } else { format!("{WEBVIEW_ARGS} --disable-gpu --in-process-gpu") };
-    let win = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+    let decorations = cfg!(not(windows));
+    #[allow(unused_mut)]
+    let mut builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
         .title("FluxCode")
         .inner_size(1280.0, 760.0)
         .min_inner_size(600.0, 400.0)
-        .decorations(false)
+        .decorations(decorations)
         .shadow(true)
         .visible(false) // shown by window_state::place once it is inside the work area
         .theme(Some(tauri::Theme::Dark))
         .background_color(tauri::window::Color(0x1e, 0x1f, 0x22, 0xff))
-        .disable_drag_drop_handler()
-        .additional_browser_args(&args)
-        .build()?;
+        .disable_drag_drop_handler();
+
+    #[cfg(windows)]
+    {
+        let gpu = std::env::var("FLUXCODE_GPU").is_ok_and(|v| v == "1");
+        let args = if gpu { WEBVIEW_ARGS.to_string() } else { format!("{WEBVIEW_ARGS} --disable-gpu --in-process-gpu") };
+        builder = builder.additional_browser_args(&args);
+    }
+
+    let win = builder.build()?;
     window_state::place(app.handle(), &win)
 }
 
@@ -564,6 +567,7 @@ pub fn run() {
             terminal::access_check,
             terminal::access_grant,
             terminal::access_reset,
+            get_platform,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FluxCode");
