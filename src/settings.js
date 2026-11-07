@@ -117,6 +117,14 @@ export function openSettings(ctx) {
             ${row("Smooth caret", "Glide between positions instead of jumping.", seg("terminal", "smoothCaret", [[true, "On"], [false, "Off"]]), "animation")}
             ${row("Hidden files in ls", "Show dot-files and hidden items in listings.", seg("terminal", "showHidden", [[true, "Show"], [false, "Hide"]]), "dotfiles")}
             ${row("Folder permissions", "Flux Terminal only runs commands in folders you allowed.", `<button class="btn-danger" data-ap="revoke">${icons.shield}<span>Revoke all</span></button>`, "access revoke security")}
+            <div class="st-row st-row-block" data-q="preview sample terminal">
+              <div class="st-term">
+                <div class="st-term-head"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>Flux Terminal</span><span class="st-term-shell"></span></div>
+                <div class="st-term-line"><span class="st-term-prompt">${icons.chevron}</span><span class="st-term-cmd">ls</span></div>
+                <div class="st-term-out"><span class="st-term-hidden">.git  .env  </span>src  package.json  README.md</div>
+                <div class="st-term-line"><span class="st-term-prompt">${icons.chevron}</span><span class="st-term-field"><span class="st-term-cmd">node</span> app.js<span class="st-term-caret"></span></span></div>
+              </div>
+            </div>
           </section>
 
           <section class="st-section" data-section="accounts">
@@ -156,6 +164,15 @@ export function openSettings(ctx) {
   function sync() {
     for (const b of panel.querySelectorAll("button[data-ns][data-k]")) {
       b.classList.toggle("on", String(value(b.dataset.ns, b.dataset.k)) === b.dataset.v);
+    }
+    const term = panel.querySelector(".st-term");
+    if (term) {
+      const t = prefs.get("terminal");
+      term.style.setProperty("--term-font-size", `${t.fontSize}px`);
+      term.dataset.cursor = t.cursor;
+      term.classList.toggle("smooth", !!t.smoothCaret);
+      term.classList.toggle("show-hidden", !!t.showHidden);
+      term.querySelector(".st-term-shell").textContent = t.shell === "powershell" ? "PowerShell" : t.shell;
     }
     for (const b of panel.querySelectorAll("[data-preset]")) b.classList.toggle("on", b.dataset.preset === s.preset);
     panel.querySelector("[data-ap=text-auto]")?.classList.toggle("on", !s.text);
@@ -243,6 +260,8 @@ export function openSettings(ctx) {
     }
     const go = e.target.closest("[data-go]");
     if (go) {
+      setNav(go.dataset.go);
+      navLock = performance.now() + 800;
       panel.querySelector(`[data-section="${go.dataset.go}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
@@ -310,15 +329,21 @@ export function openSettings(ctx) {
   // Highlight the section in view in the side nav.
   const body = () => panel.querySelector(".st-body");
   let navFrame = 0;
+  let navLock = 0; // while a nav click scrolls, the clicked item stays highlighted
+  const setNav = (id) => { for (const n of panel.querySelectorAll("[data-go]")) n.classList.toggle("on", n.dataset.go === id); };
   panel.addEventListener("scroll", () => {
     if (navFrame) return;
     navFrame = requestAnimationFrame(() => {
       navFrame = 0;
+      if (performance.now() < navLock) return;
       const b = body();
-      const top = b.scrollTop + 60;
-      let current = SECTIONS[0][0];
-      for (const sec of b.querySelectorAll(".st-section")) if (sec.offsetTop <= top) current = sec.dataset.section;
-      for (const n of panel.querySelectorAll("[data-go]")) n.classList.toggle("on", n.dataset.go === current);
+      const sections = [...b.querySelectorAll(".st-section")].filter((sec) => !sec.hidden);
+      if (!sections.length) return;
+      const line = b.getBoundingClientRect().top + Math.min(140, b.clientHeight / 4);
+      let current = sections[0];
+      for (const sec of sections) if (sec.getBoundingClientRect().top <= line) current = sec;
+      if (b.scrollTop + b.clientHeight >= b.scrollHeight - 4) current = sections[sections.length - 1];
+      setNav(current.dataset.section);
     });
   }, true);
 
@@ -337,8 +362,8 @@ export function openSettings(ctx) {
   }
 
   render();
-  panel.querySelector("[data-go]").classList.add("on");
-  if (ctx.section) panel.querySelector(`[data-section="${ctx.section}"]`)?.scrollIntoView({ block: "start" });
+  setNav(ctx.section ?? SECTIONS[0][0]);
+  if (ctx.section) { navLock = performance.now() + 300; panel.querySelector(`[data-section="${ctx.section}"]`)?.scrollIntoView({ block: "start" }); }
   else panel.querySelector(".st-search input")?.focus();
   return { close };
 }

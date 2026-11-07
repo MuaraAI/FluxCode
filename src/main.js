@@ -26,10 +26,13 @@ import {
 import { languageFor, loadLanguage } from "./languages.js";
 import { setWorkspaceManifests } from "./complete/index.js";
 import { setAgentBaseline, agentBaseline, onHunkSettled } from "./agentdiff.js";
+import { problemCounts, problemsChanged, nextProblem } from "./diagnostics.js";
+import { createDebugUI } from "./debugview.js";
 import { icons, abIcon, winIcon, logo, fileIcon, folderIcon } from "./icons.js";
 
 const $ = (sel) => document.querySelector(sel);
 const appWindow = getCurrentWindow();
+let versionReady = Promise.resolve(null);
 let VERSION = "dev"; // filled from tauri.conf.json at boot (e.g. 0.2.0-dev.2026-11-07-1000)
 
 // ------------------------------------------------------------------ paths
@@ -216,7 +219,7 @@ function makeRow(entry, depth) {
   const open = entry.is_dir && state.expanded.has(entry.path);
   const guides = depth ? `<span class="guides">${"<i></i>".repeat(depth)}</span>` : "";
   row.innerHTML = entry.is_dir
-    ? `${guides}<span class="twistie${open ? " open" : ""}">${icons.chevron}</span>${folderIcon(open)}<span class="label"></span>`
+    ? `${guides}<span class="twistie${open ? " open" : ""}">${icons.chevron}</span>${folderIcon(open, entry.name)}<span class="label"></span>`
     : `${guides}<span class="twistie none">${icons.chevron}</span>${fileIcon(entry.name)}<span class="label"></span>`;
   row.querySelector(".label").textContent = entry.name;
   if (samePath(entry.path, state.active?.path)) row.classList.add("active");
@@ -254,7 +257,7 @@ async function toggleDir(row) {
   const depth = +row.dataset.depth;
   const opening = !state.expanded.has(path);
   row.querySelector(".twistie").classList.toggle("open", opening);
-  row.querySelector(".folder-icon").outerHTML = folderIcon(opening);
+  row.querySelector(".folder-icon").outerHTML = folderIcon(opening, basename(path));
   if (opening) {
     state.expanded.add(path);
     const frag = document.createDocumentFragment();
@@ -353,9 +356,22 @@ async function inlineInput({ parent, initial = "", isDir = false, replacePath = 
   const row = document.createElement("div");
   row.className = "row enter";
   const guides = depth ? `<span class="guides">${"<i></i>".repeat(depth)}</span>` : "";
-  row.innerHTML = `${guides}<span class="twistie none">${icons.chevron}</span>${isDir ? folderIcon(false) : fileIcon(initial || "file")}<input spellcheck="false" />`;
+  // The icon follows what is typed: "index.html" shows the HTML icon, "src" the src folder, before Enter.
+  const iconFor = (value) => {
+    const name = basename(value.trim()) || "";
+    return isDir ? folderIcon(false, name) : fileIcon(name || "file");
+  };
+  row.innerHTML = `${guides}<span class="twistie none">${icons.chevron}</span>${iconFor(initial)}<input spellcheck="false" />`;
   const input = row.querySelector("input");
   input.value = initial;
+  input.placeholder = isDir ? "Folder name (a/b creates both)" : "File name (a/b.js creates the folder too)";
+  let shownIcon = iconFor(initial);
+  input.addEventListener("input", () => {
+    const html = iconFor(input.value);
+    if (html === shownIcon) return;
+    shownIcon = html;
+    row.querySelector(".ficon, .folder-icon").outerHTML = html;
+  });
   const hidden = replacePath && anchor;
   if (hidden) { anchor.hidden = true; anchor.after(row); }
   else if (anchor) anchor.after(row);
@@ -386,13 +402,23 @@ async function newEntry(isDir) {
   if (!state.root) return isDir ? openFolderDialog() : newUntitled();
   showView("explorer");
   const parent = targetFolder();
-  const name = await inlineInput({ parent, isDir });
-  if (!name) return;
-  const path = join(parent, name);
+  const typed = await inlineInput({ parent, isDir });
+  if (!typed) return;
+  // "a/b/c.js" (either slash) creates the folders too, like VS Code.
+  const parts = typed.split(/[\\/]+/).filter(Boolean);
+  if (!parts.length) return;
+  const path = parts.reduce((dir, part) => join(dir, part), parent);
   try {
     await invoke(isDir ? "create_dir" : "create_file", { path });
     state.fileIndex = null;
     await loadDir(parent, true);
+    let dir = parent;
+    for (const part of parts.slice(0, isDir ? -1 : parts.length - 1)) {
+      dir = join(dir, part);
+      state.expanded.add(dir);
+      state.dirCache.delete(dir);
+    }
+    if (isDir) state.dirCache.delete(path);
     state.selected = path;
     await renderTree();
     if (!isDir) await openFile(path);
@@ -411,12 +437,17 @@ async function startRename(path) {
     await invoke("rename_path", { from: path, to });
     state.fileIndex = null;
     await loadDir(parent, true);
+    const moved = [];
     for (const tab of state.tabs) {
       if (tab.path && isInside(path, tab.path)) {
         tab.path = to + tab.path.slice(path.length);
         tab.name = basename(tab.path);
+        moved.push(tab);
       }
     }
+    dbg.renamed(path, to);
+    // notes.txt -> notes.py: the open tab switches to Python highlighting and icon at once.
+    for (const tab of moved) await retargetLanguage(tab);
     if (state.expanded.delete(path)) state.expanded.add(to);
     state.selected = to;
     await renderTree();
@@ -425,6 +456,22 @@ async function startRename(path) {
     updateTitle();
   } catch (e) {
     toast(`${e}`, "error");
+  }
+}
+
+/** After a rename: give the tab the language (highlighting, completion, run) of its new extension. */
+async function retargetLanguage(tab) {
+  const lang = languageFor(tab.path);
+  if (lang.id === tab.lang.id) return;
+  const current = tab === state.active ? view.state : tab.state;
+  const langExt = await loadLanguage(lang, tab.path);
+  const fresh = dbg.prepareState(tab.path, createState(current.doc.toString(), langExt, lang.indent));
+  tab.lang = lang;
+  tab.state = fresh;
+  if (tab === state.active) {
+    view.setState(fresh);
+    syncWrap(view);
+    updateStatus();
   }
 }
 
@@ -456,73 +503,170 @@ function showView(name, { focus = true } = {}) {
 }
 
 // --------------------------------------------------------- find in files
+//
+// Built to stay light: typing is debounced, the Rust scan runs in parallel and
+// abandons itself when a newer query arrives, rows are plain DOM nodes built
+// without innerHTML, and only the first screen is rendered up front — the rest
+// is appended in small chunks as the list is scrolled.
 
-const search = { matchCase: false, wholeWord: false, seq: 0, timer: null };
-const MAX_RENDERED_HITS = 1500;
+const search = {
+  matchCase: false, wholeWord: false, seq: 0, timer: null, spinner: null,
+  q: "", res: null, fileIdx: 0, hitIdx: 0, group: null, more: false, collapsed: false, focused: null,
+};
+const SEARCH_CHUNK = 150; // rows per render pass
+const SEARCH_CONTEXT = 22; // characters kept before the first match on a long line
 
-function highlightRanges(text, ranges) {
-  let html = "";
+const srResults = $("#search-results");
+const srSummary = $("#search-summary");
+const srInput = $("#search-input");
+
+/** One hit row: the line with each match wrapped in <mark>, trimmed so the first match is visible. */
+function hitRow(hit, q) {
+  const ranges = findRanges(hit.text, q, search.matchCase, search.wholeWord);
+  let text = hit.text;
+  let shift = 0;
+  if (ranges.length && ranges[0][0] > SEARCH_CONTEXT + 10) {
+    const cut = ranges[0][0] - SEARCH_CONTEXT;
+    text = `…${hit.text.slice(cut)}`;
+    shift = cut - 1;
+  }
+  const row = document.createElement("div");
+  row.className = "sr-hit";
+  row.dataset.line = hit.line;
+  const body = document.createElement("span");
+  body.className = "text";
   let last = 0;
-  for (const [a, b] of ranges) {
-    html += `${escapeHtml(text.slice(last, a))}<mark class="hit">${escapeHtml(text.slice(a, b))}</mark>`;
+  for (const [a0, b0] of ranges) {
+    const a = a0 - shift;
+    const b = b0 - shift;
+    if (a > last) body.append(text.slice(last, a));
+    const mark = document.createElement("mark");
+    mark.className = "hit";
+    mark.textContent = text.slice(a, b);
+    body.append(mark);
     last = b;
   }
-  return html + escapeHtml(text.slice(last));
+  if (last < text.length) body.append(text.slice(last));
+  const ln = document.createElement("span");
+  ln.className = "ln";
+  ln.textContent = hit.line;
+  row.append(body, ln);
+  return row;
+}
+
+function fileRow(file) {
+  const group = document.createElement("div");
+  group.className = search.collapsed ? "sr-group collapsed" : "sr-group";
+  group.dataset.path = file.path;
+  const name = basename(file.path);
+  const dir = dirname(relative(state.root, file.path));
+  const head = document.createElement("div");
+  head.className = "sr-file";
+  head.title = relative(state.root, file.path);
+  head.innerHTML = `<span class="twistie${search.collapsed ? "" : " open"}">${icons.chevron}</span>${fileIcon(name)}<span class="name"></span><span class="dir"></span><span class="count"></span>`;
+  head.querySelector(".name").textContent = name;
+  head.querySelector(".dir").textContent = dir;
+  head.querySelector(".count").textContent = file.hits.length;
+  group.append(head);
+  return group;
+}
+
+/** Append the next chunk of rows (called for the first screen, then on scroll). */
+function renderMoreResults() {
+  const { res, q } = search;
+  if (!res) return;
+  const frag = document.createDocumentFragment();
+  let n = 0;
+  while (n < SEARCH_CHUNK && search.fileIdx < res.files.length) {
+    const file = res.files[search.fileIdx];
+    if (search.hitIdx === 0) {
+      search.group = fileRow(file);
+      frag.append(search.group);
+    }
+    while (search.hitIdx < file.hits.length && n < SEARCH_CHUNK) {
+      search.group.append(hitRow(file.hits[search.hitIdx++], q));
+      n++;
+    }
+    if (search.hitIdx >= file.hits.length) { search.fileIdx++; search.hitIdx = 0; }
+  }
+  srResults.append(frag);
+  search.more = search.fileIdx < res.files.length;
+}
+
+function fillResultsViewport() {
+  // Keep adding rows until the list overflows (or everything is shown).
+  for (let i = 0; i < 6 && search.more && srResults.scrollHeight <= srResults.clientHeight + 300; i++) renderMoreResults();
+}
+srResults.addEventListener("scroll", () => {
+  if (search.more && srResults.scrollTop + srResults.clientHeight > srResults.scrollHeight - 500) renderMoreResults();
+}, { passive: true });
+
+function showResults(res, q) {
+  Object.assign(search, { res, q, fileIdx: 0, hitIdx: 0, group: null, more: false, focused: null });
+  srResults.replaceChildren();
+  srResults.scrollTop = 0;
+  renderMoreResults();
+  fillResultsViewport();
+  const files = res.files.length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  srSummary.textContent = res.total
+    ? `${res.truncated ? `${res.total}+` : res.total} result${res.total === 1 ? "" : "s"} in ${plural(files, "file")}`
+    : "No results found.";
+  srSummary.classList.toggle("empty", !res.total);
+  $("#search-collapse").hidden = !res.total;
+}
+
+function clearResults(message = "") {
+  clearTimeout(search.spinner);
+  Object.assign(search, { res: null, more: false, focused: null });
+  srResults.replaceChildren();
+  srSummary.textContent = message;
+  srSummary.classList.remove("empty");
+  $("#search-collapse").hidden = true;
 }
 
 async function runSearch() {
   clearTimeout(search.timer);
-  const q = $("#search-input").value;
+  const q = srInput.value;
   const seq = ++search.seq;
-  const results = $("#search-results");
-  const summary = $("#search-summary");
+  $("#opt-clear").hidden = !q;
   setSearchHighlight(view, q ? { text: q, matchCase: search.matchCase, wholeWord: search.wholeWord } : null);
-  if (!q) { results.replaceChildren(); summary.textContent = ""; return; }
-  if (!state.root) { results.replaceChildren(); summary.textContent = "Open a folder to search in its files."; return; }
-  summary.innerHTML = '<span class="panel-status"><span class="spinner"></span>Searching…</span>';
+  if (!q) return clearResults();
+  if (!state.root) return clearResults("Open a folder to search in its files.");
+  // Only show the spinner for searches that take a moment, so quick ones do not flicker.
+  clearTimeout(search.spinner);
+  search.spinner = setTimeout(() => { srSummary.innerHTML = '<span class="panel-status"><span class="spinner"></span>Searching…</span>'; }, 150);
   let res;
   try {
     res = await invoke("search_files", { root: state.root, query: q, matchCase: search.matchCase, wholeWord: search.wholeWord });
   } catch (e) {
-    summary.textContent = `${e}`;
+    if (seq === search.seq) { clearTimeout(search.spinner); srSummary.textContent = `${e}`; }
     return;
   }
   if (seq !== search.seq) return; // a newer search is running
-  const frag = document.createDocumentFragment();
-  let rendered = 0;
-  for (const file of res.files) {
-    if (rendered >= MAX_RENDERED_HITS) break;
-    const group = document.createElement("div");
-    group.className = "sr-group";
-    const name = basename(file.path);
-    const dir = dirname(relative(state.root, file.path));
-    group.innerHTML = `<div class="sr-file"><span class="twistie open">${icons.chevron}</span>${fileIcon(name)}<span class="name">${escapeHtml(name)}</span><span class="dir">${escapeHtml(dir)}</span><span class="count">${file.hits.length}</span></div>`;
-    for (const hit of file.hits) {
-      if (rendered++ >= MAX_RENDERED_HITS) break;
-      const row = document.createElement("div");
-      row.className = "sr-hit";
-      row.dataset.path = file.path;
-      row.dataset.line = hit.line;
-      row.title = `${relative(state.root, file.path)}:${hit.line}`;
-      row.innerHTML = `<span class="text">${highlightRanges(hit.text, findRanges(hit.text, q, search.matchCase, search.wholeWord))}</span><span class="ln">${hit.line}</span>`;
-      group.append(row);
-    }
-    frag.append(group);
-  }
-  results.replaceChildren(frag);
-  const files = res.files.length;
-  summary.textContent = res.total
-    ? `${res.total}${res.truncated ? "+" : ""} result${res.total === 1 ? "" : "s"} in ${files} file${files === 1 ? "" : "s"}${rendered < res.total ? ` (showing ${MAX_RENDERED_HITS})` : ""}`
-    : "No results found.";
+  clearTimeout(search.spinner);
+  showResults(res, q);
 }
 
-$("#search-input").addEventListener("input", () => {
+srInput.addEventListener("input", () => {
   clearTimeout(search.timer);
-  search.timer = setTimeout(runSearch, 200);
+  $("#opt-clear").hidden = !srInput.value;
+  search.timer = setTimeout(runSearch, 120);
 });
-$("#search-input").addEventListener("keydown", (e) => {
+srInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); runSearch(); }
-  if (e.key === "Escape") { e.target.value = ""; runSearch(); }
+  else if (e.key === "Escape") { srInput.value = ""; runSearch(); }
+  else if (e.key === "ArrowDown" && srResults.firstElementChild) { e.preventDefault(); srResults.focus(); focusRow(visibleRows()[0]); }
+});
+$("#opt-clear").addEventListener("click", () => { srInput.value = ""; runSearch(); srInput.focus(); });
+$("#search-refresh").addEventListener("click", () => runSearch());
+$("#search-collapse").addEventListener("click", () => {
+  search.collapsed = !search.collapsed;
+  for (const g of srResults.children) {
+    g.classList.toggle("collapsed", search.collapsed);
+    g.firstElementChild.firstElementChild.classList.toggle("open", !search.collapsed);
+  }
+  $("#search-collapse").title = search.collapsed ? "Expand All" : "Collapse All";
 });
 
 function setSearchOption(opt, value) {
@@ -533,31 +677,68 @@ function setSearchOption(opt, value) {
 $("#opt-case").addEventListener("click", () => setSearchOption("matchCase", !search.matchCase));
 $("#opt-word").addEventListener("click", () => setSearchOption("wholeWord", !search.wholeWord));
 
-$("#search-results").addEventListener("click", async (e) => {
-  const fileRow = e.target.closest(".sr-file");
-  if (fileRow) {
-    const group = fileRow.parentElement;
-    group.classList.toggle("collapsed");
-    fileRow.querySelector(".twistie").classList.toggle("open", !group.classList.contains("collapsed"));
-    return;
-  }
-  const hit = e.target.closest(".sr-hit");
-  if (!hit) return;
-  for (const h of document.querySelectorAll(".sr-hit.active")) h.classList.remove("active");
-  hit.classList.add("active");
-  const tab = await openFile(hit.dataset.path, { preview: true, focus: false });
-  if (!tab) return;
-  // Select the match on that line, so it is highlighted in the editor too.
+// ---- result list: mouse and keyboard (↑ ↓ ← → Enter, like VS Code's tree)
+
+const visibleRows = () => [...srResults.querySelectorAll(".sr-file, .sr-group:not(.collapsed) > .sr-hit")];
+
+function focusRow(row) {
+  search.focused?.classList.remove("focused");
+  search.focused = row ?? null;
+  if (!row) return;
+  row.classList.add("focused");
+  row.scrollIntoView({ block: "nearest" });
+}
+
+function toggleGroup(group, open = group.classList.contains("collapsed")) {
+  group.classList.toggle("collapsed", !open);
+  group.querySelector(".twistie").classList.toggle("open", open);
+}
+
+/** Open the file of a hit row (preview tab) and select that match in the editor. */
+async function openHit(row, { pin = false } = {}) {
+  for (const h of srResults.querySelectorAll(".sr-hit.active")) h.classList.remove("active");
+  row.classList.add("active");
+  const tab = await openFile(row.parentElement.dataset.path, { preview: !pin, focus: pin });
+  if (!tab || state.active !== tab) return;
   const doc = view.state.doc;
-  const line = doc.line(Math.min(+hit.dataset.line, doc.lines));
-  const q = $("#search-input").value;
-  const [range] = findRanges(line.text, q, search.matchCase, search.wholeWord);
+  const line = doc.line(Math.min(+row.dataset.line, doc.lines));
+  const [range] = findRanges(line.text, search.q, search.matchCase, search.wholeWord);
   const from = line.from + (range?.[0] ?? 0);
   const to = line.from + (range?.[1] ?? 0);
   view.dispatch({ selection: EditorSelection.range(from, to), effects: EditorView.scrollIntoView(from, { y: "center" }) });
+}
+
+srResults.addEventListener("click", (e) => {
+  const fileRowEl = e.target.closest(".sr-file");
+  if (fileRowEl) { focusRow(fileRowEl); return toggleGroup(fileRowEl.parentElement); }
+  const hit = e.target.closest(".sr-hit");
+  if (hit) { focusRow(hit); openHit(hit); }
 });
-$("#search-results").addEventListener("dblclick", (e) => {
-  if (e.target.closest(".sr-hit") && state.active) { state.active.preview = false; renderTabs(); view.focus(); }
+srResults.addEventListener("dblclick", (e) => {
+  const hit = e.target.closest(".sr-hit");
+  if (hit) openHit(hit, { pin: true });
+});
+srResults.addEventListener("keydown", (e) => {
+  const rows = visibleRows();
+  if (!rows.length) return;
+  const cur = search.focused && rows.includes(search.focused) ? search.focused : null;
+  const i = cur ? rows.indexOf(cur) : -1;
+  const isFile = cur?.classList.contains("sr-file");
+  switch (e.key) {
+    case "ArrowDown": focusRow(rows[Math.min(i + 1, rows.length - 1)]); break;
+    case "ArrowUp": if (i <= 0) { srInput.focus(); srInput.select(); } else focusRow(rows[i - 1]); break;
+    case "Home": focusRow(rows[0]); break;
+    case "End": focusRow(rows[rows.length - 1]); break;
+    case "PageDown": focusRow(rows[Math.min(i + 12, rows.length - 1)]); break;
+    case "PageUp": focusRow(rows[Math.max(i - 12, 0)]); break;
+    case "ArrowRight": if (isFile) toggleGroup(cur.parentElement, true); else return; break;
+    case "ArrowLeft": if (isFile) toggleGroup(cur.parentElement, false); else if (cur) focusRow(cur.parentElement.firstElementChild); else return; break;
+    case "Enter": if (isFile) toggleGroup(cur.parentElement); else if (cur) openHit(cur, { pin: true }); break;
+    case " ": if (cur && !isFile) openHit(cur); break;
+    case "Escape": srInput.focus(); break;
+    default: return;
+  }
+  e.preventDefault();
 });
 
 // -------------------------------------------------------------------- tabs
@@ -575,7 +756,7 @@ async function openFile(path, { preview = false, line = null, quiet = false, act
     const lang = languageFor(path);
     const langExt = await loadLanguage(lang, path);
     const eol = content.text.includes("\r\n") ? "\r\n" : content.text.includes("\n") ? "\n" : "\r\n";
-    const editorState = createState(content.text, langExt, lang.indent);
+    const editorState = dbg.prepareState(path, createState(content.text, langExt, lang.indent));
     tab = { id: ++tabSeq, path, name: basename(path), state: editorState, saved: editorState.doc, eol, lang, dirty: false, preview, scroll: 0 };
     // Reuse the current preview tab instead of piling up tabs (VS Code preview mode).
     const previewIdx = state.tabs.findIndex((t) => t.preview && !t.dirty);
@@ -732,6 +913,8 @@ function updateTitle() {
 onEditorUpdate((u) => {
   const tab = state.active;
   if (!tab) return;
+  if (problemsChanged(u)) updateProblems();
+  dbg.editorUpdate(u, tab);
   if (u.docChanged) {
     const dirty = tab.eolChanged || !u.state.doc.eq(tab.saved);
     const pinned = tab.preview;
@@ -825,8 +1008,19 @@ function updateCursorStatus() {
   $("#sb-cursor").textContent = text;
 }
 
+function updateProblems() {
+  const el = $("#sb-problems");
+  if (!state.active) return el.replaceChildren();
+  const { errors, warnings } = problemCounts(view.state);
+  el.innerHTML = `${icons.error}<span>${errors}</span>${icons.warning}<span>${warnings}</span>`;
+  el.classList.toggle("has-errors", errors > 0);
+  el.classList.toggle("has-warnings", !errors && warnings > 0);
+}
+$("#sb-problems").addEventListener("click", () => { nextProblem(view); view.focus(); });
+
 function updateStatus() {
   const tab = state.active;
+  updateProblems();
   $("#sb-folder").textContent = state.root ? basename(state.root) : "";
   $("#sb-indent").textContent = tab ? `Spaces: ${tab.lang.indent}` : "";
   $("#sb-encoding").textContent = tab ? "UTF-8" : "";
@@ -848,30 +1042,135 @@ function updateStatus() {
 // ------------------------------------------------------------ run & debug view
 
 const RUN_LABELS = { python: "Run Python File", node: "Run with Node.js", preview: "Open Live Preview" };
+const KIND_NAMES = { python: "Python", node: "Node.js", preview: "Live Preview" };
 
-/** The Run and Debug side view: what F5 does for the active file and which runners were found. */
+// Launch configurations: `.vscode/launch.json` in the VS Code format
+// ("python"/"debugpy" and "node" launch requests), plus "Current File".
+const launch = { configs: [], selected: localStorage.getItem("fluxcode.launch") ?? "" };
+const stripJsonc = (t) => t.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str ?? "").replace(/,(\s*[}\]])/g, "$1");
+const launchJsonPath = () => join(join(state.root, ".vscode"), "launch.json");
+
+async function loadLaunchConfigs() {
+  launch.configs = [];
+  if (!state.root) return;
+  try {
+    const { text } = await invoke("read_file", { path: launchJsonPath() });
+    const json = JSON.parse(stripJsonc(text));
+    launch.configs = (json.configurations ?? []).filter((c) => c?.name && c.request !== "attach" && /^(python|debugpy|node|pwa-node)$/.test(c.type));
+  } catch {}
+}
+
+function selectLaunch(name) {
+  launch.selected = name;
+  try { localStorage.setItem("fluxcode.launch", name); } catch {}
+}
+
+/** A launch.json entry with ${file}, ${workspaceFolder}, … filled in. */
+function resolveLaunch(c, tab) {
+  const file = tab?.path ?? "";
+  const root = state.root ?? dirname(file);
+  const name = basename(file);
+  const vars = {
+    file, workspaceFolder: root, workspaceRoot: root, workspaceFolderBasename: basename(root), cwd: root,
+    fileDirname: dirname(file), fileBasename: name, fileBasenameNoExtension: name.replace(/\.[^.]+$/, ""),
+    fileExtname: name.match(/\.[^.]+$/)?.[0] ?? "", relativeFile: relative(root, file), pathSeparator: sepOf(root),
+  };
+  const sub = (v) => (typeof v === "string" ? v.replace(/\$\{(\w+)\}/g, (m, k) => vars[k] ?? m) : v);
+  const kind = /^(python|debugpy)$/.test(c.type) ? "python" : "node";
+  if (!c.program && c.module) { toast(`"${c.name}": module launches are not supported yet — set "program" instead.`, "warning"); return null; }
+  const program = sub(c.program ?? "${file}");
+  if (!program || program.includes("${")) { toast(`"${c.name}": open a file first (its "program" uses \${file}).`, "warning"); return null; }
+  const abs = (/^([A-Za-z]:)?[\\/]/.test(program) ? program : join(root, program)).replace(/[\\/]/g, sepOf(root));
+  return {
+    kind, name: c.name, file: abs, args: (c.args ?? []).map(sub), cwd: sub(c.cwd) || root, stopOnEntry: !!c.stopOnEntry,
+    runtimeArgs: (c.runtimeArgs ?? []).map(sub), python: sub(c.python ?? c.pythonPath ?? ""), runtime: sub(c.runtimeExecutable ?? ""),
+  };
+}
+
+const LAUNCH_TEMPLATE = `{
+  // FluxCode reads the VS Code format. Supported: "python" / "debugpy" and "node"
+  // launch configurations with program, args, cwd, stopOnEntry, runtimeArgs and
+  // \${file}, \${workspaceFolder}, \${fileDirname}, \${relativeFile} …
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "\${file}",
+      "args": []
+    },
+    {
+      "name": "Node.js: Current File",
+      "type": "node",
+      "request": "launch",
+      "program": "\${file}",
+      "args": []
+    }
+  ]
+}
+`;
+
+async function openLaunchJson() {
+  if (!state.root) return toast("Open a folder first: launch.json lives in its .vscode folder.", "warning");
+  const path = launchJsonPath();
+  const exists = await invoke("read_file", { path }).then(() => true, () => false);
+  if (!exists) {
+    try {
+      await invoke("create_file", { path });
+      await invoke("write_file", { path, contents: LAUNCH_TEMPLATE.replace(/\n/g, "\r\n") });
+      state.dirCache.delete(join(state.root, ".vscode"));
+      await loadDir(state.root, true);
+      await renderTree();
+    } catch (e) {
+      return toast(`${e}`, "error");
+    }
+  }
+  await openFile(path);
+}
+
+/** The Run and Debug side view: launch picker, what F5 does, runners (debug sections live in debugview.js). */
 async function renderDebugView() {
   const tab = state.active;
   const kind = tab?.lang.run;
+  await loadLaunchConfigs();
+  if (launch.selected && !launch.configs.some((c) => c.name === launch.selected)) selectLaunch("");
+  const sel = $("#dbg-config");
+  const current = `Current File${kind ? ` (${KIND_NAMES[kind]})` : ""}`;
+  sel.innerHTML = [["", current], ...launch.configs.map((c) => [c.name, c.name])]
+    .map(([v, label]) => `<option value="${escapeHtml(v)}"${v === launch.selected ? " selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("") + (state.root ? '<option value="\__add__">Add Configuration…</option>' : "");
+  $(".dbg-start").innerHTML = icons.play;
+  $(".dbg-gear").innerHTML = icons.gear;
+  $(".dbg-gear").hidden = !state.root;
   const btn = $(".dbg-run");
   btn.querySelector(".dbg-run-ic").innerHTML = state.run ? icons.stop : kind === "preview" ? icons.preview : icons.play;
-  btn.querySelector(".dbg-run-label").textContent = state.run ? `Stop ${state.run.name}` : kind ? `${RUN_LABELS[kind]}` : "Run and Debug";
+  btn.querySelector(".dbg-run-label").textContent = state.run ? `Stop ${state.run.name}` : kind === "preview" ? RUN_LABELS.preview : "Run and Debug";
   btn.classList.toggle("stop", !!state.run);
-  btn.disabled = !tab || (!kind && !state.run);
+  btn.disabled = !state.run && !launch.selected && (!tab || !kind);
+  $(".dbg-link").hidden = !state.root || launch.configs.length > 0;
   $(".dbg-hint").innerHTML = !tab
-    ? "Open a Python, JavaScript/TypeScript or HTML file, then press <kbd>F5</kbd>."
-    : kind
-      ? `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> runs ${kind === "python" ? "with the Python interpreter below, with live output and <code>input()</code> support." : kind === "node" ? "with Node.js, with clickable stack traces." : "in the Live Preview pane, reloading on every save."}`
-      : `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> — ${escapeHtml(tab.lang.name)} files can't be run yet.`;
+    ? "Open a Python, JavaScript/TypeScript or HTML file, then press <kbd>F5</kbd>. Click left of a line number (or press <kbd>F9</kbd>) to set a breakpoint."
+    : kind === "python" || kind === "node"
+      ? `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> starts under the debugger: it stops at breakpoints, shows variables and the call stack, and steps with <kbd>F10</kbd> / <kbd>F11</kbd>. <kbd>Ctrl</kbd><kbd>F5</kbd> runs it without debugging.`
+      : kind
+        ? `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> opens in the Live Preview pane, reloading on every save.`
+        : `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> — ${escapeHtml(tab.lang.name)} files can't be run yet.`;
   if (state.python === undefined) await resolvePython();
   const node = await resolveNode();
   const row = (ok, icon, name, detail, action) =>
     `<div class="dbg-tool ${ok ? "ok" : "missing"}">${icon}<div><b>${name}</b><span>${escapeHtml(detail)}</span></div>${action ? `<button class="btn-secondary" data-action="${action}">Re-detect</button>` : ""}</div>`;
   $(".dbg-tools").innerHTML =
-    row(!!state.python, fileIcon("x.py"), "Python", state.python ? `${state.python.version} · ${state.python.path}` : "Not found on PATH — install from python.org", "selectInterpreter") +
-    row(!!node, fileIcon("x.js"), "Node.js", node ? `${node.version}` : "Not found on PATH — install from nodejs.org") +
+    row(!!state.python, fileIcon("x.py"), "Python", state.python ? `${state.python.version} · ${state.python.path} · built-in debugger` : "Not found on PATH — install from python.org", "selectInterpreter") +
+    row(!!node, fileIcon("x.js"), "Node.js", node ? `${node.version} · inspector debugger` : "Not found on PATH — install from nodejs.org") +
     row(true, fileIcon("x.html"), "Live Preview", "Built in: serves the folder on 127.0.0.1 and reloads on save");
 }
+
+$("#dbg-config").addEventListener("change", (e) => {
+  if (e.target.value === "\__add__") { e.target.value = launch.selected; return openLaunchJson(); }
+  selectLaunch(e.target.value);
+  renderDebugView();
+});
 
 async function updateGithubStatus() {
   const el = $("#sb-github");
@@ -898,6 +1197,77 @@ $("#sb-eol").addEventListener("click", () => {
   updateTitle();
 });
 $("#sb-python").addEventListener("click", () => resolvePython(true));
+
+// ------------------------------------------------------------- debugging
+
+const dbg = createDebugUI({
+  $, state, view, icons, fileIcon, basename, relative, samePath, toast,
+  openFile: (path, opts) => openFile(path, opts),
+  stop: () => stopRun(),
+  restart: () => {
+    if (!state.run?.debug || !state.lastDebug) return;
+    state.restartPending = state.lastDebug;
+    stopRun();
+  },
+  onPaused: () => outputPane?.setPlaceholder("Paused · type an expression to evaluate it (Debug Console), then Enter"),
+  onContinued: () => outputPane?.setPlaceholder(null),
+});
+
+/** F5: debug the selected launch configuration, or the active file. */
+async function startDebugging() {
+  await loadLaunchConfigs();
+  const named = launch.configs.find((c) => c.name === launch.selected);
+  const tab = state.active;
+  if (!named) {
+    if (!tab) return toast("Open a Python or JavaScript/TypeScript file, then press F5 to debug it.", "warning");
+    if (tab.lang.run !== "python" && tab.lang.run !== "node") return runActive(); // Live Preview, or a message
+    if ((tab.dirty || !tab.path) && !(await saveTab(tab))) return;
+  }
+  for (const t of state.tabs) if (t.dirty && t.path) await saveTab(t); // like VS Code: save before launching
+  const cfg = named
+    ? resolveLaunch(named, tab)
+    : { kind: tab.lang.run, name: tab.name, file: tab.path, args: [], cwd: isInside(state.root, tab.path) ? state.root : dirname(tab.path) };
+  if (cfg) await launchDebug(cfg);
+}
+
+async function launchDebug(cfg) {
+  const pane = await ensureOutput();
+  showPanelTab("output", { focus: false });
+  pane.clear();
+  let program;
+  if (cfg.kind === "python") {
+    if (state.python === undefined) await resolvePython();
+    program = cfg.python || state.python?.path;
+    if (!program) return pane.append("Python was not found.\nInstall it from https://www.python.org/downloads/ (tick \"Add python.exe to PATH\"), or create a .venv in this folder.\n", "stderr");
+  } else {
+    program = cfg.runtime || (await resolveNode())?.path;
+    if (!program) return pane.append("Node.js was not found.\nInstall it from https://nodejs.org/ and make sure `node` is on PATH.\n", "stderr");
+  }
+  const shown = relative(cfg.cwd, cfg.file);
+  pane.append(`> Debugging ${shown.includes(" ") ? `"${shown}"` : shown} with ${KIND_NAMES[cfg.kind]} · F5 continue · F10 step over · F11 step into · Shift+F5 stop\n`, "cmd");
+  try {
+    const id = await dbg.start({ ...cfg, program, root: state.root ?? cfg.cwd });
+    state.lastDebug = cfg;
+    state.run = { id, start: performance.now(), name: cfg.name, debug: true };
+    setRunning(true);
+  } catch (e) {
+    dbg.ended();
+    pane.append(`${e}\n`, "stderr");
+  }
+}
+
+async function evaluateInConsole(expr) {
+  outputPane?.append(`> ${expr}\n`, "echo");
+  try {
+    const r = await dbg.evaluate(expr);
+    outputPane?.append(`${r.value === "" ? "(no value)" : r.value}\n`, "dbg-result");
+  } catch (e) {
+    outputPane?.append(`${e.message ?? e}\n`, "stderr");
+  }
+}
+
+// Node's inspector chatter, kept out of the Output panel while debugging.
+const NODE_INSPECTOR_NOISE = /^(?:Debugger listening on ws:\/\/\S+|For help, see: https:\/\/nodejs\.org\/\S*|Debugger attached\.|Waiting for the debugger to disconnect\.\.\.)\r?\n/gm;
 
 async function resolvePython(announce = false) {
   state.python = undefined;
@@ -928,6 +1298,12 @@ function ensureOutput() {
       runId: () => state.run?.id ?? null,
       openFile: (path, line) => openFile(path, { line }),
       onExit: onRunExit,
+      transform: (p) => (state.run?.debug && p.stream === "stderr" ? p.data.replace(NODE_INSPECTOR_NOISE, "") : p.data),
+      onInput: (value) => {
+        if (!dbg.isPaused()) return false;
+        evaluateInConsole(value);
+        return true;
+      },
     });
     return outputPane;
   });
@@ -1180,6 +1556,7 @@ function toggleTerminal() {
 const RUN_TITLES = { python: "Run Python File (F5)", node: "Run with Node.js (F5)", preview: "Open Live Preview (F5)" };
 
 function updateRunButton() {
+  $("#notes-btn").hidden = !/\.(flx|md|markdown)$/i.test(state.active?.name ?? "");
   const kind = state.active?.lang.run;
   const btn = $("#run-btn");
   btn.hidden = !kind;
@@ -1197,7 +1574,7 @@ function setRunning(running) {
   outputPane?.setRunning(running);
   $(".panel-actions [data-action=stop]").hidden = !running;
   $(".panel-status").innerHTML = running
-    ? `<span class="spinner"></span><span class="ps-label">Running</span><span class="ps-name">${escapeHtml(state.run?.name ?? "")}</span>`
+    ? `<span class="spinner"></span><span class="ps-label">${state.run?.debug ? "Debugging" : "Running"}</span><span class="ps-name">${escapeHtml(state.run?.name ?? "")}</span>`
     : "";
   if (!running) updateRunButton();
   if (state.view === "debug") renderDebugView();
@@ -1205,9 +1582,17 @@ function setRunning(running) {
 
 function onRunExit(payload) {
   const secs = ((performance.now() - state.run.start) / 1000).toFixed(3);
+  const debugged = state.run.debug;
   state.run = null;
+  if (debugged) dbg.ended();
+  outputPane?.setPlaceholder(null);
   outputPane?.append(`\n[Done] exited with code=${payload.code ?? "terminated"} in ${secs} seconds\n`, "info");
   setRunning(false);
+  if (state.restartPending) {
+    const cfg = state.restartPending;
+    state.restartPending = null;
+    return launchDebug(cfg);
+  }
   if ($("#panel").hidden) releaseOutput(); // closed while running: nothing left to show
 }
 
@@ -1379,8 +1764,20 @@ const COMMANDS = {
   zoomIn: ["View: Zoom In", "Ctrl+="],
   zoomOut: ["View: Zoom Out", "Ctrl+-"],
   zoomReset: ["View: Reset Zoom", "Ctrl+0"],
-  run: ["Run: Run Active File / Open Preview", "F5"],
-  stop: ["Run: Stop Running Program", "Shift+F5"],
+  debugStart: ["Run: Start Debugging", "F5"],
+  run: ["Run: Run Without Debugging", "Ctrl+F5"],
+  stop: ["Run: Stop", "Shift+F5"],
+  dbgRestart: ["Run: Restart Debugging", "Ctrl+Shift+F5"],
+  dbgContinue: ["Run: Continue", "F5"],
+  dbgPause: ["Run: Pause", "F6"],
+  dbgStepOver: ["Run: Step Over", "F10"],
+  dbgStepInto: ["Run: Step Into", "F11"],
+  dbgStepOut: ["Run: Step Out", "Shift+F11"],
+  toggleBreakpoint: ["Run: Toggle Breakpoint", "F9"],
+  removeAllBreakpoints: ["Run: Remove All Breakpoints"],
+  addWatch: ["Run: Add Watch Expression"],
+  openLaunchJson: ["Run: Open launch.json"],
+  selectDebugConfig: ["Run: Select Debug Configuration"],
   openPreview: ["Live Preview: Open Preview", ""],
   closePreview: ["Live Preview: Close Preview"],
   toggleAutoSave: ["File: Auto Save"],
@@ -1425,6 +1822,8 @@ const COMMANDS = {
   agentStop: ["OpenCode: Stop Agent Process"],
   agentMode: ["OpenCode: Select Mode"],
   shortcuts: ["Help: Keyboard Shortcuts"],
+  releaseNotes: ["Help: Release Notes (What's New)"],
+  flxPreview: ["Notes: Open Preview (.flx / .md)", "Ctrl+Shift+V"],
   about: ["Help: About FluxCode"],
   reload: ["Developer: Reload Window"],
   exit: ["File: Exit"],
@@ -1435,9 +1834,9 @@ const MENUS = {
   edit: ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace", "findInFiles", "-", "toggleComment"],
   selection: ["selectAll", "selectLine", "-", "copyLineUp", "copyLineDown", "moveLineUp", "moveLineDown", "-", "addNextOccurrence"],
   view: ["commandPalette", "quickOpen", "-", "showExplorer", "findInFiles", "showDebug", "showAgent", "-", "settings", "colorTheme", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
-  run: ["run", "stop", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
+  run: ["debugStart", "run", "stop", "dbgRestart", "-", "dbgStepOver", "dbgStepInto", "dbgStepOut", "dbgContinue", "-", "toggleBreakpoint", "removeAllBreakpoints", "-", "openLaunchJson", "selectDebugConfig", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
   terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "terminalShell", "terminalSettings", "-", "showOutput"],
-  help: ["commandPalette", "shortcuts", "-", "githubSettings", "agentSettings", "-", "about"],
+  help: ["commandPalette", "shortcuts", "releaseNotes", "-", "githubSettings", "agentSettings", "-", "about"],
 };
 const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview|Preferences|Accounts|OpenCode): /, "");
 // Menu items that show a check mark when on.
@@ -1540,6 +1939,26 @@ async function runCommand(id) {
       editorPrefs.set({ autoSave: !state.autoSave });
       return toast(`Auto Save is ${state.autoSave ? "on" : "off"}.`);
     case "stop": return stopRun();
+    case "debugStart":
+      if (dbg.isActive()) return dbg.isPaused() && dbg.command("continue");
+      if (state.run) return stopRun();
+      return startDebugging();
+    case "dbgContinue": return dbg.command("continue");
+    case "dbgPause": return dbg.command("pause");
+    case "dbgStepOver": return dbg.command("stepOver");
+    case "dbgStepInto": return dbg.command("stepInto");
+    case "dbgStepOut": return dbg.command("stepOut");
+    case "dbgRestart": return dbg.isActive() ? dbg.command("restart") : startDebugging();
+    case "toggleBreakpoint": return dbg.command("toggleBreakpoint");
+    case "removeAllBreakpoints": return dbg.removeAll();
+    case "addWatch": showView("debug"); return dbg.addWatch();
+    case "openLaunchJson": return openLaunchJson();
+    case "selectDebugConfig":
+      await loadLaunchConfigs();
+      return pickQuick("Select Debug Configuration", [{ name: "" }, ...launch.configs].map((c) => ({
+        label: c.name || "Current File", detail: c.type ?? "the active editor", on: c.name === launch.selected,
+        run: () => { selectLaunch(c.name); if (state.view === "debug") renderDebugView(); },
+      })));
     case "selectInterpreter": return resolvePython(true);
     case "refresh": return refreshExplorer();
     case "collapseAll":
@@ -1611,6 +2030,12 @@ async function runCommand(id) {
       return;
     }
     case "shortcuts": return showShortcuts();
+    case "releaseNotes": return (await import("./whatsnew.js")).showReleaseNotes(VERSION, notesCtx());
+    case "flxPreview": {
+      if (!tab) return toast("Open a .flx or .md file to preview it.", "warning");
+      const text = (tab === state.active ? view.state : tab.state).doc.toString();
+      return (await import("./whatsnew.js")).previewNotes(text, tab.name, notesCtx());
+    }
     case "about":
       return modal(
         `FluxCode ${VERSION}`,
@@ -1982,15 +2407,16 @@ const bindings = {
   "ctrl+w": "closeEditor", "ctrl+F4": "closeEditor", "ctrl+b": "toggleSidebar",
   "ctrl+`": "toggleTerminal", "ctrl+j": "togglePanel", "ctrl+shift+`": "newTerminal", "ctrl+shift+~": "newTerminal", "ctrl+p": "quickOpen", "ctrl+e": "quickOpen",
   "ctrl+shift+p": "commandPalette", F1: "commandPalette",
-  F5: "run", "ctrl+F5": "run", "ctrl+alt+n": "run", "shift+F5": "stop",
+  F5: "debugStart", "ctrl+F5": "run", "ctrl+alt+n": "run", "shift+F5": "stop", "ctrl+shift+F5": "dbgRestart",
+  F6: "dbgPause", F9: "toggleBreakpoint", F10: "dbgStepOver", F11: "dbgStepInto", "shift+F11": "dbgStepOut",
   "ctrl+Tab": "nextTab", "ctrl+PageDown": "nextTab", "ctrl+shift+Tab": "prevTab", "ctrl+PageUp": "prevTab",
   "ctrl+shift+e": "showExplorer", "ctrl+shift+f": "findInFiles", "ctrl+shift+d": "showDebug", "ctrl+shift+a": "showAgent", "ctrl+,": "settings", "ctrl+h": "replace", "ctrl+f": "find", "ctrl+g": "gotoLine",
-  "alt+z": "toggleWordWrap", "ctrl+=": "zoomIn", "ctrl+shift++": "zoomIn", "ctrl++": "zoomIn",
+  "ctrl+shift+v": "flxPreview", "alt+z": "toggleWordWrap", "ctrl+=": "zoomIn", "ctrl+shift++": "zoomIn", "ctrl++": "zoomIn",
   "ctrl+-": "zoomOut", "ctrl+shift+_": "zoomOut", "ctrl+0": "zoomReset",
 };
 const chordBindings = { "ctrl+t": "colorTheme", "ctrl+o": "openFolder", "ctrl+w": "closeAll", s: "saveAll", "ctrl+s": "saveAll" };
 // Keys the WebView would otherwise treat as browser shortcuts (reload, print, devtools, …).
-const blockedBrowserKeys = new Set(["F5", "ctrl+r", "ctrl+shift+r", "ctrl+p", "F3", "F7", "ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c"]);
+const blockedBrowserKeys = new Set(["F5", "F6", "F9", "F10", "F11", "ctrl+r", "ctrl+shift+r", "ctrl+p", "F3", "F7", "ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c"]);
 
 window.addEventListener(
   "keydown",
@@ -2106,6 +2532,10 @@ function paintIcons() {
   $(".ws-actions [data-action=collapseAll]").innerHTML = icons.collapse;
   $("#opt-case").innerHTML = icons.caseSensitive;
   $("#opt-word").innerHTML = icons.wholeWord;
+  $("#opt-clear").innerHTML = icons.close;
+  $(".search-ic").innerHTML = icons.search;
+  $("#search-refresh").innerHTML = icons.refresh;
+  $("#search-collapse").innerHTML = icons.collapse;
   $(".panel-actions [data-action=stop]").innerHTML = icons.stop;
   $(".panel-actions [data-action=clearOutput]").innerHTML = icons.clear;
   $(".panel-actions [data-action=clearTerminal]").innerHTML = icons.clear;
@@ -2113,12 +2543,29 @@ function paintIcons() {
   $("#sb-agent").innerHTML = `${icons.agent}<span></span>`;
   $(".wm-logo").innerHTML = logo;
   $(".pv-ic").innerHTML = icons.preview;
+  $("#notes-btn").innerHTML = icons.notes;
   $("button[data-dev=full]").innerHTML = icons.desktop;
   $("button[data-dev=tablet]").innerHTML = icons.tablet;
   $("button[data-dev=phone]").innerHTML = icons.phone;
   $("[data-pv=reload]").innerHTML = icons.refresh;
   $("[data-pv=external]").innerHTML = icons.reveal;
   $("[data-pv=close]").innerHTML = icons.close;
+}
+
+const notesCtx = () => ({
+  icons, logo,
+  openUrl: (url) => invoke("open_url", { url }).catch(() => {}),
+  onClose: () => { if (state.active) view.focus(); },
+});
+
+/** After an update (or on the very first start), show What's New once — folder open or not. */
+async function showNotesAfterUpdate() {
+  const version = await versionReady;
+  let seen = null;
+  let auto = null;
+  try { seen = localStorage.getItem("fluxcode.notesSeen"); auto = localStorage.getItem("fluxcode.notesAuto"); } catch {}
+  if (!version || version === seen || auto === "off") return; // nothing new: don't even load the viewer
+  (await import("./whatsnew.js")).maybeShowReleaseNotes(version, notesCtx());
 }
 
 /** `fluxcode <folder|file>...` opens those (like `code .`); otherwise restore the last session. */
@@ -2133,11 +2580,12 @@ async function boot() {
   state.autoSave = session?.autoSave ?? true;
   // 240px was the old, cramped default: let the new roomier default apply.
   if (session?.panelH === "240px") document.documentElement.style.removeProperty("--panel-h");
-  getVersion().then((v) => {
+  versionReady = getVersion().then((v) => {
     VERSION = v;
     $(".tb-badge").hidden = !v.includes("-dev");
     $(".tb-badge").title = `Development build ${v} — not a final release`;
-  }).catch(() => {});
+    return v;
+  }).catch(() => null);
   invoke("get_platform").then((p) => {
     if (p === "linux") document.body.classList.add("platform-linux");
   }).catch(() => {});
@@ -2159,6 +2607,7 @@ async function boot() {
     }
   } finally {
     booted = true;
+    showNotesAfterUpdate();
     persist();
   }
 }

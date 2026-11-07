@@ -19,6 +19,8 @@ import {
 import { tags as t } from "@lezer/highlight";
 import { loadEmmetTab } from "./complete/index.js";
 import { agentDiffField, agentDiffTheme } from "./agentdiff.js";
+import { problems } from "./diagnostics.js";
+import { debugGutter } from "./breakpoints.js";
 
 // ------------------------------------------------------------------ theme
 
@@ -44,10 +46,12 @@ const theme = EditorView.theme({
     ".cm-selectionBackground": { backgroundColor: "var(--sel-dim)" },
     "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": { backgroundColor: "var(--sel)" },
     ".cm-content ::selection": { backgroundColor: "transparent" },
-    ".cm-activeLine": { backgroundColor: "var(--line-hl)" },
+    // Translucent on purpose: the selection is drawn in a layer *under* the line,
+    // so an opaque active-line color would hide a selection on the caret's line.
+    ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--fg-strong) 4%, transparent)" },
     ".cm-gutters": { backgroundColor: "var(--bg-editor)", color: "var(--fg-dim)", border: "none" },
     // Numbers are zero-padded (01, 02 … 10) so every line number has the same width and column.
-    ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 18px", minWidth: "44px", fontVariantNumeric: "tabular-nums" },
+    ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 4px", minWidth: "30px", fontVariantNumeric: "tabular-nums" },
     ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--fg-strong)" },
     ".cm-foldGutter .cm-gutterElement": { color: "var(--fg-muted)", padding: "0 4px", cursor: "pointer", opacity: "0", transition: "opacity .1s" },
     ".cm-gutters:hover .cm-foldGutter .cm-gutterElement": { opacity: "1" },
@@ -266,6 +270,7 @@ const vscodeKeys = [
 ];
 
 const baseExtensions = [
+  debugGutter,
   lineNumbers({ formatNumber: (n, state) => String(n).padStart(Math.max(2, String(state.doc.lines).length), "0") }),
   highlightActiveLineGutter(),
   highlightSpecialChars(),
@@ -296,6 +301,7 @@ const baseExtensions = [
     indentWithTab,
   ]),
   theme,
+  problems,
   agentDiffField,
   agentDiffTheme,
   EditorView.updateListener.of((u) => updateHandler(u)),

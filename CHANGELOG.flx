@@ -1,0 +1,56 @@
+@title What's new in FluxCode
+@version 0.5.3-dev
+@date 7 November 2026
+
+> FluxCode shows this page by itself after every update (and on the first start). Untick **Show after updates** above to stop that; it is always under **Help → Release Notes**.
+
+# 0.5.3 — Run and Debug, Problems, faster search
+
+## Debugger, the VS Code way
+- !new **Breakpoints**: click left of a line number, or press [[F9]]. They follow the text as you edit and are remembered per file.
+- !new **F5 starts debugging** Python and JavaScript / TypeScript (Node.js); [[Ctrl+F5]] still runs without the debugger.
+- !new A floating **debug toolbar**: Continue [[F5]], Pause [[F6]], Step Over [[F10]], Step Into [[F11]], Step Out [[Shift+F11]], Restart [[Ctrl+Shift+F5]], Stop [[Shift+F5]].
+- !new **Variables**, **Watch**, **Call Stack** and **Breakpoints** in the Run and Debug view. Click a frame to see its variables; objects, lists and dicts expand on demand.
+- !new Hover a name while paused to see its value. Type an expression in the Output panel's input row to evaluate it (**Debug Console**).
+- !new Stops on **uncaught exceptions** at the line that raised them, with the message shown on top.
+- !new `.vscode/launch.json` support: `python` / `debugpy` and `node` launch configurations with `program`, `args`, `cwd`, `stopOnEntry`, `runtimeArgs` and `${file}`, `${workspaceFolder}`, `${fileDirname}` … Pick one next to the play button, or let FluxCode write a starter file.
+- !perf Built to stay light: Python debugging uses a tiny helper on the standard library (`bdb`), so there is **nothing to install** (no debugpy). With no breakpoints the program runs at full speed. Node uses its own inspector. The debugger code loads only on the first F5.
+
+## Problems
+- !new Syntax errors come from the parse tree the editor already keeps, so there is no second parser or extra process.
+- !new Errors show as a wavy underline, a red line number, a hover message, and the ✕ / ⚠ count in the status bar. Click the count or press [[F8]] to jump to the next one.
+- !new HTML also reports a closing tag that does not match and an element left open.
+
+## Find in Files
+- !perf Files are searched in **parallel**, and a whole-file pre-check means files without a match cost almost nothing.
+- !perf A search that newer typing makes outdated **stops itself**, and the results render in chunks as you scroll.
+- !better The first match on a long line is always visible, and file headers stay at the top while you scroll. Keyboard: [[Down]] enters the list, [[Left]] / [[Right]] fold a file, [[Enter]] opens it.
+
+## Explorer
+- !fix New file / folder: the icon follows what you type, so `index.html` shows the HTML icon before you press Enter.
+- !new `src/utils/date.js` creates the missing folders too, like VS Code.
+- !new Well-known folders get their own color and glyph: `src`, `tests`, `docs`, `assets`, `.git`, `.vscode`, `node_modules`, `dist`, `scripts`, `.venv` …
+- !new More file types are recognised: fonts, PDFs, audio and video, archives, Swift, Dart, R, `.env.*` files, `package.json`, `tsconfig.json` …
+- !fix Renaming `notes.txt` to `notes.py` switches the open tab to Python right away.
+
+## .flx — FluxCode's notes format
+- !new This page is written in `.flx`: everyday Markdown plus `@title` / `@version` / `@date`, key caps like `[[Ctrl+P]]`, tagged items (`!new`, `!fix`, `!better`, `!perf`), task items and `>!` warnings.
+- !new `.flx` files get their own icon and highlighting; **Open Preview** ([[Ctrl+Shift+V]]) renders `.flx` and `.md` files.
+
+## Fixes
+- !fix Double-click selection is visible again on the caret's line (the active-line highlight was covering it).
+- !fix Settings: the side navigation follows the section you are reading, including the last one. The Terminal section has a live preview.
+
+---
+
+# 0.5.2 — OpenCode live edits
+
+- OpenCode edits appear in the editor as they happen, with inline **Keep** / **Undo** on every hunk.
+- Custom context menus for tabs, the explorer and the terminal.
+- Code completion with Emmet for HTML and CSS, and snippets for Python, JavaScript and PHP.
+
+# 0.5.1 — Settings, OpenCode, GitHub, Linux
+
+- Settings panel (Appearance, Editor, Terminal, Accounts, OpenCode) with live preview and contrast scores.
+- OpenCode agent over the Agent Client Protocol; GitHub sign-in for `git`, `gh` and the agent.
+- Native Linux build.

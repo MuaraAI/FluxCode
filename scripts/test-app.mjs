@@ -16,7 +16,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const EXE = process.argv[2] ?? "C:/Users/User/.fluxcode-target/release/fluxcode.exe";
 const EXAMPLES = join(ROOT, "examples");
 const OUT = join(process.env.TEMP ?? ROOT, "fluxcode-test");
-const PORT = 9233;
+const PORT = +(process.env.FLUX_CDP_PORT ?? 9233);
 mkdirSync(OUT, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -134,6 +134,13 @@ await sleep(800);
 measure("idle, examples open");
 await shot("00-start");
 
+// What's New: shown by itself on the first start (fresh profile), closes with Escape.
+check("What's New opens on the first start", !!(await waitFor(`!!document.querySelector('#notes .nt-body h2')`, 6000)));
+check("release notes rendered from CHANGELOG.flx (.flx tags, key caps)", !!(await evaluate(`document.querySelector('#notes .nt-body').innerText.includes('Debugger') && document.querySelectorAll('#notes .tag').length > 5 && document.querySelectorAll('#notes kbd').length > 5`)));
+await shot("00-whats-new");
+await press("Escape");
+check("What's New closes with Escape", !!(await waitFor(`!document.querySelector('#notes')`, 2000)));
+
 // Python
 check("open python/main.py", !!(await openFile("python/main.py")));
 await press("F5");
@@ -147,8 +154,52 @@ await shot("01-python");
 
 check("open python/error_demo.py", !!(await openFile("python/error_demo.py")));
 await press("F5");
+// F5 debugs: an uncaught exception pauses on the line that raised it (like VS Code), F5 then lets it finish.
+check("debugger stops on the uncaught exception", !!(await waitFor(`document.querySelector('.dbg-exception:not([hidden])')?.innerText.includes('ZeroDivisionError') && document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent === 'divide'`, 15000)));
+await shot("01b-exception");
+await press("F5");
 await waitFor(`document.querySelector('.out-text').innerText.includes('exited with code=1')`, 15000);
 check("traceback links", (await evaluate(`document.querySelectorAll('.out-text a[data-file]').length`)) >= 3);
+
+// Debugger: Python through the built-in bdb helper (no debugpy)
+async function goLine(n) {
+  await press("g", { ctrl: true });
+  await waitFor(`!document.querySelector('#quick-input').hidden`);
+  await type(String(n));
+  await sleep(150);
+  await press("Enter");
+  await waitFor(`document.querySelector('#sb-cursor').textContent.startsWith('Ln ${n},')`, 2000);
+}
+const bpLines = (file) => evaluate(`(() => { const b = JSON.parse(localStorage.getItem('fluxcode.breakpoints') || '{}'); const k = Object.keys(b).find(k => k.toLowerCase().endsWith(${JSON.stringify(file)})); return k ? b[k].join(',') : ''; })()`);
+const topFrame = () => evaluate(`document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent ?? ''`);
+const varRow = (text) => `[...document.querySelectorAll('#dbg-variables .dv-row')].some(r => r.textContent === ${JSON.stringify(text)})`;
+
+check("open python/debug_demo.py", !!(await openFile("python/debug_demo.py")));
+await goLine(12);
+await press("F9");
+check("F9 sets a breakpoint (saved per file)", (await bpLines("debug_demo.py")) === "12", await bpLines("debug_demo.py"));
+await press("d", { ctrl: true, shift: true });
+const dbgT0 = Date.now();
+await press("F5");
+check("python debugger stops at the breakpoint in area()", !!(await waitFor(`!!document.querySelector('.cm-execLine') && document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent === 'area'`, 15000)), `${Date.now() - dbgT0} ms`);
+check("debug toolbar shown, status bar in debug color", await evaluate(`!document.querySelector('#debug-toolbar').hidden && document.querySelector('#statusbar').classList.contains('debugging')`));
+check("Variables show the locals (squared: 1)", !!(await waitFor(varRow("squared: 1"), 5000)));
+check("Call Stack lists area and <module>", (await evaluate(`[...document.querySelectorAll('#dbg-stack .ds-name')].map(e => e.textContent).join(',')`)) === "area,<module>");
+await shot("03-debug-python");
+await evaluate(`document.querySelector('.stdin').focus()`);
+await type("shapes[0]['name']");
+await press("Enter");
+check("Debug Console evaluates in the paused frame", !!(await waitFor(`document.querySelector('.out-text').innerText.includes("'small'")`, 5000)));
+await press("F10");
+check("F10 steps back into the caller", !!(await waitFor(`document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent === '<module>'`, 5000)), await topFrame());
+await press("F5");
+check("F5 continues to the same breakpoint (next loop)", !!(await waitFor(`document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent === 'area' && [...document.querySelectorAll('#dbg-variables .dv-row')].some(r => r.textContent === 'radius: 2')`, 8000)));
+await evaluate(`document.querySelector('[data-da=clearBps]').click()`);
+check("Remove All Breakpoints clears them", (await bpLines("debug_demo.py")) === "");
+await press("F5");
+check("python program finishes after continue", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('3 circles, total area 43.98') && document.querySelector('.out-text').innerText.includes('exited with code=0')`, 10000)), (await outputText()).slice(-160));
+check("debug UI cleared after the program ends", !!(await waitFor(`document.querySelector('#debug-toolbar').hidden && !document.querySelector('.cm-execLine') && !document.querySelector('#statusbar').classList.contains('debugging')`, 3000)));
+measure("after python debug session");
 
 // JavaScript (Node)
 check("open js/hello.js", !!(await openFile("js/hello.js")));
@@ -164,6 +215,33 @@ await shot("02-node");
 check("open js/greet.ts", !!(await openFile("js/greet.ts")));
 await press("F5");
 check("typescript runs on node", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('total bahasa: 5')`, 15000)), (await outputText()).split("\n").slice(1, 4).join(" | "));
+
+// Debugger: Node.js through its own inspector (WebSocket from the webview)
+check("open js/debug_demo.js", !!(await openFile("js/debug_demo.js")));
+await goLine(6);
+await press("F9");
+check("breakpoint set in the JS file", (await bpLines("debug_demo.js")) === "6");
+await press("F5");
+check("node debugger stops at the breakpoint in area()", !!(await waitFor(`!!document.querySelector('.cm-execLine') && document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent === 'area'`, 15000)), await topFrame());
+check("node Variables show the locals (squared: 1)", !!(await waitFor(varRow("squared: 1"), 5000)));
+check("inspector chatter kept out of the Output", !/Debugger listening|For help, see|Debugger attached/.test(await outputText()));
+await shot("04-debug-node");
+await press("F10");
+await press("F10");
+check("F10 steps in node", !!(await waitFor(`document.querySelector('#dbg-stack .ds-row.active .ds-name')?.textContent !== 'area'`, 5000)), await topFrame());
+await evaluate(`document.querySelector('[data-da=clearBps]').click()`);
+await press("F5");
+check("node program finishes after continue", !!(await waitFor(`document.querySelector('.out-text').innerText.includes('3 circles, total area 43.98') && document.querySelector('.out-text').innerText.includes('exited with code=0')`, 10000)), (await outputText()).slice(-200));
+check("node debug UI cleared", !!(await waitFor(`document.querySelector('#debug-toolbar').hidden`, 3000)));
+
+// Explorer: the new-file icon follows the typed name; a/b/c creates folders.
+await press("e", { ctrl: true, shift: true });
+await evaluate(`document.querySelector('.ws-actions [data-action=newFile]').focus()`);
+await evaluate(`document.querySelector('.ws-actions [data-action=newFile]').click()`);
+check("inline new-file input appears", !!(await waitFor(`!!document.querySelector('#tree input')`, 2000)));
+await type("index.html");
+check("icon follows the typed name (HTML)", (await evaluate(`document.querySelector('#tree input').parentElement.querySelector('.ficon')?.dataset.kind`)) === "html");
+await press("Escape");
 
 // Web: Live Preview + auto save + reload
 check("open web/index.html", !!(await openFile("web/index.html")));

@@ -72,6 +72,17 @@ const P = {
   tool: '<path d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.8 6.8a2.1 2.1 0 0 1-3-3l6.8-6.8a6 6 0 0 1 7.9-7.9z"/>',
   edit: '<path d="M4 20h4l10.5-10.5a2 2 0 0 0-4-4L4 16z"/><path d="m13 7 4 4"/>',
   plan: '<path d="M4.5 7h2M4.5 12h2M4.5 17h2"/><path d="M10 7h9.5M10 12h9.5M10 17h9.5"/>',
+  // debugging (toolbar and Run menu)
+  dbgContinue: '<path d="M5.5 5.5v13"/><path d="M9.5 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4l-8.6-5.8a.8.8 0 0 0-1.2.7z" fill="currentColor"/>',
+  dbgPause: '<path d="M8.5 5.5v13M15.5 5.5v13" stroke-width="2.6"/>',
+  dbgStepOver: '<path d="M4.5 13a7.5 7.5 0 0 1 14.3-3.2"/><path d="M19.5 5.2v4.6h-4.6"/><circle cx="12" cy="18.2" r="2" fill="currentColor"/>',
+  dbgStepInto: '<path d="M12 3.5v10.3"/><path d="m7.6 9.6 4.4 4.4 4.4-4.4"/><circle cx="12" cy="19.2" r="2" fill="currentColor"/>',
+  dbgStepOut: '<path d="M12 14.2V3.8"/><path d="M7.6 8.2 12 3.8l4.4 4.4"/><circle cx="12" cy="19.2" r="2" fill="currentColor"/>',
+  dbgRestart: '<path d="M5.2 12.5a7 7 0 1 0 2-5.4"/><path d="M5 3.8v4.6h4.6"/>',
+  dbgStop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
+  breakpoint: '<circle cx="12" cy="12" r="5.5" fill="currentColor" stroke="none"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/>',
+  notes: '<path d="M7 3.5h7.5L19 8v10.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2z"/><path d="M14.5 3.5V8H19"/><path d="M8.5 12.5h7M8.5 16h4.5"/>',
   // window controls: 20px glyphs with 1.3px strokes, like Windows 11 but easier to see
   minimize: '<path d="M5.5 12h13" stroke-width="1.3"/>',
   maximize: '<rect x="5.5" y="5.5" width="13" height="13" rx="1.6" stroke-width="1.3"/>',
@@ -107,6 +118,8 @@ const G = {
   diamond: '<path d="M8 4.2 11.8 8 8 11.8 4.2 8z"/>',
   table: '<rect x="4" y="4.8" width="8" height="6.4" rx="1"/><path d="M4 8h8M8 4.8v6.4"/>',
   box: '<path d="M8 4 12 6v4L8 12 4 10V6z"/><path d="M4 6l4 2 4-2M8 8v4"/>',
+  // FluxCode's own notes format (.flx): the logo's lightning bolt
+  bolt: '<path d="M9.3 3.4 5.3 8.9h2.8l-1 3.7 4-5.5H8.3z" fill="currentColor" stroke="none"/>',
 };
 
 const letters = (text) => {
@@ -128,6 +141,8 @@ const T = {
   config: [G.sliders, "#9aa5b1"], env: [G.sliders, "#d9b43c"], image: [G.image, "#a57ae8"], svg: [G.diamond, "#f0a53a"],
   git: [G.branch, "#f05133"], lock: [G.lock, "#8b949e"], shell: [G.prompt, "#6cc06a"], powershell: [G.prompt, "#3b82f6"],
   batch: [G.prompt, "#c9b85a"], csv: [G.table, "#4caf6a"], docker: [G.box, "#2496ed"], package: [G.box, "#c98a4a"],
+  flx: [G.bolt, "#8b7cf6"], swift: [letters("Sw"), "#f05138"], dart: [letters("Dt"), "#2bb7f6"], r: [letters("R"), "#4a8fd6"],
+  font: [letters("Aa"), "#e06c9f"], pdf: [letters("PDF"), "#e5534b"], audio: [G.image, "#4caf6a"], video: [G.image, "#e5679f"],
 };
 
 const EXT = {
@@ -141,8 +156,15 @@ const EXT = {
   env: "env", png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", ico: "image", bmp: "image", svg: "svg",
   gitignore: "git", gitattributes: "git", gitmodules: "git", lock: "lock", sh: "shell", bash: "shell", zsh: "shell",
   ps1: "powershell", bat: "batch", cmd: "batch", csv: "csv", tsv: "csv", dockerfile: "docker", zip: "package", "7z": "package",
+  flx: "flx", mdx: "markdown", rst: "text", jsonl: "json", json5: "json", lockb: "lock", xhtml: "html", vue: "vue",
+  swift: "swift", dart: "dart", r: "r", kts: "kotlin", scala: "java", groovy: "java", hh: "header", cxx: "cpp",
+  tar: "package", gz: "package", tgz: "package", rar: "package", whl: "package", jar: "package",
+  ttf: "font", otf: "font", woff: "font", woff2: "font", pdf: "pdf", mp3: "audio", wav: "audio", ogg: "audio",
+  mp4: "video", mov: "video", webm: "video", avif: "image", tif: "image", tiff: "image",
+  editorconfig: "config", prettierrc: "config", eslintrc: "config", babelrc: "config", npmrc: "config", nvmrc: "config", properties: "config",
+  env: "env", example: "env",
 };
-const NAMES = { license: "license", licence: "license", "license.md": "license", "license.txt": "license", "package-lock.json": "lock", "cargo.lock": "lock", "composer.lock": "lock", dockerfile: "docker" };
+const NAMES = { ".env.local": "env", ".env.example": "env", ".env.development": "env", ".env.production": "env", makefile: "config", "requirements.txt": "config", "pyproject.toml": "config", "package.json": "package", "tsconfig.json": "config", "jsconfig.json": "config", "launch.json": "config", "settings.json": "config", license: "license", licence: "license", "license.md": "license", "license.txt": "license", "package-lock.json": "lock", "cargo.lock": "lock", "composer.lock": "lock", dockerfile: "docker" };
 
 const tile = (kind, [glyph, color]) =>
   `<svg class="ficon" data-kind="${kind}" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="color:${color}" aria-hidden="true"><rect x="1" y="1" width="14" height="14" rx="3.5" fill="currentColor" fill-opacity=".14" stroke="none"/>${glyph}</svg>`;
@@ -162,9 +184,50 @@ export function fileIcon(name) {
   return html;
 }
 
-/** Folder icon: a flat folder in the theme's folder color. */
-export function folderIcon(open) {
-  return open
-    ? `<svg class="folder-icon open" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 11.4V4.3c0-.8.6-1.4 1.4-1.4h3.2c.4 0 .7.1 1 .4l1 1h4.5c.8 0 1.4.6 1.4 1.4V7" fill="currentColor" fill-opacity=".55"/><path d="M3.7 7h10.5c.7 0 1.1.7.9 1.3l-1.7 4c-.2.5-.7.9-1.3.9H2.4c-.7 0-1.1-.7-.9-1.3l1.7-4c.2-.5.7-.9 1.3-.9z" fill="currentColor"/></svg>`
-    : `<svg class="folder-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.3c0-.8.6-1.4 1.4-1.4h3.2c.4 0 .7.1 1 .4l1 1h4.9c.8 0 1.4.6 1.4 1.4v6.2c0 .8-.6 1.4-1.4 1.4H2.9c-.8 0-1.4-.6-1.4-1.4z" fill="currentColor"/><path d="M1.5 6.4h13" stroke="#000" stroke-opacity=".14" stroke-width="1"/></svg>`;
+// Well-known folders get their own color and a small glyph on the folder
+// (src, tests, docs, assets, .git, .vscode, node_modules, …), so a tree reads
+// at a glance; every other folder keeps the theme's folder color.
+const FG = {
+  code: '<path d="M6.7 8.2 5.2 9.8l1.5 1.6M9.3 8.2l1.5 1.6-1.5 1.6"/>',
+  check: '<path d="m5.6 9.9 1.6 1.5 3.2-3.1"/>',
+  lines: '<path d="M5.5 8.6h5M5.5 11h3.4"/>',
+  image: '<path d="m5 11.6 1.9-2 1.4 1.3 1-1 1.7 1.7"/>',
+  branch: '<path d="M6.4 8v3.8M6.4 9.6c1.8 0 3.2-.3 3.2-1.6"/>',
+  box: '<path d="M8 7.8 10.5 9v2.3L8 12.5l-2.5-1.2V9z"/>',
+  gear: '<circle cx="8" cy="10" r="1.6"/>',
+  play: '<path d="M7 8.3v3.4l2.7-1.7z" fill="currentColor"/>',
+  arrow: '<path d="M8 7.8v4M6.3 10.2 8 11.9l1.7-1.7"/>',
+  py: '<path d="M6.2 11.8V8.4h1.6a1 1 0 0 1 0 2H6.2"/><path d="M9.5 8.4v1.9l1.2 1.5"/>',
+};
+const FOLDERS = {
+  src: ["code", "#4c8ef7"], source: ["code", "#4c8ef7"], lib: ["code", "#4c8ef7"], app: ["code", "#4c8ef7"], core: ["code", "#4c8ef7"],
+  components: ["code", "#38bdf8"], pages: ["code", "#38bdf8"], views: ["code", "#38bdf8"], routes: ["code", "#38bdf8"], api: ["code", "#38bdf8"], server: ["code", "#38bdf8"],
+  test: ["check", "#4caf6a"], tests: ["check", "#4caf6a"], __tests__: ["check", "#4caf6a"], spec: ["check", "#4caf6a"], e2e: ["check", "#4caf6a"],
+  docs: ["lines", "#5aa3f0"], doc: ["lines", "#5aa3f0"], examples: ["lines", "#5aa3f0"], notes: ["lines", "#5aa3f0"],
+  assets: ["image", "#a57ae8"], images: ["image", "#a57ae8"], img: ["image", "#a57ae8"], icons: ["image", "#a57ae8"], media: ["image", "#a57ae8"], public: ["image", "#a57ae8"], static: ["image", "#a57ae8"], fonts: ["image", "#a57ae8"],
+  styles: ["code", "#e5679f"], css: ["code", "#e5679f"], scss: ["code", "#e5679f"],
+  ".git": ["branch", "#f05133"], ".github": ["branch", "#8b949e"],
+  ".vscode": ["gear", "#3b82f6"], ".idea": ["gear", "#8b949e"], config: ["gear", "#9aa5b1"], ".config": ["gear", "#9aa5b1"], settings: ["gear", "#9aa5b1"], ".claude": ["gear", "#d97757"],
+  node_modules: ["box", "#7cb342"], packages: ["box", "#c98a4a"], vendor: ["box", "#c98a4a"],
+  dist: ["arrow", "#e5a33d"], build: ["arrow", "#e5a33d"], out: ["arrow", "#e5a33d"], target: ["arrow", "#e5a33d"], release: ["arrow", "#e5a33d"],
+  scripts: ["play", "#6cc06a"], bin: ["play", "#6cc06a"], tools: ["play", "#6cc06a"],
+  venv: ["py", "#4b9fe0"], ".venv": ["py", "#4b9fe0"], env: ["py", "#4b9fe0"], __pycache__: ["py", "#8b949e"],
+};
+
+const folderCache = new Map();
+
+/** Folder icon: flat folder; known names (src, tests, .git, …) get a color and glyph. */
+export function folderIcon(open, name = "") {
+  const known = FOLDERS[name.toLowerCase()];
+  const key = `${open ? 1 : 0}:${known ? name.toLowerCase() : ""}`;
+  let html = folderCache.get(key);
+  if (html) return html;
+  const style = known ? ` style="color:${known[1]}"` : "";
+  const cls = `folder-icon${open ? " open" : ""}${known ? " known" : ""}`;
+  const glyph = known ? `<g fill="none" stroke="var(--bg-side, #1e1e1e)" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" color="var(--bg-side, #1e1e1e)">${FG[known[0]]}</g>` : "";
+  html = open
+    ? `<svg class="${cls}"${style} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 11.4V4.3c0-.8.6-1.4 1.4-1.4h3.2c.4 0 .7.1 1 .4l1 1h4.5c.8 0 1.4.6 1.4 1.4V7" fill="currentColor" fill-opacity=".55"/><path d="M3.7 7h10.5c.7 0 1.1.7.9 1.3l-1.7 4c-.2.5-.7.9-1.3.9H2.4c-.7 0-1.1-.7-.9-1.3l1.7-4c.2-.5.7-.9 1.3-.9z" fill="currentColor"/>${glyph}</svg>`
+    : `<svg class="${cls}"${style} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.3c0-.8.6-1.4 1.4-1.4h3.2c.4 0 .7.1 1 .4l1 1h4.9c.8 0 1.4.6 1.4 1.4v6.2c0 .8-.6 1.4-1.4 1.4H2.9c-.8 0-1.4-.6-1.4-1.4z" fill="currentColor"/><path d="M1.5 6.4h13" stroke="#000" stroke-opacity=".14" stroke-width="1"/>${glyph}</svg>`;
+  folderCache.set(key, html);
+  return html;
 }

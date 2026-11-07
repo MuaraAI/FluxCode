@@ -50,6 +50,11 @@ const LANGUAGES = [
     load: () => import("@codemirror/lang-markdown").then((m) => m.markdown()),
   },
   {
+    // FluxCode's own notes format (CHANGELOG.flx): Markdown highlighting, preview with Ctrl+Shift+V.
+    id: "flx", name: "FluxCode Notes", extensions: ["flx"], indent: 2,
+    load: () => import("@codemirror/lang-markdown").then((m) => m.markdown()),
+  },
+  {
     id: "rust", name: "Rust", extensions: ["rs"], indent: 4,
     load: () => import("@codemirror/lang-rust").then((m) => m.rust()),
   },

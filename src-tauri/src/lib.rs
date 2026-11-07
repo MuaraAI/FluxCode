@@ -10,12 +10,13 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod acp;
+mod debug;
 mod github;
 mod preview;
 mod terminal;
@@ -102,6 +103,14 @@ async fn list_files(root: String) -> Result<Vec<String>, String> {
 const MAX_SEARCH_HITS: usize = 5_000;
 /// Files larger than this are skipped by find-in-files (minified bundles, logs, …).
 const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// Never worth opening: images, fonts, archives, compiled output, source maps.
+const SKIP_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tiff", "psd", "woff", "woff2", "ttf", "otf", "eot",
+    "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "jar", "exe", "dll", "so", "dylib", "pdb", "lib", "obj", "o", "a",
+    "class", "pyc", "pyo", "wasm", "bin", "dat", "db", "sqlite", "mp3", "mp4", "mov", "avi", "mkv", "wav", "ogg", "pdf", "map",
+];
+/// Bumped by every search; a scan that sees a newer number stops early.
+static SEARCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize)]
 struct Hit {
@@ -161,13 +170,17 @@ fn preview(line: &str, match_char: usize) -> String {
     s
 }
 
-fn search_blocking(root: String, query: String, match_case: bool, whole_word: bool) -> SearchResult {
-    let needle = if match_case { query.clone() } else { query.to_lowercase() };
-    let mut result = SearchResult { files: Vec::new(), total: 0, truncated: false };
-    if needle.is_empty() {
-        return result;
+fn searchable(path: &Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => !SKIP_EXTENSIONS.iter().any(|s| ext.eq_ignore_ascii_case(s)),
+        None => true,
     }
-    let mut stack = vec![PathBuf::from(root)];
+}
+
+/// Every file under `root` worth searching, in directory/name order.
+fn search_candidates(root: PathBuf) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         let mut entries: Vec<_> = rd.filter_map(Result::ok).collect();
@@ -183,35 +196,83 @@ fn search_blocking(root: String, query: String, match_case: bool, whole_word: bo
         }
         for e in &entries {
             let Ok(meta) = e.metadata() else { continue };
-            if !meta.is_file() || meta.len() > MAX_SEARCH_FILE_BYTES {
-                continue;
-            }
-            let Ok(bytes) = fs::read(e.path()) else { continue };
-            if bytes[..bytes.len().min(8192)].contains(&0) {
-                continue; // binary
-            }
-            let text = String::from_utf8_lossy(&bytes);
-            let mut hits = Vec::new();
-            for (n, line) in text.lines().enumerate() {
-                let hay = if match_case { std::borrow::Cow::Borrowed(line) } else { std::borrow::Cow::Owned(line.to_lowercase()) };
-                if let Some(at) = find_match(&hay, &needle, whole_word) {
-                    let match_char = hay[..at].chars().count();
-                    hits.push(Hit { line: n as u32 + 1, text: preview(line, match_char) });
-                    result.total += 1;
-                    if result.total >= MAX_SEARCH_HITS {
-                        result.truncated = true;
-                        break;
-                    }
-                }
-            }
-            if !hits.is_empty() {
-                result.files.push(FileHits { path: e.path().to_string_lossy().into_owned(), hits });
-            }
-            if result.truncated {
-                return result;
+            if meta.is_file() && meta.len() <= MAX_SEARCH_FILE_BYTES && searchable(&e.path()) {
+                files.push(e.path());
             }
         }
     }
+    files
+}
+
+/// Hits in one file. The whole file is checked once with a fast substring
+/// scan first, so the per-line work only happens in files that do match.
+fn search_file(path: &Path, needle: &str, match_case: bool, whole_word: bool, budget: &AtomicUsize) -> Option<FileHits> {
+    let bytes = fs::read(path).ok()?;
+    if bytes[..bytes.len().min(8192)].contains(&0) {
+        return None; // binary
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let hay: std::borrow::Cow<str> = if match_case { std::borrow::Cow::Borrowed(&text) } else { std::borrow::Cow::Owned(text.to_lowercase()) };
+    if !hay.contains(needle) {
+        return None;
+    }
+    let mut hits = Vec::new();
+    for ((n, line), hay_line) in text.lines().enumerate().zip(hay.lines()) {
+        if let Some(at) = find_match(hay_line, needle, whole_word) {
+            if budget.fetch_add(1, Ordering::Relaxed) >= MAX_SEARCH_HITS {
+                break;
+            }
+            let match_char = hay_line[..at].chars().count();
+            hits.push(Hit { line: n as u32 + 1, text: preview(line, match_char) });
+        }
+    }
+    (!hits.is_empty()).then(|| FileHits { path: path.to_string_lossy().into_owned(), hits })
+}
+
+fn search_blocking(root: String, query: String, match_case: bool, whole_word: bool) -> SearchResult {
+    let generation = SEARCH_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let needle = if match_case { query.clone() } else { query.to_lowercase() };
+    let mut result = SearchResult { files: Vec::new(), total: 0, truncated: false };
+    if needle.is_empty() {
+        return result;
+    }
+    let files = search_candidates(PathBuf::from(root));
+    if files.is_empty() {
+        return result;
+    }
+    // Files are read in parallel, in contiguous slices, so the merged list keeps
+    // its directory order. The hit budget is shared; a stale search stops itself.
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8).min(files.len());
+    let chunk = files.len().div_ceil(threads);
+    let budget = AtomicUsize::new(0);
+    let parts: Vec<Vec<FileHits>> = std::thread::scope(|s| {
+        let handles: Vec<_> = files
+            .chunks(chunk)
+            .map(|slice| {
+                let (needle, budget) = (&needle, &budget);
+                s.spawn(move || {
+                    let mut out = Vec::new();
+                    for (i, path) in slice.iter().enumerate() {
+                        if budget.load(Ordering::Relaxed) >= MAX_SEARCH_HITS
+                            || (i % 32 == 0 && SEARCH_GENERATION.load(Ordering::Relaxed) != generation)
+                        {
+                            break;
+                        }
+                        if let Some(hits) = search_file(path, needle, match_case, whole_word, budget) {
+                            out.push(hits);
+                        }
+                    }
+                    out
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    });
+    for part in parts {
+        result.files.extend(part);
+    }
+    result.total = result.files.iter().map(|f| f.hits.len()).sum();
+    result.truncated = budget.load(Ordering::Relaxed) > MAX_SEARCH_HITS;
     result
 }
 
@@ -263,8 +324,12 @@ async fn write_file(path: String, contents: String) -> Result<(), String> {
     })
 }
 
+/// New file; like VS Code, `a/b/c.txt` also creates the missing folders.
 #[tauri::command]
 fn create_file(path: String) -> Result<(), String> {
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -273,9 +338,13 @@ fn create_file(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// New folder (nested `a/b` works too); an existing one is an error.
 #[tauri::command]
 fn create_dir(path: String) -> Result<(), String> {
-    fs::create_dir(&path).map_err(|e| e.to_string())
+    if Path::new(&path).exists() {
+        return Err(format!("'{path}' already exists."));
+    }
+    fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -567,6 +636,7 @@ pub fn run() {
         .manage(Processes::default())
         .manage(preview::Preview::default())
         .manage(acp::Acp::default())
+        .manage(debug::DebugChannels::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 acp::shutdown(window.app_handle());
@@ -588,6 +658,8 @@ pub fn run() {
             launch_paths,
             open_url,
             search_files,
+            debug::debug_python,
+            debug::debug_send,
             preview::preview_start,
             preview::preview_reload,
             terminal::term_run,

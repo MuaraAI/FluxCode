@@ -45,11 +45,19 @@ mockIPC(
       case "resolve_python": return { path: "python", version: "Python 3.12.10" };
       case "launch_paths": return [];
       case "search_files": {
+        // Same rules as the Rust side: case fold unless matchCase, whole-word on \w boundaries.
         const out = [];
         let total = 0;
+        const q = args.matchCase ? args.query : args.query.toLowerCase();
+        const word = (t, i) => !args.wholeWord || (!/[\p{L}\p{N}_]/u.test(t[i - 1] ?? "") && !/[\p{L}\p{N}_]/u.test(t[i + q.length] ?? ""));
         for (const [path, text] of Object.entries(files)) {
-          const hits = text.split("\n").map((t, i) => ({ line: i + 1, text: t.trim() }))
-            .filter((h) => h.text.toLowerCase().includes(args.query.toLowerCase()));
+          const hits = [];
+          text.split("\n").forEach((line, i) => {
+            const hay = args.matchCase ? line : line.toLowerCase();
+            let at = hay.indexOf(q);
+            while (at >= 0 && !word(hay, at)) at = hay.indexOf(q, at + 1);
+            if (at >= 0) hits.push({ line: i + 1, text: line.trim() });
+          });
           total += hits.length;
           if (hits.length) out.push({ path, hits });
         }
@@ -78,6 +86,55 @@ mockIPC(
         setTimeout(() => emit("proc-output", { id, stream: "stdout", data: `Halo, ${name}!\n` }), delay + 30);
         setTimeout(() => emit("proc-output", { id, stream: "stderr", data: 'Traceback (most recent call last):\n  File "C:\\demo\\main.py", line 12, in greet\nZeroDivisionError: division by zero\n' }), delay + 60);
         setTimeout(() => emit("proc-exit", { id, code: 1 }), delay + 100);
+        return null;
+      }
+      case "create_file":
+      case "create_dir": {
+        const parts = args.path.split("\\");
+        for (let i = 2; i <= parts.length; i++) {
+          const dir = parts.slice(0, i - 1).join("\\");
+          const name = parts[i - 1];
+          if (i < parts.length || cmd === "create_dir") dirs[parts.slice(0, i).join("\\")] ??= [];
+          if (!(dirs[dir] ??= []).includes(name)) dirs[dir].push(name);
+        }
+        if (cmd === "create_file") files[args.path] = "";
+        return null;
+      }
+      // A fake Python debug session (fluxdbg.py): pauses at the breakpoints, answers variables/evaluate.
+      case "debug_python": {
+        const id = ++pid;
+        const msg = (o, delay = 20) => setTimeout(() => emit("dbg-msg", { id, msg: JSON.stringify(o) }), delay);
+        globalThis.__dbg = { id, msg, step: 0, script: args.script };
+        msg({ event: "ready", python: "3.12.10" });
+        return id;
+      }
+      case "debug_send": {
+        const d = globalThis.__dbg;
+        const m = JSON.parse(args.msg);
+        const frames = (line) => [
+          { id: 0, name: "greet", path: d.script, line, internal: false },
+          { id: 1, name: "<module>", path: d.script, line: 18, internal: false },
+        ];
+        const reply = (body) => d.msg({ event: "response", seq: m.seq, body });
+        if (m.op === "init") {
+          for (const [path, lines] of Object.entries(m.breakpoints)) d.msg({ event: "breakpoints", path, lines });
+          emit("proc-output", { id: d.id, stream: "stdout", data: "Starting…\n" });
+          d.msg({ event: "stopped", reason: "breakpoint", text: null, frames: frames(12) }, 120);
+        } else if (m.op === "next" || m.op === "stepIn") {
+          d.msg({ event: "continued" });
+          d.msg({ event: "stopped", reason: "step", text: null, frames: frames(13 + d.step++) }, 80);
+        } else if (m.op === "continue" || m.op === "stepOut") {
+          d.msg({ event: "continued" });
+          setTimeout(() => emit("proc-output", { id: d.id, stream: "stdout", data: "Hello, FluxCode! 45.14\n" }), 60);
+          setTimeout(() => emit("proc-exit", { id: d.id, code: 0 }), 120);
+        } else if (m.op === "scopes") reply([{ name: "Locals", ref: 1, expensive: false }, { name: "Globals", ref: 2, expensive: true }]);
+        else if (m.op === "variables") {
+          reply(+m.ref === 1
+            ? [{ name: "self", value: "<__main__.Greeter object at 0x0000021F>", type: "Greeter", ref: 3 }, { name: "count", value: String(3 + d.step), type: "int", ref: 0 }, { name: "items", value: "['a', 'b', 'c']", type: "list", ref: 4 }]
+            : +m.ref === 3 ? [{ name: "name", value: "'FluxCode'", type: "str", ref: 0 }]
+            : +m.ref === 4 ? ["a", "b", "c"].map((v, i) => ({ name: String(i), value: `'${v}'`, type: "str", ref: 0 }))
+            : [{ name: "Greeter", value: "<class '__main__.Greeter'>", type: "type", ref: 0 }, { name: "sys", value: "<module 'sys'>", type: "module", ref: 0 }]);
+        } else if (m.op === "evaluate") reply(m.expression === "nope" ? undefined : { name: m.expression, value: m.expression === "self.name" ? "'FluxCode'" : "42", type: "int", ref: 0 });
         return null;
       }
       case "kill_process": setTimeout(() => emit("proc-exit", { id: args.id, code: null }), 20); return null;

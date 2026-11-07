@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "fluxcode"
-version = "0.5.2-dev.2026-11-07-1545"
+version = "0.5.3-dev.2026-11-07-1802"
 dependencies = [
  "libc",
  "serde",

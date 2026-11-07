@@ -146,6 +146,7 @@ export function createOutput(host, ctx) {
     if (e.key !== "Enter" || id == null) return;
     const value = stdin.value;
     stdin.value = "";
+    if (ctx.onInput?.(value)) return; // paused in the debugger: the Debug Console evaluates it
     append(`${value}\n`, "echo");
     invoke("write_stdin", { id, data: `${value}\n` }).catch((err) => ctx.toast(`${err}`, "error"));
   };
@@ -153,7 +154,9 @@ export function createOutput(host, ctx) {
 
   const unlisteners = Promise.all([
     listen("proc-output", ({ payload }) => {
-      if (payload.id === ctx.runId()) append(payload.data, payload.stream === "stderr" ? "stderr" : "");
+      if (payload.id !== ctx.runId()) return;
+      const data = ctx.transform ? ctx.transform(payload) : payload.data;
+      if (data) append(data, payload.stream === "stderr" ? "stderr" : "");
     }),
     listen("proc-exit", ({ payload }) => {
       if (payload.id !== ctx.runId()) return;
@@ -176,6 +179,11 @@ export function createOutput(host, ctx) {
       if (running) stdin.focus();
     },
     focus: () => (stdinRow.hidden ? out : stdin).focus(),
+    /** Placeholder of the input row (the Debug Console while paused); null restores the default. */
+    setPlaceholder(text) {
+      stdin.placeholder = text ?? "Type input for the running program, then Enter";
+      stdinRow.classList.toggle("console", !!text);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

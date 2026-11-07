@@ -1,7 +1,7 @@
 {
   "name": "fluxcode",
   "private": true,
-  "version": "0.5.2-dev.2026-11-07-1545",
+  "version": "0.5.3-dev.2026-11-07-1802",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "@codemirror/lang-python": "^6.2.0",
     "@codemirror/lang-rust": "^6.0.2",
     "@codemirror/language": "^6.11.0",
+    "@codemirror/lint": "^6.9.7",
     "@codemirror/search": "^6.5.0",
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.36.0",

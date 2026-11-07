@@ -77,27 +77,43 @@
 
         <div id="search-view" class="view" hidden>
           <div class="search-box">
-            <input id="search-input" placeholder="Search" spellcheck="false" autocomplete="off" />
+            <span class="search-ic"></span>
+            <input id="search-input" placeholder="Search" spellcheck="false" autocomplete="off" aria-label="Search in files" />
+            <button class="opt" id="opt-clear" title="Clear (Esc)" hidden></button>
             <button class="opt" id="opt-case" title="Match Case (Alt+C)"></button>
             <button class="opt" id="opt-word" title="Match Whole Word (Alt+W)"></button>
           </div>
-          <div id="search-summary"></div>
-          <div id="search-results" tabindex="0"></div>
+          <div class="search-head">
+            <span id="search-summary"></span>
+            <span class="search-actions">
+              <button id="search-refresh" title="Refresh"></button>
+              <button id="search-collapse" title="Collapse All"></button>
+            </span>
+          </div>
+          <div id="search-results" tabindex="0" role="tree"></div>
         </div>
 
         <!-- Run and Debug: what F5 does for the active file, with the tools found on this machine. -->
         <div id="debug-view" class="view" hidden>
+          <div class="dbg-launch">
+            <button class="dbg-start" data-action="debugStart" title="Start Debugging (F5)"></button>
+            <select id="dbg-config" title="Launch configuration" aria-label="Launch configuration"></select>
+            <button class="dbg-gear" data-action="openLaunchJson" title="Open launch.json"></button>
+          </div>
           <div class="dbg-body">
-            <button class="btn-primary dbg-run" data-action="run"><span class="dbg-run-ic"></span><span class="dbg-run-label">Run and Debug</span></button>
+            <button class="btn-primary dbg-run" data-action="debugStart"><span class="dbg-run-ic"></span><span class="dbg-run-label">Run and Debug</span></button>
             <div class="dbg-hint"></div>
+            <button class="dbg-link" data-action="openLaunchJson">create a launch.json file</button>
             <h4>Runners</h4>
             <div class="dbg-tools"></div>
             <h4>Shortcuts</h4>
             <dl class="dbg-keys">
-              <dt>Run / Preview</dt><dd><kbd>F5</kbd></dd>
+              <dt>Start Debugging / Continue</dt><dd><kbd>F5</kbd></dd>
+              <dt>Run Without Debugging</dt><dd><kbd>Ctrl</kbd><kbd>F5</kbd></dd>
+              <dt>Toggle Breakpoint</dt><dd><kbd>F9</kbd></dd>
+              <dt>Step Over / Into / Out</dt><dd><kbd>F10</kbd><kbd>F11</kbd><kbd>Shift</kbd><kbd>F11</kbd></dd>
               <dt>Stop</dt><dd><kbd>Shift</kbd><kbd>F5</kbd></dd>
-              <dt>Output</dt><dd><kbd>Ctrl</kbd><kbd>J</kbd></dd>
-              <dt>Terminal</dt><dd><kbd>Ctrl</kbd><kbd>`</kbd></dd>
+              <dt>Output / Debug Console</dt><dd><kbd>Ctrl</kbd><kbd>J</kbd></dd>
             </dl>
           </div>
         </div>
@@ -113,6 +129,7 @@
           <div id="tabs-bar">
             <div id="tabs" role="tablist"></div>
             <div class="editor-actions">
+              <button id="notes-btn" data-action="flxPreview" title="Open Preview (Ctrl+Shift+V)" hidden></button>
               <button id="run-btn" data-action="run" title="Run Python File (F5)"></button>
             </div>
           </div>
@@ -182,6 +199,7 @@
       <footer id="statusbar">
         <div class="sb-left">
           <span class="sb-item" id="sb-folder"></span>
+          <button class="sb-item" id="sb-problems" title="Problems · click to jump to the next one (F8)"></button>
           <button class="sb-item" id="sb-agent" title="OpenCode" hidden></button>
         </div>
         <div class="sb-right">

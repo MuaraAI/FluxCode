@@ -6,7 +6,7 @@ in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
 everything that touches the machine (files, processes, the terminal, the preview server)
 runs in Rust.
 
-> Status: **development build `0.5.2-dev.2026-11-07-1545`** — not a final
+> Status: **development build `0.5.3-dev.2026-11-07-1802`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -71,11 +71,28 @@ System dependencies on Linux: `webkit2gtk-4.1`, `libayatana-appindicator`, `open
   OpenCode — each opens a quick pick or the right Settings section. Narrow
   windows fold the menu bar into a ☰ button so it never collides with the
   command center
-- **Run and Debug** view (Ctrl+Shift+D): what F5 does for the active file and
-  the runners found on this machine (Python, Node.js, Live Preview)
+- **Debugger** (F5), VS Code style: breakpoints in the gutter (click or F9,
+  remembered per file), a floating toolbar (Continue, Step Over/Into/Out,
+  Restart, Stop), **Variables**, **Watch**, **Call Stack** and **Breakpoints**
+  in the Run and Debug view (Ctrl+Shift+D), value tooltips on hover, a Debug
+  Console in the Output input row, and a stop on uncaught exceptions.
+  `.vscode/launch.json` (`python`/`debugpy`, `node`) is read too. Python uses
+  a small built-in helper on the standard library's `bdb` (nothing to install,
+  full speed with no breakpoints); Node.js/TypeScript use Node's own
+  inspector. Ctrl+F5 runs without the debugger
+- **Problems**: syntax errors from the editor's own parse tree (wavy
+  underline, red line number, ✕/⚠ count in the status bar, F8 for the next one)
+- **What's New** after every update (and on the first start): release notes
+  written in FluxCode's own **`.flx`** notes format (Markdown plus
+  `@title`/`@version`/`@date`, `[[Ctrl+P]]` key caps, `!new`/`!fix`/`!perf`
+  tags, task items). Help → Release Notes; Ctrl+Shift+V previews any `.flx`
+  or `.md` file
 - **One icon system**: every file type is the same 16×16 tile (tinted
-  background + simple glyph) so names line up; flat folders; UI icons on one
-  24px grid with 1.5px strokes
+  background + simple glyph) so names line up; flat folders, with their own
+  color and glyph for well-known ones (`src`, `tests`, `docs`, `assets`,
+  `.git`, `.vscode`, `node_modules`, `dist`, `.venv` …); UI icons on one 24px
+  grid with 1.5px strokes. New file / folder: the icon follows the name as you
+  type, and `a/b/c.js` creates the folders too
 - **Live Preview** with a compact header (file + folder), Fit / Tablet (768px)
   / Phone (390px) sizes, a thin loading bar instead of a white flash, and it
   follows whichever HTML file you switch to
@@ -91,12 +108,12 @@ System dependencies on Linux: `webkit2gtk-4.1`, `libayatana-appindicator`, `open
 
 | Language | Editing | F5 does |
 | --- | --- | --- |
-| Python | highlight, smart indent, completion, snippets, `import` of stdlib / PyPI / `requirements.txt` modules | run with live output, `input()`, clickable tracebacks, `.venv` detection |
-| JavaScript / TypeScript | highlight, JSX/TSX, every browser API, Node.js globals and modules, npm packages (`package.json` first) in `import`/`require`, snippets | run with Node.js (TypeScript via Node's type stripping), clickable stack traces |
+| Python | highlight, smart indent, completion, snippets, `import` of stdlib / PyPI / `requirements.txt` modules | debug (breakpoints, stepping, variables) with live output, `input()`, clickable tracebacks, `.venv` detection |
+| JavaScript / TypeScript | highlight, JSX/TSX, every browser API, Node.js globals and modules, npm packages (`package.json` first) in `import`/`require`, snippets | debug with Node.js's inspector (TypeScript via Node's type stripping), clickable stack traces |
 | HTML / CSS | highlight, auto-close tags, **Emmet** (`!`, `ul>li*3>a`, `div.card#main`, `input:email`, `m10-20`, `df`, `bgc#fff` …), tag completion in text | **Live Preview** inside FluxCode |
 | PHP / Laravel / Blade | highlight, PHP functions, facades (`Route::`, `DB::` …), Eloquent / request methods after `->`, helpers, `use Illuminate\…`, Blade directives, snippets | — |
 | JSON | `package.json` / `composer.json` keys, npm and Packagist package names in dependencies | — |
-| Markdown, Rust | highlight | — |
+| Markdown, `.flx`, Rust | highlight; `.flx` / `.md` preview (Ctrl+Shift+V) | — |
 
 **Completion** is VS Code-like: suggestions appear as you type, **Tab** or
 Enter accepts them, Tab then walks through the snippet's fields, and Tab on an
@@ -211,7 +228,10 @@ share stays as above.
 | Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
 | Accept suggestion / expand Emmet / next snippet field | `Tab` |
 | Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
-| Run or Preview / Stop | `F5` / `Shift+F5` |
+| Start Debugging (or Preview) / Run Without Debugging / Stop | `F5` / `Ctrl+F5` / `Shift+F5` |
+| Toggle Breakpoint / Step Over / Into / Out | `F9` / `F10` / `F11` / `Shift+F11` |
+| Pause / Restart Debugging | `F6` / `Ctrl+Shift+F5` |
+| Preview `.flx` / `.md` | `Ctrl+Shift+V` |
 | Find / Replace / Go to Line | `Ctrl+F` / `Ctrl+H` / `Ctrl+G` |
 | Find in Files / Explorer | `Ctrl+Shift+F` / `Ctrl+Shift+E` |
 | Word Wrap / Zoom | `Alt+Z` / `Ctrl+=`, `Ctrl+-`, `Ctrl+0` |
@@ -267,6 +287,11 @@ src/                     frontend (plain JS + CSS)
   terminal.js            Flux Terminal (lazy-loaded)
   agent.js               OpenCode over ACP: JSON-RPC client + transcript view (lazy-loaded)
   settings.js            Settings panel (lazy-loaded)
+  breakpoints.js         breakpoint gutter, current-line marker, value hover
+  debugview.js           Run and Debug UI: toolbar, Variables / Watch / Call Stack / Breakpoints
+  debug.js               debug sessions: Python (fluxdbg.py) and Node inspector (lazy-loaded)
+  diagnostics.js         Problems from the editor's parse tree
+  notes.js, whatsnew.js  .flx renderer and the What's New page (lazy-loaded)
   prefs.js               shared preference store (terminal, agent, editor)
   languages.js           lazy language registry
   icons.js               FluxCode icon set + file-type badges
@@ -276,6 +301,8 @@ src-tauri/src/acp.rs     spawns `opencode acp` and bridges its stdio to the view
 src-tauri/src/github.rs  GitHub account (token / gh), verified with the system curl
 src-tauri/src/terminal.rs    terminal runner, native listing, folder-access grants
 src-tauri/src/preview.rs     Live Preview server
+src-tauri/src/debug.rs       Python debug channel (loopback socket) + fluxdbg.py helper
+CHANGELOG.flx            release notes shown in What's New
 src-tauri/src/window_state.rs  work-area placement, remembered window bounds
 scripts/test-app.mjs     end-to-end test (CDP)
 examples/                python/, js/ (JS + TS), web/ (HTML + CSS + JS)
