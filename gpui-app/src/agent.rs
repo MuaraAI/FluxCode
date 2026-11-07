@@ -179,6 +179,7 @@ impl Workbench {
             return;
         };
         cmd.arg("acp").env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+        crate::github::apply_env(&mut cmd);
         self.agent.status = Status::Starting;
         self.agent.buf.clear();
         self.agent.log_tail.clear();

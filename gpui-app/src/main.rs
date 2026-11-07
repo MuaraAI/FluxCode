@@ -10,6 +10,7 @@ mod complete;
 mod core;
 mod explorer;
 mod files;
+mod github;
 mod panel;
 mod preview;
 mod preview_ui;

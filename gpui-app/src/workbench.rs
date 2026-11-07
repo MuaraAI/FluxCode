@@ -150,6 +150,8 @@ pub struct Workbench {
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
+    pub(crate) github: Option<crate::github::Account>,
+    pub(crate) github_input: Entity<InputState>,
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
     #[cfg(not(feature = "embedded-preview"))]
@@ -166,6 +168,7 @@ impl Workbench {
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let term_input = cx.new(|cx| InputState::new(window, cx));
+        let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("Personal access token"));
         let subs = vec![
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -240,6 +243,8 @@ impl Workbench {
             out_scroll: UniformListScrollHandle::new(),
             agent,
             preview_server: None,
+            github: crate::github::load(),
+            github_input,
             preview: None,
             _subs: subs,
         };

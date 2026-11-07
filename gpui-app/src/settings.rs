@@ -5,13 +5,15 @@ use crate::theme::{self, c};
 use crate::workbench::Workbench;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
-    h_flex, v_flex, Selectable, Sizable,
+    h_flex,
+    input::Input,
+    v_flex, Selectable, Sizable,
 };
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
@@ -168,6 +170,7 @@ impl Workbench {
                 "Let the agent edit files and run commands without asking each time.",
                 toggle("aa", s.agent_auto_approve, |w| w.settings.agent_auto_approve = !w.settings.agent_auto_approve),
             ))
+            .child(row("GitHub", "Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).", self.render_github(cx)))
             .child(
                 div()
                     .pt_4()
@@ -186,5 +189,57 @@ trait WhenOn {
 impl WhenOn for Button {
     fn when_on(self, on: bool) -> Self {
         if on { self.primary() } else { self }
+    }
+}
+
+impl Workbench {
+    fn github_result(&mut self, r: Result<crate::github::Account, String>, cx: &mut Context<Self>) {
+        match r {
+            Ok(a) => {
+                self.github = Some(a);
+                self.status = "Signed in to GitHub".into();
+            }
+            Err(e) => self.status = e.into(),
+        }
+        cx.notify();
+    }
+
+    fn render_github(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(a) = &self.github {
+            return h_flex()
+                .gap_2()
+                .text_sm()
+                .child(format!("{} ({})", a.login, if a.source == "gh" { "GitHub CLI" } else { "token" }))
+                .child(Button::new("gh-out").label("Sign out").xsmall().on_click(cx.listener(|this, _, _, cx| {
+                    let _ = crate::github::logout();
+                    this.github = None;
+                    cx.notify();
+                })))
+                .into_any_element();
+        }
+        v_flex()
+            .w(px(300.))
+            .gap_1()
+            .child(Input::new(&self.github_input).small())
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(Button::new("gh-token").label("Sign in with token").xsmall().primary().on_click(cx.listener(|this, _, _, cx| {
+                        let t = this.github_input.read(cx).value().to_string();
+                        cx.spawn(async move |this, cx| {
+                            let r = cx.background_spawn(async move { crate::github::login_token(&t) }).await;
+                            _ = this.update(cx, |this, cx| this.github_result(r, cx));
+                        })
+                        .detach();
+                    })))
+                    .child(Button::new("gh-cli").label("Use GitHub CLI login").xsmall().on_click(cx.listener(|_, _, _, cx| {
+                        cx.spawn(async move |this, cx| {
+                            let r = cx.background_spawn(async move { crate::github::login_cli() }).await;
+                            _ = this.update(cx, |this, cx| this.github_result(r, cx));
+                        })
+                        .detach();
+                    }))),
+            )
+            .into_any_element()
     }
 }

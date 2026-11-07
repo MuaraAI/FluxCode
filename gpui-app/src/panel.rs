@@ -66,7 +66,9 @@ impl Workbench {
         } else if trimmed.len() == 2 && trimmed.ends_with(':') {
             self.change_dir(&format!("{trimmed}\\"));
         } else {
-            match self.procs.spawn(proc::shell_command(trimmed), Some(&self.term_cwd.clone())) {
+            let mut cmd = proc::shell_command(trimmed);
+            crate::github::apply_env(&mut cmd);
+            match self.procs.spawn(cmd, Some(&self.term_cwd.clone())) {
                 Ok(id) => self.term_proc = Some(id),
                 Err(e) => push_line(&mut self.term_lines, &e, LineKind::Err),
             }
