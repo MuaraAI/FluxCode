@@ -25,6 +25,7 @@ import {
 } from "./editor.js";
 import { languageFor, loadLanguage } from "./languages.js";
 import { setWorkspaceManifests } from "./complete/index.js";
+import { setAgentBaseline, agentBaseline, onHunkSettled } from "./agentdiff.js";
 import { icons, abIcon, winIcon, logo, fileIcon, folderIcon } from "./icons.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -993,7 +994,11 @@ function ensureAgent() {
       activeFile: () => (state.active?.path ? { path: state.active.path, name: state.active.name, text: view.state.doc.toString() } : null),
       openFile: (path, line) => openFile(path, { line }),
       openExternal: (url) => invoke("open_url", { url }).catch(() => {}),
-      fileWritten: (path, content) => reloadFromDisk(path, content),
+      fileChanged: (path, text, before) => agentFileChanged(path, text, before),
+      showDiff: (path) => openFile(path, { preview: true }),
+      keepFile: (path) => agentKeepFile(path),
+      revertFile: (path, before) => agentRevertFile(path, before),
+      afterTurn: () => agentAfterTurn(),
       onStatus: (st) => {
         const el = $("#sb-agent");
         el.hidden = st === "off";
@@ -1007,7 +1012,74 @@ function ensureAgent() {
 }
 $("#sb-agent").addEventListener("click", () => showView("agent"));
 
-/** The agent (or another tool) wrote a file: refresh its tab unless the user has unsaved edits there. */
+/**
+ * The agent changed a file (it writes to disk itself): show the new text in its
+ * tab — opened as a preview tab if needed — with the hunks highlighted inline.
+ * `before` is the text before the agent's first change (the baseline for Keep / Undo).
+ */
+async function agentFileChanged(path, text, before) {
+  let tab = state.tabs.find((t) => samePath(t.path, path));
+  if (!tab) tab = await openFile(path, { preview: true, focus: false });
+  if (!tab) return;
+  const isActive = tab === state.active;
+  const cur = isActive ? view.state : tab.state;
+  const normalized = text.replace(/\r\n?/g, "\n");
+  if (cur.doc.toString() === normalized && agentBaseline(cur) != null) return;
+  const base = agentBaseline(cur) ?? before?.replace(/\r\n?/g, "\n") ?? cur.doc.toString();
+  const tr = cur.update({ changes: { from: 0, to: cur.doc.length, insert: normalized }, effects: setAgentBaseline.of(base === normalized ? null : base) });
+  tab.saved = tr.state.doc; // the disk already has this text
+  tab.dirty = false;
+  tab.eolChanged = false;
+  if (isActive) {
+    const top = view.scrollDOM.scrollTop;
+    view.dispatch(tr);
+    view.scrollDOM.scrollTop = top;
+  } else tab.state = tr.state;
+  renderTabs();
+  refreshTreeMarkers();
+  updateTitle();
+  previewChanged(path);
+  if (isInside(state.root, path) && !state.dirCache.has(dirname(path))) loadDir(dirname(path), true).then(renderTree);
+}
+
+/** After a turn: pick up files the agent wrote without reporting a diff (compare open tabs with the disk). */
+async function agentAfterTurn() {
+  for (const tab of state.tabs) {
+    if (!tab.path || tab.dirty) continue;
+    const content = await invoke("read_file", { path: tab.path }).catch(() => null);
+    if (!content) continue;
+    const cur = tab === state.active ? view.state : tab.state;
+    if (content.text.replace(/\r\n?/g, "\n") !== cur.doc.toString()) agentFileChanged(tab.path, content.text);
+  }
+}
+
+function agentKeepFile(path) {
+  const tab = state.tabs.find((t) => samePath(t.path, path));
+  if (!tab) return;
+  if (tab === state.active) view.dispatch({ effects: setAgentBaseline.of(null) });
+  else tab.state = tab.state.update({ effects: setAgentBaseline.of(null) }).state;
+}
+
+async function agentRevertFile(path, before) {
+  if (before == null) return toast(`${basename(path)} was created by the agent; delete it yourself if you don't want it.`, "warning");
+  try { await invoke("write_file", { path, contents: before }); } catch (e) { return toast(`${e}`, "error"); }
+  const tab = state.tabs.find((t) => samePath(t.path, path));
+  if (tab) {
+    const cur = tab === state.active ? view.state : tab.state;
+    const tr = cur.update({ changes: { from: 0, to: cur.doc.length, insert: before.replace(/\r\n?/g, "\n") }, effects: setAgentBaseline.of(null) });
+    tab.saved = tr.state.doc;
+    tab.dirty = false;
+    if (tab === state.active) view.dispatch(tr); else tab.state = tr.state;
+    renderTabs();
+    refreshTreeMarkers();
+  }
+  previewChanged(path);
+}
+
+// The last hunk of the active file was kept or undone from inside the editor.
+onHunkSettled((v, done) => { if (done && state.active?.path) agent?.fileSettled(state.active.path); });
+
+/** Another tool wrote a file: refresh its tab unless the user has unsaved edits there. */
 function reloadFromDisk(path, content) {
   const tab = state.tabs.find((t) => samePath(t.path, path));
   if (!tab || tab.dirty) return;
@@ -1534,9 +1606,9 @@ async function runCommand(id) {
     case "agentStop": return agent?.stop();
     case "agentMode": {
       showView("agent", { focus: false });
-      const sel = $("#agent-view .ag-mode");
-      if (!sel) return toast("Start a session first: the modes come from OpenCode.", "warning");
-      return pickQuick("OpenCode Mode", [...sel.options].map((o) => ({ label: o.textContent, on: o.selected, run: () => { sel.value = o.value; sel.dispatchEvent(new Event("change")); } })));
+      const a = await ensureAgent();
+      if (!a.openOption("mode")) toast("Start a session first: the modes come from OpenCode.", "warning");
+      return;
     }
     case "shortcuts": return showShortcuts();
     case "about":

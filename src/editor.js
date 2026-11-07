@@ -18,6 +18,7 @@ import {
 } from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
 import { loadEmmetTab } from "./complete/index.js";
+import { agentDiffField, agentDiffTheme } from "./agentdiff.js";
 
 // ------------------------------------------------------------------ theme
 
@@ -295,6 +296,8 @@ const baseExtensions = [
     indentWithTab,
   ]),
   theme,
+  agentDiffField,
+  agentDiffTheme,
   EditorView.updateListener.of((u) => updateHandler(u)),
 ];
 

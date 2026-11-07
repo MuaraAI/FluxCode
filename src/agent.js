@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { prefs } from "./prefs.js";
+import { diffLines } from "./agentdiff.js";
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
@@ -75,7 +76,9 @@ export function createAgent(host, ctx) {
   let turn = null; // current assistant turn DOM state
   let idleTimer = 0;
   let lastError = "";
+  let usage = 0; // context tokens used, from usage_update
   const logTail = [];
+  const changes = new Map(); // path -> { before, after }: every file the agent changed this session
   let unlisten = [];
 
   host.innerHTML = `
@@ -87,10 +90,11 @@ export function createAgent(host, ctx) {
       </span>
     </div>
     <div class="ag-config" hidden></div>
+    <div class="ag-changes" hidden></div>
     <div class="ag-log"></div>
     <div class="ag-composer">
       <div class="ag-cmds" hidden></div>
-      <textarea class="ag-input" rows="1" placeholder="Ask OpenCode… (Enter to send, Shift+Enter for a new line, / for commands)" spellcheck="false"></textarea>
+      <textarea class="ag-input" rows="1" placeholder="Ask OpenCode… (/ for commands)" spellcheck="false"></textarea>
       <div class="ag-row">
         <button class="ag-chip" data-ag="file" title="Attach the active file to the prompt"></button>
         <span class="ag-spacer"></span>
@@ -106,7 +110,8 @@ export function createAgent(host, ctx) {
   function setStatus(s, text) {
     status = s;
     host.dataset.status = s;
-    $(".ag-status-text").textContent = text ?? { off: "OpenCode · off", starting: "Starting…", ready: "Ready", busy: "Working…", error: "Error" }[s];
+    const label = text ?? { off: "OpenCode · off", starting: "Starting…", ready: "Ready", busy: "Working…", error: "Error" }[s];
+    $(".ag-status-text").textContent = usage && (s === "ready" || s === "busy") ? `${label} · ${usage >= 1000 ? `${(usage / 1000).toFixed(usage >= 10000 ? 0 : 1)}k` : usage} tokens` : label;
     $(".ag-send").innerHTML = s === "busy" ? icons.stop : icons.send;
     $(".ag-send").title = s === "busy" ? "Stop (Esc)" : "Send (Enter)";
     $("[data-ag=power]").hidden = s === "off";
@@ -173,7 +178,7 @@ export function createAgent(host, ctx) {
         }
         case "fs/write_text_file":
           await invoke("write_file", { path: params.path, contents: params.content });
-          ctx.fileWritten?.(params.path, params.content);
+          recordChange(params.path, null, params.content);
           return respond(id, {});
         default: return respondError(id, -32601, `Method not supported: ${method}`);
       }
@@ -192,6 +197,7 @@ export function createAgent(host, ctx) {
       case "tool_call_update": return toolUpdate(u);
       case "plan": return renderPlan(u.entries ?? []);
       case "available_commands_update": commands = u.availableCommands ?? []; return;
+      case "usage_update": usage = u.used ?? usage; if (status === "ready" || status === "busy") setStatus(status); return;
       case "current_mode_update": if (session?.modes) { session.modes.currentModeId = u.currentModeId; renderModes(); } return;
       case "config_option_update": if (session) { session.config = u.configOptions ?? session.config; renderModes(); } return;
     }
@@ -292,39 +298,114 @@ export function createAgent(host, ctx) {
 
   // ------------------------------------------------------------- modes
 
-  /** One <select> per option (mode, model, effort …), updated in place. */
-  function renderModes() {
-    const row = $(".ag-config");
-    const selects = [];
+  // ------------------------------------------------------ option pills
+  // Mode / model / effort come from OpenCode. Each is a small pill; clicking
+  // opens one shared, fixed-position menu (no <select>: it is styled by the
+  // theme, keyboard-navigable and costs one DOM node while closed).
+
+  function optionList() {
+    const list = [];
     const modes = session?.modes?.availableModes;
-    if (modes?.length) {
-      selects.push(`<select class="ag-mode" data-mode="1" title="Session mode">${modes.map((m) => `<option value="${esc(m.id)}" ${m.id === session.modes.currentModeId ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select>`);
-    }
+    if (modes?.length) list.push({ id: "__mode", name: "Mode", mode: true, current: session.modes.currentModeId, items: modes.map((m) => ({ value: m.id, name: m.name, description: m.description })) });
     for (const opt of session?.config ?? []) {
       if (opt.type !== "select" || !opt.options?.length) continue;
-      selects.push(`<select class="${opt.category === "mode" ? "ag-mode" : "ag-opt"}" data-config="${esc(opt.id)}" title="${esc(opt.name)}">${opt.options.map((o) => `<option value="${esc(o.value)}" ${o.value === opt.currentValue ? "selected" : ""}>${esc(o.name ?? o.value)}</option>`).join("")}</select>`);
+      list.push({ id: opt.id, name: opt.name, mode: opt.category === "mode", current: opt.currentValue, items: opt.options.map((o) => ({ value: o.value, name: o.name ?? o.value, description: o.description })) });
     }
-    row.hidden = !selects.length;
-    row.innerHTML = selects.join("");
+    return list;
   }
-  $(".ag-config").addEventListener("change", async (e) => {
-    const sel = e.target;
-    if (!session || sel.tagName !== "SELECT") return;
-    const value = sel.value;
+  const shortName = (name) => String(name ?? "").split("/").pop();
+
+  function renderModes() {
+    const row = $(".ag-config");
+    const list = optionList();
+    row.hidden = !list.length;
+    row.innerHTML = list.map((o) => {
+      const cur = o.items.find((i) => i.value === o.current);
+      return `<button class="ag-pill${o.mode ? " mode" : ""}" data-opt="${esc(o.id)}" title="${esc(o.name)}: ${esc(cur?.name ?? o.current ?? "")}"><small>${esc(o.name)}</small><span>${esc(shortName(cur?.name ?? o.current ?? "—"))}</span>${icons.chevron}</button>`;
+    }).join("");
+  }
+
+  let menu = null; // the open option menu: { el, opt, index }
+  function closeMenu() {
+    if (!menu) return;
+    menu.el.remove();
+    host.querySelector(".ag-pill.open")?.classList.remove("open");
+    menu = null;
+  }
+  function openMenu(optId) {
+    closeMenu();
+    const opt = optionList().find((o) => o.id === optId);
+    const pill = host.querySelector(`.ag-pill[data-opt="${CSS.escape(optId)}"]`);
+    if (!opt || !pill) return false;
+    const el = document.createElement("div");
+    el.className = "ag-menu";
+    el.innerHTML = `<div class="ag-menu-title">${esc(opt.name)}</div>${opt.items.map((it, i) => `<button data-i="${i}" class="${it.value === opt.current ? "on" : ""}"><span class="ag-menu-check">${it.value === opt.current ? icons.check : ""}</span><span class="ag-menu-text"><b>${esc(it.name)}</b>${it.description ? `<small>${esc(it.description)}</small>` : it.name !== shortName(it.name) || String(it.value).includes("/") ? `<small>${esc(it.value)}</small>` : ""}</span></button>`).join("")}`;
+    document.body.append(el);
+    // Place below the pill, flip above if there is no room, keep inside the window.
+    const r = pill.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+    const below = window.innerHeight - r.bottom - 12;
+    const top = h <= below || below >= r.top ? r.bottom + 4 : Math.max(8, r.top - h - 4);
+    if (h > Math.max(below, r.top - 12)) el.style.maxHeight = `${Math.max(below, r.top - 12)}px`;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    pill.classList.add("open");
+    menu = { el, opt, index: Math.max(0, opt.items.findIndex((it) => it.value === opt.current)) };
+    el.querySelector("button.on")?.scrollIntoView({ block: "nearest" });
+    el.addEventListener("mousedown", (e) => {
+      const b = e.target.closest("button[data-i]");
+      if (!b) return;
+      e.preventDefault();
+      pickMenu(+b.dataset.i);
+    });
+    return true;
+  }
+  function moveMenu(d) {
+    if (!menu) return;
+    const items = menu.el.querySelectorAll("button[data-i]");
+    items[menu.index]?.classList.remove("focus");
+    menu.index = (menu.index + d + items.length) % items.length;
+    items[menu.index].classList.add("focus");
+    items[menu.index].scrollIntoView({ block: "nearest" });
+  }
+  async function pickMenu(i) {
+    if (!menu) return;
+    const { opt } = menu;
+    const value = opt.items[i]?.value;
+    closeMenu();
+    if (value == null || value === opt.current || !session) return;
     try {
-      if (sel.dataset.mode) {
+      if (opt.mode && opt.id === "__mode") {
         await request("session/set_mode", { sessionId: session.id, modeId: value });
         session.modes.currentModeId = value;
         prefs.set("agent", { mode: value });
       } else {
-        const r = await request("session/set_config_option", { sessionId: session.id, configId: sel.dataset.config, value });
+        const r = await request("session/set_config_option", { sessionId: session.id, configId: opt.id, value });
         if (r?.configOptions) session.config = r.configOptions;
-        else for (const o of session.config) if (o.id === sel.dataset.config) o.currentValue = value;
-        prefs.set("agent", { config: { ...(prefs.get("agent").config ?? {}), [sel.dataset.config]: value } });
-        renderModes();
+        else for (const o of session.config) if (o.id === opt.id) o.currentValue = value;
+        prefs.set("agent", { config: { ...(prefs.get("agent").config ?? {}), [opt.id]: value } });
       }
-    } catch (err) { ctx.toast(`${err.message}`, "warning"); renderModes(); }
+    } catch (err) { ctx.toast(`${err.message}`, "warning"); }
+    renderModes();
+    input.focus();
+  }
+  $(".ag-config").addEventListener("click", (e) => {
+    const pill = e.target.closest(".ag-pill");
+    if (!pill) return;
+    if (menu?.opt.id === pill.dataset.opt) closeMenu();
+    else openMenu(pill.dataset.opt);
   });
+  document.addEventListener("mousedown", (e) => { if (menu && !menu.el.contains(e.target) && !e.target.closest(".ag-pill")) closeMenu(); });
+  document.addEventListener("keydown", (e) => {
+    if (!menu) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMenu(); input.focus(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); moveMenu(e.key === "ArrowDown" ? 1 : -1); }
+    else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); pickMenu(menu.index); }
+  }, true);
+  window.addEventListener("resize", closeMenu);
+  log.addEventListener("scroll", closeMenu);
 
   // --------------------------------------------------------- transcript
 
@@ -405,6 +486,8 @@ export function createAgent(host, ctx) {
     if (u.content?.length) {
       const body = card.querySelector(".ag-tool-body");
       for (const c of u.content) {
+        // OpenCode writes files itself; its diff is how the editor learns about the change.
+        if (c.type === "diff" && c.path) recordChange(c.path, c.oldText ?? "", c.newText ?? "");
         if (c.type === "diff") {
           const old = (c.oldText ?? "").split("\n");
           const neu = (c.newText ?? "").split("\n");
@@ -455,6 +538,50 @@ export function createAgent(host, ctx) {
   function trim() {
     while (log.children.length > MAX_TURNS) log.firstElementChild.remove();
   }
+
+  // ----------------------------------------------------------- changes
+  // Files the agent changed, with before/after. The editor shows the hunks
+  // inline (green added lines, red removed lines, Keep / Undo per hunk);
+  // this list keeps the overview and the per-file Keep / Undo.
+
+  function recordChange(path, oldText, newText) {
+    const c = changes.get(path);
+    if (c) c.after = newText;
+    else changes.set(path, { before: oldText, after: newText });
+    ctx.fileChanged?.(path, newText, c ? undefined : oldText ?? undefined);
+    renderChanges();
+  }
+
+  function renderChanges() {
+    const box = $(".ag-changes");
+    box.hidden = !changes.size;
+    if (!changes.size) { box.innerHTML = ""; return; }
+    const rows = [...changes].map(([path, c]) => {
+      let add = 0, del = 0;
+      if (c.before != null) for (const h of diffLines(c.before, c.after)) { add += h.added.length; del += h.removed.length; }
+      else add = c.after.split("\n").length;
+      return `<div class="ag-ch-row" data-path="${esc(path)}"><button class="ag-ch-open" title="${esc(path)}">${ctx.fileIcon(baseName(path))}<span>${esc(baseName(path))}</span><em><i class="add">+${add}</i> <i class="del">−${del}</i></em></button><button data-ch="keep" title="Keep this file's changes">${icons.check}</button><button data-ch="undo" title="Undo: restore the file as it was">${icons.rerun}</button></div>`;
+    }).join("");
+    box.innerHTML = `<div class="ag-ch-head">${icons.edit}<b>Changes</b><span>${changes.size} file${changes.size > 1 ? "s" : ""}</span><span class="ag-spacer"></span><button data-ch="keepall">Keep all</button><button data-ch="undoall">Undo all</button></div>${rows}`;
+  }
+
+  async function settle(path, action) {
+    const c = changes.get(path);
+    if (!c) return;
+    changes.delete(path);
+    if (action === "undo") await ctx.revertFile?.(path, c.before);
+    else ctx.keepFile?.(path);
+    renderChanges();
+  }
+
+  $(".ag-changes").addEventListener("click", async (e) => {
+    const open = e.target.closest(".ag-ch-open");
+    if (open) return ctx.showDiff?.(open.parentElement.dataset.path);
+    const act = e.target.closest("[data-ch]")?.dataset.ch;
+    if (!act) return;
+    if (act === "keepall" || act === "undoall") { for (const path of [...changes.keys()]) await settle(path, act === "undoall" ? "undo" : "keep"); return; }
+    settle(e.target.closest(".ag-ch-row").dataset.path, act);
+  });
 
   // ------------------------------------------------------------- prompt
 
@@ -573,6 +700,11 @@ export function createAgent(host, ctx) {
     newSession: () => (status === "off" || status === "error" ? start() : newSession()),
     isRunning: () => status !== "off" && status !== "error",
     refreshChip: renderChip,
+    /** The editor kept/undid the last hunk of a file: drop it from the list. */
+    fileSettled: (path) => { if (changes.delete(path)) renderChanges(); },
+    changedFiles: () => [...changes.keys()],
+    /** Open the picker for an option ("mode", "model", "effort" …); false when the session has none. */
+    openOption: (id) => { const o = optionList().find((x) => x.id === id || (id === "mode" && x.mode)); return !!o && openMenu(o.id); },
     status: () => status,
     lastError: () => lastError,
     dispose: () => { for (const u of unlisten) u(); unlisten = []; stop(); },
