@@ -3,11 +3,9 @@
 // Plain DOM — no UI framework, nothing re-renders that doesn't have to.
 
 // Theme + fonts first, so the very first paint already has the user's look.
-import "@fontsource/jersey-10";
 import "@fontsource/jersey-15";
-import "@fontsource/jersey-20";
 import "@fontsource/jersey-25";
-import { loadAppearance, applyAppearance } from "./theme.js";
+import { loadAppearance, applyAppearance, saveAppearance } from "./theme.js";
 let appearance = loadAppearance();
 applyAppearance(appearance);
 
@@ -604,6 +602,7 @@ function activateTab(tab, { focus = true } = {}) {
     requestAnimationFrame(() => { view.scrollDOM.scrollTop = top; });
   }
   if (tab && focus) view.focus();
+  previewFollow(tab);
   renderTabs();
   renderBreadcrumbs();
   refreshTreeMarkers();
@@ -646,6 +645,9 @@ async function closeTab(tab, { force = false } = {}) {
   persist();
   return true;
 }
+
+// When the tab strip changes width (side bar, preview pane, window), keep the active tab in view.
+new ResizeObserver(() => $("#tabs .tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" })).observe($("#tabs"));
 
 /** Tabs are keyed by id: existing tab elements are reused, so only new tabs animate in. */
 const tabEls = new Map();
@@ -1029,7 +1031,20 @@ async function stopRun() {
 
 // ----------------------------------------------------------- live preview
 
-const preview = { root: null, url: null };
+const preview = { root: null, url: null, page: null };
+const pane = $("#preview-pane");
+const frame = $("#preview-frame");
+
+/** Thin progress bar + dimmed page while a page loads; cleared on the iframe's load event. */
+function previewLoading() {
+  pane.classList.remove("loaded");
+  pane.classList.add("loading");
+}
+frame.addEventListener("load", () => {
+  if (!preview.url) return;
+  pane.classList.remove("loading");
+  pane.classList.add("loaded");
+});
 
 /** Show an HTML page (or the index.html next to a CSS/JS file) in the preview pane. */
 async function openPreview(tab) {
@@ -1041,35 +1056,51 @@ async function openPreview(tab) {
   } catch (e) {
     return toast(`Live Preview could not start: ${e}`, "error");
   }
-  const rel = relative(root, page).split(/[\\/]/).map(encodeURIComponent).join("/");
+  const rel = relative(root, page);
   preview.root = root;
-  preview.url = `http://127.0.0.1:${port}/${rel}`;
-  $("#preview-pane").hidden = false;
+  preview.page = page;
+  preview.url = `http://127.0.0.1:${port}/${rel.split(/[\\/]/).map(encodeURIComponent).join("/")}`;
+  pane.hidden = false;
   $("#sash-preview").hidden = false;
-  $(".pv-url").textContent = rel.replace(/%20/g, " ");
-  $(".pv-url").title = preview.url;
-  $("#preview-frame").src = preview.url;
+  // Compact header: the file name, then its folder (muted); the full URL is in the tooltip.
+  $(".pv-name").textContent = basename(page);
+  $(".pv-dir").textContent = dirname(rel).replace(/[\\/]/g, " / ");
+  $(".pv-head").title = preview.url;
+  previewLoading();
+  frame.src = preview.url;
 }
 
 function closePreview() {
-  $("#preview-pane").hidden = true;
+  pane.hidden = true;
   $("#sash-preview").hidden = true;
-  $("#preview-frame").src = "about:blank"; // drops the page and its memory
-  preview.url = null;
+  frame.src = "about:blank"; // drops the page and its memory
+  preview.url = preview.page = null;
+}
+
+/** Switching to another HTML file in the same folder tree follows it in the preview. */
+function previewFollow(tab) {
+  if (preview.url && tab?.lang.id === "html" && tab.path && !samePath(tab.path, preview.page) && isInside(preview.root, tab.path)) openPreview(tab);
 }
 
 let reloadTimer = 0;
 function previewChanged(path) {
   if (!preview.url || !isInside(preview.root, path)) return;
   clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(() => invoke("preview_reload").catch(() => {}), 60);
+  reloadTimer = setTimeout(() => { previewLoading(); invoke("preview_reload").catch(() => {}); }, 60);
 }
 
-$("#preview-pane").addEventListener("click", (e) => {
+function setPreviewDevice(dev) {
+  pane.dataset.dev = dev;
+  for (const b of pane.querySelectorAll("button[data-dev]")) b.classList.toggle("on", b.dataset.dev === dev);
+}
+
+pane.addEventListener("click", (e) => {
+  const dev = e.target.closest("button[data-dev]");
+  if (dev) return setPreviewDevice(dev.dataset.dev);
   const b = e.target.closest("[data-pv]");
   if (!b) return;
   if (b.dataset.pv === "close") closePreview();
-  else if (b.dataset.pv === "reload") invoke("preview_reload").catch(() => {});
+  else if (b.dataset.pv === "reload") { previewLoading(); invoke("preview_reload").catch(() => {}); }
   else if (b.dataset.pv === "external" && preview.url) invoke("spawn_process", { program: "explorer.exe", args: [preview.url], cwd: null }).catch(() => {});
 });
 
@@ -1146,6 +1177,8 @@ const COMMANDS = {
   copyLineDown: ["Copy Line Down", "Shift+Alt+Down"],
   addNextOccurrence: ["Add Selection to Next Find Match", "Ctrl+D"],
   appearance: ["Preferences: Appearance (Theme, Colors, Fonts)", "Ctrl+K Ctrl+T"],
+  fontJersey: ["Preferences: Font — Jersey"],
+  fontDefault: ["Preferences: Font — VS Code Default"],
   shortcuts: ["Help: Keyboard Shortcuts"],
   about: ["Help: About FluxCode"],
   reload: ["Developer: Reload Window"],
@@ -1156,14 +1189,14 @@ const MENUS = {
   file: ["newFile", "newFolder", "openFile", "openFolder", "-", "save", "saveAs", "saveAll", "toggleAutoSave", "-", "closeEditor", "closeAll", "closeFolder", "-", "exit"],
   edit: ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace", "findInFiles", "-", "toggleComment"],
   selection: ["selectAll", "selectLine", "-", "copyLineUp", "copyLineDown", "moveLineUp", "moveLineDown", "-", "addNextOccurrence"],
-  view: ["commandPalette", "quickOpen", "appearance", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
+  view: ["commandPalette", "quickOpen", "appearance", "fontJersey", "fontDefault", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
   run: ["run", "stop", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
   terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "showOutput"],
   help: ["commandPalette", "shortcuts", "-", "about"],
 };
 const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview|Preferences): /, "");
 // Menu items that show a check mark when on.
-const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave };
+const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave, fontJersey: () => appearance.uiFont === "jersey", fontDefault: () => appearance.uiFont !== "jersey" };
 
 /** Run an editor command on the active editor (from a menu or the palette). */
 const editorCmd = (fn) => () => {
@@ -1304,6 +1337,12 @@ async function runCommand(id) {
       const i = state.tabs.indexOf(tab);
       return activateTab(state.tabs[(i + (id === "nextTab" ? 1 : -1) + state.tabs.length) % state.tabs.length]);
     }
+    case "fontJersey":
+    case "fontDefault":
+      appearance = { ...appearance, uiFont: id === "fontJersey" ? "jersey" : "system" };
+      applyAppearance(appearance);
+      saveAppearance(appearance);
+      return toast(`Interface font: ${id === "fontJersey" ? "Jersey" : "VS Code default (Segoe UI)"}`);
     case "appearance": {
       const { openAppearance } = await import("./appearance.js");
       return openAppearance({ icons, get: () => appearance, set: (s) => { appearance = s; } });
@@ -1734,6 +1773,10 @@ function paintIcons() {
   $(".panel-actions [data-action=togglePanel]").innerHTML = icons.close;
   $(".sb-brand").innerHTML = icons.bolt;
   $(".wm-logo").innerHTML = logo;
+  $(".pv-ic").innerHTML = icons.preview;
+  $("button[data-dev=full]").innerHTML = icons.desktop;
+  $("button[data-dev=tablet]").innerHTML = icons.tablet;
+  $("button[data-dev=phone]").innerHTML = icons.phone;
   $("[data-pv=reload]").innerHTML = icons.refresh;
   $("[data-pv=external]").innerHTML = icons.reveal;
   $("[data-pv=close]").innerHTML = icons.close;

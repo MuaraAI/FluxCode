@@ -87,15 +87,15 @@ export function openAppearance({ icons, get, set }) {
 
         <section class="ap-section">
           <h3>Fonts</h3>
-          <div class="ap-row"><span>Interface</span>${seg("uiFont", [["jersey", "Jersey"], ["system", "System"]])}</div>
+          <div class="ap-row"><span>Interface</span>${seg("uiFont", [["jersey", "Jersey"], ["system", "VS Code default"]])}</div>
           <div class="ap-row"><span>Editor &amp; terminal</span>${seg("editorFont", [["cascadia", "Cascadia Code"], ["consolas", "Consolas"], ["jersey", "Jersey 15"]])}</div>
           <div class="ap-row"><span>Editor size</span>${seg("editorSize", [12, 13, 14, 15, 16, 18].map((n) => [n, n]))}</div>
           ${s.editorFont === "jersey" ? '<div class="ap-note">Jersey is not monospaced: columns and indentation will not line up exactly.</div>' : ""}
           <div class="ap-scale">
             <div class="ap-hero">FluxCode</div>
-            <div class="ap-s-title">Jersey 20 · section titles</div>
-            <div class="ap-s-body">Jersey 15 · menus, tabs, explorer and panels</div>
-            <div class="ap-s-small">Jersey 10 · status bar and small labels</div>
+            <div class="ap-s-title">Jersey 15 · interface, titles and labels</div>
+            <div class="ap-s-body">Menus, tabs, explorer and panels</div>
+            <div class="ap-s-small">Status bar and small labels</div>
             <pre class="ap-s-code">def hello(name: str) -&gt; str:\n    return f"Halo, {name}!"</pre>
           </div>
         </section>

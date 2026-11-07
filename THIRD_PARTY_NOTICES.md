@@ -10,7 +10,7 @@ its own license, which the FluxCode license does not change.
 | [Serde](https://serde.rs/) (`serde`, `serde_json`) | MIT or Apache-2.0 | Rust (de)serialization |
 | Other Rust crates resolved in `src-tauri/Cargo.lock` | mostly MIT or Apache-2.0 | Tauri's dependencies |
 | [Vite](https://vite.dev/) | MIT | Build tool (development only) |
-| [Jersey 10, 15, 20, 25](https://github.com/scfried/soft-type-jersey) by The Soft Type Project Authors, via [Fontsource](https://fontsource.org/) | SIL Open Font License 1.1 | Interface fonts |
+| [Jersey 15 and Jersey 25](https://github.com/scfried/soft-type-jersey) by The Soft Type Project Authors, via [Fontsource](https://fontsource.org/) | SIL Open Font License 1.1 | Interface fonts |
 | Microsoft Edge WebView2 Loader (`WebView2Loader.dll`) | Microsoft WebView2 SDK license (redistributable) | Loads the system WebView2 runtime |
 
 The Jersey fonts are bundled unmodified. Their license (SIL OFL 1.1) is

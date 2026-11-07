@@ -112,17 +112,26 @@
           </div>
         </div>
         <div class="sash vertical" id="sash-preview" hidden></div>
-        <section id="preview-pane" hidden>
+        <section id="preview-pane" hidden data-dev="full">
           <div class="pv-head">
-            <span class="pv-title">PREVIEW</span>
-            <span class="pv-url"></span>
+            <span class="pv-ic"></span>
+            <span class="pv-name"></span>
+            <span class="pv-dir"></span>
+            <div class="pv-devices" role="radiogroup" aria-label="Preview size">
+              <button data-dev="full" class="on" title="Fit the pane"></button>
+              <button data-dev="tablet" title="Tablet · 768 px"></button>
+              <button data-dev="phone" title="Phone · 390 px"></button>
+            </div>
             <span class="pv-actions">
               <button data-pv="reload" title="Reload"></button>
               <button data-pv="external" title="Open in Browser"></button>
               <button data-pv="close" title="Close Preview"></button>
             </span>
           </div>
-          <iframe id="preview-frame" title="Live Preview" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"></iframe>
+          <div class="pv-progress"></div>
+          <div class="pv-stage">
+            <iframe id="preview-frame" title="Live Preview" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"></iframe>
+          </div>
         </section>
         </div>
         <div class="sash horizontal" id="sash-panel"></div>

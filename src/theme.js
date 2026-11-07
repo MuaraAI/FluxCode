@@ -170,19 +170,20 @@ export function derive(s) {
   }
   ANSI[dark ? "dark" : "light"].forEach((c, i) => { v[`--ansi${i}`] = ensure(c, side, 3); });
 
-  // Fonts: Jersey sizes for the UI hierarchy, a monospace font for code.
+  // Fonts: "jersey" = Jersey 15 (the most legible of the family, also when blurred), Jersey 25 for the wordmark;
+  // "system" = the VS Code default (Segoe UI). Code always stays monospaced.
   const jersey = s.uiFont === "jersey";
   v["--font-ui"] = jersey ? '"Jersey 15", "Segoe UI Variable Text", "Segoe UI", sans-serif' : '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
-  v["--font-title"] = jersey ? '"Jersey 20", var(--font-ui)' : "var(--font-ui)";
+  v["--font-title"] = "var(--font-ui)";
   v["--font-display"] = jersey ? '"Jersey 25", var(--font-ui)' : "var(--font-ui)";
-  v["--font-small"] = jersey ? '"Jersey 10", var(--font-ui)' : "var(--font-ui)";
-  v["--ui-adjust"] = jersey ? "0.56" : "none";
+  v["--font-small"] = "var(--font-ui)";
+  v["--ui-adjust"] = jersey ? "0.53" : "none";
   v["--editor-font"] = {
     cascadia: '"Cascadia Code", Consolas, "Courier New", monospace',
     consolas: 'Consolas, "Cascadia Code", "Courier New", monospace',
     jersey: '"Jersey 15", Consolas, monospace',
   }[s.editorFont] ?? '"Cascadia Code", Consolas, monospace';
-  v["--code-adjust"] = s.editorFont === "jersey" ? "0.56" : "none";
+  v["--code-adjust"] = s.editorFont === "jersey" ? "0.53" : "none";
   v["--editor-font-size"] = `${s.editorSize}px`;
   v["--editor-line-height"] = `${Math.round(s.editorSize * 1.45)}px`;
   return { vars: v, dark };

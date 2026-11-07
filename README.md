@@ -5,7 +5,7 @@ A lightweight code editor for Windows with the VS Code look and feel, built on
 in Windows' built-in WebView2, and everything that touches the machine (files,
 processes, the terminal, the preview server) runs in Rust.
 
-> Status: **development build `0.4.0-dev.2026-11-07-1135`** — not a final
+> Status: **development build `0.4.1-dev.2026-11-07-1155`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -34,10 +34,21 @@ zip is attached too.
   highlighting, terminal ANSI colors — is derived from those and, with
   **auto contrast**, adjusted to meet WCAG contrast ratios (text 7:1, muted
   text and code 4.5:1), with live contrast scores in the panel
-- **Jersey type scale** (SIL OFL fonts): Jersey 25 for the wordmark, Jersey 20
-  for titles, Jersey 15 for the interface, Jersey 10 for small labels; code
-  stays in a monospace font (Cascadia Code / Consolas, or Jersey 15 if you
-  want it). "System" switches the interface back to Segoe UI
+- **Two interface fonts** (Appearance, or View → Font — Jersey / Font — VS
+  Code Default):
+  - **Jersey** (SIL OFL, pixel style): all 8 Jersey families on Fontsource were
+    compared sharp and blurred (to simulate low vision); Jersey 15 stayed the
+    most legible, so it is used for all interface text, Jersey 25 only for the
+    big wordmark. The "Charted" variants were left out: their grid background
+    cuts contrast. No synthetic bold
+  - **VS Code default**: Segoe UI, like VS Code on Windows
+  - Code always stays in a monospace font (Cascadia Code / Consolas)
+- **One icon system**: every file type is the same 16×16 tile (tinted
+  background + simple glyph) so names line up; flat folders; UI icons on one
+  24px grid with 1.5px strokes
+- **Live Preview** with a compact header (file + folder), Fit / Tablet (768px)
+  / Phone (390px) sizes, a thin loading bar instead of a white flash, and it
+  follows whichever HTML file you switch to
 - **Its own icon set** (UI icons, file-type badges, folder icons), drawn for
   this project
 - Smooth, cheap animations (opacity/transform only); respects "reduce motion"

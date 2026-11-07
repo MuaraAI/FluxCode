@@ -155,7 +155,11 @@ check("typescript runs on node", !!(await waitFor(`document.querySelector('.out-
 
 // Web: Live Preview + auto save + reload
 check("open web/index.html", !!(await openFile("web/index.html")));
-check("HTML file icon shows its label", (await evaluate(`document.querySelector('.tab.active .ficon')?.textContent`)) === "</>");
+check("HTML file icon is the markup tile", (await evaluate(`document.querySelector('.tab.active .ficon')?.dataset.kind`)) === "html");
+const icons = await evaluate(`(() => { const r = [...document.querySelectorAll('#tabs .ficon')].map(i => i.getBoundingClientRect()); return r.length && r.every(b => Math.round(b.width) === 16 && Math.round(b.height) === 16); })()`);
+check("every file icon is exactly 16x16", icons);
+const label = await evaluate(`(() => { const l = document.querySelector('.tab.active .label'); return { clipped: l.scrollWidth > l.clientWidth, text: l.textContent }; })()`);
+check("active tab label is not clipped", !label.clipped, JSON.stringify(label));
 await press("F5");
 const url = await waitFor(`!document.querySelector('#preview-pane').hidden && document.querySelector('#preview-frame').src`, 5000);
 check("preview pane opens", !!url, url ?? "");
@@ -168,6 +172,14 @@ if (url) {
   check("preview refuses paths outside the folder", evil.status === 403 || evil.status === 404, `status ${evil.status}`);
 }
 await sleep(1500);
+check("active tab stays visible after the preview opens", await evaluate(`(() => { const t = document.querySelector('.tab.active').getBoundingClientRect(); const b = document.querySelector('#tabs').getBoundingClientRect(); return t.left >= b.left - 1 && t.right <= b.right + 1; })()`));
+check("preview header is compact (name + folder)", (await evaluate(`document.querySelector('.pv-name').textContent + '|' + document.querySelector('.pv-dir').textContent`)) === "index.html|web");
+check("preview finished loading", !!(await waitFor(`document.querySelector('#preview-pane').classList.contains('loaded')`, 5000)));
+await evaluate(`document.querySelector('button[data-dev=phone]').click()`);
+await sleep(450);
+check("phone mode renders at 390px", Math.round(await evaluate(`document.querySelector('#preview-frame').getBoundingClientRect().width`)) === 390);
+await shot("03b-preview-phone");
+await evaluate(`document.querySelector('button[data-dev=full]').click()`);
 measure("preview open");
 await shot("03-preview");
 
@@ -203,6 +215,8 @@ check("typing a folder name enters it", !!(await waitFor(`document.querySelector
 await type("..");
 await press("Enter");
 check("'..' goes up", !!(await waitFor(`document.querySelector('.tc.last')?.textContent === 'examples'`, 5000)));
+const termSizes = await evaluate(`(() => { const px = (s) => parseFloat(getComputedStyle(document.querySelector(s)).fontSize); return { crumb: px('.tc.last'), note: px('.tnav'), input: px('.ti-input') }; })()`);
+check("terminal UI text is comfortably sized", termSizes.crumb >= 13 && termSizes.note >= 13 && termSizes.input >= 13, JSON.stringify(termSizes));
 check("consecutive folder moves share one compact pill", (await evaluate(`document.querySelectorAll('.term-session:not([hidden]) .tnav').length`)) === 1 && !!(await evaluate(`document.querySelector('.tnav-pill b')?.textContent === 'examples'`)));
 const crumbs = await evaluate(`(() => { const c = document.querySelector('.tp-crumbs'); const first = c.querySelector('.tc:not([hidden])'); return { fits: c.scrollWidth <= c.clientWidth + 1, first: first?.textContent, last: c.querySelector('.tc.last')?.textContent }; })()`);
 check("path bar fits (drive and current folder visible)", crumbs.fits && crumbs.first === "C:" && crumbs.last === "examples", JSON.stringify(crumbs));
@@ -222,7 +236,8 @@ measure("preview closed");
 
 // Appearance: fonts, presets, auto contrast.
 await evaluate(`document.fonts.ready.then(() => true)`);
-check("Jersey fonts load", await evaluate(`Promise.all(['10','15','20','25'].map(n => document.fonts.load('16px "Jersey ' + n + '"'))).then(r => r.every(x => x.length > 0))`));
+check("no fake bold on the single-weight Jersey font", (await evaluate(`getComputedStyle(document.body).fontSynthesis`)).includes("none") || (await evaluate(`getComputedStyle(document.body).fontSynthesisWeight`)) === "none");
+check("Jersey fonts load", await evaluate(`Promise.all(['15','25'].map(n => document.fonts.load('16px "Jersey ' + n + '"'))).then(r => r.every(x => x.length > 0))`));
 const contrastJs = `(() => {
   const rgb = (c) => c.match(/[\\d.]+/g).slice(0, 3).map(Number);
   const lum = (c) => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
@@ -248,6 +263,17 @@ await sleep(300);
 const darkT = await evaluate(contrastJs);
 check("dark theme readable", darkT.theme === "dark" && darkT.text >= 7 && darkT.comment >= 3.8, JSON.stringify(darkT));
 await shot("09-appearance-dark");
+await press("Escape");
+await sleep(250);
+await evaluate(`document.querySelector('[data-action=appearance]').click()`);
+await waitFor(`!!document.querySelector('#appearance')`, 3000);
+await evaluate(`document.querySelector('[data-k=uiFont][data-v=system]').click()`);
+await sleep(250);
+check("font option: VS Code default uses Segoe UI", /Segoe UI/.test(await evaluate(`getComputedStyle(document.querySelector('.tab .label') ?? document.body).fontFamily`)) && !/Jersey/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)));
+await shot("10-font-vscode-default");
+await evaluate(`document.querySelector('[data-k=uiFont][data-v=jersey]').click()`);
+await sleep(250);
+check("font option: Jersey uses Jersey 15", /Jersey 15/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)));
 await press("Escape");
 await sleep(250);
 check("Appearance panel closes", await evaluate(`!document.querySelector('#appearance')`));

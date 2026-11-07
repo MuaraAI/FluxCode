@@ -93,7 +93,7 @@ function styleSpan(st, text) {
 
 export function createTerminal(host, ctx) {
   const { icons, fileIcon, folderIcon } = ctx;
-  const settings = loadJson(SETTINGS_KEY, { shell: "cmd", fontSize: 13, cursor: "bar", smoothCaret: true, showHidden: false });
+  const settings = loadJson(SETTINGS_KEY, { shell: "cmd", fontSize: 14, cursor: "bar", smoothCaret: true, showHidden: false });
   let history = [];
   try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]"); } catch {}
   const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {} };
