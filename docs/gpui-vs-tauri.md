@@ -1,6 +1,6 @@
 # FluxCode: Tauri (WebView2) vs GPUI (native)
 
-Status: **prototype**. The GPUI edition lives in [`gpui-app/`](../gpui-app/) next to the
+Status: **working GPUI edition, most features ported** (see parity table). The GPUI edition lives in [`gpui-app/`](../gpui-app/) next to the
 Tauri app; nothing in `src/` or `src-tauri/` was changed. Measured 2026-11-07.
 
 ## Setup
@@ -23,23 +23,25 @@ Tauri app; nothing in `src/` or `src-tauri/` was changed. Measured 2026-11-07.
 
 ## Results
 
-| Metric | Tauri (WebView2) | GPUI | Difference |
+| Metric | Tauri (WebView2) | GPUI (full edition) | Difference |
 |---|---|---|---|
-| Executable size | 3.9 MB (+ system WebView2 runtime) | 26.0 MB (self-contained) | GPUI 6.7x bigger file |
-| Start to window shown (median) | 430 ms | 213 ms | GPUI ~2x faster |
+| Executable size | 3.9 MB (+ system WebView2 runtime) | 26.4 MB (self-contained) | GPUI 6.8x bigger file |
+| Start to window shown (median) | 436 ms | 212 ms | GPUI ~2x faster |
 | Start to painted UI (median) | 506 ms | 273 ms | GPUI ~1.9x faster |
 | Processes | 6 | 1 | |
-| Idle private memory | 113 MB | 101 MB | GPUI -11 % |
-| Idle working set | 337 MB | 59 MB | GPUI -82 % |
-| Large file, private | 144 MB | 114 MB (large-file mode) / 283 MB (highlighting on) | see notes |
-| Large file, working set | 387 MB | 78 MB (large-file mode) / 242 MB (highlighting on) | |
-| CPU while typing (large file) | 77 % | 10 % (large-file mode) / 46 % (highlighting on) | GPUI 1.7-7x less |
-| CPU while scrolling (large file) | 61 % | 8 % (large-file mode) / 18 % (highlighting on) | GPUI 3-7x less |
-| CPU idle after input | 9.4 % | 2.8 % | |
+| Idle private memory | 113 MB | 101 MB | GPUI -10 % |
+| Idle working set | 336 MB | 60 MB | GPUI -82 % |
+| Large file, private | 142 MB | 117 MB (large-file mode) / 283 MB (highlighting on) | see notes |
+| Large file, working set | 386 MB | 76 MB (large-file mode) / 242 MB (highlighting on) | |
+| CPU while typing (large file, auto save on) | 77 % | 11 % (large-file mode) / 46 % (highlighting on) | GPUI 1.7-7x less |
+| CPU while scrolling (large file) | 63 % | 11 % (large-file mode) / 18 % (highlighting on) | GPUI 3.5-6x less |
+| CPU idle after input | 10 % | 2.2 % | |
 
-Raw start-to-paint runs (ms): Tauri 516, 506, 492, 521, 503; GPUI 257, 274, 273, 257, 275.
-The "highlighting on" column is from the first benchmark run, before the 2 MB large-file limit
-was added (same build otherwise); all other numbers are from the final run.
+Raw start-to-paint runs (ms): Tauri 544, 506, 497, 499, 550; GPUI 260, 273, 275, 259, 275.
+Final run with every ported feature (search, terminal, OpenCode, preview server, settings,
+completion). The "highlighting on" values come from the first run, before the 2 MB large-file
+limit existed; the shell-only prototype measured the same start/idle numbers (273 ms, 101 MB),
+so the extra features cost nothing until they are used.
 
 ## What the numbers say
 
@@ -60,24 +62,30 @@ was added (same build otherwise); all other numbers are from the final run.
 
 ## Feature parity (GPUI edition)
 
+✅ = works and was checked in the running app or by a unit test; ⚠️ = works with a difference; ❌ = missing.
+
 | Area | Tauri app | GPUI edition |
 |---|---|---|
-| Custom title bar + menus | ✅ | ✅ title bar, window buttons; menu labels only (no dropdowns yet) |
-| Activity bar | ✅ | ✅ Explorer works; Search / Debug / OpenCode show "not ported yet" |
-| Explorer tree + file icons | ✅ SVG icons, lazy folders, create/rename | ✅ tree with folder icons + coloured file badges; no create/rename/delete yet; folders read up front (20k entry cap, skips node_modules/target/.git) |
-| Open folder / open from CLI | ✅ | ✅ (`fluxcode-gpui <folder> [files…]`, Ctrl+K Ctrl+O) |
+| Custom title bar + menus | ✅ | ✅ window buttons, File / Edit / View / Run / Terminal / Help dropdown menus |
+| Activity bar | ✅ | ✅ Explorer, Search, Run, OpenCode, Settings |
+| Explorer tree + file icons | ✅ SVG icons, lazy folders, create/rename | ⚠️ folder icons + coloured file badges (not the SVG set); new file/folder, rename, delete (to the Recycle Bin), copy path, reveal, via right-click / toolbar / F2 / Del; folders are read up front (20k entry cap, skips node_modules/target/.git) |
+| Open folder / file / CLI | ✅ | ✅ Ctrl+K Ctrl+O, Ctrl+O, `fluxcode-gpui <folder> [files…]` |
 | Tabs | ✅ | ✅ open/switch/close, dirty dot, Ctrl+Tab, Ctrl+W |
-| Editor + syntax highlighting | ✅ CodeMirror 6 | ✅ gpui-component editor, tree-sitter (JS/TS/TSX/HTML/CSS/JSON/MD/PY/RS/PHP/TOML/YAML/sh/C/C++/Go/Java/Lua/SQL), line numbers, indent guides; undo/redo and find come with the gpui-component editor (not separately tested); files > 2 MB open without highlighting |
-| Save | ✅ | ✅ Ctrl+S |
-| Status bar | ✅ | ✅ cursor Ln/Col, language, messages |
-| Completion + Emmet | ✅ | ❌ (gpui-component has a `CompletionProvider` hook; the JS logic in `src/complete/` must be ported to Rust) |
-| Search in files | ✅ | ❌ |
-| Terminal | ✅ | ❌ (FluxCode's terminal is not a PTY, so it is a plain output view + runner to port) |
-| Run / Debug (Python, Node) | ✅ | ❌ |
-| OpenCode ACP panel, inline Keep/Undo | ✅ | ❌ |
-| Live Preview | ✅ (WebView) | ❌ (possible with `gpui-webview`, which loads WebView2 only while the preview is open) |
-| Settings UI, GitHub sign-in | ✅ | ❌ |
-| Window state, session restore | ✅ | ❌ |
+| Editor + syntax highlighting | ✅ CodeMirror 6 | ✅ gpui-component editor, tree-sitter for 20 languages, line numbers, indent guides, undo/redo/find from gpui-component; files > 2 MB open without highlighting |
+| Save / auto save / line endings | ✅ | ✅ atomic save, CRLF kept, auto save 1 s after typing (on by default, like Tauri) |
+| Completion + Emmet | ✅ | ⚠️ document words + language keywords + Emmet HTML (`!`, `ul>li.item$*3`, `#id.cls`, `[attr]`, `{text}`, `input:email`) and CSS (`m10`, `df`, `bgc#fff`, `w50p`); no snippet tab stops (gpui-component has none), so the cursor lands at the end |
+| Search in files | ✅ | ✅ same search code as Tauri (match case, whole word, 5k hit cap), click opens at the line |
+| Terminal | ✅ | ⚠️ same model (one command at a time through cmd.exe, `cd`/`cls` built in, stdin for prompts, Stop); ANSI colours are stripped; the folder access-grant prompt of the Tauri terminal is not ported |
+| Run file | ✅ | ✅ F5 → Output panel (Python with workspace venv, Node, tsx, PowerShell, batch, cargo, go, php, lua, ruby) |
+| Debugger (breakpoints) | in progress on another branch | ❌ |
+| OpenCode ACP panel | ✅ | ⚠️ chat (Markdown), thinking, tool calls, plan, permission prompts (or auto-approve), agent reads/writes files, changed-file list with Keep / Undo per file; no inline diff in the editor, no mode/model picker |
+| Live Preview | ✅ in-window WebView | ⚠️ same server and reload-on-save, opened in the system browser by default so no WebView2 is loaded; in-window WebView2 with `--features embedded-preview` (then `WebView2Loader.dll` must sit next to the exe) |
+| Settings | ✅ | ✅ font size, tab size, word wrap, auto save, OpenCode auto-approve (JSON in `%APPDATA%\FluxCode-GPUI`) |
+| GitHub sign-in | ✅ | ✅ token or GitHub CLI login (same `curl` check as Tauri), passed as GH_TOKEN to terminal + OpenCode (UI checked; sign-in itself not exercised here) |
+| Session restore | ✅ | ✅ last folder, open files and active tab when started without arguments |
+| Window position/size restore | ✅ | ❌ |
+| Quick Open (Ctrl+P), command palette | ✅ | ❌ |
+| `.flx` changelog viewer, explorer SVG icon fixes | in progress on another branch | ❌ |
 
 ## Licensing
 
