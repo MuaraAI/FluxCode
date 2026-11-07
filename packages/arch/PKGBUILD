@@ -1,11 +1,11 @@
 # Maintainer: MuaraAI <team@muaraai.com>
 pkgname=fluxcode-bin
-pkgver=0.3.0
+pkgver=0.4.2
 pkgrel=1
 pkgdesc="Lightweight code editor for Python and Web built with Tauri and CodeMirror 6"
 arch=('x86_64' 'aarch64')
 url="https://github.com/MuaraAI/FluxCode"
-license=('MIT')
+license=('custom:FluxCode Source-Available License, version 1.0')
 depends=('webkit2gtk-4.1' 'libayatana-appindicator' 'openssl')
 provides=('fluxcode')
 conflicts=('fluxcode')
@@ -18,4 +18,5 @@ package() {
     bsdtar -xf data.tar.* -C "${pkgdir}/"
     chmod 755 "${pkgdir}/usr/bin/fluxcode"
     install -Dm644 "${startdir:-.}/fluxcode.desktop" "${pkgdir}/usr/share/applications/fluxcode.desktop" 2>/dev/null || true
+    install -Dm644 "${startdir:-.}/../../LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
 }
