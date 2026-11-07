@@ -37,6 +37,10 @@
 - !new This page is written in `.flx`: everyday Markdown plus `@title` / `@version` / `@date`, key caps like `[[Ctrl+P]]`, tagged items (`!new`, `!fix`, `!better`, `!perf`), task items and `>!` warnings.
 - !new `.flx` files get their own icon and highlighting; **Open Preview** ([[Ctrl+Shift+V]]) renders `.flx` and `.md` files.
 
+## Open source, and a native edition
+- !new FluxCode is now **free and open source** under the GNU GPL v3.0 or later.
+- !new A native **GPUI edition** (`gpui-app/`) runs without a WebView, in a single process. The README has the benchmark against this Tauri edition.
+
 ## Fixes
 - !fix Double-click selection is visible again on the caret's line (the active-line highlight was covering it).
 - !fix Settings: the side navigation follows the section you are reading, including the last one. The Terminal section has a live preview.

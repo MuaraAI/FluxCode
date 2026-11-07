@@ -1,9 +1,8 @@
 # Contributing to FluxCode
 
-Thanks for helping build FluxCode! FluxCode is **source-available**, not open
-source: you may fork and build it **only to prepare contributions** to
-[MuaraAI/FluxCode](https://github.com/MuaraAI/FluxCode). Publishing your own
-copy, fork or rebrand is not allowed. The full terms are in [LICENSE](LICENSE).
+Thanks for helping build FluxCode! FluxCode is free and open source under the
+[GNU GPL v3.0 or later](LICENSE): you may use, fork, change and share it, as
+long as what you distribute stays under the same license.
 
 ## How to contribute
 
@@ -34,6 +33,6 @@ copy, fork or rebrand is not allowed. The full terms are in [LICENSE](LICENSE).
 
 ## Contributor terms
 
-By opening a pull request you agree to section 4 of the [LICENSE](LICENSE):
-you grant MuaraAI a perpetual license to use and relicense your contribution,
-and you confirm it is your own work or properly licensed to you.
+By opening a pull request you license your contribution under the
+GPL-3.0-or-later (the same license as the project), and you confirm it is your
+own work or properly licensed to you under GPL-compatible terms.

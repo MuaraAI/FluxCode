@@ -1,0 +1,10 @@
+[package]
+name = "fxc-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal fxc.exe stand-in (only what GPUI's build script uses), backed by Windows' own d3dcompiler_47.dll"
+
+[profile.release]
+opt-level = "s"
+strip = true
