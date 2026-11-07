@@ -26,8 +26,8 @@ export const DEFAULTS = {
   accent: "#3b8eea",
   text: null, // null = automatic
   autoContrast: true,
-  uiFont: "jersey", // "jersey" | "system"
-  editorFont: "cascadia", // "cascadia" | "consolas" | "jersey"
+  uiSize: 13, // interface font size (px): 12 | 13 | 14
+  editorFont: "cascadia", // "cascadia" | "consolas" | "jetbrains"
   editorSize: 14,
 };
 
@@ -170,20 +170,14 @@ export function derive(s) {
   }
   ANSI[dark ? "dark" : "light"].forEach((c, i) => { v[`--ansi${i}`] = ensure(c, side, 3); });
 
-  // Fonts: "jersey" = Jersey 15 (the most legible of the family, also when blurred), Jersey 25 for the wordmark;
-  // "system" = the VS Code default (Segoe UI). Code always stays monospaced.
-  const jersey = s.uiFont === "jersey";
-  v["--font-ui"] = jersey ? '"Jersey 15", "Segoe UI Variable Text", "Segoe UI", sans-serif' : '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
-  v["--font-title"] = "var(--font-ui)";
-  v["--font-display"] = jersey ? '"Jersey 25", var(--font-ui)' : "var(--font-ui)";
-  v["--font-small"] = "var(--font-ui)";
-  v["--ui-adjust"] = jersey ? "0.53" : "none";
+  // Fonts: the interface uses the VS Code default on Windows (Segoe UI); code stays monospaced.
+  v["--font-ui"] = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
+  v["--ui-font-size"] = `${s.uiSize ?? 13}px`;
   v["--editor-font"] = {
     cascadia: '"Cascadia Code", Consolas, "Courier New", monospace',
     consolas: 'Consolas, "Cascadia Code", "Courier New", monospace',
-    jersey: '"Jersey 15", Consolas, monospace',
+    jetbrains: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
   }[s.editorFont] ?? '"Cascadia Code", Consolas, monospace';
-  v["--code-adjust"] = s.editorFont === "jersey" ? "0.53" : "none";
   v["--editor-font-size"] = `${s.editorSize}px`;
   v["--editor-line-height"] = `${Math.round(s.editorSize * 1.45)}px`;
   return { vars: v, dark };
@@ -193,7 +187,11 @@ export function derive(s) {
 
 export function loadAppearance() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") };
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") ?? {};
+    // Older builds had a pixel font option; it is gone, so fall back to the defaults.
+    if (saved.editorFont === "jersey") delete saved.editorFont;
+    delete saved.uiFont;
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }

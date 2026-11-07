@@ -5,7 +5,7 @@ A lightweight code editor for Windows with the VS Code look and feel, built on
 in Windows' built-in WebView2, and everything that touches the machine (files,
 processes, the terminal, the preview server) runs in Rust.
 
-> Status: **development build `0.4.2-dev.2026-11-07-1206`** — not a final
+> Status: **development build `0.5.0-dev.2026-11-07-1420`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.
@@ -28,21 +28,27 @@ zip is attached too.
   breadcrumbs, panel (Output + Terminal), status bar
 - Opens inside the monitor's work area (never under the taskbar; maximized
   on small screens) and reopens where you left it
-- **Appearance** (gear in the activity bar, or Ctrl+K Ctrl+T): 8 theme
-  presets (dark and light) or your own **Accent / Background / Text** colors
-  with color pickers. Every other color — panels, borders, selections, syntax
+- **Settings** (gear in the activity bar, Ctrl+, or the command palette):
+  one searchable VS Code-style page — Appearance, Editor, Terminal, Accounts,
+  OpenCode. Changes apply instantly and update in place (the page never
+  jumps); **Reset to default** asks to confirm first
+- **Color theme** (Ctrl+K Ctrl+T, with live preview while you arrow through
+  the list): 8 presets (dark and light) or your own **Accent / Background /
+  Text** colors. Every other color — panels, borders, selections, syntax
   highlighting, terminal ANSI colors — is derived from those and, with
   **auto contrast**, adjusted to meet WCAG contrast ratios (text 7:1, muted
-  text and code 4.5:1), with live contrast scores in the panel
-- **Two interface fonts** (Appearance, or View → Font — Jersey / Font — VS
-  Code Default):
-  - **Jersey** (SIL OFL, pixel style): all 8 Jersey families on Fontsource were
-    compared sharp and blurred (to simulate low vision); Jersey 15 stayed the
-    most legible, so it is used for all interface text, Jersey 25 only for the
-    big wordmark. The "Charted" variants were left out: their grid background
-    cuts contrast. No synthetic bold
-  - **VS Code default**: Segoe UI, like VS Code on Windows
-  - Code always stays in a monospace font (Cascadia Code / Consolas)
+  text and code 4.5:1), with live contrast scores
+- **Fonts**: the interface uses the VS Code default on Windows (Segoe UI,
+  three sizes); code and the terminal use Cascadia Code, Consolas or
+  JetBrains Mono. Line numbers are zero-padded (`01`, `02` … `10`) so the
+  gutter never shifts
+- **Command palette** (Ctrl+Shift+P) also finds every setting: theme, fonts,
+  interface size, terminal shell / font size / cursor, GitHub sign-in,
+  OpenCode — each opens a quick pick or the right Settings section. Narrow
+  windows fold the menu bar into a ☰ button so it never collides with the
+  command center
+- **Run and Debug** view (Ctrl+Shift+D): what F5 does for the active file and
+  the runners found on this machine (Python, Node.js, Live Preview)
 - **One icon system**: every file type is the same 16×16 tile (tinted
   background + simple glyph) so names line up; flat folders; UI icons on one
   24px grid with 1.5px strokes
@@ -61,10 +67,18 @@ zip is attached too.
 
 | Language | Editing | F5 does |
 | --- | --- | --- |
-| Python | highlight, smart indent, completion | run with live output, `input()`, clickable tracebacks, `.venv` detection |
-| JavaScript / TypeScript | highlight, JSX/TSX | run with Node.js (TypeScript via Node's type stripping), clickable stack traces |
-| HTML / CSS | highlight, auto-close tags | **Live Preview** inside FluxCode |
-| JSON, Markdown, Rust | highlight | — |
+| Python | highlight, smart indent, completion, snippets, `import` of stdlib / PyPI / `requirements.txt` modules | run with live output, `input()`, clickable tracebacks, `.venv` detection |
+| JavaScript / TypeScript | highlight, JSX/TSX, every browser API, Node.js globals and modules, npm packages (`package.json` first) in `import`/`require`, snippets | run with Node.js (TypeScript via Node's type stripping), clickable stack traces |
+| HTML / CSS | highlight, auto-close tags, **Emmet** (`!`, `ul>li*3>a`, `div.card#main`, `input:email`, `m10-20`, `df`, `bgc#fff` …), tag completion in text | **Live Preview** inside FluxCode |
+| PHP / Laravel / Blade | highlight, PHP functions, facades (`Route::`, `DB::` …), Eloquent / request methods after `->`, helpers, `use Illuminate\…`, Blade directives, snippets | — |
+| JSON | `package.json` / `composer.json` keys, npm and Packagist package names in dependencies | — |
+| Markdown, Rust | highlight | — |
+
+**Completion** is VS Code-like: suggestions appear as you type, **Tab** or
+Enter accepts them, Tab then walks through the snippet's fields, and Tab on an
+Emmet abbreviation expands it directly. Words from the open file are offered
+last. Everything is static data loaded with the language — no language
+server process, so it costs nothing while idle.
 
 **Live Preview** (HTML/CSS/JS): a tiny Rust server on `127.0.0.1` serves the
 workspace folder; the preview pane reloads after every save (auto save makes
@@ -87,14 +101,42 @@ and tools sit in the panel header to leave room for output.
 - Native, clickable `ls` / `dir`; colored command line; ANSI colors and
   progress bars; clickable tracebacks; multiple terminals; Ctrl+C, Ctrl+L
 - Bare `python` / `py` / `node` start their interactive REPL
-- Terminal Settings (⚙): shell (cmd, PowerShell, pwsh), font size, cursor
-  style, smooth caret, hidden files, revoke permissions — popovers always
-  stay inside the window
+- Terminal Settings (⚙, or Settings → Terminal): shell (cmd, PowerShell,
+  pwsh), font size, cursor style, smooth caret, hidden files, revoke
+  permissions — the popover updates in place and always stays inside the
+  window. Clear (the icon next to ✕, or Ctrl+L) fades the old blocks out;
+  the drive menu marks the current drive
+- Signed in to GitHub (Settings → Accounts)? `gh` and token-aware tools get
+  `GH_TOKEN` / `GITHUB_TOKEN` automatically
 - **Permissions first**: the terminal only works in folders you allowed —
   the open workspace (for the session), a folder allowed once or always, or
   full disk access. This is a consent gate for where commands run, not a
   sandbox: a command can still reach any path your Windows account can
 - Limits: full-screen TUI programs (vim, htop) need a real PTY
+
+## OpenCode (AI agent)
+
+The **OpenCode** view (robot icon, Ctrl+Shift+A) runs the
+[OpenCode](https://opencode.ai) CLI inside FluxCode over the
+[Agent Client Protocol](https://agentclientprotocol.com) (ACP). Install it
+once (`npm i -g @opencode/cli`, v2 or newer) and sign in with
+`opencode auth login`; FluxCode finds it on PATH or in the npm global folder.
+
+- Starts `opencode acp` only when you send the first message, in the open
+  folder; **Stop when idle** (default on) quits it after 10 minutes and the
+  next message starts it again
+- Streams the answer, the agent's plan, tool calls (with diffs and output)
+  and thoughts into a light transcript; files the agent writes are reloaded
+  in the editor; its file reads/writes go through FluxCode
+- Permission requests appear inline (allow once / always / reject), or set
+  **Auto-approve tools** in Settings; modes (build / plan) and `/commands`
+  come from OpenCode itself
+- The active file can be attached to each prompt (chip in the composer)
+
+**GitHub** (Settings → Accounts): sign in with a personal access token
+(verified through api.github.com, stored in your FluxCode config folder) or
+reuse the GitHub CLI's login. The token is passed to Flux Terminal commands
+and to OpenCode as `GH_TOKEN`.
 
 ## Resource use
 
@@ -112,7 +154,16 @@ processes including WebView2 and the programs being run):
 | Preview closed again | 6 | ~159 MB |
 | VS Code, no extensions, fresh profile (for comparison) | 9 | ~1,577 MB |
 
-Executable: 3.6 MB. Idle CPU: near zero.
+Executable: 3.6 MB. Idle CPU: near zero. Completion data and the OpenCode
+view are lazy chunks: nothing is loaded until a matching file or the view is
+opened.
+
+About the OpenCode process: the CLI is a ~260 MB Bun executable that uses
+roughly 150–300 MB of memory of its own while a session is open. FluxCode
+cannot make that smaller — it only makes sure the process exists while you
+use it (start on first message, stop when idle). A whole-stack total under
+50 MB is therefore not reachable with WebView2 plus OpenCode; FluxCode's own
+share stays as above.
 
 ## Keybindings
 
@@ -124,6 +175,9 @@ Executable: 3.6 MB. Idle CPU: near zero.
 | Close Editor / Close All | `Ctrl+W` / `Ctrl+K Ctrl+W` |
 | Next / Previous Editor | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Toggle Side Bar / Panel | `Ctrl+B` / `Ctrl+J` |
+| Settings / Color Theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
+| Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
+| Accept suggestion / expand Emmet / next snippet field | `Tab` |
 | Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
 | Run or Preview / Stop | `F5` / `Shift+F5` |
 | Find / Replace / Go to Line | `Ctrl+F` / `Ctrl+H` / `Ctrl+G` |
@@ -158,14 +212,19 @@ example, checks the results, saves screenshots and measures memory.
 
 ```
 src/                     frontend (plain JS + CSS)
-  main.js                workbench: explorer, tabs, panel, preview, auto save, commands
-  editor.js              CodeMirror setup, theme, indent guides, search highlights
+  main.js                workbench: explorer, tabs, panel, preview, auto save, commands, palette
+  editor.js              CodeMirror setup, theme, Tab behaviour, indent guides, search highlights
+  complete/              completion: emmet.js, html.js, css.js, javascript.js, python.js, php.js, json.js
   terminal.js            Flux Terminal (lazy-loaded)
+  agent.js               OpenCode over ACP: JSON-RPC client + transcript view (lazy-loaded)
+  settings.js            Settings panel (lazy-loaded)
+  prefs.js               shared preference store (terminal, agent, editor)
   languages.js           lazy language registry
   icons.js               FluxCode icon set + file-type badges
   theme.js               theme engine: presets, derived palette, auto contrast, fonts
-  appearance.js          Appearance panel (lazy-loaded)
 src-tauri/src/lib.rs     file system, search, process runner, Python/Node detection
+src-tauri/src/acp.rs     spawns `opencode acp` and bridges its stdio to the view
+src-tauri/src/github.rs  GitHub account (token / gh), verified with the system curl
 src-tauri/src/terminal.rs    terminal runner, native listing, folder-access grants
 src-tauri/src/preview.rs     Live Preview server
 src-tauri/src/window_state.rs  work-area placement, remembered window bounds
@@ -177,7 +236,7 @@ examples/                python/, js/ (JS + TS), web/ (HTML + CSS + JS)
 
 1. Language servers: basedpyright/ruff (Python), TypeScript, HTML/CSS
    diagnostics, go-to-definition and hover
-2. Emmet for HTML/CSS; npm scripts runner
+2. npm / composer scripts runner; OpenCode: session history, image input
 3. Rust: `cargo run`/`cargo check` with clickable errors, rust-analyzer
 4. Flux Terminal: optional PTY mode for full-screen programs; Git status,
    minimap, settings UI, bracket pair colors

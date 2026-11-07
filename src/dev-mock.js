@@ -7,8 +7,16 @@ const files = {
   "C:\\demo\\main.py": `"""Demo file."""\n\nimport sys\n\n\nclass Greeter:\n    def __init__(self, name: str) -> None:\n        self.name = name\n\n    def greet(self) -> str:\n        # f-strings, numbers and keywords\n        return f"Hello, {self.name}! {42 + 3.14}"\n\n\nif __name__ == "__main__":\n    for i in range(3):\n        if i % 2 == 0:\n            print(Greeter("FluxCode").greet())\n        else:\n            pass\n`,
   "C:\\demo\\utils\\helpers.py": "def add(a, b):\n    return a + b\n",
   "C:\\demo\\README.md": "# Demo\n",
+  "C:\\demo\\web\\index.html": "",
+  "C:\\demo\\web\\style.css": "body {\n  margin: 0;\n}\n",
+  "C:\\demo\\web\\app.js": "const el = document.querySelector('#app');\n",
+  "C:\\demo\\package.json": "{\n  \"name\": \"demo\",\n  \"dependencies\": {\n    \"express\": \"^4.19.2\"\n  }\n}\n",
+  "C:\\demo\\app\\Http\\Controllers\\UserController.php": "<?php\n\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Http\\Request;\n\nclass UserController extends Controller\n{\n    public function index(Request $request)\n    {\n        \n    }\n}\n",
 };
-const dirs = { "C:\\demo": ["utils", "main.py", "README.md"], "C:\\demo\\utils": ["helpers.py"] };
+const dirs = {
+  "C:\\demo": ["app", "utils", "web", "main.py", "package.json", "README.md"], "C:\\demo\\utils": ["helpers.py"], "C:\\demo\\web": ["app.js", "index.html", "style.css"],
+  "C:\\demo\\app": ["Http"], "C:\\demo\\app\\Http": ["Controllers"], "C:\\demo\\app\\Http\\Controllers": ["UserController.php"],
+};
 
 mockWindows("main");
 localStorage.setItem("fluxcode.session", JSON.stringify({ root: ROOT, files: ["C:\\demo\\main.py"], active: "C:\\demo\\main.py" }));
@@ -23,7 +31,16 @@ mockIPC(
           return { name, path, is_dir: !!dirs[path] };
         });
       case "list_files": return Object.keys(files);
-      case "read_file": return { text: files[args.path] ?? "", lossy: false };
+      case "read_file":
+        if (!(args.path in files)) throw new Error("not found");
+        return { text: files[args.path], lossy: false };
+      case "github_status": return { login: null, name: null, source: null, gh: true };
+      case "acp_info": return { path: "C:\\Users\\demo\\AppData\\Roaming\\npm\\node_modules\\@opencode\\cli\\bin\\opencode.exe", version: "2.2.5", running: false };
+      case "term_env": return { home: "C:\\Users\\demo", drives: ["C:\\", "D:\\"], shells: ["cmd", "powershell", "pwsh"], user: "demo", computer: "PC" };
+      case "access_check": return { granted: true };
+      case "term_list": return (dirs[args.path] ?? []).map((name) => ({ name, path: `${args.path}\\${name}`, is_dir: !!dirs[`${args.path}\\${name}`], size: 120, hidden: false }));
+      case "term_resolve": return args.input === ".." ? args.cwd.slice(0, args.cwd.lastIndexOf("\\")) || args.cwd : `${args.cwd}\\${args.input}`;
+      case "term_is_command": return false;
       case "write_file": files[args.path] = args.contents; return null;
       case "resolve_python": return { path: "python", version: "Python 3.12.10" };
       case "launch_paths": return [];

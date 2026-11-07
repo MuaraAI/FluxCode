@@ -2,10 +2,9 @@
 // output panel, quick open, command palette and status bar.
 // Plain DOM — no UI framework, nothing re-renders that doesn't have to.
 
-// Theme + fonts first, so the very first paint already has the user's look.
-import "@fontsource/jersey-15";
-import "@fontsource/jersey-25";
-import { loadAppearance, applyAppearance, saveAppearance } from "./theme.js";
+// Theme first, so the very first paint already has the user's look.
+import { loadAppearance, applyAppearance, saveAppearance, PRESETS } from "./theme.js";
+import { prefs } from "./prefs.js";
 let appearance = loadAppearance();
 applyAppearance(appearance);
 
@@ -25,7 +24,8 @@ import {
   createState, createView, onEditorUpdate, setWrap, syncWrap, isWrapOn, findRanges, setSearchHighlight,
 } from "./editor.js";
 import { languageFor, loadLanguage } from "./languages.js";
-import { icons, abIcon, logo, fileIcon, folderIcon } from "./icons.js";
+import { setWorkspaceManifests } from "./complete/index.js";
+import { icons, abIcon, winIcon, logo, fileIcon, folderIcon } from "./icons.js";
 
 const $ = (sel) => document.querySelector(sel);
 const appWindow = getCurrentWindow();
@@ -181,11 +181,21 @@ async function setRoot(path, { quiet = false } = {}) {
   updateStatus();
   updateTitle();
   resolvePython();
+  loadManifests(path);
+  agent?.refreshChip();
   persist();
+}
+
+/** Package manifests of the workspace feed the completion lists (npm, PyPI, Composer). */
+async function loadManifests(root) {
+  const read = (name) => invoke("read_file", { path: join(root, name) }).then((r) => r.text).catch(() => null);
+  const [packageJson, requirements, pyproject, composerJson] = await Promise.all([read("package.json"), read("requirements.txt"), read("pyproject.toml"), read("composer.json")]);
+  if (state.root === root) setWorkspaceManifests({ packageJson, requirements, pyproject, composerJson });
 }
 
 function closeFolderUi() {
   state.root = null;
+  setWorkspaceManifests({});
   $(".ws-header").hidden = true;
   $("#tree").hidden = true;
   $("#tree").innerHTML = "";
@@ -424,13 +434,16 @@ async function refreshExplorer() {
 
 // ------------------------------------------------------------- side views
 
+const VIEW_TITLES = { explorer: "EXPLORER", search: "SEARCH", debug: "RUN AND DEBUG", agent: "OPENCODE" };
+
 function showView(name, { focus = true } = {}) {
   state.view = name;
   toggleSidebar(true);
-  $("#explorer").hidden = name !== "explorer";
-  $("#search-view").hidden = name !== "search";
-  $("#sb-title-text").textContent = name === "search" ? "SEARCH" : "EXPLORER";
+  for (const id of ["explorer", "search-view", "debug-view", "agent-view"]) $(`#${id}`).hidden = id.replace("-view", "") !== name;
+  $("#sb-title-text").textContent = VIEW_TITLES[name] ?? "EXPLORER";
   for (const b of document.querySelectorAll(".ab-item[data-view]")) b.classList.toggle("active", b.dataset.view === name);
+  if (name === "debug") renderDebugView();
+  if (name === "agent") ensureAgent().then((a) => { if (focus) a.focus(); });
   if (name === "search" && focus) {
     const input = $("#search-input");
     const sel = state.active ? view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) : "";
@@ -558,7 +571,7 @@ async function openFile(path, { preview = false, line = null, quiet = false, act
       return null;
     }
     const lang = languageFor(path);
-    const langExt = await loadLanguage(lang);
+    const langExt = await loadLanguage(lang, path);
     const eol = content.text.includes("\r\n") ? "\r\n" : content.text.includes("\n") ? "\n" : "\r\n";
     const editorState = createState(content.text, langExt, lang.indent);
     tab = { id: ++tabSeq, path, name: basename(path), state: editorState, saved: editorState.doc, eol, lang, dirty: false, preview, scroll: 0 };
@@ -608,6 +621,8 @@ function activateTab(tab, { focus = true } = {}) {
   refreshTreeMarkers();
   updateStatus();
   updateTitle();
+  if (state.view === "debug") renderDebugView();
+  agent?.refreshChip();
   persist();
 }
 
@@ -769,7 +784,7 @@ async function saveTab(tab, { saveAs = false } = {}) {
     const lang = languageFor(path);
     if (lang.id !== tab.lang.id) {
       // The file got a real extension: rebuild the state with the right language.
-      const langExt = await loadLanguage(lang);
+      const langExt = await loadLanguage(lang, path);
       const fresh = createState(editorState.doc.toString(), langExt, lang.indent);
       tab.lang = lang;
       tab.state = fresh;
@@ -827,6 +842,47 @@ function updateStatus() {
   $("#sb-python").title = py ? `${py.path}\nClick to re-detect` : "Python was not found on PATH. Click to re-detect.";
   updateCursorStatus();
 }
+
+// ------------------------------------------------------------ run & debug view
+
+const RUN_LABELS = { python: "Run Python File", node: "Run with Node.js", preview: "Open Live Preview" };
+
+/** The Run and Debug side view: what F5 does for the active file and which runners were found. */
+async function renderDebugView() {
+  const tab = state.active;
+  const kind = tab?.lang.run;
+  const btn = $(".dbg-run");
+  btn.querySelector(".dbg-run-ic").innerHTML = state.run ? icons.stop : kind === "preview" ? icons.preview : icons.play;
+  btn.querySelector(".dbg-run-label").textContent = state.run ? `Stop ${state.run.name}` : kind ? `${RUN_LABELS[kind]}` : "Run and Debug";
+  btn.classList.toggle("stop", !!state.run);
+  btn.disabled = !tab || (!kind && !state.run);
+  $(".dbg-hint").innerHTML = !tab
+    ? "Open a Python, JavaScript/TypeScript or HTML file, then press <kbd>F5</kbd>."
+    : kind
+      ? `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> runs ${kind === "python" ? "with the Python interpreter below, with live output and <code>input()</code> support." : kind === "node" ? "with Node.js, with clickable stack traces." : "in the Live Preview pane, reloading on every save."}`
+      : `<span class="dbg-file">${fileIcon(tab.name)}${escapeHtml(tab.name)}</span> — ${escapeHtml(tab.lang.name)} files can't be run yet.`;
+  if (state.python === undefined) await resolvePython();
+  const node = await resolveNode();
+  const row = (ok, icon, name, detail, action) =>
+    `<div class="dbg-tool ${ok ? "ok" : "missing"}">${icon}<div><b>${name}</b><span>${escapeHtml(detail)}</span></div>${action ? `<button class="btn-secondary" data-action="${action}">Re-detect</button>` : ""}</div>`;
+  $(".dbg-tools").innerHTML =
+    row(!!state.python, fileIcon("x.py"), "Python", state.python ? `${state.python.version} · ${state.python.path}` : "Not found on PATH — install from python.org", "selectInterpreter") +
+    row(!!node, fileIcon("x.js"), "Node.js", node ? `${node.version}` : "Not found on PATH — install from nodejs.org") +
+    row(true, fileIcon("x.html"), "Live Preview", "Built in: serves the folder on 127.0.0.1 and reloads on save");
+}
+
+async function updateGithubStatus() {
+  const el = $("#sb-github");
+  try {
+    const st = await invoke("github_status");
+    el.innerHTML = `${icons.github}<span>${st.login ? escapeHtml(st.login) : ""}</span>`;
+    el.title = st.login ? `GitHub: ${st.login}${st.name ? ` (${st.name})` : ""} — click for account settings` : "GitHub: not signed in — click to sign in";
+    el.classList.toggle("on", !!st.login);
+  } catch {
+    el.innerHTML = icons.github;
+  }
+}
+$("#sb-github").addEventListener("click", () => runCommand("githubSettings"));
 
 $("#sb-eol").addEventListener("click", () => {
   const tab = state.active;
@@ -912,10 +968,108 @@ function ensureTerminal() {
       toolbarHost: $("#panel-slot"),
       workspace: () => state.root,
       openFile: (path, line) => openFile(path, { line: Number.isFinite(line) ? line : null }),
+      openSettings: () => openSettingsPanel("terminal"),
     });
     return terminal;
   });
   return terminalLoading;
+}
+
+// ------------------------------------------------------------- opencode
+
+let agent = null; // OpenCode (ACP) view, loaded on first open
+let agentLoading = null;
+
+function ensureAgent() {
+  agentLoading ??= import("./agent.js").then(({ createAgent }) => {
+    agent = createAgent($("#agent-view"), {
+      icons, fileIcon, toast, modal,
+      version: () => VERSION,
+      workspace: () => state.root,
+      home: () => null,
+      activeFile: () => (state.active?.path ? { path: state.active.path, name: state.active.name, text: view.state.doc.toString() } : null),
+      openFile: (path, line) => openFile(path, { line }),
+      openExternal: (url) => invoke("spawn_process", { program: "explorer.exe", args: [url], cwd: null }).catch(() => {}),
+      fileWritten: (path, content) => reloadFromDisk(path, content),
+      onStatus: (st) => {
+        const el = $("#sb-agent");
+        el.hidden = st === "off";
+        el.dataset.status = st;
+        el.querySelector("span").textContent = st === "busy" ? "OpenCode · working" : st === "starting" ? "OpenCode · starting" : "OpenCode";
+      },
+    });
+    return agent;
+  });
+  return agentLoading;
+}
+$("#sb-agent").addEventListener("click", () => showView("agent"));
+
+/** The agent (or another tool) wrote a file: refresh its tab unless the user has unsaved edits there. */
+function reloadFromDisk(path, content) {
+  const tab = state.tabs.find((t) => samePath(t.path, path));
+  if (!tab || tab.dirty) return;
+  loadLanguage(tab.lang, path).then((langExt) => {
+    const st = createState(content, langExt, tab.lang.indent);
+    tab.state = st;
+    tab.saved = st.doc;
+    if (tab === state.active) {
+      const top = view.scrollDOM.scrollTop;
+      view.setState(st);
+      syncWrap(view);
+      view.scrollDOM.scrollTop = top;
+    }
+    previewChanged(path);
+  });
+  if (isInside(state.root, path)) loadDir(dirname(path), true).then(renderTree);
+}
+
+// -------------------------------------------------------------- settings
+
+function setAppearance(patch) {
+  appearance = { ...appearance, ...patch };
+  applyAppearance(appearance);
+  saveAppearance(appearance);
+}
+
+const editorPrefs = {
+  get: () => ({ autoSave: state.autoSave, wordWrap: isWrapOn() }),
+  set: (patch) => {
+    if ("autoSave" in patch && patch.autoSave !== state.autoSave) {
+      state.autoSave = patch.autoSave;
+      if (state.autoSave) saveAllNow();
+    }
+    if ("wordWrap" in patch && patch.wordWrap !== isWrapOn()) setWrap(view, patch.wordWrap);
+    persist();
+  },
+};
+
+async function openSettingsPanel(section) {
+  const { openSettings } = await import("./settings.js");
+  return openSettings({
+    icons, toast, section,
+    get: () => appearance,
+    set: (next) => { appearance = next; },
+    editor: editorPrefs,
+    terminal: {
+      shells: () => terminal?.shells() ?? ["cmd", "powershell"],
+      revoke: async () => {
+        await invoke("access_reset");
+        if (state.root) await invoke("access_grant", { path: state.root, scope: "session" });
+      },
+    },
+    github: {
+      status: () => invoke("github_status"),
+      login: async (token) => { await invoke("github_login", { token }); updateGithubStatus(); },
+      loginCli: async () => { await invoke("github_login_cli"); updateGithubStatus(); },
+      logout: async () => { await invoke("github_logout"); updateGithubStatus(); },
+      openTokenPage: () => invoke("spawn_process", { program: "explorer.exe", args: ["https://github.com/settings/tokens/new?scopes=repo,read:user&description=FluxCode"], cwd: null }).catch(() => {}),
+    },
+    agent: {
+      status: async () => ({ ...(await invoke("acp_info")), running: agent?.isRunning() ?? false }),
+      open: () => showView("agent"),
+      stop: () => agent?.stop(),
+    },
+  });
 }
 
 async function showPanelTab(name, { focus = true } = {}) {
@@ -971,6 +1125,7 @@ function setRunning(running) {
     ? `<span class="spinner"></span><span class="ps-label">Running</span><span class="ps-name">${escapeHtml(state.run?.name ?? "")}</span>`
     : "";
   if (!running) updateRunButton();
+  if (state.view === "debug") renderDebugView();
 }
 
 function onRunExit(payload) {
@@ -1176,9 +1331,24 @@ const COMMANDS = {
   copyLineUp: ["Copy Line Up", "Shift+Alt+Up"],
   copyLineDown: ["Copy Line Down", "Shift+Alt+Down"],
   addNextOccurrence: ["Add Selection to Next Find Match", "Ctrl+D"],
-  appearance: ["Preferences: Appearance (Theme, Colors, Fonts)", "Ctrl+K Ctrl+T"],
-  fontJersey: ["Preferences: Font — Jersey"],
-  fontDefault: ["Preferences: Font — VS Code Default"],
+  settings: ["Preferences: Open Settings", "Ctrl+,"],
+  appearance: ["Preferences: Appearance Settings (Theme, Colors)"],
+  colorTheme: ["Preferences: Color Theme", "Ctrl+K Ctrl+T"],
+  editorFont: ["Preferences: Editor Font"],
+  editorFontSize: ["Preferences: Editor Font Size"],
+  uiSize: ["Preferences: Interface Size"],
+  editorSettings: ["Preferences: Editor Settings"],
+  terminalSettings: ["Preferences: Terminal Settings"],
+  terminalShell: ["Terminal: Select Default Shell"],
+  terminalFontSize: ["Terminal: Font Size"],
+  terminalCursor: ["Terminal: Cursor Style"],
+  githubSettings: ["Accounts: GitHub Sign In / Sign Out"],
+  agentSettings: ["Preferences: OpenCode Settings"],
+  showDebug: ["View: Show Run and Debug", "Ctrl+Shift+D"],
+  showAgent: ["View: Show OpenCode", "Ctrl+Shift+A"],
+  agentNew: ["OpenCode: New Session"],
+  agentStop: ["OpenCode: Stop Agent Process"],
+  agentMode: ["OpenCode: Select Mode"],
   shortcuts: ["Help: Keyboard Shortcuts"],
   about: ["Help: About FluxCode"],
   reload: ["Developer: Reload Window"],
@@ -1189,14 +1359,14 @@ const MENUS = {
   file: ["newFile", "newFolder", "openFile", "openFolder", "-", "save", "saveAs", "saveAll", "toggleAutoSave", "-", "closeEditor", "closeAll", "closeFolder", "-", "exit"],
   edit: ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace", "findInFiles", "-", "toggleComment"],
   selection: ["selectAll", "selectLine", "-", "copyLineUp", "copyLineDown", "moveLineUp", "moveLineDown", "-", "addNextOccurrence"],
-  view: ["commandPalette", "quickOpen", "appearance", "fontJersey", "fontDefault", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
+  view: ["commandPalette", "quickOpen", "-", "showExplorer", "findInFiles", "showDebug", "showAgent", "-", "settings", "colorTheme", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
   run: ["run", "stop", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
-  terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "showOutput"],
-  help: ["commandPalette", "shortcuts", "-", "about"],
+  terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "terminalShell", "terminalSettings", "-", "showOutput"],
+  help: ["commandPalette", "shortcuts", "-", "githubSettings", "agentSettings", "-", "about"],
 };
-const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview|Preferences): /, "");
+const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview|Preferences|Accounts|OpenCode): /, "");
 // Menu items that show a check mark when on.
-const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave, fontJersey: () => appearance.uiFont === "jersey", fontDefault: () => appearance.uiFont !== "jersey" };
+const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave };
 
 /** Run an editor command on the active editor (from a menu or the palette). */
 const editorCmd = (fn) => () => {
@@ -1292,10 +1462,8 @@ async function runCommand(id) {
       return openPreview(tab);
     case "closePreview": return closePreview();
     case "toggleAutoSave":
-      state.autoSave = !state.autoSave;
-      toast(`Auto Save is ${state.autoSave ? "on" : "off"}.`);
-      if (state.autoSave) saveAllNow();
-      return persist();
+      editorPrefs.set({ autoSave: !state.autoSave });
+      return toast(`Auto Save is ${state.autoSave ? "on" : "off"}.`);
     case "stop": return stopRun();
     case "selectInterpreter": return resolvePython(true);
     case "refresh": return refreshExplorer();
@@ -1312,9 +1480,7 @@ async function runCommand(id) {
       if (!tab) return;
       view.focus();
       return openSearchPanel(view);
-    case "toggleWordWrap":
-      setWrap(view, !isWrapOn());
-      return persist();
+    case "toggleWordWrap": return editorPrefs.set({ wordWrap: !isWrapOn() });
     case "zoomIn": return setZoom(state.zoom + 0.1);
     case "zoomOut": return setZoom(state.zoom - 0.1);
     case "zoomReset": return setZoom(1);
@@ -1337,15 +1503,37 @@ async function runCommand(id) {
       const i = state.tabs.indexOf(tab);
       return activateTab(state.tabs[(i + (id === "nextTab" ? 1 : -1) + state.tabs.length) % state.tabs.length]);
     }
-    case "fontJersey":
-    case "fontDefault":
-      appearance = { ...appearance, uiFont: id === "fontJersey" ? "jersey" : "system" };
-      applyAppearance(appearance);
-      saveAppearance(appearance);
-      return toast(`Interface font: ${id === "fontJersey" ? "Jersey" : "VS Code default (Segoe UI)"}`);
-    case "appearance": {
-      const { openAppearance } = await import("./appearance.js");
-      return openAppearance({ icons, get: () => appearance, set: (s) => { appearance = s; } });
+    case "settings": return openSettingsPanel();
+    case "appearance": return openSettingsPanel("appearance");
+    case "editorSettings": return openSettingsPanel("editor");
+    case "terminalSettings": return openSettingsPanel("terminal");
+    case "githubSettings": return openSettingsPanel("accounts");
+    case "agentSettings": return openSettingsPanel("opencode");
+    case "colorTheme":
+      return pickQuick("Select Color Theme", PRESETS.map((p) => ({ label: p.name, detail: p.id === appearance.preset ? "current" : "", on: p.id === appearance.preset, run: () => setAppearance({ preset: p.id, bg: p.bg, accent: p.accent, text: null }) })), { preview: (i) => applyAppearance({ ...appearance, bg: PRESETS[i].bg, accent: PRESETS[i].accent, text: null }), cancel: () => applyAppearance(appearance) });
+    case "editorFont":
+      return pickQuick("Editor & Terminal Font", [["cascadia", "Cascadia Code"], ["consolas", "Consolas"], ["jetbrains", "JetBrains Mono"]].map(([v, label]) => ({ label, on: appearance.editorFont === v, run: () => setAppearance({ editorFont: v }) })));
+    case "editorFontSize":
+      return pickQuick("Editor Font Size", [12, 13, 14, 15, 16, 18].map((n) => ({ label: `${n} px`, on: appearance.editorSize === n, run: () => setAppearance({ editorSize: n }) })));
+    case "uiSize":
+      return pickQuick("Interface Size", [[12, "Compact"], [13, "Default"], [14, "Large"]].map(([n, label]) => ({ label, detail: `${n} px`, on: appearance.uiSize === n, run: () => setAppearance({ uiSize: n }) })));
+    case "terminalShell": {
+      const shells = terminal?.shells() ?? ["cmd", "powershell"];
+      return pickQuick("Default Shell for Flux Terminal", shells.map((sh) => ({ label: sh === "powershell" ? "PowerShell" : sh, on: prefs.get("terminal").shell === sh, run: () => prefs.set("terminal", { shell: sh }) })));
+    }
+    case "terminalFontSize":
+      return pickQuick("Terminal Font Size", [12, 13, 14, 15, 16].map((n) => ({ label: `${n} px`, on: prefs.get("terminal").fontSize === n, run: () => prefs.set("terminal", { fontSize: n }) })));
+    case "terminalCursor":
+      return pickQuick("Terminal Cursor Style", [["bar", "Bar"], ["block", "Block"], ["underline", "Line"]].map(([v, label]) => ({ label, on: prefs.get("terminal").cursor === v, run: () => prefs.set("terminal", { cursor: v }) })));
+    case "showDebug": return showView("debug");
+    case "showAgent": return showView("agent");
+    case "agentNew": showView("agent"); return (await ensureAgent()).newSession();
+    case "agentStop": return agent?.stop();
+    case "agentMode": {
+      showView("agent", { focus: false });
+      const sel = $("#agent-view .ag-mode");
+      if (!sel) return toast("Start a session first: the modes come from OpenCode.", "warning");
+      return pickQuick("OpenCode Mode", [...sel.options].map((o) => ({ label: o.textContent, on: o.selected, run: () => { sel.value = o.value; sel.dispatchEvent(new Event("change")); } })));
     }
     case "shortcuts": return showShortcuts();
     case "about":
@@ -1376,18 +1564,40 @@ const menu = { open: null, index: -1 };
 const kbHtml = (kb) =>
   kb ? kb.split(" ").map((chord) => chord.split("+").map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join("")).join(" ") : "";
 
+const menuItemHtml = (id) =>
+  id === "-"
+    ? '<div class="menu-sep"></div>'
+    : `<button class="menu-item" data-cmd="${id}"><span class="mi-check">${CHECKED[id]?.() ? icons.check : ""}</span><span>${escapeHtml(menuLabel(id))}</span><span class="kb">${escapeHtml(COMMANDS[id][1] ?? "")}</span></button>`;
+
+/** Narrow windows: the menu bar folds into one ☰ button so it never collides with the command center. */
+let menubarFrame = 0;
+function fitMenubar() {
+  if (menubarFrame) return;
+  menubarFrame = requestAnimationFrame(() => {
+    menubarFrame = 0;
+    const bar = $("#menubar");
+    const compact = $("#menu-compact");
+    bar.hidden = false;
+    compact.hidden = true;
+    // Fold when the menus + the smallest command center (120px) + the right-hand controls don't fit.
+    const need = [...bar.children].reduce((w, b) => w + b.offsetWidth, 0) + $(".tb-logo").offsetWidth + ($(".tb-badge").hidden ? 0 : $(".tb-badge").offsetWidth + 6);
+    const fold = need + $(".tb-right").offsetWidth + 140 > window.innerWidth;
+    bar.hidden = fold;
+    compact.hidden = !fold;
+    if (fold && menu.open && menu.open !== "all") closeMenu();
+  });
+}
+window.addEventListener("resize", fitMenubar);
+
 function openMenu(name) {
   $("#quick-input").hidden = true;
   const popup = $("#menu-popup");
-  const btn = $(`#menubar [data-menu=${name}]`);
-  for (const b of document.querySelectorAll("#menubar button")) b.classList.toggle("open", b === btn);
-  popup.innerHTML = MENUS[name]
-    .map((id) =>
-      id === "-"
-        ? '<div class="menu-sep"></div>'
-        : `<button class="menu-item" data-cmd="${id}"><span class="mi-check">${CHECKED[id]?.() ? icons.check : ""}</span><span>${escapeHtml(menuLabel(id))}</span><span class="kb">${escapeHtml(COMMANDS[id][1] ?? "")}</span></button>`,
-    )
-    .join("");
+  const btn = name === "all" ? $("#menu-compact") : $(`#menubar [data-menu=${name}]`);
+  for (const b of document.querySelectorAll("#menubar button, #menu-compact")) b.classList.toggle("open", b === btn);
+  popup.classList.toggle("all", name === "all");
+  popup.innerHTML = name === "all"
+    ? Object.entries(MENUS).map(([key, ids]) => `<div class="menu-group"><div class="menu-title">${key[0].toUpperCase()}${key.slice(1)}</div>${ids.filter((id) => id !== "-").map(menuItemHtml).join("")}</div>`).join("")
+    : MENUS[name].map(menuItemHtml).join("");
   const r = btn.getBoundingClientRect();
   popup.style.left = `${Math.min(r.left, window.innerWidth - 280)}px`;
   popup.style.top = `${r.bottom + 4}px`;
@@ -1404,15 +1614,17 @@ function closeMenu() {
   if (!menu.open) return;
   menu.open = null;
   $("#menu-popup").hidden = true;
-  for (const b of document.querySelectorAll("#menubar button")) b.classList.remove("open");
+  for (const b of document.querySelectorAll("#menubar button, #menu-compact")) b.classList.remove("open");
 }
 
-$("#menubar").addEventListener("mousedown", (e) => {
-  const btn = e.target.closest("[data-menu]");
-  if (!btn) return;
-  e.preventDefault(); // keep the editor focused
-  menu.open === btn.dataset.menu ? closeMenu() : openMenu(btn.dataset.menu);
-});
+for (const host of ["#menubar", "#menu-compact"]) {
+  $(host).addEventListener("mousedown", (e) => {
+    const btn = e.target.closest("[data-menu]");
+    if (!btn) return;
+    e.preventDefault(); // keep the editor focused
+    menu.open === btn.dataset.menu ? closeMenu() : openMenu(btn.dataset.menu);
+  });
+}
 $("#menubar").addEventListener("mouseover", (e) => {
   const btn = e.target.closest("[data-menu]");
   if (btn && menu.open && menu.open !== btn.dataset.menu) openMenu(btn.dataset.menu);
@@ -1425,7 +1637,7 @@ $("#menu-popup").addEventListener("click", (e) => {
   runCommand(item.dataset.cmd);
 });
 document.addEventListener("mousedown", (e) => {
-  if (menu.open && !e.target.closest("#menu-popup, #menubar")) closeMenu();
+  if (menu.open && !e.target.closest("#menu-popup, #menubar, #menu-compact")) closeMenu();
 });
 window.addEventListener("blur", closeMenu);
 
@@ -1435,7 +1647,7 @@ function menuKey(e) {
   else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     menu.index = (menu.index + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
     items.forEach((it, i) => it.classList.toggle("focus", i === menu.index));
-  } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+  } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && menu.open !== "all") {
     const names = Object.keys(MENUS);
     openMenu(names[(names.indexOf(menu.open) + (e.key === "ArrowRight" ? 1 : -1) + names.length) % names.length]);
   } else if (e.key === "Enter" && items[menu.index]) {
@@ -1457,7 +1669,7 @@ $("#command-center").addEventListener("click", () => openQuickInput(""));
 
 async function syncMaximized() {
   const max = await appWindow.isMaximized().catch(() => false);
-  $("#wc-max").innerHTML = max ? icons.restore : icons.maximize;
+  $("#wc-max").innerHTML = winIcon(max ? "restore" : "maximize");
   $("#wc-max").title = max ? "Restore" : "Maximize";
 }
 let resizeFrame = 0;
@@ -1467,7 +1679,28 @@ appWindow.onResized(() => {
 
 // ------------------------------------------------- quick open / palette
 
-const quick = { filtered: [], index: 0 };
+const quick = { filtered: [], index: 0, pick: null };
+
+/**
+ * A list to choose from in the quick input (themes, fonts, shells …).
+ * items: [{ label, detail?, on?, run }]; opts.preview(i) runs while moving, opts.cancel() on Escape.
+ */
+function pickQuick(title, items, opts = {}) {
+  closeMenu();
+  quick.pick = { title, items, ...opts, done: false };
+  const box = $("#quick-input");
+  const input = $("#qi-input");
+  box.hidden = false;
+  box.style.animation = "none";
+  void box.offsetWidth;
+  box.style.animation = "";
+  input.value = "";
+  input.placeholder = title;
+  input.focus();
+  filterQuick();
+  const i = quick.filtered.findIndex((r) => r.on);
+  if (i > 0) { quick.index = 0; moveQuick(i); }
+}
 
 /** Start of a word: after a separator, or a camelCase hump. */
 const isWordStart = (text, i) =>
@@ -1526,6 +1759,7 @@ function highlightHits(text, hits) {
 
 async function openQuickInput(prefix = "") {
   closeMenu();
+  if (quick.pick) { quick.pick.cancel?.(); quick.pick = null; }
   const box = $("#quick-input");
   const input = $("#qi-input");
   if (!box.hidden && input.value === prefix) return closeQuickInput();
@@ -1534,7 +1768,7 @@ async function openQuickInput(prefix = "") {
   void box.offsetWidth;
   box.style.animation = "";
   input.value = prefix;
-  input.placeholder = prefix === ">" ? "Type a command" : "Search files by name (type > for commands, : for a line)";
+  input.placeholder = prefix === ">" ? "Type a command or a setting (theme, font, shell, GitHub …)" : "Search files by name (type > for commands, : for a line, ? for help)";
   input.focus();
   filterQuick();
   if (!prefix.startsWith(">") && state.root && !state.fileIndex) {
@@ -1545,13 +1779,32 @@ async function openQuickInput(prefix = "") {
 
 function closeQuickInput() {
   $("#quick-input").hidden = true;
+  const pick = quick.pick;
+  quick.pick = null;
+  if (pick && !pick.done) pick.cancel?.();
   if (state.active) view.focus();
 }
 
 function filterQuick() {
   const raw = $("#qi-input").value;
   let results = [];
-  if (raw.startsWith(">")) {
+  if (quick.pick) {
+    const q = raw.trim();
+    results = quick.pick.items
+      .map((it, i) => ({ ...it, i, m: fuzzyScore(q, it.label) }))
+      .filter((r) => r.m)
+      .sort((a, b) => (q ? b.m.score - a.m.score : 0))
+      .map((r) => ({
+        html: `<span class="pick-check">${r.on ? icons.check : ""}</span><span>${highlightHits(r.label, r.m.hits)}</span>${r.detail ? `<span class="detail">${escapeHtml(r.detail)}</span>` : ""}`,
+        on: r.on,
+        i: r.i,
+        run: () => { quick.pick && (quick.pick.done = true); r.run(); },
+      }));
+  } else if (raw.startsWith("?")) {
+    results = [
+      ["", "Go to File (type a file name)"], [">", "Show and Run Commands"], [":", "Go to Line/Column"], ["?", "Help"],
+    ].map(([prefix, label]) => ({ html: `<b>${escapeHtml(prefix || "…")}</b><span>${label}</span>`, run: () => openQuickInput(prefix === "?" ? "" : prefix) }));
+  } else if (raw.startsWith(">")) {
     const q = raw.slice(1).trim();
     results = Object.entries(COMMANDS)
       .filter(([id]) => id !== "commandPalette")
@@ -1609,10 +1862,13 @@ function moveQuick(delta) {
   quick.index = (quick.index + delta + items.length) % items.length;
   items[quick.index].classList.add("selected");
   items[quick.index].scrollIntoView({ block: "nearest" });
+  const it = quick.filtered[quick.index];
+  if (quick.pick?.preview && it) quick.pick.preview(it.i);
 }
 
 function acceptQuick(i = quick.index) {
   const item = quick.filtered[i];
+  if (quick.pick && item) quick.pick.done = true; // a choice was made: no cancel/revert on close
   closeQuickInput();
   item?.run();
 }
@@ -1627,7 +1883,13 @@ $("#qi-input").addEventListener("keydown", (e) => {
   e.stopPropagation();
 });
 $("#qi-input").addEventListener("blur", () =>
-  setTimeout(() => { if (!$("#quick-input").contains(document.activeElement)) $("#quick-input").hidden = true; }, 80),
+  setTimeout(() => {
+    if ($("#quick-input").contains(document.activeElement)) return;
+    $("#quick-input").hidden = true;
+    const pick = quick.pick;
+    quick.pick = null;
+    if (pick && !pick.done) pick.cancel?.();
+  }, 80),
 );
 $("#qi-list").addEventListener("mousedown", (e) => {
   const li = e.target.closest("li[data-i]");
@@ -1647,11 +1909,11 @@ const bindings = {
   "ctrl+shift+p": "commandPalette", F1: "commandPalette",
   F5: "run", "ctrl+F5": "run", "ctrl+alt+n": "run", "shift+F5": "stop",
   "ctrl+Tab": "nextTab", "ctrl+PageDown": "nextTab", "ctrl+shift+Tab": "prevTab", "ctrl+PageUp": "prevTab",
-  "ctrl+shift+e": "showExplorer", "ctrl+shift+f": "findInFiles", "ctrl+h": "replace", "ctrl+f": "find", "ctrl+g": "gotoLine",
+  "ctrl+shift+e": "showExplorer", "ctrl+shift+f": "findInFiles", "ctrl+shift+d": "showDebug", "ctrl+shift+a": "showAgent", "ctrl+,": "settings", "ctrl+h": "replace", "ctrl+f": "find", "ctrl+g": "gotoLine",
   "alt+z": "toggleWordWrap", "ctrl+=": "zoomIn", "ctrl+shift++": "zoomIn", "ctrl++": "zoomIn",
   "ctrl+-": "zoomOut", "ctrl+shift+_": "zoomOut", "ctrl+0": "zoomReset",
 };
-const chordBindings = { "ctrl+t": "appearance", "ctrl+o": "openFolder", "ctrl+w": "closeAll", s: "saveAll", "ctrl+s": "saveAll" };
+const chordBindings = { "ctrl+t": "colorTheme", "ctrl+o": "openFolder", "ctrl+w": "closeAll", s: "saveAll", "ctrl+s": "saveAll" };
 // Keys the WebView would otherwise treat as browser shortcuts (reload, print, devtools, …).
 const blockedBrowserKeys = new Set(["F5", "ctrl+r", "ctrl+shift+r", "ctrl+p", "F3", "F7", "ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c"]);
 
@@ -1755,13 +2017,15 @@ appWindow.onCloseRequested(async (event) => {
 function paintIcons() {
   $(".tb-logo").innerHTML = logo;
   $(".cc-icon").innerHTML = icons.search;
-  $("#wc-min").innerHTML = icons.minimize;
-  $("#wc-close").innerHTML = icons.winClose;
-  const [explorer, searchBtn, run] = document.querySelectorAll(".ab-top .ab-item");
+  $("#wc-min").innerHTML = winIcon("minimize");
+  $("#wc-close").innerHTML = winIcon("winClose");
+  $("#menu-compact").innerHTML = icons.menu;
+  const [explorer, searchBtn, debug] = document.querySelectorAll(".ab-top .ab-item");
   explorer.innerHTML = abIcon("explorer");
   searchBtn.innerHTML = abIcon("search");
-  run.innerHTML = abIcon("run");
-  $(".ab-bottom .ab-item").innerHTML = abIcon("settings");
+  debug.innerHTML = abIcon("debug");
+  $(".ab-bottom [data-view=agent]").innerHTML = abIcon("agent");
+  $(".ab-bottom [data-action=settings]").innerHTML = abIcon("settings");
   $(".ws-header .twistie").innerHTML = icons.chevron;
   for (const id of ["newFile", "newFolder", "refresh"]) $(`.ws-actions [data-action=${id}]`).innerHTML = icons[id];
   $(".ws-actions [data-action=collapseAll]").innerHTML = icons.collapse;
@@ -1771,7 +2035,7 @@ function paintIcons() {
   $(".panel-actions [data-action=clearOutput]").innerHTML = icons.clear;
   $(".panel-actions [data-action=clearTerminal]").innerHTML = icons.clear;
   $(".panel-actions [data-action=togglePanel]").innerHTML = icons.close;
-  $(".sb-brand").innerHTML = icons.bolt;
+  $("#sb-agent").innerHTML = `${icons.agent}<span></span>`;
   $(".wm-logo").innerHTML = logo;
   $(".pv-ic").innerHTML = icons.preview;
   $("button[data-dev=full]").innerHTML = icons.desktop;
@@ -1805,6 +2069,8 @@ async function boot() {
   setRunning(false);
   syncMaximized();
   activateTab(null);
+  updateGithubStatus();
+  fitMenubar();
   const launch = (await invoke("launch_paths").catch(() => null)) ?? [];
   try {
     if (!launch.length) await restoreSession(session);

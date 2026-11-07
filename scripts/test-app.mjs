@@ -81,7 +81,7 @@ const waitFor = async (expr, ms = 10000) => {
 // go through the page's real keyboard pipeline (global shortcuts, CodeMirror keymaps, inputs).
 const SPECIAL = {
   Enter: [13, "Enter", "\r"], Tab: [9, "Tab"], Escape: [27, "Escape"], Backspace: [8, "Backspace"],
-  "`": [192, "Backquote"], "~": [192, "Backquote"], "/": [191, "Slash"], "=": [187, "Equal"], "-": [189, "Minus"],
+  "`": [192, "Backquote"], "~": [192, "Backquote"], "/": [191, "Slash"], "=": [187, "Equal"], "-": [189, "Minus"], ",": [188, "Comma"],
   PageDown: [34, "PageDown"], PageUp: [33, "PageUp"], ArrowUp: [38, "ArrowUp"], ArrowDown: [40, "ArrowDown"],
 };
 function keyInfo(key) {
@@ -125,6 +125,7 @@ async function openFile(rel) {
   return waitFor(`document.querySelector('.tab.active')?.title.toLowerCase().endsWith(${JSON.stringify(rel.replace(/\//g, "\\").toLowerCase())})`, 5000);
 }
 const outputText = () => evaluate(`document.querySelector('.out-text').innerText`);
+const focusEditorNow = () => evaluate(`document.querySelector('.cm-content').focus()`);
 
 // ------------------------------------------------------------------- tests
 
@@ -171,6 +172,33 @@ const icons = await evaluate(`(() => { const r = [...document.querySelectorAll('
 check("every file icon is exactly 16x16", icons);
 const label = await evaluate(`(() => { const l = document.querySelector('.tab.active .label'); return { clipped: l.scrollWidth > l.clientWidth, text: l.textContent }; })()`);
 check("active tab label is not clipped", !label.clipped, JSON.stringify(label));
+// Zero-padded line numbers: every gutter number has the same width.
+const gutter = await evaluate(`(() => { const n = [...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')].slice(1).map(e => e.textContent.trim()).filter(Boolean); return { first: n[0], same: n.every(x => x.length === n[0].length) }; })()`);
+check("line numbers are zero-padded (01, 02 …) and equally wide", gutter.first === "01" && gutter.same, JSON.stringify(gutter));
+// Emmet: `!` suggests the boilerplate, Tab applies it; `ul>li*3` expands on Tab.
+await focusEditorNow();
+await press("a", { ctrl: true });
+await type("!");
+check("typing ! shows the Emmet suggestion", !!(await waitFor(`[...document.querySelectorAll('.cm-tooltip-autocomplete li')].some(li => li.textContent.includes('Emmet'))`, 3000)));
+await press("Tab");
+check("Tab applies the HTML boilerplate", !!(await waitFor(`document.querySelector('.cm-content').textContent.includes('<!DOCTYPE html>') && document.querySelector('.cm-content').textContent.includes('</html>')`, 3000)));
+await press("Escape");
+await press("a", { ctrl: true });
+await type("<body>\n  ul>li*3>a{Item $}");
+await sleep(150);
+await press("Escape");
+await press("Tab");
+check("Tab expands ul>li*3>a{Item $} without a popup", !!(await waitFor(`(() => { const t = document.querySelector('.cm-content').textContent; return t.includes('<li><a href="">Item 1</a></li>') && t.includes('Item 3</a>'); })()`, 3000)));
+await press("Escape");
+await press("z", { ctrl: true });
+await press("z", { ctrl: true });
+await press("z", { ctrl: true });
+await press("z", { ctrl: true });
+await press("z", { ctrl: true });
+await press("z", { ctrl: true });
+await evaluate(`(() => { const v = document.querySelector('.cm-content'); return v.textContent.length; })()`);
+await press("s", { ctrl: true });
+await sleep(400);
 await press("F5");
 const url = await waitFor(`!document.querySelector('#preview-pane').hidden && document.querySelector('#preview-frame').src`, 5000);
 check("preview pane opens", !!url, url ?? "");
@@ -245,10 +273,9 @@ await sleep(2500);
 check("closing the preview hides it", await evaluate(`document.querySelector('#preview-pane').hidden`));
 measure("preview closed");
 
-// Appearance: fonts, presets, auto contrast.
+// Settings: fonts, presets, auto contrast, in-place updates.
 await evaluate(`document.fonts.ready.then(() => true)`);
-check("no fake bold on the single-weight Jersey font", (await evaluate(`getComputedStyle(document.body).fontSynthesis`)).includes("none") || (await evaluate(`getComputedStyle(document.body).fontSynthesisWeight`)) === "none");
-check("Jersey fonts load", await evaluate(`Promise.all(['15','25'].map(n => document.fonts.load('16px "Jersey ' + n + '"'))).then(r => r.every(x => x.length > 0))`));
+check("interface uses the VS Code default font (Segoe UI), no Jersey", /Segoe UI/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)) && !/Jersey/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)));
 const contrastJs = `(() => {
   const rgb = (c) => c.match(/[\\d.]+/g).slice(0, 3).map(Number);
   const lum = (c) => { const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
@@ -257,8 +284,8 @@ const contrastJs = `(() => {
   const v = (n) => { const d = document.createElement('div'); d.style.color = cs.getPropertyValue(n); document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; };
   return { text: ratio(v('--fg'), v('--bg-editor')), muted: ratio(v('--fg-muted'), v('--bg-side')), comment: ratio(v('--tk-comment'), v('--bg-editor')), theme: document.documentElement.dataset.theme };
 })()`;
-await evaluate(`document.querySelector('[data-action=appearance]').click()`);
-check("Appearance panel opens", !!(await waitFor(`!!document.querySelector('#appearance .ap-presets')`, 5000)));
+await evaluate(`document.querySelector('[data-action=settings]').click()`);
+check("Settings panel opens", !!(await waitFor(`!!document.querySelector('#settings .ap-presets')`, 5000)));
 await evaluate(`document.querySelector('[data-preset=flux-light]').click()`);
 await sleep(300);
 const light = await evaluate(contrastJs);
@@ -274,20 +301,33 @@ await sleep(300);
 const darkT = await evaluate(contrastJs);
 check("dark theme readable", darkT.theme === "dark" && darkT.text >= 7 && darkT.comment >= 3.8, JSON.stringify(darkT));
 await shot("09-appearance-dark");
+// Changing a font must not scroll the page back to the top (no re-render).
+const fontChange = await evaluate(`(async () => {
+  const body = document.querySelector('.st-body');
+  const btn = document.querySelector('[data-k=editorFont][data-v=consolas]');
+  btn.scrollIntoView({ block: 'center' });
+  await new Promise(r => setTimeout(r, 50));
+  const before = body.scrollTop;
+  btn.click();
+  await new Promise(r => setTimeout(r, 150));
+  return { before, after: body.scrollTop, font: getComputedStyle(document.querySelector('.cm-scroller')).fontFamily, on: btn.classList.contains('on') };
+})()`);
+check("font option: Consolas applies without the panel jumping", fontChange.on && /^Consolas/.test(fontChange.font) && Math.abs(fontChange.after - fontChange.before) < 2, JSON.stringify(fontChange));
+await evaluate(`document.querySelector('[data-k=editorFont][data-v=cascadia]').click()`);
+await shot("10-settings-editor");
+// Reset asks for confirmation first.
+await evaluate(`document.querySelector('[data-ap=reset]').click()`);
+check("reset to default asks to confirm", !!(await waitFor(`!document.querySelector('.st-confirm').hidden`, 1500)));
+await evaluate(`document.querySelector('[data-ap=reset-no]').click()`);
+// Settings has search, Terminal, Accounts and OpenCode sections.
+const sections = await evaluate(`[...document.querySelectorAll('#settings .st-section')].map(s => s.dataset.section).join(',')`);
+check("settings sections: appearance, editor, terminal, accounts, opencode", sections === "appearance,editor,terminal,accounts,opencode", sections);
+await evaluate(`(() => { const i = document.querySelector('.st-search input'); i.value = 'shell'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+await sleep(100);
+check("settings search filters rows", (await evaluate(`[...document.querySelectorAll('#settings .st-row')].filter(r => !r.hidden).length`)) <= 3);
 await press("Escape");
 await sleep(250);
-await evaluate(`document.querySelector('[data-action=appearance]').click()`);
-await waitFor(`!!document.querySelector('#appearance')`, 3000);
-await evaluate(`document.querySelector('[data-k=uiFont][data-v=system]').click()`);
-await sleep(250);
-check("font option: VS Code default uses Segoe UI", /Segoe UI/.test(await evaluate(`getComputedStyle(document.querySelector('.tab .label') ?? document.body).fontFamily`)) && !/Jersey/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)));
-await shot("10-font-vscode-default");
-await evaluate(`document.querySelector('[data-k=uiFont][data-v=jersey]').click()`);
-await sleep(250);
-check("font option: Jersey uses Jersey 15", /Jersey 15/.test(await evaluate(`getComputedStyle(document.body).fontFamily`)));
-await press("Escape");
-await sleep(250);
-check("Appearance panel closes", await evaluate(`!document.querySelector('#appearance')`));
+check("Settings panel closes", await evaluate(`!document.querySelector('#settings')`));
 
 // Python GUI app (opens a real window; stopped right after)
 check("open python/gui_app.py", !!(await openFile("python/gui_app.py")));
@@ -314,6 +354,13 @@ check("palette: 'ter' highlights one contiguous run per row", pal.marks.length >
 check("palette: no scattered matches like 'Toggle Word Wrap'", !pal.labels.some((l) => /Word Wrap/.test(l)));
 check("palette: highlight has no background box", pal.bg === "rgba(0, 0, 0, 0)", pal.bg);
 await shot("07-palette");
+await press("Escape");
+await press("p", { ctrl: true, shift: true });
+await waitFor(`!document.querySelector('#quick-input').hidden`);
+await type("settings");
+await sleep(200);
+const settingsCmds = await evaluate(`[...document.querySelectorAll('#qi-list li[data-i]')].map(r => r.textContent)`);
+check("palette: 'settings' lists Open Settings, Terminal, Editor, OpenCode and GitHub settings", /Open Settings/.test(settingsCmds[0] ?? "") && settingsCmds.some((l) => /Terminal Settings/.test(l)) && settingsCmds.some((l) => /OpenCode Settings/.test(l)), JSON.stringify(settingsCmds.slice(0, 5)));
 await press("Escape");
 
 // ------------------------------------------------------------- shortcuts
@@ -383,7 +430,8 @@ await waitFor(`!!document.querySelector('.term-session:not([hidden]) .tblock.run
 await press("c", { ctrl: true });
 check("Ctrl+C stops the running terminal command", !!(await waitFor(`!document.querySelector('.term-session:not([hidden]) .tblock.running')`, 6000)));
 await press("l", { ctrl: true });
-check("Ctrl+L clears the terminal", !!(await waitFor(`document.querySelector('.term-session:not([hidden])').children.length === 0`, 2000)));
+check("Ctrl+L clears the terminal (animated, then empty)", !!(await waitFor(`document.querySelector('.term-session:not([hidden])').children.length === 0`, 2500)));
+check("clear button sits right before the close button in the panel header", await evaluate(`(() => { const a = [...document.querySelectorAll('.panel-actions button')].filter(b => getComputedStyle(b).display !== 'none'); return a.length === 2 && a[0].dataset.action === 'clearTerminal' && a[1].dataset.action === 'togglePanel'; })()`));
 await evaluate(`document.querySelector('.ts-pill.on [data-close]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
 await press("j", { ctrl: true });
 
@@ -494,9 +542,18 @@ check("Ctrl+PageDown / Ctrl+PageUp switch editors", t3 !== t0 && (await activeTi
 
 await press("k", { ctrl: true });
 await press("t", { ctrl: true });
-check("Ctrl+K Ctrl+T opens Appearance", !!(await waitFor(`!!document.querySelector('#appearance')`, 3000)));
+check("Ctrl+K Ctrl+T opens the Color Theme picker", !!(await waitFor(`!document.querySelector('#quick-input').hidden && document.querySelector('#qi-input').placeholder === 'Select Color Theme'`, 3000)));
 await press("Escape");
-check("Escape closes Appearance", !!(await waitFor(`!document.querySelector('#appearance')`, 1500)));
+check("Escape closes the theme picker", !!(await waitFor(`document.querySelector('#quick-input').hidden`, 1500)));
+await press(",", { ctrl: true });
+check("Ctrl+, opens Settings", !!(await waitFor(`!!document.querySelector('#settings')`, 3000)));
+await press("Escape");
+check("Escape closes Settings", !!(await waitFor(`!document.querySelector('#settings')`, 1500)));
+await press("d", { ctrl: true, shift: true });
+check("Ctrl+Shift+D shows Run and Debug with the runners found", !!(await waitFor(`!document.querySelector('#debug-view').hidden && document.querySelectorAll('.dbg-tool').length === 3`, 3000)));
+await press("a", { ctrl: true, shift: true });
+check("Ctrl+Shift+A shows the OpenCode view (composer focused, no process yet)", !!(await waitFor(`!document.querySelector('#agent-view').hidden && document.activeElement?.classList.contains('ag-input') && document.querySelector('#agent-view').dataset.status === 'off'`, 3000)));
+await press("e", { ctrl: true, shift: true });
 
 await evaluate(`document.querySelector('[data-menu=file]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
 const menuOpen = !!(await waitFor(`!document.querySelector('#menu-popup').hidden`, 1000));
@@ -509,6 +566,19 @@ check("Ctrl+K Ctrl+W closes all editors", !!(await waitFor(`document.querySelect
 check("python/main.py unchanged after the shortcut tests", readFileSync(mainPath, "utf8") === mainOriginal);
 check("layout intact after all shortcuts", await layoutOk());
 await shot("12-after-shortcuts");
+
+// Title bar: the Help menu never overlaps the command center; window buttons are 46px with 20px glyphs.
+const tb = await evaluate(`(() => {
+  const help = document.querySelector('[data-menu=help]').getBoundingClientRect();
+  const cc = document.querySelector('#command-center').getBoundingClientRect();
+  const close = document.querySelector('#wc-close').getBoundingClientRect();
+  const glyph = document.querySelector('#wc-close svg').getBoundingClientRect();
+  return { helpRight: help.right, ccLeft: cc.left, closeW: close.width, glyph: glyph.width };
+})()`);
+check("menu bar ends before the command center", tb.helpRight <= tb.ccLeft + 0.5, JSON.stringify(tb));
+check("window buttons are 46px wide with 20px glyphs", Math.round(tb.closeW) === 46 && Math.round(tb.glyph) === 20, JSON.stringify(tb));
+check("status bar has no lightning brand button", await evaluate(`!document.querySelector('.sb-brand')`));
+check("activity bar: explorer, search, run and debug, opencode, settings", await evaluate(`document.querySelectorAll('.ab-item').length === 5 && !!document.querySelector('.ab-item[data-view=debug]') && !!document.querySelector('.ab-item[data-view=agent]')`));
 
 // Layout sanity: nothing important outside the window.
 const layout = await evaluate(`(() => {

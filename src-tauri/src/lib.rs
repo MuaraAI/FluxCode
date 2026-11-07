@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod acp;
+mod github;
 mod preview;
 mod terminal;
 mod window_state;
@@ -538,6 +540,12 @@ pub fn run() {
         })
         .manage(Processes::default())
         .manage(preview::Preview::default())
+        .manage(acp::Acp::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                acp::shutdown(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_dir,
             list_files,
@@ -563,6 +571,14 @@ pub fn run() {
             terminal::access_check,
             terminal::access_grant,
             terminal::access_reset,
+            github::github_status,
+            github::github_login,
+            github::github_login_cli,
+            github::github_logout,
+            acp::acp_info,
+            acp::acp_start,
+            acp::acp_send,
+            acp::acp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FluxCode");

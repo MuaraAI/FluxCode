@@ -301,6 +301,10 @@ pub fn term_run(
         // Ask tools for colors even though stdout is a pipe; the terminal renders ANSI colors.
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1");
+    // A GitHub sign-in in Settings makes `gh` and token-aware tools work here too.
+    if let Some(token) = crate::github::token(&app) {
+        cmd.env("GH_TOKEN", &token).env("GITHUB_TOKEN", &token);
+    }
     start_process(&app, &procs, cmd, &shell)
 }
 

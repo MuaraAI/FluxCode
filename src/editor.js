@@ -6,15 +6,18 @@ import {
   highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor,
   highlightActiveLine,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder, Compartment, StateEffect } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, Compartment, StateEffect, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab, selectLine } from "@codemirror/commands";
 import {
   indentOnInput, bracketMatching, foldGutter, foldKeymap, syntaxHighlighting, HighlightStyle,
   indentUnit, getIndentUnit,
 } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches, gotoLine } from "@codemirror/search";
-import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import {
+  autocompletion, closeBrackets, closeBracketsKeymap, acceptCompletion, completionStatus, hasNextSnippetField, nextSnippetField, startCompletion,
+} from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
+import { loadEmmetTab } from "./complete/index.js";
 
 // ------------------------------------------------------------------ theme
 
@@ -42,7 +45,8 @@ const theme = EditorView.theme({
     ".cm-content ::selection": { backgroundColor: "transparent" },
     ".cm-activeLine": { backgroundColor: "var(--line-hl)" },
     ".cm-gutters": { backgroundColor: "var(--bg-editor)", color: "var(--fg-dim)", border: "none" },
-    ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 18px", minWidth: "42px" },
+    // Numbers are zero-padded (01, 02 … 10) so every line number has the same width and column.
+    ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 18px", minWidth: "44px", fontVariantNumeric: "tabular-nums" },
     ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--fg-strong)" },
     ".cm-foldGutter .cm-gutterElement": { color: "var(--fg-muted)", padding: "0 4px", cursor: "pointer", opacity: "0", transition: "opacity .1s" },
     ".cm-gutters:hover .cm-foldGutter .cm-gutterElement": { opacity: "1" },
@@ -64,12 +68,29 @@ const theme = EditorView.theme({
     ".cm-button": { backgroundImage: "none", backgroundColor: "var(--bg-input)", border: "1px solid var(--border-strong)", color: "var(--fg)", borderRadius: "6px", padding: "3px 10px" },
     ".cm-button:hover": { backgroundColor: "var(--bg-input-hover)" },
     ".cm-tooltip": { backgroundColor: "var(--bg-elevated)", border: "1px solid var(--border-strong)", color: "var(--fg)", borderRadius: "8px", overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,.3)" },
-    ".cm-tooltip-autocomplete": { animation: "pop-in .1s cubic-bezier(.2,.7,.2,1)" },
-    ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--editor-font)", maxHeight: "15em", padding: "3px" },
-    ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px", borderRadius: "4px" },
+    // Suggest widget: VS Code-like rows with a type icon, the label, and a muted detail; cheap pop animation.
+    ".cm-tooltip-autocomplete": { animation: "cm-suggest-in .09s cubic-bezier(.2,.7,.2,1)" },
+    ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--editor-font)", fontSize: "calc(var(--editor-font-size) - 1px)", maxHeight: "13em", minWidth: "280px", maxWidth: "min(560px, 70vw)", padding: "3px" },
+    ".cm-tooltip-autocomplete > ul > li": { padding: "2px 8px 2px 6px", borderRadius: "4px", display: "flex", alignItems: "center", gap: "6px", lineHeight: "1.55", overflow: "hidden" },
     ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--bg-select)", color: "var(--fg-strong)" },
+    ".cm-completionLabel": { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "none", maxWidth: "60%" },
+    ".cm-completionDetail": { marginLeft: "auto", paddingLeft: "12px", fontStyle: "normal", color: "var(--fg-dim)", fontSize: "0.86em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontFamily: "var(--font-ui)", flex: "0 1 auto", minWidth: "0" },
     ".cm-completionMatchedText": { textDecoration: "none", color: "var(--accent)", fontWeight: "600" },
-    ".cm-completionIcon": { opacity: "0.8" },
+    ".cm-completionIcon": { width: "16px", height: "16px", flex: "none", borderRadius: "3px", fontSize: "9px", fontFamily: "var(--font-ui)", fontWeight: "700", display: "grid", placeItems: "center", opacity: "1", padding: "0", boxSizing: "border-box", color: "#fff" },
+    ".cm-completionIcon::after": { content: "''" },
+    ".cm-completionIcon-keyword": { backgroundColor: "#b180d7" }, ".cm-completionIcon-keyword::after": { content: "'K'" },
+    ".cm-completionIcon-variable": { backgroundColor: "#4fa3e3" }, ".cm-completionIcon-variable::after": { content: "'V'" },
+    ".cm-completionIcon-function, .cm-completionIcon-method": { backgroundColor: "#b180d7" }, ".cm-completionIcon-function::after": { content: "'F'" }, ".cm-completionIcon-method::after": { content: "'M'" },
+    ".cm-completionIcon-class": { backgroundColor: "#ee9d28" }, ".cm-completionIcon-class::after": { content: "'C'" },
+    ".cm-completionIcon-type, .cm-completionIcon-interface, .cm-completionIcon-enum": { backgroundColor: "#ee9d28" }, ".cm-completionIcon-type::after": { content: "'T'" }, ".cm-completionIcon-interface::after": { content: "'I'" }, ".cm-completionIcon-enum::after": { content: "'E'" },
+    ".cm-completionIcon-property": { backgroundColor: "#4fa3e3" }, ".cm-completionIcon-property::after": { content: "'P'" },
+    ".cm-completionIcon-constant": { backgroundColor: "#4fa3e3" }, ".cm-completionIcon-constant::after": { content: "'K'" },
+    ".cm-completionIcon-namespace, .cm-completionIcon-module": { backgroundColor: "#4ec9b0" }, ".cm-completionIcon-namespace::after": { content: "'N'" }, ".cm-completionIcon-module::after": { content: "'M'" },
+    ".cm-completionIcon-snippet": { backgroundColor: "#3f8f6a" }, ".cm-completionIcon-snippet::after": { content: "'S'" },
+    ".cm-completionIcon-text": { backgroundColor: "color-mix(in srgb, var(--fg-dim) 60%, transparent)" }, ".cm-completionIcon-text::after": { content: "'abc'", fontSize: "7px" },
+    ".cm-tooltip.cm-completionInfo": { padding: "8px 10px", maxWidth: "min(460px, 60vw)", fontFamily: "var(--font-ui)", fontSize: "12px", marginLeft: "4px" },
+    ".cm-emmet-preview": { margin: "0", fontFamily: "var(--editor-font)", fontSize: "12px", whiteSpace: "pre", overflow: "auto", maxHeight: "16em", color: "var(--fg)" },
+    ".cm-snippetField": { backgroundColor: "color-mix(in srgb, var(--accent) 16%, transparent)", borderRadius: "2px" },
     ".cm-indent-guides": {
       backgroundImage: `repeating-linear-gradient(to right, ${fgMix(10)} 0 1px, transparent 1px calc(var(--unit) * 1ch))`,
       backgroundSize: "calc(var(--guides) * var(--unit) * 1ch) 100%",
@@ -226,13 +247,25 @@ const chevron = (open) => {
   return el;
 };
 
+// Tab, like VS Code: accept the suggestion → next snippet field → expand an
+// Emmet abbreviation → indent. The Emmet expander loads with the first HTML/CSS file.
+let emmetTab = null;
+loadEmmetTab().then((fn) => { emmetTab = fn; });
+const smartTab = (view) => {
+  if (completionStatus(view.state) === "active" && acceptCompletion(view)) return true;
+  if (hasNextSnippetField(view.state)) return nextSnippetField(view);
+  if (emmetTab?.(view)) return true;
+  return false;
+};
+
 const vscodeKeys = [
   { key: "Mod-g", run: gotoLine, preventDefault: true },
   { key: "Mod-l", run: selectLine, preventDefault: true },
+  { key: "Mod-Space", run: startCompletion },
 ];
 
 const baseExtensions = [
-  lineNumbers(),
+  lineNumbers({ formatNumber: (n, state) => String(n).padStart(Math.max(2, String(state.doc.lines).length), "0") }),
   highlightActiveLineGutter(),
   highlightSpecialChars(),
   history(),
@@ -244,13 +277,14 @@ const baseExtensions = [
   syntaxHighlighting(highlight),
   bracketMatching(),
   closeBrackets(),
-  autocompletion({ icons: true, activateOnTyping: true }),
+  autocompletion({ icons: true, activateOnTyping: true, maxRenderedOptions: 60, interactionDelay: 0, selectOnOpen: true, closeOnBlur: true }),
   rectangularSelection(),
   crosshairCursor(),
   highlightActiveLine(),
   highlightSelectionMatches(),
   indentGuides,
   searchViewHighlighter,
+  Prec.highest(keymap.of([{ key: "Tab", run: smartTab }])),
   keymap.of([
     ...vscodeKeys,
     ...closeBracketsKeymap,
@@ -258,7 +292,6 @@ const baseExtensions = [
     ...searchKeymap,
     ...historyKeymap,
     ...foldKeymap,
-    ...completionKeymap,
     indentWithTab,
   ]),
   theme,
