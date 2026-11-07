@@ -20,6 +20,9 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Small, fast binary: everything optimized for size + speed, no debug info.
 [profile.release]
 opt-level = "s"
