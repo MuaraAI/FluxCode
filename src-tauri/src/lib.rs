@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod preview;
 mod terminal;
 mod window_state;
+pub(crate) mod sys;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
