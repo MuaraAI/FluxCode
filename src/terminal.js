@@ -13,8 +13,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { prefs } from "./prefs.js";
 
-const SETTINGS_KEY = "fluxcode.terminal";
 const HISTORY_KEY = "fluxcode.terminal.history";
 const MAX_BLOCKS = 150;
 const MAX_BLOCK_CHARS = 300_000;
@@ -28,10 +28,6 @@ const joinPath = (dir, name) =>
 const fmtSize = (n) =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
 const fmtTime = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
-
-function loadJson(key, fallback) {
-  try { return { ...fallback, ...JSON.parse(localStorage.getItem(key) ?? "null") }; } catch { return { ...fallback }; }
-}
 
 // ---------------------------------------------------------------- ANSI → DOM
 
@@ -94,10 +90,12 @@ function styleSpan(st, text) {
 
 export function createTerminal(host, ctx) {
   const { icons, fileIcon, folderIcon } = ctx;
-  const settings = loadJson(SETTINGS_KEY, { shell: "cmd", fontSize: 14, cursor: "bar", smoothCaret: true, showHidden: false });
+  // Settings live in the shared store (the Settings panel edits the same values).
+  let settings = prefs.get("terminal");
+  prefs.on("terminal", (next) => { settings = next; applySettings(); });
+  const setSetting = (key, value) => prefs.set("terminal", { [key]: value });
   let history = [];
   try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]"); } catch {}
-  const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {} };
   const saveHistory = () => { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-300))); } catch {} };
 
   let env = { home: "/", drives: ["/"], shells: ["bash", "sh"], user: "", computer: "", platform: "linux" };
@@ -119,7 +117,7 @@ export function createTerminal(host, ctx) {
         <button data-t="home" title="Home folder (~)">${icons.home}</button>
         <button data-t="workspace" title="Workspace folder">${icons.workspace}</button>
         <button data-t="list" title="Show this folder (ls)">${icons.list}</button>
-        <button data-t="reveal" title="Open in File Explorer">${icons.reveal}</button>
+        <button data-t="reveal" title="Show this folder in File Explorer">${icons.folderOpen}</button>
         <span class="tt-sep"></span>
         <div class="term-sessions"></div>
         <button data-t="new" title="New Terminal (Ctrl+Shift+\`)">${icons.plus}</button>
@@ -358,6 +356,7 @@ export function createTerminal(host, ctx) {
     crumbs.classList.remove("anim");
     void crumbs.offsetWidth;
     crumbs.classList.add("anim");
+    crumbs.querySelectorAll(".tc").forEach((el, i, all) => { el.style.animationDelay = `${Math.max(0, all.length - 1 - i) * 18}ms`; });
     fitCrumbs();
   }
 
@@ -442,9 +441,10 @@ export function createTerminal(host, ctx) {
     if (env.platform === "linux" || env.drives.length <= 1) {
       return navigate(env.drives[0] ?? "/");
     }
+    const current = (active?.cwd ?? "").slice(0, 3).toUpperCase();
     openPop(
       e.currentTarget,
-      `<div class="tp-list">${env.drives.map((d) => `<button data-v="${esc(d)}">${icons.drive}<span>${esc(d)}</span></button>`).join("")}</div>`,
+      `<div class="tp-list tp-drives">${env.drives.map((d) => `<button data-v="${esc(d)}" class="${d.toUpperCase() === current ? "on" : ""}">${icons.drive}<span>${esc(d)}</span>${d.toUpperCase() === current ? icons.check : ""}</button>`).join("")}</div>`,
       (v) => navigate(v),
     );
   });
@@ -476,41 +476,43 @@ export function createTerminal(host, ctx) {
 
   $(".ti-shell").addEventListener("click", () => {
     const list = env.shells;
-    settings.shell = list[(list.indexOf(settings.shell) + 1) % list.length];
-    saveSettings();
-    applySettings();
+    setSetting("shell", list[(list.indexOf(settings.shell) + 1) % list.length]);
     focus();
   });
 
   function openSettings(anchor) {
     const seg = (key, opts) =>
-      `<div class="seg">${opts.map(([v, label]) => `<button data-v="${key}:${v}" class="${String(settings[key]) === String(v) ? "on" : ""}">${label}</button>`).join("")}</div>`;
-    openPop(
-      anchor,
-      `<div class="tset">
-        <div class="tset-title">Terminal Settings</div>
-        <label>Shell</label>${seg("shell", env.shells.map((s) => [s, s === "powershell" ? "PowerShell" : s]))}
-        <label>Font size</label>${seg("fontSize", [[12, "12"], [13, "13"], [14, "14"], [15, "15"], [16, "16"]])}
-        <label>Cursor</label>${seg("cursor", [["bar", "Bar"], ["block", "Block"], ["underline", "Line"]])}
-        <label>Smooth caret</label>${seg("smoothCaret", [[true, "On"], [false, "Off"]])}
-        <label>Hidden files in ls</label>${seg("showHidden", [[true, "Show"], [false, "Hide"]])}
-        <button class="tset-danger" data-v="reset:1">${icons.shield}<span>Revoke all folder permissions</span></button>
-      </div>`,
-      async (v, e) => {
-        const [key, raw] = v.split(":");
-        if (key === "reset") {
-          await invoke("access_reset");
-          if (ctx.workspace()) await invoke("access_grant", { path: ctx.workspace(), scope: "session" });
-          ctx.toast("All folder permissions were revoked.");
-          return;
-        }
-        settings[key] = raw === "true" ? true : raw === "false" ? false : /^\d+$/.test(raw) ? +raw : raw;
-        saveSettings();
-        applySettings();
-        openSettings(anchor); // keep the panel open to show the new state
-        e.stopPropagation();
-      },
-    );
+      `<div class="seg" data-key="${key}">${opts.map(([v, label]) => `<button data-set="${key}:${v}" class="${String(settings[key]) === String(v) ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const row = (label, hint, control) => `<div class="tset-row"><div class="tset-text"><span>${label}</span>${hint ? `<small>${hint}</small>` : ""}</div>${control}</div>`;
+    pop.innerHTML = `<div class="tset">
+        <div class="tset-head">${icons.terminal}<div><b>Terminal</b><small>Flux Terminal settings</small></div><button class="tset-all" data-set="all:1">All settings ${icons.chevron}</button></div>
+        ${row("Shell", "for commands you type", seg("shell", env.shells.map((s) => [s, s === "powershell" ? "PowerShell" : s])))}
+        ${row("Font size", "", seg("fontSize", [[12, "12"], [13, "13"], [14, "14"], [15, "15"], [16, "16"]]))}
+        ${row("Cursor", "", seg("cursor", [["bar", "Bar"], ["block", "Block"], ["underline", "Line"]]))}
+        ${row("Smooth caret", "glides between positions", seg("smoothCaret", [[true, "On"], [false, "Off"]]))}
+        ${row("Hidden files", "in <code>ls</code> listings", seg("showHidden", [[true, "Show"], [false, "Hide"]]))}
+        <div class="tset-foot"><button class="tset-danger" data-set="reset:1">${icons.shield}<span>Revoke folder permissions</span></button></div>
+      </div>`;
+    pop.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    placeFloating(pop, r, { alignRight: r.left > window.innerWidth / 2 });
+    pop.onclick = async (e) => {
+      const b = e.target.closest("[data-set]");
+      if (!b) return;
+      const [key, raw] = b.dataset.set.split(":");
+      if (key === "all") { pop.hidden = true; return ctx.openSettings?.(); }
+      if (key === "reset") {
+        const choice = await ctx.modal("Revoke all folder permissions?", "Flux Terminal will ask again before running commands in any folder.", [{ id: "yes", label: "Revoke", primary: true }, { id: "cancel", label: "Cancel" }]);
+        if (choice !== "yes") return;
+        await invoke("access_reset");
+        if (ctx.workspace()) await invoke("access_grant", { path: ctx.workspace(), scope: "session" });
+        ctx.toast("All folder permissions were revoked.");
+        return;
+      }
+      setSetting(key, raw === "true" ? true : raw === "false" ? false : /^\d+$/.test(raw) ? +raw : raw);
+      // Update the segmented control in place (no re-render, no flicker).
+      for (const x of b.parentElement.children) x.classList.toggle("on", x === b);
+    };
   }
 
   document.addEventListener("mousedown", (e) => {
@@ -793,10 +795,21 @@ export function createTerminal(host, ctx) {
     scrollBottom();
   });
 
+  /** Clear with a short fade-and-rise of the old blocks (opacity/transform only, so it stays cheap). */
   function clear() {
     if (!active) return;
-    active.el.replaceChildren();
-    if (active.running) active.el.append(active.running.b);
+    const s = active;
+    const keep = s.running?.b ?? null;
+    const old = [...s.el.children].filter((el) => el !== keep);
+    if (!old.length) return;
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce || old.length > 40) { for (const el of old) el.remove(); return; }
+    s.el.classList.add("clearing");
+    old.forEach((el, i) => { el.classList.add("leaving"); el.style.animationDelay = `${Math.min(i, 12) * 12}ms`; });
+    setTimeout(() => {
+      for (const el of old) el.remove();
+      s.el.classList.remove("clearing");
+    }, 220 + Math.min(old.length, 12) * 12);
   }
 
   // ------------------------------------------------------------ input line
@@ -1072,6 +1085,7 @@ export function createTerminal(host, ctx) {
   const booted = boot();
 
   return {
+    shells: () => env.shells,
     focus: () => booted.then(focus),
     newSession: () => booted.then(() => { newSession(); focus(); }),
     clear: () => booted.then(clear),

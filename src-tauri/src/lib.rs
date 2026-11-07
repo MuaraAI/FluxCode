@@ -15,6 +15,8 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod acp;
+mod github;
 mod preview;
 mod terminal;
 mod window_state;
@@ -470,6 +472,28 @@ async fn resolve_node() -> Option<Interpreter> {
     version.starts_with('v').then(|| Interpreter { path: "node".into(), version: format!("Node {version}") })
 }
 
+/// Open a URL (http/https only) in the user's default browser.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Only http(s) links can be opened.".into());
+    }
+    let mut cmd = if cfg!(windows) {
+        let mut c = command("explorer.exe");
+        c.arg(&url);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = command("open");
+        c.arg(&url);
+        c
+    } else {
+        let mut c = command("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Folders/files passed on the command line (`fluxcode .`, `fluxcode main.py`).
 #[tauri::command]
 fn launch_paths() -> Vec<Entry> {
@@ -542,6 +566,12 @@ pub fn run() {
         })
         .manage(Processes::default())
         .manage(preview::Preview::default())
+        .manage(acp::Acp::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                acp::shutdown(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_dir,
             list_files,
@@ -556,6 +586,7 @@ pub fn run() {
             resolve_python,
             resolve_node,
             launch_paths,
+            open_url,
             search_files,
             preview::preview_start,
             preview::preview_reload,
@@ -568,6 +599,14 @@ pub fn run() {
             terminal::access_grant,
             terminal::access_reset,
             get_platform,
+            github::github_status,
+            github::github_login,
+            github::github_login_cli,
+            github::github_logout,
+            acp::acp_info,
+            acp::acp_start,
+            acp::acp_send,
+            acp::acp_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FluxCode");

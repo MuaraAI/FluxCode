@@ -17,6 +17,8 @@ use tauri::{AppHandle, Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 // ------------------------------------------------------------- access grants
 
@@ -302,6 +304,7 @@ pub fn term_run(
             c.args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &base64(&utf16)]);
             c
         }
+        #[cfg(windows)]
         _ => {
             let mut c = command("cmd.exe");
             // /s keeps the line verbatim; chcp 65001 makes cmd's output UTF-8.
@@ -327,6 +330,10 @@ pub fn term_run(
         // Ask tools for colors even though stdout is a pipe; the terminal renders ANSI colors.
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1");
+    // A GitHub sign-in in Settings makes `gh` and token-aware tools work here too.
+    if let Some(token) = crate::github::token(&app) {
+        cmd.env("GH_TOKEN", &token).env("GITHUB_TOKEN", &token);
+    }
     start_process(&app, &procs, cmd, &shell)
 }
 

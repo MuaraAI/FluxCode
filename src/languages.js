@@ -1,8 +1,11 @@
 // Language registry. Each language is loaded lazily (its own small chunk) the
 // first time a matching file is opened, so startup only pays for the core.
+// Completion data (Emmet, modules, packages, snippets) is loaded with it.
 //
 // `run` says what F5 does: "python" (python -u), "node" (node), "preview"
 // (Live Preview in FluxCode). Adding a language is one entry.
+
+import { completionExtensions } from "./complete/index.js";
 
 const LANGUAGES = [
   {
@@ -35,6 +38,10 @@ const LANGUAGES = [
     load: () => import("@codemirror/lang-css").then((m) => m.css()),
   },
   {
+    id: "php", name: "PHP", extensions: ["php", "phtml"], indent: 4,
+    load: () => import("@codemirror/lang-php").then((m) => m.php()),
+  },
+  {
     id: "json", name: "JSON", extensions: ["json", "jsonc", "webmanifest"], indent: 2,
     load: () => import("@codemirror/lang-json").then((m) => m.json()),
   },
@@ -55,13 +62,22 @@ const loaded = new Map();
 
 /** Language descriptor for a file name, or a plain-text fallback. */
 export function languageFor(name) {
-  const ext = (name ?? "").toLowerCase().split(".").pop();
-  return byExtension.get(ext) ?? { id: "plaintext", name: "Plain Text", indent: 4, load: null };
+  const lower = (name ?? "").toLowerCase();
+  const ext = lower.split(".").pop();
+  const lang = byExtension.get(ext) ?? { id: "plaintext", name: "Plain Text", indent: 4, load: null };
+  return lower.endsWith(".blade.php") ? { ...lang, name: "Blade" } : lang;
 }
 
-/** CodeMirror extension for a language (cached after the first load). */
-export async function loadLanguage(lang) {
+/**
+ * CodeMirror extensions for a language (cached after the first load).
+ * `name` (file name) picks file-specific completion, e.g. package.json keys.
+ */
+export async function loadLanguage(lang, name = "") {
   if (!lang.load) return [];
-  if (!loaded.has(lang.id)) loaded.set(lang.id, lang.load());
-  return loaded.get(lang.id);
+  const lower = name.toLowerCase();
+  const key = lang.id === "json" || lang.id === "php" ? `${lang.id}:${lower.split(/[\\/]/).pop()}` : lang.id;
+  if (!loaded.has(key)) {
+    loaded.set(key, lang.load().then(async (support) => [support, await completionExtensions(lang.id, support, lower.split(/[\\/]/).pop())]));
+  }
+  return loaded.get(key);
 }
