@@ -23,7 +23,8 @@ const BUILTINS = ["cd", "ls", "dir", "clear", "cls", "open", "code", "help", "hi
 const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const sepIdx = (p) => Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
 const baseName = (p) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
-const joinPath = (dir, name) => (/[\\/]$/.test(dir) ? dir + name : `${dir}\\${name}`);
+const joinPath = (dir, name) =>
+  dir === "/" ? `/${name}` : (/[\\/]$/.test(dir) ? dir + name : (dir.includes("\\") ? `${dir}\\${name}` : `${dir}/${name}`));
 const fmtSize = (n) =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
 const fmtTime = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
@@ -99,7 +100,7 @@ export function createTerminal(host, ctx) {
   const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {} };
   const saveHistory = () => { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-300))); } catch {} };
 
-  let env = { home: "C:\\", drives: ["C:\\"], shells: ["cmd", "powershell"], user: "", computer: "" };
+  let env = { home: "/", drives: ["/"], shells: ["bash", "sh"], user: "", computer: "", platform: "linux" };
   const sessions = [];
   let active = null;
   let seq = 0;
@@ -331,13 +332,27 @@ export function createTerminal(host, ctx) {
     const cwd = active?.cwd;
     const crumbs = $(".tp-crumbs");
     if (!cwd) { crumbs.innerHTML = '<span class="tc-empty">No folder</span>'; return; }
+    const isWin = env.platform === "windows" || /^[A-Za-z]:/.test(cwd);
     const parts = cwd.split(/[\\/]/).filter(Boolean);
     let acc = "";
-    crumbs.innerHTML = parts
-      .map((p, i) => {
-        acc = i === 0 ? `${p}\\` : joinPath(acc, p);
-        const last = i === parts.length - 1;
-        return `${i ? `<span class="tc-sep">${icons.chevron}</span>` : ""}<button class="tc${last ? " last" : ""}" data-path="${esc(acc)}">${esc(i === 0 ? p : p)}</button>`;
+    const items = [];
+    if (!isWin && cwd.startsWith("/")) {
+      acc = "/";
+      items.push({ path: "/", label: "/" });
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (isWin && i === 0) {
+        acc = `${p}\\`;
+      } else {
+        acc = joinPath(acc, p);
+      }
+      items.push({ path: acc, label: p });
+    }
+    crumbs.innerHTML = items
+      .map((item, i) => {
+        const last = i === items.length - 1;
+        return `${i ? `<span class="tc-sep">${icons.chevron}</span>` : ""}<button class="tc${last ? " last" : ""}" data-path="${esc(item.path)}">${esc(item.label)}</button>`;
       })
       .join("") + `<button class="tc-more" title="Go into a subfolder">${icons.chevron}</button>`;
     crumbs.classList.remove("anim");
@@ -424,12 +439,16 @@ export function createTerminal(host, ctx) {
   });
 
   $(".tp-drive").addEventListener("click", (e) => {
+    if (env.platform === "linux" || env.drives.length <= 1) {
+      return navigate(env.drives[0] ?? "/");
+    }
     openPop(
       e.currentTarget,
       `<div class="tp-list">${env.drives.map((d) => `<button data-v="${esc(d)}">${icons.drive}<span>${esc(d)}</span></button>`).join("")}</div>`,
       (v) => navigate(v),
     );
   });
+
 
   window.addEventListener("resize", () => { pop.hidden = true; hideSuggest(); });
 
@@ -605,10 +624,10 @@ export function createTerminal(host, ctx) {
 
   /** Python tracebacks and `path:line` become clickable. */
   function linkify(out) {
-    const re = /File "([^"]+)", line (\d+)|([A-Za-z]:\\[^\s:"'<>|]+\.[A-Za-z0-9]+):(\d+)/g;
+    const re = /File "([^"]+)", line (\d+)|((?:\/[^\s:"'<>|]+\.[A-Za-z0-9]+|[A-Za-z]:\\[^\s:"'<>|]+\.[A-Za-z0-9]+)):(\d+)/g;
     const walker = document.createTreeWalker(out, NodeFilter.SHOW_TEXT);
     const nodes = [];
-    while (walker.nextNode()) if (/File "|[A-Za-z]:\\/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
+    while (walker.nextNode()) if (/File "|[A-Za-z]:\\|\//.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
     for (const node of nodes) {
       const text = node.nodeValue;
       const frag = document.createDocumentFragment();
@@ -627,6 +646,7 @@ export function createTerminal(host, ctx) {
       node.replaceWith(frag);
     }
   }
+
 
   body.addEventListener("click", (e) => {
     const a = e.target.closest("a[data-file]");
@@ -1027,7 +1047,17 @@ export function createTerminal(host, ctx) {
   // ------------------------------------------------------------------ boot
 
   applySettings();
-  const ready = invoke("term_env").then((e) => { env = e; if (!env.shells.includes(settings.shell)) settings.shell = "cmd"; applySettings(); });
+  const ready = invoke("term_env").then((e) => {
+    env = e;
+    if (!env.shells.includes(settings.shell)) {
+      settings.shell = env.shells[0] ?? (env.platform === "linux" ? "bash" : "cmd");
+    }
+    if (env.platform === "linux") {
+      $(".tp-drive").title = "Root directory (/)";
+      $(".tp-drive").innerHTML = `<span>/</span>`;
+    }
+    applySettings();
+  });
   const remembered = (() => { try { return localStorage.getItem("fluxcode.terminal.cwd"); } catch { return null; } })();
 
   async function boot() {

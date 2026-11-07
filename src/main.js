@@ -887,6 +887,7 @@ function clearOutput() {
   outputPane?.clear();
 }
 
+
 function showPanel(show = true) {
   $("#panel").hidden = !show;
   $("#toggle-panel").innerHTML = show ? icons.panelOn : icons.panel;
@@ -1798,6 +1799,9 @@ async function boot() {
     VERSION = v;
     $(".tb-badge").hidden = !v.includes("-dev");
     $(".tb-badge").title = `Development build ${v} — not a final release`;
+  }).catch(() => {});
+  invoke("get_platform").then((p) => {
+    if (p === "linux") document.body.classList.add("platform-linux");
   }).catch(() => {});
   $("#panel").dataset.tab = state.panelTab;
   toggleSidebar(true);
