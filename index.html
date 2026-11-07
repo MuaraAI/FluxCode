@@ -86,6 +86,7 @@
       <div class="sash vertical" id="sash-sidebar"></div>
 
       <main id="main">
+        <div id="groups">
         <div id="editor-group">
           <div id="tabs-bar">
             <div id="tabs" role="tablist"></div>
@@ -103,10 +104,25 @@
                 <dt>Go to File</dt><dd><kbd>Ctrl</kbd><kbd>P</kbd></dd>
                 <dt>Find in Files</dt><dd><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F</kbd></dd>
                 <dt>Open Folder</dt><dd><kbd>Ctrl</kbd><kbd>K</kbd> <kbd>Ctrl</kbd><kbd>O</kbd></dd>
-                <dt>Run Python File</dt><dd><kbd>F5</kbd></dd>
+                <dt>Run / Preview</dt><dd><kbd>F5</kbd></dd>
+                <dt>Terminal</dt><dd><kbd>Ctrl</kbd><kbd>`</kbd></dd>
               </dl>
             </div>
           </div>
+        </div>
+        <div class="sash vertical" id="sash-preview" hidden></div>
+        <section id="preview-pane" hidden>
+          <div class="pv-head">
+            <span class="pv-title">PREVIEW</span>
+            <span class="pv-url"></span>
+            <span class="pv-actions">
+              <button data-pv="reload" title="Reload"></button>
+              <button data-pv="external" title="Open in Browser"></button>
+              <button data-pv="close" title="Close Preview"></button>
+            </span>
+          </div>
+          <iframe id="preview-frame" title="Live Preview" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin"></iframe>
+        </section>
         </div>
         <div class="sash horizontal" id="sash-panel"></div>
         <section id="panel" hidden>
@@ -116,6 +132,7 @@
               <button class="panel-tab" data-ptab="terminal">TERMINAL</button>
             </div>
             <span class="panel-status"></span>
+            <div id="panel-slot"></div>
             <span class="panel-actions">
               <button data-action="stop" class="po" title="Stop (Shift+F5)"></button>
               <button data-action="clearOutput" class="po" title="Clear Output"></button>

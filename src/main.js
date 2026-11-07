@@ -122,6 +122,7 @@ function persist() {
         wrap: isWrapOn(),
         zoom: state.zoom,
         panelTab: state.panelTab,
+        autoSave: state.autoSave,
       }),
     );
   } catch {}
@@ -671,7 +672,7 @@ function renderTabs() {
   // Only touch the DOM when order/membership changed.
   if (els.length !== bar.children.length || els.some((el, i) => bar.children[i] !== el)) bar.replaceChildren(...els);
   bar.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  $("#run-btn").hidden = state.active?.lang.id !== "python";
+  updateRunButton();
 }
 
 function renderBreadcrumbs() {
@@ -713,6 +714,7 @@ onEditorUpdate((u) => {
       refreshTreeMarkers();
       updateTitle();
     }
+    if (dirty) scheduleAutoSave(tab);
   }
   if (u.docChanged || u.selectionSet) scheduleCursorStatus();
 });
@@ -738,6 +740,14 @@ async function saveTab(tab, { saveAs = false } = {}) {
     return false;
   }
   const renamed = path !== tab.path;
+  previewChanged(path);
+  // Only mark clean if nothing was typed while the write was in flight.
+  const current = tab === state.active ? view.state : tab.state;
+  if (!renamed && !current.doc.eq(editorState.doc)) {
+    tab.saved = editorState.doc;
+    scheduleAutoSave(tab);
+    return true;
+  }
   tab.saved = editorState.doc;
   tab.dirty = false;
   tab.eolChanged = false;
@@ -880,20 +890,20 @@ function clearOutput() {
   output.replaceChildren();
 }
 
-/** Turn Python traceback locations into clickable links. */
+/** Turn Python tracebacks and Node stack frames (`C:\x.js:10:5`) into clickable links. */
 function linkifyTracebacks() {
-  const re = /File "([^"]+)", line (\d+)/g;
+  const re = /File "([^"]+)", line (\d+)|([A-Za-z]:\\[^\s:()"'<>|]+):(\d+)(?::\d+)?/g;
   for (const span of [...output.querySelectorAll("span.stderr")]) {
     const text = span.textContent;
-    if (!text.includes('File "')) continue;
+    if (!/File "|[A-Za-z]:\\/.test(text)) continue;
     const frag = document.createDocumentFragment();
     let last = 0;
     for (const m of text.matchAll(re)) {
       frag.append(text.slice(last, m.index));
       const a = document.createElement("a");
       a.textContent = m[0];
-      a.dataset.file = m[1];
-      a.dataset.line = m[2];
+      a.dataset.file = m[1] ?? m[3];
+      a.dataset.line = m[2] ?? m[4];
       frag.append(a);
       last = m.index + m[0].length;
     }
@@ -927,6 +937,7 @@ function ensureTerminal() {
   terminalLoading ??= import("./terminal.js").then(({ createTerminal }) => {
     terminal = createTerminal($("#terminal"), {
       icons, fileIcon, folderIcon, modal, toast,
+      toolbarHost: $("#panel-slot"),
       workspace: () => state.root,
       openFile: (path, line) => openFile(path, { line: Number.isFinite(line) ? line : null }),
     });
@@ -965,34 +976,73 @@ function toggleTerminal() {
   showPanelTab("terminal");
 }
 
+const RUN_TITLES = { python: "Run Python File (F5)", node: "Run with Node.js (F5)", preview: "Open Live Preview (F5)" };
+
+function updateRunButton() {
+  const kind = state.active?.lang.run;
+  const btn = $("#run-btn");
+  btn.hidden = !kind;
+  if (state.run) return;
+  btn.innerHTML = kind === "preview" ? icons.preview : icons.play;
+  btn.title = RUN_TITLES[kind] ?? "";
+  btn.classList.toggle("is-preview", kind === "preview");
+}
+
 function setRunning(running) {
   $("#run-btn").innerHTML = running ? icons.stop : icons.play;
-  $("#run-btn").title = running ? "Stop (Shift+F5)" : "Run Python File (F5)";
+  $("#run-btn").title = running ? "Stop (Shift+F5)" : "Run (F5)";
   $("#run-btn").classList.toggle("running", running);
   $("#statusbar").classList.toggle("running", running);
   $("#stdin-row").hidden = !running;
   $(".panel-actions [data-action=stop]").hidden = !running;
   $(".panel-status").innerHTML = running ? `<span class="spinner"></span>Running ${escapeHtml(state.run?.name ?? "")}` : "";
+  if (!running) updateRunButton();
+}
+
+async function resolveNode() {
+  if (state.node === undefined) state.node = (await invoke("resolve_node")) ?? null;
+  return state.node;
 }
 
 async function runActive() {
   const tab = state.active;
-  if (!tab) return toast("Open a Python file to run it.", "warning");
+  if (!tab) return toast("Open a Python, JavaScript or HTML file to run it.", "warning");
   if (state.run) return stopRun();
-  if (tab.lang.id !== "python") return toast(`Running ${tab.lang.name} files is not supported yet. Python works now; Rust and web are next.`, "warning");
+  const kind = tab.lang.run;
+  if (!kind) return toast(`${tab.lang.name} files can't be run yet. Python, JavaScript/TypeScript (Node) and HTML/CSS (Live Preview) can.`, "warning");
   if ((tab.dirty || !tab.path) && !(await saveTab(tab))) return;
-  if (state.python === undefined) await resolvePython();
+  if (kind === "preview") return openPreview(tab);
+
+  let program;
+  let args;
+  if (kind === "python") {
+    if (state.python === undefined) await resolvePython();
+    if (!state.python) {
+      showPanelTab("output", { focus: false });
+      clearOutput();
+      appendOutput("Python was not found.\nInstall it from https://www.python.org/downloads/ (tick \"Add python.exe to PATH\"), or create a .venv in this folder, then click the Python item in the status bar.\n", "stderr");
+      return;
+    }
+    program = state.python.path;
+    args = ["-u", tab.path];
+  } else {
+    const node = await resolveNode();
+    if (!node) {
+      showPanelTab("output", { focus: false });
+      clearOutput();
+      appendOutput("Node.js was not found.\nInstall it from https://nodejs.org/ and make sure `node` is on PATH.\n", "stderr");
+      return;
+    }
+    program = node.path;
+    args = [tab.path];
+  }
   showPanelTab("output", { focus: false });
   clearOutput();
-  if (!state.python) {
-    appendOutput("Python was not found.\nInstall it from https://www.python.org/downloads/ (tick \"Add python.exe to PATH\"), or create a .venv in this folder, then click the Python item in the status bar.\n", "stderr");
-    return;
-  }
   const cwd = isInside(state.root, tab.path) ? state.root : dirname(tab.path);
   const shown = relative(cwd, tab.path);
-  appendOutput(`> ${basename(state.python.path)} ${shown.includes(" ") ? `"${shown}"` : shown}\n`, "cmd");
+  appendOutput(`> ${basename(program)} ${shown.includes(" ") ? `"${shown}"` : shown}\n`, "cmd");
   try {
-    const id = await invoke("spawn_process", { program: state.python.path, args: ["-u", tab.path], cwd });
+    const id = await invoke("spawn_process", { program, args, cwd });
     state.run = { id, start: performance.now(), name: tab.name };
     setRunning(true);
     $("#stdin").focus(); // like VS Code focusing the terminal, so input() just works
@@ -1004,6 +1054,72 @@ async function runActive() {
 async function stopRun() {
   if (state.run) await invoke("kill_process", { id: state.run.id }).catch(() => {});
 }
+
+// ----------------------------------------------------------- live preview
+
+const preview = { root: null, url: null };
+
+/** Show an HTML page (or the index.html next to a CSS/JS file) in the preview pane. */
+async function openPreview(tab) {
+  const root = isInside(state.root, tab.path) ? state.root : dirname(tab.path);
+  const page = tab.lang.id === "html" ? tab.path : join(dirname(tab.path), "index.html");
+  let port;
+  try {
+    port = await invoke("preview_start", { root });
+  } catch (e) {
+    return toast(`Live Preview could not start: ${e}`, "error");
+  }
+  const rel = relative(root, page).split(/[\\/]/).map(encodeURIComponent).join("/");
+  preview.root = root;
+  preview.url = `http://127.0.0.1:${port}/${rel}`;
+  $("#preview-pane").hidden = false;
+  $("#sash-preview").hidden = false;
+  $(".pv-url").textContent = rel.replace(/%20/g, " ");
+  $(".pv-url").title = preview.url;
+  $("#preview-frame").src = preview.url;
+}
+
+function closePreview() {
+  $("#preview-pane").hidden = true;
+  $("#sash-preview").hidden = true;
+  $("#preview-frame").src = "about:blank"; // drops the page and its memory
+  preview.url = null;
+}
+
+let reloadTimer = 0;
+function previewChanged(path) {
+  if (!preview.url || !isInside(preview.root, path)) return;
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => invoke("preview_reload").catch(() => {}), 60);
+}
+
+$("#preview-pane").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pv]");
+  if (!b) return;
+  if (b.dataset.pv === "close") closePreview();
+  else if (b.dataset.pv === "reload") invoke("preview_reload").catch(() => {});
+  else if (b.dataset.pv === "external" && preview.url) invoke("spawn_process", { program: "explorer.exe", args: [preview.url], cwd: null }).catch(() => {});
+});
+
+// --------------------------------------------------------------- autosave
+
+const autoSaveTimers = new Map();
+
+/** VS Code's "afterDelay" auto save: write the file shortly after typing stops. */
+function scheduleAutoSave(tab) {
+  if (!state.autoSave || !tab.path) return;
+  clearTimeout(autoSaveTimers.get(tab.id));
+  autoSaveTimers.set(tab.id, setTimeout(() => {
+    autoSaveTimers.delete(tab.id);
+    if (tab.dirty && state.tabs.includes(tab)) saveTab(tab);
+  }, 700));
+}
+
+function saveAllNow() {
+  if (!state.autoSave) return;
+  for (const t of state.tabs) if (t.dirty && t.path) saveTab(t);
+}
+window.addEventListener("blur", saveAllNow); // switching to another app saves too
 
 listen("proc-output", ({ payload }) => {
   if (payload.id === state.run?.id) appendOutput(payload.data, payload.stream === "stderr" ? "stderr" : "");
@@ -1052,8 +1168,11 @@ const COMMANDS = {
   zoomIn: ["View: Zoom In", "Ctrl+="],
   zoomOut: ["View: Zoom Out", "Ctrl+-"],
   zoomReset: ["View: Reset Zoom", "Ctrl+0"],
-  run: ["Python: Run Python File", "F5"],
-  stop: ["Python: Stop Running Program", "Shift+F5"],
+  run: ["Run: Run Active File / Open Preview", "F5"],
+  stop: ["Run: Stop Running Program", "Shift+F5"],
+  openPreview: ["Live Preview: Open Preview", ""],
+  closePreview: ["Live Preview: Close Preview"],
+  toggleAutoSave: ["File: Auto Save"],
   selectInterpreter: ["Python: Re-detect Interpreter"],
   toggleTerminal: ["Terminal: Toggle Terminal", "Ctrl+`"],
   newTerminal: ["Terminal: Create New Terminal", "Ctrl+Shift+`"],
@@ -1083,15 +1202,17 @@ const COMMANDS = {
 };
 
 const MENUS = {
-  file: ["newFile", "newFolder", "openFile", "openFolder", "-", "save", "saveAs", "saveAll", "-", "closeEditor", "closeAll", "closeFolder", "-", "exit"],
+  file: ["newFile", "newFolder", "openFile", "openFolder", "-", "save", "saveAs", "saveAll", "toggleAutoSave", "-", "closeEditor", "closeAll", "closeFolder", "-", "exit"],
   edit: ["undo", "redo", "-", "cut", "copy", "paste", "-", "find", "replace", "findInFiles", "-", "toggleComment"],
   selection: ["selectAll", "selectLine", "-", "copyLineUp", "copyLineDown", "moveLineUp", "moveLineDown", "-", "addNextOccurrence"],
   view: ["commandPalette", "quickOpen", "-", "showExplorer", "findInFiles", "-", "toggleSidebar", "togglePanel", "toggleWordWrap", "-", "zoomIn", "zoomOut", "zoomReset"],
-  run: ["run", "stop", "-", "selectInterpreter"],
+  run: ["run", "stop", "-", "openPreview", "closePreview", "-", "selectInterpreter"],
   terminal: ["newTerminal", "toggleTerminal", "-", "clearTerminal", "stopTerminal", "-", "showOutput"],
   help: ["commandPalette", "shortcuts", "-", "about"],
 };
-const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal): /, "");
+const menuLabel = (id) => COMMANDS[id][0].replace(/^(File|View|Python|Search|Help|Workspaces|Developer|Terminal|Run|Live Preview): /, "");
+// Menu items that show a check mark when on.
+const CHECKED = { toggleWordWrap: () => isWrapOn(), toggleAutoSave: () => state.autoSave };
 
 /** Run an editor command on the active editor (from a menu or the palette). */
 const editorCmd = (fn) => () => {
@@ -1182,6 +1303,15 @@ async function runCommand(id) {
     case "stopTerminal": return terminal?.stop();
     case "showOutput": return showPanelTab("output");
     case "run": return runActive();
+    case "openPreview":
+      if (!tab?.path) return toast("Open an HTML file to preview it.", "warning");
+      return openPreview(tab);
+    case "closePreview": return closePreview();
+    case "toggleAutoSave":
+      state.autoSave = !state.autoSave;
+      toast(`Auto Save is ${state.autoSave ? "on" : "off"}.`);
+      if (state.autoSave) saveAllNow();
+      return persist();
     case "stop": return stopRun();
     case "selectInterpreter": return resolvePython(true);
     case "refresh": return refreshExplorer();
@@ -1261,7 +1391,7 @@ function openMenu(name) {
     .map((id) =>
       id === "-"
         ? '<div class="menu-sep"></div>'
-        : `<button class="menu-item" data-cmd="${id}"><span>${escapeHtml(menuLabel(id))}${id === "toggleWordWrap" && isWrapOn() ? "  ✓" : ""}</span><span class="kb">${escapeHtml(COMMANDS[id][1] ?? "")}</span></button>`,
+        : `<button class="menu-item" data-cmd="${id}"><span class="mi-check">${CHECKED[id]?.() ? icons.check : ""}</span><span>${escapeHtml(menuLabel(id))}</span><span class="kb">${escapeHtml(COMMANDS[id][1] ?? "")}</span></button>`,
     )
     .join("");
   const r = btn.getBoundingClientRect();
@@ -1573,6 +1703,10 @@ dragSash($("#sash-sidebar"), (e) => {
   const w = Math.min(Math.max(e.clientX / state.zoom - 48, 170), window.innerWidth * 0.6);
   document.documentElement.style.setProperty("--sidebar-w", `${w}px`);
 });
+dragSash($("#sash-preview"), (e) => {
+  const w = Math.min(Math.max(window.innerWidth - e.clientX, 260), window.innerWidth * 0.7);
+  document.documentElement.style.setProperty("--preview-w", `${w}px`);
+});
 dragSash($("#sash-panel"), (e) => {
   const h = Math.min(Math.max(window.innerHeight - 24 - e.clientY, 90), window.innerHeight - 220);
   document.documentElement.style.setProperty("--panel-h", `${h}px`);
@@ -1625,6 +1759,9 @@ function paintIcons() {
   $(".stdin-prompt").innerHTML = icons.chevron;
   $(".sb-brand").innerHTML = icons.bolt;
   $(".wm-logo").innerHTML = logo;
+  $("[data-pv=reload]").innerHTML = icons.refresh;
+  $("[data-pv=external]").innerHTML = icons.reveal;
+  $("[data-pv=close]").innerHTML = icons.close;
 }
 
 /** `fluxcode <folder|file>...` opens those (like `code .`); otherwise restore the last session. */
@@ -1636,6 +1773,9 @@ async function boot() {
   if (session?.wrap) setWrap(view, true);
   if (session?.zoom && session.zoom !== 1) setZoom(session.zoom);
   if (session?.panelTab) state.panelTab = session.panelTab;
+  state.autoSave = session?.autoSave ?? true;
+  // 240px was the old, cramped default: let the new roomier default apply.
+  if (session?.panelH === "240px") document.documentElement.style.removeProperty("--panel-h");
   getVersion().then((v) => {
     VERSION = v;
     $(".tb-badge").hidden = !v.includes("-dev");

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flux Tasks</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header>
+        <h1>⚡ Flux Tasks</h1>
+        <p class="sub">Contoh web untuk Live Preview FluxCode: edit file ini, CSS atau JS, lalu lihat perubahan langsung.</p>
+      </header>
+
+      <form id="add">
+        <input id="title" placeholder="Tambah tugas…" autocomplete="off" />
+        <button type="submit">Tambah</button>
+      </form>
+
+      <ul id="list"></ul>
+
+      <footer>
+        <span id="count">0 tugas</span>
+        <button id="clear" class="ghost">Hapus yang selesai</button>
+      </footer>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

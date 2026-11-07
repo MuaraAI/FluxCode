@@ -1,6 +1,6 @@
 [package]
 name = "fluxcode"
-version = "0.2.0-dev.2026-11-07-1026"
+version = "0.3.0-dev.2026-11-07-1052"
 description = "FluxCode - a lightweight code editor with the VS Code look and feel"
 edition = "2021"
 license = "MIT"

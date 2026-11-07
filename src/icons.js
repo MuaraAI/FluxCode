@@ -33,6 +33,8 @@ const P = {
   bell: '<path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   caseSensitive: '<path d="M3.5 17 7 7.5 10.5 17M4.8 13.5h4.4"/><path d="M17 17v-1.2m0 0c-.6.9-1.5 1.4-2.5 1.4-1.3 0-2.2-.8-2.2-2s1-2 2.6-2h2.1m0 2.6V12.6c0-1.3-.8-2.1-2.2-2.1-.9 0-1.7.4-2.1 1.1"/>',
   wholeWord: '<path d="M3 19h18" opacity=".55"/><path d="M5 15.5v-6m0 3a2.5 2.5 0 1 0 5 0 2.5 2.5 0 1 0-5 0"/><path d="M19 10.5a2.5 2.5 0 1 0 0 4"/><path d="M14.5 15.5V7.5"/>',
+  preview: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M12 4.5v15"/><path d="m15 10 2 2-2 2"/><path d="M6 9h3M6 12h3M6 15h2"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.5 5.2 3.5 8.5s-1.1 6.2-3.5 8.5c-2.4-2.3-3.5-5.2-3.5-8.5S9.6 5.8 12 3.5z"/>',
   // terminal
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7 10 3 2.5L7 15"/><path d="M12.5 15.5h4.5"/>',
   up: '<path d="M12 19V6"/><path d="m6.5 11 5.5-5.5 5.5 5.5"/>',
@@ -89,7 +91,8 @@ export function fileIcon(name) {
     // generic document glyph
     return `<span class="ficon generic" style="color:${color}">${svg('<path d="M7 3.5h6.5l4.5 4.5v10.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2z"/><path d="M13.5 3.5V8H18"/>', 14)}</span>`;
   }
-  return `<span class="ficon" style="--c:${color}">${label}</span>`;
+  const safe = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); // "</>" must not become a tag
+  return `<span class="ficon" style="--c:${color}">${safe}</span>`;
 }
 
 export function folderIcon(open) {

@@ -1,7 +1,7 @@
 {
   "name": "fluxcode",
   "private": true,
-  "version": "0.2.0-dev.2026-11-07-1026",
+  "version": "0.3.0-dev.2026-11-07-1052",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,13 @@
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/lang-python": "^6.2.0",
+    "@codemirror/lang-rust": "^6.0.2",
     "@codemirror/language": "^6.11.0",
     "@codemirror/search": "^6.5.0",
     "@codemirror/state": "^6.5.0",

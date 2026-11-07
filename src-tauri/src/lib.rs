@@ -15,7 +15,9 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod preview;
 mod terminal;
+mod window_state;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -468,6 +470,13 @@ async fn resolve_python(workspace: Option<String>) -> Option<Interpreter> {
     })
 }
 
+/// Node.js for running JavaScript files (`node` on PATH).
+#[tauri::command]
+async fn resolve_node() -> Option<Interpreter> {
+    let version = probe_version("node")?;
+    version.starts_with('v').then(|| Interpreter { path: "node".into(), version: format!("Node {version}") })
+}
+
 /// Folders/files passed on the command line (`fluxcode .`, `fluxcode main.py`).
 #[tauri::command]
 fn launch_paths() -> Vec<Entry> {
@@ -504,18 +513,19 @@ AutofillServerCommunication,MediaRouter --disable-background-networking --disabl
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let gpu = std::env::var("FLUXCODE_GPU").is_ok_and(|v| v == "1");
     let args = if gpu { WEBVIEW_ARGS.to_string() } else { format!("{WEBVIEW_ARGS} --disable-gpu --in-process-gpu") };
-    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+    let win = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
         .title("FluxCode")
-        .inner_size(1280.0, 800.0)
+        .inner_size(1280.0, 760.0)
         .min_inner_size(600.0, 400.0)
         .decorations(false)
         .shadow(true)
+        .visible(false) // shown by window_state::place once it is inside the work area
         .theme(Some(tauri::Theme::Dark))
-        .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
+        .background_color(tauri::window::Color(0x1e, 0x1f, 0x22, 0xff))
         .disable_drag_drop_handler()
         .additional_browser_args(&args)
         .build()?;
-    Ok(())
+    window_state::place(app.handle(), &win)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -527,6 +537,7 @@ pub fn run() {
             Ok(create_main_window(app)?)
         })
         .manage(Processes::default())
+        .manage(preview::Preview::default())
         .invoke_handler(tauri::generate_handler![
             list_dir,
             list_files,
@@ -539,8 +550,11 @@ pub fn run() {
             write_stdin,
             kill_process,
             resolve_python,
+            resolve_node,
             launch_paths,
             search_files,
+            preview::preview_start,
+            preview::preview_reload,
             terminal::term_run,
             terminal::term_list,
             terminal::term_resolve,

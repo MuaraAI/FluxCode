@@ -109,7 +109,9 @@ export function createTerminal(host, ctx) {
   const procs = new Map(); // process id -> block
   const listCache = new Map(); // folder -> { at, entries }
 
-  host.innerHTML = `
+  // The path bar + tools live in the panel header (saves a whole row of height).
+  const top = document.createElement("div");
+  top.innerHTML = `
     <div class="term-top">
       <button class="tp-drive" title="Switch drive">${icons.drive}<span class="tp-drive-chev">${icons.chevron}</span></button>
       <div class="tp-crumbs"></div>
@@ -125,7 +127,11 @@ export function createTerminal(host, ctx) {
         <button data-t="new" title="New Terminal (Ctrl+Shift+\`)">${icons.plus}</button>
         <button data-t="settings" title="Terminal Settings">${icons.settings}</button>
       </div>
-    </div>
+    </div>`;
+  const topBar = top.firstElementChild;
+  (ctx.toolbarHost ?? host).append(topBar);
+
+  host.innerHTML = `
     <div class="term-body"></div>
     <div class="term-input">
       <span class="ti-prompt">${icons.chevron}</span>
@@ -135,17 +141,40 @@ export function createTerminal(host, ctx) {
         <div class="ti-caret"></div>
       </div>
       <button class="ti-shell" title="Shell for commands (click to switch)"></button>
-    </div>
-    <ul class="term-suggest" hidden></ul>
-    <div class="term-pop" hidden></div>`;
+    </div>`;
 
-  const $ = (s) => host.querySelector(s);
+  const $ = (s) => host.querySelector(s) ?? topBar.querySelector(s);
   const body = $(".term-body");
   const input = $(".ti-input");
   const mirror = $(".ti-mirror");
   const caret = $(".ti-caret");
-  const suggest = $(".term-suggest");
-  const pop = $(".term-pop");
+  // Floating UI lives on <body> with fixed positioning, clamped to the window.
+  const suggest = document.createElement("ul");
+  suggest.className = "term-suggest";
+  suggest.hidden = true;
+  const pop = document.createElement("div");
+  pop.className = "term-pop";
+  pop.hidden = true;
+  document.body.append(suggest, pop);
+
+  /** Place a fixed popup next to `rect`, flipping above and clamping so it never leaves the window. */
+  function placeFloating(el, rect, { prefer = "below", alignRight = false } = {}) {
+    el.style.maxHeight = "";
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = alignRight ? rect.right - w : rect.left;
+    left = Math.max(8, Math.min(left, vw - w - 8));
+    const below = vh - rect.bottom - 12;
+    const above = rect.top - 12;
+    const showBelow = prefer === "below" ? h <= below || below >= above : !(h <= above || above >= below);
+    const room = showBelow ? below : above;
+    if (h > room) el.style.maxHeight = `${room}px`;
+    const top = showBelow ? rect.bottom + 4 : rect.top - Math.min(h, room) - 4;
+    el.style.left = `${left}px`;
+    el.style.top = `${Math.max(8, top)}px`;
+  }
 
   // --------------------------------------------------------- appearance
 
@@ -259,7 +288,7 @@ export function createTerminal(host, ctx) {
     if (s.el.querySelector(".tblock")) return;
     const el = document.createElement("div");
     el.className = "tnote";
-    el.innerHTML = `${icons.terminal}<span><b>Flux Terminal</b> · type a command, a folder name to go into it, <kbd>..</kbd> to go up, <kbd>ls</kbd> to browse, <kbd>Tab</kbd> to complete, <kbd>help</kbd> for more.</span>`;
+    el.innerHTML = `${icons.terminal}<span><b>Flux Terminal</b> · type a command or a folder name · <kbd>..</kbd> up · <kbd>ls</kbd> browse · <kbd>Tab</kbd> complete · <kbd>help</kbd></span>`;
     s.el.append(el);
   }
 
@@ -310,8 +339,34 @@ export function createTerminal(host, ctx) {
     crumbs.classList.remove("anim");
     void crumbs.offsetWidth;
     crumbs.classList.add("anim");
-    crumbs.scrollLeft = crumbs.scrollWidth;
+    fitCrumbs();
   }
+
+  /** Long paths: fold the middle folders into a "…" menu so the drive and current folder stay visible. */
+  function fitCrumbs() {
+    const crumbs = $(".tp-crumbs");
+    crumbs.querySelector(".tc-ellipsis")?.previousElementSibling?.remove();
+    crumbs.querySelector(".tc-ellipsis")?.remove();
+    const items = [...crumbs.querySelectorAll(".tc")];
+    for (const el of crumbs.children) el.hidden = false;
+    if (crumbs.scrollWidth <= crumbs.clientWidth + 1 || items.length < 3) return;
+    const sep = document.createElement("span");
+    sep.className = "tc-sep";
+    sep.innerHTML = icons.chevron;
+    const more = document.createElement("button");
+    more.className = "tc tc-ellipsis";
+    more.textContent = "…";
+    items[0].after(sep, more);
+    const hidden = [];
+    for (let i = 1; i < items.length - 1 && crumbs.scrollWidth > crumbs.clientWidth + 1; i++) {
+      items[i].hidden = true;
+      items[i].previousElementSibling.hidden = true; // its separator
+      hidden.push(items[i].dataset.path);
+    }
+    more.dataset.paths = JSON.stringify(hidden);
+    more.title = hidden.at(-1) ?? "";
+  }
+  new ResizeObserver(() => fitCrumbs()).observe(topBar);
 
   async function listDir(path, fresh = false) {
     const hit = listCache.get(path.toLowerCase());
@@ -324,11 +379,9 @@ export function createTerminal(host, ctx) {
 
   function openPop(anchor, html, onPick) {
     pop.innerHTML = html;
-    const r = anchor.getBoundingClientRect();
-    const hr = host.getBoundingClientRect();
-    pop.style.left = `${Math.max(4, Math.min(r.left - hr.left, hr.width - 280))}px`;
-    pop.style.top = `${r.bottom - hr.top + 4}px`;
     pop.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    placeFloating(pop, r, { alignRight: r.left > window.innerWidth / 2 });
     pop.onclick = (e) => {
       const item = e.target.closest("[data-v]");
       if (item) { pop.hidden = true; onPick(item.dataset.v, e); }
@@ -351,6 +404,15 @@ export function createTerminal(host, ctx) {
   $(".tp-crumbs").addEventListener("click", (e) => {
     const more = e.target.closest(".tc-more");
     if (more && active?.cwd) return subfolderMenu(more, active.cwd);
+    const ell = e.target.closest(".tc-ellipsis");
+    if (ell) {
+      const paths = JSON.parse(ell.dataset.paths || "[]");
+      return openPop(
+        ell,
+        `<div class="tp-list">${paths.map((p) => `<button data-v="${esc(p)}">${folderIcon(false)}<span>${esc(baseName(p))}</span></button>`).join("")}</div>`,
+        (v) => navigate(v),
+      );
+    }
     const c = e.target.closest(".tc");
     if (!c) return;
     if (c.classList.contains("last")) return subfolderMenu(c, c.dataset.path);
@@ -364,6 +426,8 @@ export function createTerminal(host, ctx) {
       (v) => navigate(v),
     );
   });
+
+  window.addEventListener("resize", () => { pop.hidden = true; hideSuggest(); });
 
   $(".term-tools").addEventListener("click", (e) => {
     const b = e.target.closest("[data-t]");
@@ -427,7 +491,7 @@ export function createTerminal(host, ctx) {
   }
 
   document.addEventListener("mousedown", (e) => {
-    if (!pop.hidden && !pop.contains(e.target) && !e.target.closest(".tp-drive, .tc, .tc-more, [data-t=settings]")) pop.hidden = true;
+    if (!pop.hidden && !pop.contains(e.target) && !e.target.closest(".tp-drive, .tc, .tc-more, .tc-ellipsis, [data-t=settings]")) pop.hidden = true;
   });
 
   // ------------------------------------------------------------- blocks
@@ -666,10 +730,14 @@ export function createTerminal(host, ctx) {
 
     if (s.running) return note(s, "A command is still running here. Stop it (Ctrl+C) or open a new terminal (+).", "err");
     if (!(await ensureAccess(s.cwd))) return;
+    // A bare `python` / `py` / `node` has no TTY here, so force the interactive REPL.
+    let exec = text;
+    if (/^(python3?|py)$/i.test(text)) exec = `${text} -i`;
+    else if (/^node$/i.test(text)) exec = "node -i";
     const b = makeBlock(s, text, s.cwd);
     b.start = performance.now();
     try {
-      b.pid = await invoke("term_run", { line: text, cwd: s.cwd, shell: settings.shell });
+      b.pid = await invoke("term_run", { line: exec, cwd: s.cwd, shell: settings.shell });
     } catch (e) {
       write(b, `${e === "access-denied" ? "Access to this folder was not allowed." : e}\n`);
       return finishBlock(b, 1, 0);
@@ -741,21 +809,47 @@ export function createTerminal(host, ctx) {
   let draft = "";
   let typingTimer = 0;
 
+  // Common programs offered as the first word when nothing better matches.
+  const COMMON = ["python", "pip", "node", "npm", "npx", "git", "cargo", "code", "cls", "dir", "where", "type", "mkdir", "copy", "move", "del", "ipconfig", "ping", "tree"];
+
+  /**
+   * The inline suggestion shown after the caret (accept with Tab or →):
+   * history first, then a matching file/folder for the word being typed,
+   * then built-ins and common programs for the first word.
+   */
   async function computeGhost() {
     const v = input.value;
     ghost = "";
-    if (!v || input.selectionStart !== v.length) return;
+    if (!v || input.selectionStart !== v.length || active?.running) return renderInput();
     const h = [...history].reverse().find((x) => x.startsWith(v) && x !== v);
-    if (h) ghost = h.slice(v.length);
-    else if (!/\s/.test(v) && active?.cwd) {
-      // Single word: suggest a folder in the current directory (type + Enter = go there).
+    if (h) { ghost = h.slice(v.length); return renderInput(); }
+    const word = v.match(/[^\s"]*$/)[0];
+    const firstWord = !/\s/.test(v);
+    if (word && active?.cwd) {
+      const cut = sepIdx(word);
+      const dirPart = cut >= 0 ? word.slice(0, cut + 1) : "";
+      const prefix = word.slice(cut + 1).toLowerCase();
       try {
-        const entries = await listDir(active.cwd);
-        const f = entries.find((e) => e.is_dir && !e.hidden && e.name.toLowerCase().startsWith(v.toLowerCase()) && e.name.length > v.length);
-        if (f && input.value === v) ghost = f.name.slice(v.length);
+        const dir = dirPart ? await invoke("term_resolve", { cwd: active.cwd, input: dirPart }) : active.cwd;
+        const entries = await listDir(dir);
+        const pick = entries.find((e) => (!e.hidden || prefix.startsWith(".")) && e.name.toLowerCase().startsWith(prefix) && e.name.length > prefix.length && (!firstWord || e.is_dir || dirPart));
+        if (pick && input.value === v) ghost = pick.name.slice(prefix.length) + (pick.is_dir ? "\\" : "");
       } catch {}
     }
+    if (!ghost && firstWord) {
+      const w = v.toLowerCase();
+      const c = [...BUILTINS, ...COMMON].find((x) => x.startsWith(w) && x !== w);
+      if (c) ghost = c.slice(v.length);
+    }
+    if (input.value === v) renderInput();
+  }
+
+  function acceptGhost() {
+    input.value += ghost;
+    ghost = "";
+    input.setSelectionRange(input.value.length, input.value.length);
     renderInput();
+    computeGhost(); // keep going into the next folder level
   }
 
   function renderInput() {
@@ -763,7 +857,7 @@ export function createTerminal(host, ctx) {
     host.classList.toggle("stdin", running);
     $(".ti-prompt").title = running ? "Input goes to the running program" : active?.cwd ?? "";
     input.placeholder = running ? "Send input to the running program…" : active?.cwd ? `Type a command or a folder name…` : "";
-    mirror.innerHTML = highlightLine(input.value, lastTyped) + (ghost ? `<span class="tk-ghost">${esc(ghost)}</span>` : "");
+    mirror.innerHTML = highlightLine(input.value, lastTyped) + (ghost ? `<span class="tk-ghost">${esc(ghost)}</span><kbd class="tk-tab">Tab</kbd>` : "");
     lastTyped = -1;
     mirror.style.transform = `translateX(${-input.scrollLeft}px)`;
     placeCaret();
@@ -845,11 +939,11 @@ export function createTerminal(host, ctx) {
     suggest.innerHTML = sugg.items
       .map((it, i) => `<li class="${i === sugg.index ? "on" : ""}" data-i="${i}">${it.builtin ? icons.terminal : it.dir ? folderIcon(false) : fileIcon(it.label)}<span>${esc(it.label)}</span>${it.builtin ? "<em>built-in</em>" : ""}</li>`)
       .join("");
-    const fieldRect = $(".ti-field").getBoundingClientRect();
-    const hostRect = host.getBoundingClientRect();
-    suggest.style.left = `${fieldRect.left - hostRect.left + Math.max(0, sugg.start * charW - input.scrollLeft)}px`;
-    suggest.style.bottom = `${hostRect.bottom - fieldRect.top + 4}px`;
     suggest.hidden = false;
+    const f = $(".ti-field").getBoundingClientRect();
+    const x = f.left + Math.max(0, sugg.start * charW - input.scrollLeft);
+    placeFloating(suggest, { left: x, right: x, top: f.top, bottom: f.bottom }, { prefer: "above" });
+    suggest.querySelector("li.on")?.scrollIntoView({ block: "nearest" });
   }
 
   suggest.addEventListener("mousedown", (e) => {
@@ -885,12 +979,15 @@ export function createTerminal(host, ctx) {
       renderInput();
       return runLine(line);
     }
-    if (k === "Tab") { e.preventDefault(); if (active?.cwd && !active.running) complete(); return; }
+    if (k === "Tab") {
+      e.preventDefault();
+      if (ghost) return acceptGhost();
+      if (active?.cwd && !active.running) complete();
+      return;
+    }
     if ((k === "ArrowRight" || k === "End") && ghost && input.selectionStart === input.value.length) {
       e.preventDefault();
-      input.value += ghost;
-      ghost = "";
-      return renderInput();
+      return acceptGhost();
     }
     if (k === "ArrowUp" || k === "ArrowDown") {
       if (!history.length) return;
