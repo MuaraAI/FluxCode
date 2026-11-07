@@ -227,6 +227,25 @@ measure("python GUI app running");
 await press("F5", { shift: true });
 check("stop ends the GUI app", !!(await waitFor(`document.querySelector('#output').innerText.includes('[Done]')`, 8000)));
 
+// Command palette: clean, contiguous highlights and no scattered matches.
+await press("p", { ctrl: true, shift: true });
+await waitFor(`!document.querySelector('#quick-input').hidden`);
+await type("ter");
+await sleep(200);
+const pal = await evaluate(`(() => {
+  const rows = [...document.querySelectorAll('#qi-list li[data-i]')];
+  return {
+    labels: rows.map(r => r.textContent.replace(/\\s+(Ctrl|Shift|Alt|F\\d).*$/, '')),
+    marks: rows.map(r => [...r.querySelectorAll('.qh')].map(m => m.textContent)),
+    bg: rows[0] && getComputedStyle(rows[0].querySelector('.qh')).backgroundColor,
+  };
+})()`);
+check("palette: 'ter' highlights one contiguous run per row", pal.marks.length > 0 && pal.marks.every((m) => m.length === 1 && m[0].toLowerCase() === "ter"), JSON.stringify(pal.marks.slice(0, 4)));
+check("palette: no scattered matches like 'Toggle Word Wrap'", !pal.labels.some((l) => /Word Wrap/.test(l)));
+check("palette: highlight has no background box", pal.bg === "rgba(0, 0, 0, 0)", pal.bg);
+await shot("07-palette");
+await press("Escape");
+
 // Layout sanity: nothing important outside the window.
 const layout = await evaluate(`(() => {
   const r = (s) => document.querySelector(s)?.getBoundingClientRect();

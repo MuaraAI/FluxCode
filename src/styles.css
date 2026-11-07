@@ -553,6 +553,9 @@ button.sb-item:hover { background: rgba(255, 255, 255, 0.08); }
 #qi-list li .kb { margin-left: auto; display: flex; gap: 3px; flex: none; }
 #qi-list li .kb kbd { font-size: 10.5px; padding: 1px 5px; }
 #qi-list li.selected { background: var(--bg-select); color: var(--fg-strong); box-shadow: inset 0 0 0 1px rgba(59, 142, 234, 0.6); }
+/* Match highlight: accent color + semi-bold, no background boxes (clean, like VS Code). */
+.qh { color: #5eaaff; font-weight: 600; }
+#qi-list li.selected .qh { color: #9ccbff; }
 #qi-list li.empty { color: var(--fg-muted); cursor: default; }
 #qi-list li.empty:hover { background: none; }
 

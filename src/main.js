@@ -1475,38 +1475,59 @@ appWindow.onResized(() => {
 
 const quick = { filtered: [], index: 0 };
 
-function fuzzyScore(query, text) {
+/** Start of a word: after a separator, or a camelCase hump. */
+const isWordStart = (text, i) =>
+  i === 0 || "\\/._-: ()[]".includes(text[i - 1]) || (/[a-z]/.test(text[i - 1]) && /[A-Z]/.test(text[i]));
+
+/**
+ * Match `query` against `text` (VS Code-like):
+ * 1. a contiguous substring wins — ideally at a word start ("ter" → **Ter**minal);
+ * 2. otherwise letters may skip ahead only to word starts ("tt" → **T**oggle **T**erminal).
+ *    With `strict` off (file names) any in-order letters are allowed, ranked lower.
+ */
+function fuzzyScore(query, text, { strict = false } = {}) {
   if (!query) return { score: 0, hits: [] };
   const q = query.toLowerCase();
   const s = text.toLowerCase();
+  let at = -1;
+  for (let i = s.indexOf(q); i >= 0; i = s.indexOf(q, i + 1)) {
+    if (isWordStart(text, i)) { at = i; break; }
+    if (at < 0) at = i;
+  }
+  if (at >= 0) {
+    const hits = Array.from({ length: q.length }, (_, k) => at + k);
+    return { score: 1000 + (isWordStart(text, at) ? 300 : 0) - at * 2 - s.length * 0.1, hits };
+  }
   const hits = [];
   let qi = 0;
-  let score = 0;
   let prev = -2;
+  let score = 0;
   for (let i = 0; i < s.length && qi < q.length; i++) {
-    if (s[i] === q[qi]) {
-      hits.push(i);
-      score += prev === i - 1 ? 5 : 1; // consecutive matches
-      if (i === 0 || "\\/._-: ".includes(s[i - 1])) score += 3; // word starts
-      prev = i;
-      qi++;
-    }
+    if (s[i] !== q[qi]) continue;
+    const contiguous = prev === i - 1;
+    const start = isWordStart(text, i);
+    if (strict && !contiguous && !start) continue;
+    hits.push(i);
+    score += contiguous ? 6 : start ? 5 : 1;
+    prev = i;
+    qi++;
   }
-  return qi === q.length ? { score: score - s.length * 0.01, hits } : null;
+  return qi === q.length ? { score: score - s.length * 0.05, hits } : null;
 }
 
+/** Matched letters in the accent color and semi-bold; runs are grouped into one span. */
 function highlightHits(text, hits) {
   if (!hits.length) return escapeHtml(text);
   const set = new Set(hits);
   let out = "";
-  let inMark = false;
+  let open = false;
   for (let i = 0; i < text.length; i++) {
     const hit = set.has(i);
-    if (hit && !inMark) { out += '<mark class="hit">'; inMark = true; }
-    if (!hit && inMark) { out += "</mark>"; inMark = false; }
+    if (hit && !open) { out += '<span class="qh">'; open = true; }
+    if (!hit && open) { out += "</span>"; open = false; }
     out += escapeHtml(text[i]);
   }
-  return inMark ? `${out}</mark>` : out;
+  return open ? `${out}</span>` : out;
 }
 
 async function openQuickInput(prefix = "") {
@@ -1540,7 +1561,7 @@ function filterQuick() {
     const q = raw.slice(1).trim();
     results = Object.entries(COMMANDS)
       .filter(([id]) => id !== "commandPalette")
-      .map(([id, [label, kb]]) => ({ id, label, kb, m: fuzzyScore(q, label) }))
+      .map(([id, [label, kb]]) => ({ id, label, kb, m: fuzzyScore(q, label, { strict: true }) }))
       .filter((r) => r.m)
       .sort((a, b) => (q ? b.m.score - a.m.score : 0))
       .map((r) => ({
