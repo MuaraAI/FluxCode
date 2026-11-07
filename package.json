@@ -2,7 +2,7 @@
   "name": "fluxcode",
   "private": true,
   "version": "0.5.2-dev.2026-11-07-1545",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",

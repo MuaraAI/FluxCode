@@ -3,7 +3,7 @@ name = "fluxcode"
 version = "0.5.2-dev.2026-11-07-1545"
 description = "FluxCode - a lightweight code editor with the VS Code look and feel"
 edition = "2021"
-license-file = "../LICENSE"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "fluxcode_lib"

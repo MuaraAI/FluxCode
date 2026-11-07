@@ -6,6 +6,12 @@ in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
 everything that touches the machine (files, processes, the terminal, the preview server)
 runs in Rust.
 
+There is also a **native GPUI edition** (no WebView, one process, ~2x faster start and
+~80 % less resident memory); see [GPUI edition](#gpui-edition-native-no-webview).
+
+FluxCode is **free and open source** under the
+[GNU General Public License v3.0 or later](LICENSE).
+
 > Status: **development build `0.5.2-dev.2026-11-07-1545`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
@@ -197,6 +203,49 @@ use it (start on first message, stop when idle). A whole-stack total under
 50 MB is therefore not reachable with WebView2 plus OpenCode; FluxCode's own
 share stays as above.
 
+## GPUI edition (native, no WebView)
+
+[`gpui-app/`](gpui-app/) is a second FluxCode front end built on
+[GPUI](https://gpui.rs) (Zed's GPU-accelerated Rust UI framework) and
+[gpui-component](https://github.com/longbridge/gpui-kit). The UI is drawn by the GPU
+(DirectX 11 on Windows) in **one process**, without a browser engine. It reuses the Rust
+backend logic of the Tauri app (search, processes, OpenCode/ACP, preview server, GitHub).
+
+Benchmark on the same machine (Windows 11, AMD Radeon integrated graphics), release builds,
+median of 5 runs, this repository open; Tauri numbers include every WebView2 process
+([full report](docs/gpui-vs-tauri.md), script: `scripts/bench-gpui-vs-tauri.ps1`):
+
+| | Tauri (WebView2) | GPUI | |
+| --- | --- | --- | --- |
+| Start to painted UI | 506 ms | **273 ms** | ~1.9x faster |
+| Processes | 6 | **1** | |
+| Idle memory, private | 113 MB | **101 MB** | -10 % |
+| Idle memory, working set | 336 MB | **60 MB** | -82 % |
+| Large file (60k lines), working set | 386 MB | **76 MB** | highlighting off above 2 MB |
+| CPU while typing in the large file | 77 % | **11 %** | % of one core |
+| CPU while scrolling the large file | 63 % | **11 %** | |
+| CPU idle | 10 % | **2 %** | |
+| Executable | **3.9 MB** (+ system WebView2) | 26.4 MB (self-contained) | |
+
+Already in the GPUI edition: explorer (new/rename/delete to the Recycle Bin), tabs,
+tree-sitter editor for 20 languages, auto save, find in files, terminal, Run (F5) with
+Output, completion + Emmet, OpenCode panel with Keep/Undo, Live Preview, settings,
+GitHub sign-in, session restore. Not yet: debugger, Quick Open, window position restore,
+`.flx` viewer. The parity table is in [docs/gpui-vs-tauri.md](docs/gpui-vs-tauri.md).
+
+Build and install it for your user (Start Menu + Settings → Apps entry):
+
+```powershell
+cd gpui-app
+cargo build --release --manifest-path tools/fxc-shim/Cargo.toml   # SDK-free HLSL compiler shim
+$env:GPUI_FXC_PATH = "<target>/release/fxc-shim.exe"
+cargo build --release
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+See [gpui-app/README.md](gpui-app/README.md) for the details (target dir without spaces
+for MinGW, the optional in-window preview).
+
 ## Keybindings
 
 | Action | Keys |
@@ -295,9 +344,15 @@ examples/                python/, js/ (JS + TS), web/ (HTML + CSS + JS)
 
 ## License
 
-FluxCode is **source-available**, not open source — see [LICENSE](LICENSE).
-You may read the code, use the official builds, and fork/build it **only to
-contribute back** to this repository (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-Redistributing it, publishing forks or rebrands, or reusing its code in other
-products needs written permission from MuaraAI. Third-party components keep
-their own licenses ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+Copyright (C) 2026 MuaraAI and contributors.
+
+FluxCode is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version** — see [LICENSE](LICENSE). Anyone may use, study, share and change it;
+if you distribute a modified version, you must share its source under the same
+license. FluxCode comes with no warranty.
+
+Third-party components keep their own licenses
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)); all of them are compatible
+with the GPL v3.
