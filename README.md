@@ -1,9 +1,10 @@
 # FluxCode
 
-A lightweight code editor for Windows with the VS Code look and feel, built on
+A lightweight code editor for Windows and Linux with the VS Code look and feel, built on
 **Tauri 2 (Rust)** + **CodeMirror 6**. There's no bundled Chromium: the UI runs
-in Windows' built-in WebView2, and everything that touches the machine (files,
-processes, the terminal, the preview server) runs in Rust.
+in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
+everything that touches the machine (files, processes, the terminal, the preview server)
+runs in Rust.
 
 > Status: **development build `0.4.2-dev.2026-11-07-1206`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
@@ -12,6 +13,7 @@ processes, the terminal, the preview server) runs in Rust.
 
 ## Install
 
+### Windows
 Download `FluxCode_<version>_x64-setup.exe` from the
 [Releases](https://github.com/MuaraAI/FluxCode/releases) page and run it. It
 installs for your user only (no admin rights) into
@@ -19,15 +21,38 @@ installs for your user only (no admin rights) into
 the Desktop, and is removed from Settings → Apps → Installed apps. A portable
 zip is attached too.
 
+### Linux (Debian, Ubuntu, Arch, CachyOS, ARM64)
+
+Download the binary package for your distro from the [Releases](https://github.com/MuaraAI/FluxCode/releases) page:
+
+- **Debian / Ubuntu (`.deb`)** (x86_64 & arm64):
+  ```bash
+  sudo dpkg -i fluxcode_<version>_amd64.deb # or arm64.deb
+  sudo apt-get install -f # install system runtime dependencies if missing
+  ```
+- **Arch Linux / CachyOS**:
+  Install using the `PKGBUILD` provided in `packages/arch/`:
+  ```bash
+  cd packages/arch
+  makepkg -si
+  ```
+- **Universal Linux (`.AppImage`)** (x86_64 & aarch64):
+  ```bash
+  chmod +x FluxCode_<version>_x86_64.AppImage
+  ./FluxCode_<version>_x86_64.AppImage
+  ```
+
+System dependencies on Linux: `webkit2gtk-4.1`, `libayatana-appindicator`, `openssl`.
 ## What works now
 
 **Workbench**
-- VS Code layout: custom title bar with menus (File, Edit, Selection, View,
-  Run, Terminal, Help), a centered command center, layout toggles and window
-  buttons; activity bar, explorer, search, tabs (with preview tabs),
-  breadcrumbs, panel (Output + Terminal), status bar
-- Opens inside the monitor's work area (never under the taskbar; maximized
+- VS Code layout: menus (File, Edit, Selection, View, Run, Terminal, Help),
+  centered command center, layout toggles, tabs (with preview tabs),
+  breadcrumbs, panel (Output + Terminal), status bar. Seamless frameless window
+  on Windows and native desktop decorations on Linux (GNOME, KDE, Hyprland, etc.)
+- Opens inside the monitor's work area (never under taskbars; maximized
   on small screens) and reopens where you left it
+
 - **Appearance** (gear in the activity bar, or Ctrl+K Ctrl+T): 8 theme
   presets (dark and light) or your own **Accent / Background / Text** colors
   with color pickers. Every other color — panels, borders, selections, syntax
@@ -78,8 +103,9 @@ idling in the background). ``Ctrl+` `` or the **TERMINAL** tab; its path bar
 and tools sit in the panel header to leave room for output.
 
 - **No `cd` needed**: click any part of the path bar (long paths fold into
-  `…`), use ▾ for subfolders or the drive button, or type a folder name,
-  `..`, `...`, `~`, `-` (back) or `D:` and press Enter
+  `…`), use ▾ for subfolders or the root `/` / drive button, or type a folder
+  name, `..`, `...`, `~`, `-` (back), `D:` or absolute `/path` and press Enter
+
 - **Inline suggestions** while you type (history, files/folders, commands),
   shown next to the text with a `Tab` hint: **Tab** (or →) completes it;
   with no suggestion, Tab opens a completion picker
@@ -87,14 +113,15 @@ and tools sit in the panel header to leave room for output.
 - Native, clickable `ls` / `dir`; colored command line; ANSI colors and
   progress bars; clickable tracebacks; multiple terminals; Ctrl+C, Ctrl+L
 - Bare `python` / `py` / `node` start their interactive REPL
-- Terminal Settings (⚙): shell (cmd, PowerShell, pwsh), font size, cursor
-  style, smooth caret, hidden files, revoke permissions — popovers always
-  stay inside the window
+- Terminal Settings (⚙): shell (bash, zsh, fish, sh on Linux; cmd, PowerShell,
+  pwsh on Windows), font size, cursor style, smooth caret, hidden files, revoke
+  permissions — popovers always stay inside the window
+
 - **Permissions first**: the terminal only works in folders you allowed —
   the open workspace (for the session), a folder allowed once or always, or
   full disk access. This is a consent gate for where commands run, not a
-  sandbox: a command can still reach any path your Windows account can
-- Limits: full-screen TUI programs (vim, htop) need a real PTY
+  sandbox: a command can still reach any path your operating system account can
+
 
 ## Resource use
 

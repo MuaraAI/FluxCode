@@ -108,13 +108,14 @@ export function createOutput(host, ctx) {
 
   /** Turn Python tracebacks and Node stack frames (`C:\x.js:10:5`) into clickable links. */
   function linkify() {
-    const re = /File "([^"]+)", line (\d+)|([A-Za-z]:\\[^\s:()"'<>|]+):(\d+)(?::\d+)?/g;
+    const re = /(?:File "([^"]+)", line (\d+))|((?:\/[^\s:()"'<>|]+\.[a-zA-Z0-9]+|[A-Za-z]:\\[^\s:()"'<>|]+\.[a-zA-Z0-9]+)):(\d+)(?::\d+)?/g;
     for (const span of out.querySelectorAll("span.stderr:not([data-linked])")) {
       const text = span.textContent;
-      if (!/File "|[A-Za-z]:\\/.test(text)) continue;
+      if (!/File "|[A-Za-z]:\\|\//.test(text)) continue;
       const frag = document.createDocumentFragment();
       let at = 0;
       for (const m of text.matchAll(re)) {
+        if (m.index > 0 && text.slice(Math.max(0, m.index - 5), m.index).endsWith("://")) continue;
         frag.append(text.slice(at, m.index));
         const a = document.createElement("a");
         a.textContent = m[0];

@@ -1,6 +1,2 @@
-# The MinGW `windres` tool (used to embed the app icon on the windows-gnu
-# toolchain) breaks on paths with spaces, and this project lives in
-# "Project Pribadi". Build output therefore goes to a path without spaces.
-# Change or remove this if the project moves to a path without spaces.
-[build]
-target-dir = "C:/Users/User/.fluxcode-target"
+# Cross-platform cargo configuration.
+# Default target directory is standard `./target` (overridable via CARGO_TARGET_DIR).

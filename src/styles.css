@@ -128,6 +128,7 @@ input { font: inherit; }
 .win-controls button { width: 46px; height: 100%; display: grid; place-items: center; color: var(--fg); transition: background-color 0.1s; }
 .win-controls button:hover { background: color-mix(in srgb, var(--fg-strong) 8%, transparent); }
 #wc-close:hover { background: #c42b1c; color: #fff; }
+body.platform-linux .win-controls { display: none !important; }
 
 /* ------------------------------------------------------------ menu popup */
 #menu-popup {
