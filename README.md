@@ -5,7 +5,7 @@ A lightweight code editor for Windows with the VS Code look and feel, built on
 in Windows' built-in WebView2, and everything that touches the machine (files,
 processes, the terminal, the preview server) runs in Rust.
 
-> Status: **development build `0.3.0-dev.2026-11-07-1052`** — not a final
+> Status: **development build `0.3.0-dev.2026-11-07-1100`** — not a final
 > release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
 > Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
 > **DEV** badge in the title bar.

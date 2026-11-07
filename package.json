@@ -1,7 +1,7 @@
 {
   "name": "fluxcode",
   "private": true,
-  "version": "0.3.0-dev.2026-11-07-1052",
+  "version": "0.3.0-dev.2026-11-07-1100",
   "type": "module",
   "scripts": {
     "dev": "vite",
