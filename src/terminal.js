@@ -633,6 +633,7 @@ export function createTerminal(host, ctx) {
       const frag = document.createDocumentFragment();
       let last = 0;
       for (const m of text.matchAll(re)) {
+        if (m.index > 0 && text.slice(Math.max(0, m.index - 5), m.index).endsWith("://")) continue;
         frag.append(text.slice(last, m.index));
         const a = document.createElement("a");
         a.textContent = m[0];
@@ -730,7 +731,8 @@ export function createTerminal(host, ctx) {
     if (lc === "open" || lc === "code") {
       try {
         const path = rest.replace(/^"|"$/g, "");
-        return ctx.openFile(/^[A-Za-z]:[\\/]/.test(path) ? path : joinPath(s.cwd, path));
+        const isAbs = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+        return ctx.openFile(isAbs ? path : joinPath(s.cwd, path));
       } catch { return; }
     }
     if (lc === "help") {

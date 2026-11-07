@@ -59,4 +59,38 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         assert_eq!(resolved, Some(py_bin));
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_is_executable_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("fluxcode_test_exec_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let exec_file = tmp.join("script.sh");
+        let non_exec_file = tmp.join("data.txt");
+        fs::write(&exec_file, "#!/bin/sh\nexit 0").unwrap();
+        fs::write(&non_exec_file, "some data").unwrap();
+
+        let mut perms = fs::metadata(&exec_file).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&exec_file, perms).unwrap();
+
+        let mut perms2 = fs::metadata(&non_exec_file).unwrap().permissions();
+        perms2.set_mode(0o644);
+        fs::set_permissions(&non_exec_file, perms2).unwrap();
+
+        assert!(is_executable(&exec_file));
+        assert!(!is_executable(&non_exec_file));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_unix_kill_process_group() {
+        let mut child = command("sleep").arg("60").spawn().unwrap();
+        let res = kill_tree(&mut child);
+        assert!(res.is_ok());
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+    }
 }

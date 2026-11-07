@@ -13,12 +13,14 @@ pub fn command(program: &str) -> Command {
 pub fn kill_tree(child: &mut Child) -> Result<(), String> {
     let pid = child.id() as i32;
     unsafe {
-        if libc::killpg(pid, libc::SIGTERM) != 0 {
+        let _ = libc::killpg(pid, libc::SIGTERM);
+        if libc::killpg(pid, libc::SIGKILL) != 0 {
             let _ = child.kill();
         }
     }
     Ok(())
 }
+
 
 pub fn resolve_venv_python(workspace: &Path) -> Option<PathBuf> {
     for venv in [".venv", "venv", "env"] {

@@ -311,12 +311,12 @@ pub fn term_run(
     };
     #[cfg(not(windows))]
     let mut cmd = {
-        let shell_bin = if shell == "zsh" {
-            "zsh"
-        } else if shell == "fish" {
-            "fish"
-        } else {
-            "bash"
+        let shell_bin = match shell.as_str() {
+            "zsh" => "zsh",
+            "fish" => "fish",
+            "sh" => "sh",
+            "dash" => "dash",
+            _ => "bash",
         };
         let mut c = command(shell_bin);
         c.args(["-c", &line]);

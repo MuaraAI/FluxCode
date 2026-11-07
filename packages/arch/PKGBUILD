@@ -16,5 +16,6 @@ sha256sums_aarch64=('SKIP')
 
 package() {
     bsdtar -xf data.tar.* -C "${pkgdir}/"
-    install -Dm755 "${pkgdir}/usr/bin/fluxcode" "${pkgdir}/usr/bin/fluxcode"
+    chmod 755 "${pkgdir}/usr/bin/fluxcode"
+    install -Dm644 "${startdir:-.}/fluxcode.desktop" "${pkgdir}/usr/share/applications/fluxcode.desktop" 2>/dev/null || true
 }
