@@ -260,9 +260,8 @@ export function createAgent(host, ctx) {
 
   function failed(message) {
     const hint = /auth|login|api key|credential|provider/i.test(message + logTail.join(" "))
-      ? "<br>Sign in first: run <code>opencode auth login</code> in Flux Terminal, then try again."
+      ? "<br>Configure credentials: run <code>omm setup</code> or <code>opencode auth login</code> in Flux Terminal, then try again."
       : "";
-    setStatus("error", "Error");
     lastError = message;
     note(`${icons.warning}<span>${esc(message)}${hint}${logTail.length ? `<details><summary>log</summary><pre>${esc(logTail.slice(-12).join("\n"))}</pre></details>` : ""}</span>`, "err");
     invoke("acp_stop").catch(() => {});
