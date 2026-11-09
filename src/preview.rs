@@ -112,8 +112,17 @@ fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> st
 
 fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, Condvar)) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    // Read the whole request head: it can arrive in several pieces, and closing the
+    // socket with unread bytes makes Linux reset the connection instead of closing it.
     let mut buf = [0u8; 8192];
-    let n = stream.read(&mut buf)?;
+    let mut n = 0;
+    while n < buf.len() {
+        let got = stream.read(&mut buf[n..])?;
+        n += got;
+        if got == 0 || buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
     let head = String::from_utf8_lossy(&buf[..n]);
     let target = head.split_whitespace().nth(1).unwrap_or("/");
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
