@@ -37,7 +37,7 @@ actions!(
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMira, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
-        AgentInsertCode, RemoveFolder, AgentShowOptions
+        AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent
     ]
 );
 
@@ -55,6 +55,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-f", FindInFiles, None),
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
+        KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
         KeyBinding::new("ctrl-p", QuickOpenFile, None),
         KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
@@ -842,6 +843,21 @@ impl Workbench {
         } else {
             self.show_view(SideView::Agent, cx);
         }
+    }
+
+    /// Ctrl+L: open the agent panel with the caret in its input, or close it.
+    fn on_toggle_agent(&mut self, _: &ToggleAgent, window: &mut Window, cx: &mut Context<Self>) {
+        let open = if self.settings.agent_right { self.agent_open } else { self.sidebar_open && self.view == SideView::Agent };
+        if !open {
+            return self.on_show_agent(&ShowAgent, window, cx);
+        }
+        if self.settings.agent_right {
+            self.agent_open = false;
+        } else {
+            self.view = SideView::Explorer;
+        }
+        self.focus.focus(window, cx);
+        cx.notify();
     }
 
     fn on_show_settings(&mut self, _: &ShowSettings, _: &mut Window, cx: &mut Context<Self>) {
@@ -1710,6 +1726,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_mention_close))
             .on_action(cx.listener(Self::on_agent_insert_code))
             .on_action(cx.listener(Self::on_agent_show_options))
+            .on_action(cx.listener(Self::on_toggle_agent))
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))

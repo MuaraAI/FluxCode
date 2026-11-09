@@ -1188,7 +1188,7 @@ impl Workbench {
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
                     .child(self.render_agent_tools(cx))
-                    .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+Shift+A shows it again)"), cx, |this, _, cx| {
+                    .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
                     })),
@@ -2056,38 +2056,85 @@ impl Workbench {
         v.into_any_element()
     }
 
+    /// Click on a chip's name: show what it stands for.
+    fn agent_chip_go(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match key {
+            "file" | "sel" => {
+                if let Some(ix) = self.active {
+                    let h = self.docs[ix].editor.focus_handle(cx);
+                    h.focus(window, cx);
+                }
+            }
+            "err" => {
+                if let Some(p) = self.problems.first() {
+                    let (path, line) = (p.path.clone(), p.line);
+                    self.open_location(path, line, 0, window, cx);
+                } else {
+                    self.panel_open = true;
+                    self.panel_tab = crate::workbench::PanelTab::Terminal;
+                }
+            }
+            "out" => {
+                self.panel_open = true;
+                self.panel_tab = crate::workbench::PanelTab::Terminal;
+            }
+            "ws" => {
+                self.view = crate::workbench::SideView::Explorer;
+                self.sidebar_open = true;
+            }
+            k if k.starts_with('@') => {
+                if let Some(root) = self.root.clone() {
+                    let p = root.join(&k[1..]);
+                    if p.is_file() {
+                        self.open_file(p, window, cx);
+                    } else if p.is_dir() {
+                        self.selected = Some(p);
+                        self.view = crate::workbench::SideView::Explorer;
+                        self.sidebar_open = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     fn render_context_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let chips = self.agent_chips(cx);
         chips
             .into_iter()
             .enumerate()
             .map(|(i, (key, label, icon, on))| {
-                h_flex()
-                    .id(("ag-chip", i))
-                    .max_w(theme::u(200.))
-                    .h(theme::u(20.))
-                    .px_1p5()
-                    .gap_1()
-                    .rounded(px(4.))
-                    .border_1()
-                    .cursor_pointer()
-                    .text_xs()
-                    .border_color(c(if on { theme::BORDER_STRONG } else { theme::BORDER }))
-                    .bg(if on { c(theme::BG_EDITOR) } else { gpui_kit::transparent_black() })
-                    .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
-                    .hover(|s| s.border_color(c(theme::FG_DIM)))
-                    .child(icon.size(theme::u(12.)))
-                    .child(div().min_w_0().truncate().when(!on, |d| d.line_through()).child(label))
-                    .tooltip(move |w, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(if on { crate::i18n::tr("Sent with your message. Click to leave it out") } else { crate::i18n::tr("Left out. Click to send it") })
-                            .build(w, cx)
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.agent.off_ctx.remove(&key) {
-                            this.agent.off_ctx.insert(key.clone());
-                        }
-                        cx.notify();
-                    }))
+                let toggle_key = key.clone();
+                chip_shell(SharedString::from(format!("ag-chip-{i}")), on)
+                    .child(
+                        chip_x(SharedString::from(format!("ag-chip-x-{i}")), if on { IconName::Close } else { IconName::Plus }, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            if !this.agent.off_ctx.remove(&toggle_key) {
+                                this.agent.off_ctx.insert(toggle_key.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(if on { crate::i18n::tr("Leave it out of the message") } else { crate::i18n::tr("Send it with the message") }).build(w, cx)
+                        }),
+                    )
+                    .child(
+                        h_flex()
+                            .id(SharedString::from(format!("ag-chip-open-{i}")))
+                            .min_w_0()
+                            .pr_1p5()
+                            .gap_1()
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(c(theme::FG_STRONG)))
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Go to it")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                cx.stop_propagation();
+                                this.agent_chip_go(&key, w, cx);
+                            }))
+                            .child(icon.size(theme::u(12.)))
+                            .child(div().min_w_0().truncate().when(!on, |d| d.line_through()).child(label)),
+                    )
                     .into_any_element()
             })
             .collect()
@@ -2213,9 +2260,6 @@ impl Workbench {
             .when(matches!(a.status, Status::Starting | Status::Busy), |h| {
                 h.child(div().size(px(6.)).rounded_full().bg(c(dot)))
                     .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
-                    .when(a.status == Status::Busy, |h| {
-                        h.child(Button::new("ag-cancel").label(tr("Stop")).xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
-                    })
             });
         if a.show_memory {
             return v_flex().size_full().child(self.render_memory(cx)).into_any_element();
@@ -2228,7 +2272,7 @@ impl Workbench {
         }
 
         let name = agent_name();
-        let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
+        let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
             let missing = name == "Mira" && !mira_installed();
             let hint = if missing {
@@ -2679,26 +2723,33 @@ impl Workbench {
         let attachments = a.attachments.iter().enumerate().map(|(i, p)| {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (icon, tint) = crate::files::icon_for(&name);
-            h_flex()
-                .id(("ag-att", i))
-                .max_w(theme::u(200.))
-                .h(theme::u(20.))
-                .pl_1p5()
-                .gap_1()
-                .rounded(px(4.))
-                .border_1()
-                .border_color(c(theme::BORDER_STRONG))
-                .bg(c(theme::BG_EDITOR))
-                .text_xs()
-                .text_color(c(theme::FG))
-                .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)))
-                .child(div().min_w_0().truncate().child(name))
-                .child(Button::new(("ag-att-x", i)).icon(IconName::Close).xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
+            let path = p.clone();
+            chip_shell(SharedString::from(format!("ag-att-{i}")), true)
+                .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
                     if i < this.agent.attachments.len() {
                         this.agent.attachments.remove(i);
                     }
                     cx.notify();
                 })))
+                .child(
+                    h_flex()
+                        .id(SharedString::from(format!("ag-att-open-{i}")))
+                        .min_w_0()
+                        .pr_1p5()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(c(theme::FG_STRONG)))
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            cx.stop_propagation();
+                            if path.is_file() {
+                                this.open_file(path.clone(), w, cx);
+                            }
+                        }))
+                        .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)))
+                        .child(div().min_w_0().truncate().child(name)),
+                )
                 .into_any_element()
         });
         let mut chips: Vec<AnyElement> = attachments.collect();
@@ -2756,24 +2807,21 @@ impl Workbench {
             )
             .child(
                 h_flex()
+                    .h(theme::u(34.))
                     .px_1p5()
-                    .pb_1p5()
-                    .gap_px()
+                    .gap_0p5()
+                    .items_center()
                     .child(
-                        Button::new("ag-attach")
-                            .icon(Icon::new(gpui_kit::assets::IconName::Paperclip))
-                            .xsmall()
-                            .ghost()
-                            .tooltip(tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
-                            .on_click(cx.listener(|this, _, w, cx| this.agent_pick_files(w, cx))),
+                        icon_btn("ag-attach", Icon::new(gpui_kit::assets::IconName::Paperclip), tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                cx.stop_propagation();
+                                this.agent_pick_files(w, cx)
+                            })),
                     )
                     .child(
-                        Button::new("ag-at")
-                            .icon(Icon::new(gpui_kit::assets::IconName::AtSign))
-                            .xsmall()
-                            .ghost()
-                            .tooltip(tr("Mention a file in the project"))
+                        icon_btn("ag-at", Icon::new(gpui_kit::assets::IconName::AtSign), tr("Mention a file in the project"))
                             .on_click(cx.listener(|this, _, w, cx| {
+                                cx.stop_propagation();
                                 this.agent.input.update(cx, |s, cx| {
                                     let v = s.value().to_string();
                                     let new = if v.is_empty() || v.ends_with(char::is_whitespace) { format!("{v}@") } else { format!("{v} @") };
@@ -2798,7 +2846,7 @@ impl Workbench {
                                 .id("ag-model-btn")
                                 .flex_none()
                                 .max_w(theme::u(170.))
-                                .h(theme::u(22.))
+                                .h(theme::u(24.))
                                 .px_1p5()
                                 .gap_1()
                                 .rounded(px(4.))
@@ -2807,27 +2855,31 @@ impl Workbench {
                                 .text_color(c(theme::FG_MUTED))
                                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
                                 .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Model, effort and mode")).build(w, cx))
-                                .on_click(cx.listener(|this, _, _, cx| this.agent_open_options(cx)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.agent_open_options(cx)
+                                }))
                                 .child(div().min_w_0().truncate().child(short))
                                 .child(Icon::new(IconName::ChevronDown).xsmall()),
                         )
                     })
                     .child(div().flex_1())
-                    .child(div().min_w_0().truncate().px_1().text_xs().text_color(c(theme::FG_DIM)).child(if busy { crate::i18n::tr("Enter queues · Shift+Enter new line") } else { crate::i18n::tr("Enter sends · Shift+Enter new line") }))
                     .child(if busy && !has_text {
-                        Button::new("ag-stop")
-                            .icon(IconName::Square)
-                            .xsmall()
-                            .tooltip(tr("Stop the answer"))
-                            .on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx)))
+                        // A solid square in the accent: the one action while the agent works.
+                        send_btn("ag-stop", true, tr("Stop the answer"))
+                            .child(div().size(theme::u(8.)).rounded(px(1.5)).bg(c(theme::ON_ACCENT)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.agent_cancel(cx)
+                            }))
                             .into_any_element()
                     } else {
-                        Button::new("ag-send")
-                            .icon(IconName::ArrowUp)
-                            .xsmall()
-                            .when(has_text, |b| b.primary())
-                            .tooltip(if busy { crate::i18n::tr("Queue (sent when the answer ends)") } else { crate::i18n::tr("Send (Enter)") })
-                            .on_click(cx.listener(|this, _, w, cx| this.agent_send(w, cx)))
+                        send_btn("ag-send", has_text, if busy { crate::i18n::tr("Queue it (Enter): sent when the answer ends · Shift+Enter new line") } else { crate::i18n::tr("Send (Enter) · Shift+Enter new line") })
+                            .child(Icon::new(IconName::ArrowUp).size(theme::u(14.)).text_color(c(if has_text { theme::ON_ACCENT } else { theme::FG_DIM })))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                cx.stop_propagation();
+                                this.agent_send(w, cx)
+                            }))
                             .into_any_element()
                     }),
             )
@@ -3016,6 +3068,71 @@ impl Workbench {
             let _ = store.reinforce(&id);
         }
     }
+}
+
+/// The composer's icon buttons: one 24 px square each, icon centered.
+fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(theme::u(24.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_color(c(theme::FG_MUTED))
+        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
+        .child(icon.size(theme::u(14.)))
+}
+
+/// Send / stop: the same 24 px square, filled with the accent when it does something.
+fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(theme::u(24.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .cursor_pointer()
+        .when(active, |d| d.bg(c(theme::ACCENT)).hover(|s| s.opacity(0.9)))
+        .when(!active, |d| d.border_1().border_color(c(theme::BORDER_STRONG)).hover(|s| s.bg(c(theme::BG_HOVER))))
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
+}
+
+/// A chip above the input: 22 px tall, the remove button first, then the name.
+fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .max_w(theme::u(210.))
+        .h(theme::u(22.))
+        .gap_0p5()
+        .rounded(px(4.))
+        .border_1()
+        .text_xs()
+        .border_color(c(if on { theme::BORDER_STRONG } else { theme::BORDER }))
+        .bg(if on { c(theme::BG_EDITOR) } else { gpui_kit::transparent_black() })
+        .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
+}
+
+fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(theme::u(18.))
+        .ml_px()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.))
+        .cursor_pointer()
+        .text_color(c(theme::FG_DIM))
+        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+        .on_click(f)
+        .child(Icon::new(icon).size(theme::u(11.)))
 }
 
 /// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.

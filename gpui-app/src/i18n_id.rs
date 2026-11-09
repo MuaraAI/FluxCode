@@ -289,6 +289,12 @@ pub const ID: &[(&str, &str)] = &[
     ("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)", "Lampirkan file: gambar, PDF, Word, Excel, PowerPoint, kode… (atau seret / tempel)"),
     ("Mention a file in the project", "Sebut file di project"),
     ("Stop the answer", "Hentikan jawaban"),
+    ("Queue it (Enter): sent when the answer ends · Shift+Enter new line", "Antrekan (Enter): dikirim setelah jawaban selesai · Shift+Enter baris baru"),
+    ("Send (Enter) · Shift+Enter new line", "Kirim (Enter) · Shift+Enter baris baru"),
+    ("Open the file", "Buka file-nya"),
+    ("Go to it", "Lihat sumbernya"),
+    ("Leave it out of the message", "Jangan ikut kirim"),
+    ("Send it with the message", "Ikut kirim bersama pesan"),
     ("Model, effort and mode", "Model, effort dan mode"),
     ("Couldn't change the setting: {m}", "Gagal mengubah pengaturan: {m}"),
     ("{name} settings: model, effort, mode…", "Pengaturan {name}: model, effort, mode…"),
@@ -324,7 +330,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Turn the agent off", "Matikan agent"),
     ("Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.", "Mira (omm) belum terpasang di PC ini. Pasang omm, atau pilih OpenCode di menu judul panel."),
     ("Attached: {0}", "Terlampir: {0}"),
-    ("Hide (Ctrl+Shift+A shows it again)", "Sembunyikan (Ctrl+Shift+A untuk menampilkan lagi)"),
+    ("Hide (Ctrl+L)", "Sembunyikan (Ctrl+L)"),
     ("Continued with {name}. It gets the conversation with {old} above as context.", "Lanjut dengan {name}. Percakapan dengan {old} di atas ikut jadi konteksnya."),
     ("Mira (omm), not installed", "Mira (omm), belum terpasang"),
     ("Back to the chat", "Kembali ke chat"),
@@ -353,10 +359,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Sent as soon as {name} is ready", "Dikirim begitu {name} siap"),
     ("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it", "Belum terkirim: {name} gagal jalan. Ganti agent di menu judul, pesannya akan dikirim ke sana"),
     ("Sent with your next message", "Dikirim bersama pesan berikutnya"),
-    ("Enter queues · Shift+Enter new line", "Enter masuk antrean · Shift+Enter baris baru"),
-    ("Enter sends · Shift+Enter new line", "Enter kirim · Shift+Enter baris baru"),
-    ("Queue (sent when the answer ends)", "Antrekan (dikirim setelah jawaban selesai)"),
-    ("Send (Enter)", "Kirim (Enter)"),
 ];
 
 #[cfg(test)]

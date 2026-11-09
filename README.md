@@ -337,6 +337,9 @@ The agent panel:
   apply to the running session and are reused for new ones. The same view has FluxCode's
   auto-approve and idle-stop switches and opens OpenCode's config file. When a prompt
   fails because of the model (no credentials, quota), the panel says to pick another one.
+- The chips above the input (open file, selection, error, terminal output, `@file`,
+  attachments, Workspace) have an × on the left that leaves them out (+ adds them back);
+  clicking the name goes to what it stands for (the file, the error line, the terminal).
 - **Edit a message** (pencil next to it): the chat goes back to that message, and Enter
   sends the new text to a fresh session that gets everything before it as context, so the
   answer starts over from there.
@@ -401,6 +404,7 @@ for MinGW, the optional in-window preview).
 | Toggle Side Bar / Panel | `Ctrl+B` / `Ctrl+J` |
 | Settings / Color Theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 | Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
+| Open / close the agent panel (GPUI edition) | `Ctrl+L` |
 | Accept suggestion / expand Emmet / next snippet field | `Tab` |
 | Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
 | Run or Preview / Stop | `F5` / `Shift+F5` |
