@@ -17,6 +17,8 @@ apa yang bisa dilakukan sekarang, apa bedanya dengan sebelumnya, dan apa yang be
 | Placeholder kotak chat | terpotong di panel sempit | pendek: "Tanya OpenCode..." |
 | Harness | OpenCode, Mira, Mura | OpenCode, Mura |
 | Breadcrumb file di luar workspace | path lengkap dari C:\ | nama file saja |
+| Source Control dengan ribuan file baru | ribuan baris digambar, terasa berat | maksimal 200 baris per bagian, plus daftar folder untuk diabaikan |
+| Membatalkan git init | tidak bisa | Hapus Git dari Folder Ini, .git ke Recycle Bin |
 | Pengaturan agent | daftar panjang, harus scroll | satu layar: model jadi dropdown, sisanya deretan tombol |
 
 ### Yang berubah
@@ -33,6 +35,20 @@ apa yang bisa dilakukan sekarang, apa bedanya dengan sebelumnya, dan apa yang be
   dijelaskan dengan kalimat biasa.
 - Mira (`omm`) dihapus. Pengaturan lama yang memilih Mira sekarang memakai Mura.
 - Placeholder kotak chat dipendekkan supaya tidak terpotong.
+- Source Control tidak lagi berat saat ada ribuan file: tiap bagian menggambar paling banyak
+  200 baris lalu menulis berapa sisanya. Kalau file yang belum dilacak lebih dari 200, muncul
+  daftar folder yang paling banyak isinya dengan tombol Abaikan (ditambahkan ke .gitignore).
+  Dites dengan 2.801 file: panel langsung terbuka, Abaikan libraries/ menurunkan jadi 1.302.
+- Hapus Git dari folder ini (menu ... di Source Control): kebalikan dari Buat Repository.
+  Ada konfirmasi yang menyebut repository mana, folder .git dipindah ke Recycle Bin dan file
+  project tidak berubah.
+- Kotak pencarian di title bar langsung terbuka saat diklik. Sebelumnya klik itu juga memulai
+  "geser jendela" milik Windows di area title bar di bawahnya, jadi kadang telat atau tidak
+  terbuka; Ctrl+P tidak lewat situ, makanya selalu cepat.
+- Tombol Agent dengan Ctrl+L di status bar untuk membuka/menutup panel agent. Di 3 kali buka
+  pertama tombol itu menyala sekali (1,6 detik, tidak berulang) sampai Ctrl+L pernah dipakai.
+- Konfirmasi Hapus Git dan pesan commit tidak lagi terpotong di sidebar sempit: nama folder
+  di baris pertama, path satu baris (path lengkap di tooltip).
 - Pengaturan OpenCode/Mura jadi ringkas dan muat tanpa scroll: satu baris per pengaturan
   (label kiri, pilihan kanan, membungkus kalau panel sempit). Model jadi satu dropdown dengan
   model gratis di grup paling atas, mode jadi deretan tombol dengan deskripsi mode yang dipilih

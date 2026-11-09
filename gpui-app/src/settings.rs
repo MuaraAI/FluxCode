@@ -82,6 +82,8 @@ pub struct Settings {
     pub agent_access: String,
     /// Agent memory is off: nothing is recalled, saved or asked of the agent.
     pub memory_off: bool,
+    /// Launches that showed the Ctrl+L hint in the status bar (100: shortcut used).
+    pub agent_hint: u8,
     /// Settings revision, for one-time changes of defaults on existing installs.
     /// Missing in an older file means 0 (not the struct default, which is current).
     #[serde(default)]
@@ -109,6 +111,7 @@ impl Default for Settings {
             agent_options: Default::default(),
             agent_access: String::new(),
             memory_off: false,
+            agent_hint: 0,
             rev: SETTINGS_REV,
         }
     }

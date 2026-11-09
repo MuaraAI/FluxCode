@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "fluxcode-gpui"
-version = "0.9.1-dev.2026-11-09-1612"
+version = "0.9.1-dev.2026-11-09-1655"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
