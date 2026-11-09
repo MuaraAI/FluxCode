@@ -98,6 +98,10 @@ fn sha8(s: &str) -> String {
     sha1_smol::Sha1::from(s).digest().to_string()[..8].to_string()
 }
 
+/// Last parsed store: (path, (modified, size), trails).
+type Cached = (PathBuf, (Option<std::time::SystemTime>, u64), Vec<Trail>);
+static CACHE: std::sync::Mutex<Option<Cached>> = std::sync::Mutex::new(None);
+
 /// The store on disk. Every call reads the file fresh, so the Python tool and
 /// other agents writing the same store stay in sync.
 pub struct Store {
@@ -123,11 +127,31 @@ impl Store {
     /// The trails, or an error when the file exists but can't be parsed (then
     /// nothing is written, so a store another tool is mid-writing is never lost).
     pub fn load(&self) -> Result<Vec<Trail>, String> {
-        match std::fs::read_to_string(self.trails_path()) {
-            Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).map_err(|e| format!("memory store unreadable: {e}")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e.to_string()),
+        let path = self.trails_path();
+        // Parsed once and kept until the file changes (size or time): a message's
+        // recall then costs one metadata call, not a read and a JSON parse.
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        if let Ok(c) = CACHE.lock() {
+            if let Some((p, s, trails)) = c.as_ref() {
+                if *p == path && *s == stamp {
+                    return Ok(trails.clone());
+                }
+            }
         }
+        let trails: Vec<Trail> = match std::fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).map_err(|e| format!("memory store unreadable: {e}"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
+        };
+        if let Ok(mut c) = CACHE.lock() {
+            *c = Some((path, stamp, trails.clone()));
+        }
+        Ok(trails)
     }
 
     fn save_file(&self, name: &str, data: &[Trail]) -> Result<(), String> {
@@ -140,7 +164,14 @@ impl Store {
     }
 
     fn save(&self, trails: &[Trail]) -> Result<(), String> {
-        self.save_file("trails.json", trails)
+        self.save_file("trails.json", trails)?;
+        // Our own write goes straight into the cache: two writes within one clock
+        // tick and of the same size would otherwise look unchanged.
+        let path = self.trails_path();
+        if let (Ok(meta), Ok(mut c)) = (std::fs::metadata(&path), CACHE.lock()) {
+            *c = Some((path, (meta.modified().ok(), meta.len()), trails.to_vec()));
+        }
+        Ok(())
     }
 
     fn archive(&self, mut gone: Vec<Trail>, reason: &str) -> Result<(), String> {

@@ -82,6 +82,8 @@ pub struct Settings {
     /// What the agent may do without asking: "read" (read only), "write" (read and
     /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
     pub agent_access: String,
+    /// Agent memory is off: nothing is recalled, saved or asked of the agent.
+    pub memory_off: bool,
     /// Settings revision, for one-time changes of defaults on existing installs.
     /// Missing in an older file means 0 (not the struct default, which is current).
     #[serde(default)]
@@ -109,6 +111,7 @@ impl Default for Settings {
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
+            memory_off: false,
             rev: SETTINGS_REV,
         }
     }

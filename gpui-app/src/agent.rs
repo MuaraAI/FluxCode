@@ -438,9 +438,11 @@ impl AgentState {
             }
         });
         // Memory evaporates once per start, off the UI thread (same rule as `ant_memory.py decay`).
-        std::thread::spawn(|| {
-            let _ = memory::Store::default().decay();
-        });
+        if !crate::settings::Settings::load().memory_off {
+            std::thread::spawn(|| {
+                let _ = memory::Store::default().decay();
+            });
+        }
         Self {
             status: Status::Off,
             proc_id: None,
@@ -1886,7 +1888,11 @@ impl Workbench {
         }
         // Memory: the few trails that match this question (P = tau * eta^2).
         let file = self.active.map(|ix| self.docs[ix].name.to_string()).unwrap_or_default();
-        let trails = memory::Store::default().recall(&format!("{text} {file}"), 4, Some(&self.memory_scope()));
+        let trails = if self.settings.memory_off {
+            Vec::new()
+        } else {
+            memory::Store::default().recall(&format!("{text} {file}"), 4, Some(&self.memory_scope()))
+        };
         self.agent.turn_memories = trails.iter().map(|t| t.id.clone()).collect();
         if !trails.is_empty() {
             let list: Vec<String> = trails.iter().map(|t| format!("- {}", t.content)).collect();
@@ -1903,10 +1909,18 @@ impl Workbench {
         }
         if !self.agent.hinted {
             self.agent.hinted = true;
-            blocks.push(json!({ "type": "text", "text":
-                "FluxCode note: answer in the language the user writes in. When you learn a lasting fact about this project \
-                 (how to run, test or deploy it, a convention, a decision), end your reply with one line `REMEMBER: <fact>`. \
-                 FluxCode saves it to the user's memory and hides the line." }));
+            // FluxCode keeps the memory natively; the agent's own memory skill would start
+            // a Python process for the same store, so it is asked not to.
+            let text = if self.settings.memory_off {
+                "FluxCode note: answer in the language the user writes in. Memory is switched off for now: don't run a \
+                 memory skill or ant_memory.py."
+            } else {
+                "FluxCode note: answer in the language the user writes in. FluxCode keeps the project memory itself (relevant \
+                 notes come with the message), so don't run a memory skill or ant_memory.py. When you learn a lasting fact about \
+                 this project (how to run, test or deploy it, a convention, a decision), end your reply with one line \
+                 `REMEMBER: <fact>`; FluxCode saves it and hides the line."
+            };
+            blocks.push(json!({ "type": "text", "text": text }));
         }
         blocks
     }
@@ -1918,6 +1932,9 @@ impl Workbench {
 
     /// `REMEMBER:` lines at the end of the last answer go to memory and out of the text.
     fn agent_take_remembers(&mut self) {
+        if self.settings.memory_off {
+            return;
+        }
         let Some(ix) = self.agent.items.iter().rposition(|i| matches!(i, Item::Text(_))) else { return };
         let Item::Text(t) = &self.agent.items[ix] else { return };
         let (kept, facts) = memory::take_remember_lines(t);
@@ -2051,58 +2068,135 @@ impl Workbench {
 
     // ------------------------------------------------------------ render
 
+    /// The memory view: what the agent remembers for this project and for all
+    /// projects, each note with how strong it is and how often it helped.
     fn render_memory(&self, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
-        let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().gap_1().overflow_y_scroll();
-        if a.memories.is_empty() {
+        let off = self.settings.memory_off;
+        let weak = cx.entity().downgrade();
+        let header = h_flex()
+            .px_3()
+            .pb_2()
+            .gap_2()
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Memory")))
+            .when(!off && !a.memories.is_empty(), |h| h.child(div().text_xs().text_color(c(theme::FG_DIM)).child(a.memories.len().to_string())))
+            .child(div().flex_1())
+            .child(
+                Switch::new("ag-mem-on")
+                    .checked(!off)
+                    .small()
+                    .tooltip(if off { crate::i18n::tr("Memory is off. Click to turn it on") } else { crate::i18n::tr("Memory is on. Click to turn it off") })
+                    .on_click(move |on, _, cx| {
+                        let on = *on;
+                        _ = weak.update(cx, |this, cx| {
+                            this.settings.memory_off = !on;
+                            this.settings.save();
+                            this.agent_refresh_memories();
+                            cx.notify();
+                        });
+                    }),
+            );
+        let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().overflow_y_scroll();
+        if off {
+            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr(
+                "Memory is off: nothing is read or saved, and the agent gets no notes. Your notes stay in the file.",
+            )));
+        } else if a.memories.is_empty() {
             list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(
                 crate::i18n::tr("Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help."),
             ));
         }
-        for (i, t) in a.memories.iter().enumerate() {
-            let id = t.id.clone();
-            let strength = (t.tau / 2.0).clamp(0.04, 1.0) as f32;
-            let scope = if t.tags.iter().any(|x| x.starts_with("project:")) { crate::i18n::tr("this project") } else { crate::i18n::tr("all projects") };
-            list = list.child(
-                v_flex()
-                    .id(("ag-mem", i))
-                    .px_2()
-                    .py_1p5()
-                    .gap_1()
-                    .rounded(px(4.))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(div().text_xs().text_color(c(theme::FG)).child(t.content.clone()))
-                    .child(
+        if !off {
+            let (here, everywhere): (Vec<(usize, &memory::Trail)>, Vec<(usize, &memory::Trail)>) =
+                a.memories.iter().enumerate().partition(|(_, t)| t.tags.iter().any(|x| x.starts_with("project:")));
+            for (title, group) in [(crate::i18n::tr("This project"), here), (crate::i18n::tr("All projects"), everywhere)] {
+                if group.is_empty() {
+                    continue;
+                }
+                list = list.child(div().px_1().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title));
+                for (i, t) in group {
+                    let id = t.id.clone();
+                    // A word instead of the raw strength (tau): fades below 0.4, strong from 1.
+                    let (strength, tone) = match t.tau {
+                        x if x >= 1.0 => (crate::i18n::tr("Strong"), theme::GREEN),
+                        x if x >= 0.4 => (crate::i18n::tr("Normal"), theme::FG_DIM),
+                        _ => (crate::i18n::tr("Fading"), theme::WARN),
+                    };
+                    let used = if t.success == 0 { crate::i18n::tr("not used yet").to_string() } else { crate::trf!("used {n}×"; n => t.success) };
+                    list = list.child(
                         h_flex()
+                            .id(("ag-mem", i))
+                            .items_start()
                             .gap_2()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
-                            .child(div().w(theme::u(48.)).h(px(3.)).rounded_full().bg(c(theme::BORDER)).child(
-                                div().h_full().rounded_full().w(relative(strength)).bg(c(theme::ACCENT_TEXT)),
-                            ))
-                            .child(crate::trf!("{tau} · {scope} · used {n}×"; tau => format!("{:.2}", t.tau), scope => scope, n => t.success))
-                            .child(div().flex_1())
-                            .child(Button::new(("ag-mem-del", i)).icon(IconName::Delete).ghost().xsmall().tooltip(tr("Forget (moves it to the archive)")).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    let _ = memory::Store::default().forget(&id);
-                                    this.agent_refresh_memories();
-                                    cx.notify();
-                                }),
-                            )),
-                    ),
-            );
+                            .px_2()
+                            .py_1p5()
+                            .rounded(px(4.))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .child(div().text_sm().text_color(c(theme::FG)).child(t.content.clone()))
+                                    .child(
+                                        h_flex()
+                                            .gap_1p5()
+                                            .text_xs()
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(div().flex_none().size(px(6.)).rounded_full().bg(c(tone)))
+                                            .child(strength)
+                                            .child("·")
+                                            .child(used),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(("ag-mem-del", i))
+                                    .flex_none()
+                                    .size(theme::u(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .text_color(c(theme::FG_DIM))
+                                    .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Forget (moves it to the archive)")).build(w, cx))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let _ = memory::Store::default().forget(&id);
+                                        this.agent_refresh_memories();
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::Close).size(theme::u(12.))),
+                            ),
+                    );
+                }
+            }
         }
+        // The file, short: the home folder as ~, the full path in the tooltip.
+        let full = memory::dir().join("trails.json");
+        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+        let shown = full.display().to_string();
+        let shown = if !home.is_empty() && shown.starts_with(&home) { format!("~{}", &shown[home.len()..]) } else { shown };
+        let full_s: SharedString = full.display().to_string().into();
         v_flex()
             .size_full()
-            .child(div().px_3().pb_2().child(Input::new(&a.memory_input).small()))
+            .child(header)
+            .when(!off, |v| v.child(div().px_3().pb_1().child(Input::new(&a.memory_input).small())))
             .child(list)
             .child(
-                div()
+                h_flex()
+                    .id("ag-mem-file")
                     .px_3()
                     .py_2()
+                    .gap_1()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
-                    .child(crate::trf!("Stored in {0} (shared with ant_memory.py)"; 0 => memory::dir().join("trails.json").display())),
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full_s.clone()).build(w, cx))
+                    .child(div().flex_none().child(crate::i18n::tr("File:")))
+                    .child(div().min_w_0().truncate().child(shown)),
             )
             .into_any_element()
     }
