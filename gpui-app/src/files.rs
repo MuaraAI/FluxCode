@@ -17,6 +17,14 @@ pub struct Node {
     children: Option<Vec<Node>>,
 }
 
+/// Files the image tab shows (GPUI decodes these; SVG is rasterized sharp at any size).
+pub fn is_image(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" | "tif" | "tiff")
+    )
+}
+
 /// Every leaf of a scan (files, and skipped folders listed without children).
 pub fn flatten(nodes: &[Node], out: &mut Vec<String>) {
     for n in nodes {

@@ -53,11 +53,11 @@ impl Workbench {
             });
             let icon = if is_dir {
                 Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
-                    .size(theme::u(14.))
+                    .size(theme::u(13.))
                     .text_color(if skipped { c(theme::FG_DIM) } else { c(theme::FOLDER) })
             } else {
                 let (icon, tint) = files::icon_for(&item.label);
-                Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint))
+                Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint))
             };
             let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
             // Git decorations like VS Code: the letter on the right, the name in its color,
@@ -82,6 +82,9 @@ impl Workbench {
                         .w_full()
                         .gap_1()
                         .pr_2()
+                        // The tree doesn't hand its text style to rows, so size each row here
+                        // (13 px at the default interface size, like VS Code).
+                        .text_size(theme::u(11.5))
                         .text_color(label_color)
                         .child(lead)
                         .child(div().flex_1().truncate().when(mark == Some('D'), |d| d.line_through()).child(item.label.clone()))
@@ -114,7 +117,7 @@ impl Workbench {
                 .menu("Copy Path", Box::new(CopyPath))
                 .menu("Reveal in File Explorer", Box::new(RevealInExplorer))
         })
-        .text_size(theme::u(12.5))
+        .text_size(theme::u(11.5))
         .size_full();
 
         v_flex()

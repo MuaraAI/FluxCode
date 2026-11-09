@@ -85,7 +85,7 @@ impl Workbench {
                             .map(|i| {
                                 let (f, h) = this.search_rows[i];
                                 let fh = &this.search.files[f];
-                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(20.)).px_2().gap_2().text_size(theme::u(12.5)).hover(|s| s.bg(c(theme::BG_HOVER)));
+                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(20.)).px_2().gap_2().text_size(theme::u(11.5)).hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

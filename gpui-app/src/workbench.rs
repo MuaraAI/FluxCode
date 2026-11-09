@@ -129,6 +129,16 @@ pub(crate) struct Doc {
     /// Bumped on every edit; auto save only fires for the latest one.
     pub gen: u64,
     pub _sub: Subscription,
+    /// Set for an image tab (the editor stays empty and is never shown).
+    pub image: Option<ImageDoc>,
+}
+
+pub(crate) struct ImageDoc {
+    /// Pixel size from the file header (None for SVG and unreadable headers).
+    pub size: Option<(u32, u32)>,
+    pub bytes: u64,
+    /// Fit the view (default) or show at 100% with scrolling.
+    pub actual: bool,
 }
 
 /// What the explorer's inline name box is for.
@@ -190,6 +200,8 @@ pub struct Workbench {
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
     pub(crate) panel_width: Rc<std::cell::Cell<f32>>,
+    /// Size of the image viewer area (measured last frame), to fit pictures exactly.
+    pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
     /// Position while walking the history with Up/Down.
     pub(crate) term_hist_ix: Option<usize>,
@@ -202,6 +214,8 @@ pub struct Workbench {
     pub(crate) quick: crate::quick::QuickOpen,
     /// Every file of the open folder (from the explorer's scan), for Go to File.
     pub(crate) all_files: Rc<Vec<String>>,
+    /// The same paths relative to the folder and lower-cased, for fast matching.
+    pub(crate) all_lower: Rc<Vec<String>>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -316,6 +330,7 @@ impl Workbench {
             term_wrap: Default::default(),
             out_wrap: Default::default(),
             panel_width: Rc::default(),
+            image_box: Rc::default(),
             out_run: None,
             term_hist_ix: None,
             problems: Vec::new(),
@@ -324,6 +339,7 @@ impl Workbench {
             scm,
             quick,
             all_files: Rc::default(),
+            all_lower: Rc::default(),
             preview_server: None,
             github: crate::github::load(),
             github_input,
@@ -381,6 +397,10 @@ impl Workbench {
             let all = crate::quick::file_list(flat, &dirs);
             _ = tree.update(cx, |state, cx| state.set_items(items, cx));
             _ = this.update(cx, |this, cx| {
+                let root_len = this.root.as_deref().map_or(0, |r| r.to_string_lossy().len());
+                this.all_lower = Rc::new(
+                    all.iter().map(|p| p.get(root_len..).unwrap_or(p).trim_start_matches(['\\', '/']).to_lowercase()).collect(),
+                );
                 this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
                 cx.notify();
@@ -392,6 +412,10 @@ impl Workbench {
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
+            return;
+        }
+        if files::is_image(&path) {
+            self.open_image(path, window, cx);
             return;
         }
         let file = match core::read_text(&path) {
@@ -449,9 +473,129 @@ impl Workbench {
             cx.notify();
         });
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
-        self.docs.push(Doc { path, name, lang, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub });
+        self.docs.push(Doc { path, name, lang, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
+    }
+
+    /// Open a picture in its own tab (no text editor, nothing to save).
+    fn open_image(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let size = image::image_dimensions(&path).ok();
+        let editor = cx.new(|cx| EditorState::new(window, cx));
+        let sub = cx.subscribe(&editor, |_, _, _: &InputEvent, _| {});
+        let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
+        self.docs.push(Doc {
+            path,
+            name,
+            lang: "image",
+            crlf: false,
+            editor,
+            dirty: false,
+            gen: 0,
+            _sub: sub,
+            image: Some(ImageDoc { size, bytes, actual: false }),
+        });
+        self.activate(self.docs.len() - 1, window, cx);
+        self.save_session(cx);
+    }
+
+    fn render_image(&self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let d = &self.docs[ix];
+        let Some(im) = &d.image else { return div().into_any_element() };
+        let path = d.path.clone();
+        // 100% means one image pixel per screen pixel.
+        let scale = window.scale_factor().max(0.5);
+        let picture = img(path).id(("image", ix));
+        // Fit: never larger than 100%, never larger than the area (measured by the probe
+        // below), aspect kept. Sizes are explicit so the picture sits exactly centered.
+        let (bw, bh) = self.image_box.get();
+        let (aw, ah) = ((bw - 32.).max(16.), (bh - 32.).max(16.));
+        let view: AnyElement = match (im.actual, im.size) {
+            (true, Some((w, h))) => div()
+                .id(("image-scroll", ix))
+                .size_full()
+                .overflow_scroll()
+                .child(div().p_4().child(picture.w(px(w as f32 / scale)).h(px(h as f32 / scale)).object_fit(ObjectFit::Fill)))
+                .into_any_element(),
+            (_, Some((w, h))) => {
+                let (lw, lh) = (w as f32 / scale, h as f32 / scale);
+                let k = (aw / lw).min(ah / lh).min(1.);
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(picture.w(px((lw * k).floor())).h(px((lh * k).floor())).object_fit(ObjectFit::Contain))
+                    .into_any_element()
+            }
+            // SVG or an unreadable header: give it the whole area, keep its shape.
+            _ => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(picture.w(px(aw)).h(px(ah)).object_fit(ObjectFit::Contain))
+                .into_any_element(),
+        };
+        let probe = {
+            let cell = self.image_box.clone();
+            let id = cx.entity_id();
+            canvas(
+                move |b, _, cx| {
+                    let s = (f32::from(b.size.width), f32::from(b.size.height));
+                    let old = cell.get();
+                    if (old.0 - s.0).abs() > 0.5 || (old.1 - s.1).abs() > 0.5 {
+                        cell.set(s);
+                        cx.defer(move |cx| cx.notify(id));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        };
+        let kind = d.path.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+        let size = im.size.map(|(w, h)| format!("{w} × {h}  ·  ")).unwrap_or_default();
+        let info = format!("{size}{}  ·  {kind}", human_size(im.bytes));
+        let can_zoom = im.size.is_some();
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .id(("image-view", ix))
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .overflow_hidden()
+                    .child(probe)
+                    .when(can_zoom, |d| d.cursor_pointer())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(im) = this.docs.get_mut(ix).and_then(|d| d.image.as_mut()) {
+                            if im.size.is_some() {
+                                im.actual = !im.actual;
+                                cx.notify();
+                            }
+                        }
+                    }))
+                    .child(view),
+            )
+            .child(
+                h_flex()
+                    .h(theme::u(26.))
+                    .flex_none()
+                    .justify_center()
+                    .gap_3()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .child(info)
+                    .when(can_zoom, |h| h.child(if im.actual { "Click to fit" } else { "Click for 100%" })),
+            )
+            .into_any_element()
     }
 
     pub(crate) fn go_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -490,6 +634,10 @@ impl Workbench {
     }
 
     pub(crate) fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
+        // An image tab has no text to write (writing its empty editor would wipe the file).
+        if self.docs[ix].image.is_some() {
+            return true;
+        }
         let doc = &mut self.docs[ix];
         let text = doc.editor.read(cx).value();
         match core::write_text(&doc.path, &text, doc.crlf) {
@@ -741,9 +889,11 @@ impl Workbench {
         };
         let center = h_flex()
             .id("cmd-center")
+            .text_xs()
             .flex_shrink_1()
             .min_w(px(0.))
             .w(theme::u(420.))
+            .max_w(relative(0.3))
             .h(theme::u(24.))
             .px_2()
             .gap_2()
@@ -816,12 +966,15 @@ impl Workbench {
             .child(Self::render_menu("m-help", "Help", |m| {
                 m.menu("Next Color Theme", Box::new(NextTheme)).separator().menu("About FluxCode", Box::new(About))
             }))
-            .child(drag("tb-drag-l"))
-            .child(center)
-            .child(drag("tb-drag-r"));
+            .child(drag("tb-drag"));
+        // Too narrow for a centered box: Ctrl+P still opens Go to File.
+        let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
-            return TitleBar::new().child(row).into_any_element();
+            return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1()))).into_any_element();
         }
+        // Centered in the window, not in the space after the menus, so it lines up with
+        // the Go to File box. The overlay has no hitbox: clicks pass to the bar below.
+        let center_layer = div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().when(show_center, |d| d.child(center));
         // Windows: our own min / max / close, as plain buttons (always clickable).
         let maximized = window.is_maximized();
         let ctl = |id: &'static str, icon: IconName, close: bool| {
@@ -845,6 +998,7 @@ impl Workbench {
         };
         h_flex()
             .id("title-bar")
+            .relative()
             .w_full()
             .h(theme::u(34.))
             .flex_none()
@@ -858,6 +1012,7 @@ impl Workbench {
                     .on_click(|_, w, _| w.zoom_window()),
             )
             .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+            .child(center_layer)
             .into_any_element()
     }
 
@@ -1101,7 +1256,8 @@ impl Workbench {
                 .bg(theme::editor_wash())
                 .child(self.render_tabs(cx))
                 .child(self.render_breadcrumbs(ix))
-                .child(
+                .when(self.docs[ix].image.is_some(), |v| v.child(div().flex_1().min_h_0().child(self.render_image(ix, window, cx))))
+                .when(self.docs[ix].image.is_none(), |v| v.child(
                     div().flex_1().min_h_0().child(
                         Editor::new(&self.docs[ix].editor)
                             .bordered(false)
@@ -1110,7 +1266,7 @@ impl Workbench {
                             .font_family(self.settings.font_family.clone())
                             .text_size(px(self.settings.font_size)),
                     ),
-                )
+                ))
                 .into_any_element(),
             None => v_flex()
                 .size_full()
@@ -1148,6 +1304,10 @@ impl Workbench {
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (pos, lang) = match self.active {
+            Some(ix) if self.docs[ix].image.is_some() => {
+                let im = self.docs[ix].image.as_ref().unwrap();
+                (im.size.map(|(w, h)| format!("{w} × {h}")).unwrap_or_default(), "Image")
+            }
             Some(ix) => {
                 let d = &self.docs[ix];
                 let p = d.editor.read(cx).cursor_position();
@@ -1155,7 +1315,8 @@ impl Workbench {
             }
             None => (String::new(), ""),
         };
-        let crlf = self.active.map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
+        let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some());
+        let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
         let running = self.out_proc.is_some() || self.term_proc.is_some();
         let seg = |s: SharedString| div().h_full().px_2().flex().items_center().child(s);
         let folder = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
@@ -1234,7 +1395,7 @@ impl Workbench {
             })
             .child(div().px_2().flex_1().truncate().text_color(c(theme::FG)).child(self.status.clone()))
             .when(!pos.is_empty(), |h| {
-                h.child(seg(pos.into())).child(seg(crlf.into())).child(seg("UTF-8".into())).child(seg(lang.into()))
+                h.child(seg(pos.into())).when(!is_image, |h| h.child(seg(crlf.into())).child(seg("UTF-8".into()))).child(seg(lang.into()))
             })
             .child(seg(theme::palette().name.into()).pr_3())
     }
@@ -1267,6 +1428,15 @@ fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
                 .text_color(c(theme::FG_STRONG))
                 .child(k)
         }))
+}
+
+/// "245 KB", "1.2 MB".
+fn human_size(b: u64) -> String {
+    match b {
+        0..=1023 => format!("{b} B"),
+        1024..=1_048_575 => format!("{:.0} KB", b as f64 / 1024.),
+        _ => format!("{:.1} MB", b as f64 / 1_048_576.),
+    }
 }
 
 /// A panel's content may not grow its slot: anything wider is clipped, so a long

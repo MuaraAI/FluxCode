@@ -369,7 +369,7 @@ impl Workbench {
         }
         prompt.push(json!({ "type": "text", "text": text }));
         // Include the active file, like the Tauri panel's "include file" default.
-        if let Some(ix) = self.active {
+        if let Some(ix) = self.active.filter(|ix| self.docs[*ix].image.is_none()) {
             let d = &self.docs[ix];
             let body = d.editor.read(cx).value();
             if body.len() < 200_000 {

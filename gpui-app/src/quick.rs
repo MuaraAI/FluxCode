@@ -19,18 +19,24 @@ const MAX_HITS: usize = 60;
 /// Score `path` for `query` (both compared lower-case): every query character
 /// must appear in order. Matches in the file name, at word starts and in a row
 /// score higher; shorter paths win ties.
+#[cfg(test)]
 pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
-    let q: Vec<char> = query.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    let q: Vec<u8> = query.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+    fuzzy_lower(&q, path.to_lowercase().as_bytes())
+}
+
+/// `fuzzy` on an already lower-cased query and path (bytes, so a keystroke over
+/// thousands of files allocates nothing). Non-ASCII bytes still match exactly.
+pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     if q.is_empty() {
         return Some(0);
     }
-    let p: Vec<char> = path.to_lowercase().chars().collect();
-    let name_start = p.iter().rposition(|c| *c == '\\' || *c == '/').map_or(0, |i| i + 1);
+    let name_start = p.iter().rposition(|c| *c == b'\\' || *c == b'/').map_or(0, |i| i + 1);
     let mut score = 0;
     let mut at = 0usize;
     let mut prev: Option<usize> = None;
-    for qc in q {
-        let pos = (at..p.len()).find(|&i| p[i] == qc)?;
+    for &qc in q {
+        let pos = at + p[at..].iter().position(|&b| b == qc)?;
         score += 1;
         if prev.is_some_and(|pv| pv + 1 == pos) {
             score += 5;
@@ -38,7 +44,7 @@ pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
         if pos >= name_start {
             score += 3;
         }
-        if pos == 0 || matches!(p[pos - 1], '\\' | '/' | '_' | '-' | '.' | ' ') {
+        if pos == 0 || matches!(p[pos - 1], b'\\' | b'/' | b'_' | b'-' | b'.' | b' ') {
             score += 4;
         }
         prev = Some(pos);
@@ -76,7 +82,9 @@ impl Workbench {
     pub(crate) fn quick_filter(&mut self, cx: &mut Context<Self>) {
         let q = self.quick.input.read(cx).value().to_string();
         let files = self.all_files.clone();
-        let mut scored: Vec<(i32, usize)> = files.iter().enumerate().filter_map(|(i, f)| fuzzy(&q, self.rel(f)).map(|s| (s, i))).collect();
+        let lower = self.all_lower.clone();
+        let qb: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+        let mut scored: Vec<(i32, usize)> = lower.iter().enumerate().filter_map(|(i, p)| fuzzy_lower(&qb, p.as_bytes()).map(|s| (s, i))).collect();
         if q.trim().is_empty() {
             // No query: open tabs first, then the folder in its own order.
             let open: Vec<String> = self.docs.iter().map(|d| d.path.to_string_lossy().into_owned()).collect();
@@ -175,22 +183,43 @@ impl Workbench {
                     })),
             );
         }
-        // A floating box under the title bar, like VS Code's Quick Open.
-        div().absolute().top(theme::u(40.)).left_0().right_0().flex().justify_center().child(
-            v_flex()
-                .id("quick-open")
-                .w(theme::u(600.))
-                .max_w(relative(0.92))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(theme::BORDER_STRONG))
-                .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
-                .shadow_lg()
-                .overflow_hidden()
-                .on_mouse_down_out(cx.listener(|this, _, w, cx| this.quick_close(w, cx)))
-                .child(div().p_2().key_context("QuickOpen").child(Input::new(&q.input).small()))
-                .child(list),
-        )
+        // The rest of the window dims so the eye goes to the box; a click there closes it.
+        // (A real blur would re-render the whole window under it every frame; a dim layer
+        // costs nothing.) The box sits centered under the title bar's search box.
+        let fade = || Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint());
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(
+                div()
+                    .id("quick-scrim")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(gpui_kit::black().opacity(0.38))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| this.quick_close(w, cx)))
+                    .with_animation("quick-scrim-in", fade(), |d, t| d.opacity(t)),
+            )
+            .child(
+                div().absolute().top(theme::u(38.)).left_0().right_0().flex().justify_center().child(
+                    v_flex()
+                        .id("quick-open")
+                        .w(theme::u(600.))
+                        .max_w(relative(0.92))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(c(theme::BORDER_STRONG))
+                        .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
+                        .shadow_lg()
+                        .overflow_hidden()
+                        .child(div().p_2().key_context("QuickOpen").child(Input::new(&q.input).small()))
+                        .child(list)
+                        .with_animation("quick-open-in", fade(), |d, t| d.opacity(t)),
+                ),
+            )
     }
 }
 
