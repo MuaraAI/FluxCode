@@ -176,6 +176,10 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) term_run: Option<crate::panel::RunInfo>,
+    /// Wrapped rows of the terminal and output panels, and the panel's measured width.
+    pub(crate) term_wrap: crate::panel::WrapCache,
+    pub(crate) out_wrap: crate::panel::WrapCache,
+    pub(crate) panel_width: Rc<std::cell::Cell<f32>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
     /// Position while walking the history with Up/Down.
     pub(crate) term_hist_ix: Option<usize>,
@@ -248,7 +252,9 @@ impl Workbench {
         subs.push(scm_sub);
         // Like VS Code: re-read git state when the window comes back to the front.
         subs.push(cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() {
+            // Alt-Tab back and forth should not start a git process each time.
+            let recent = this.scm.last_refresh.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
+            if window.is_window_active() && !recent {
                 this.scm_refresh(cx);
             }
         }));
@@ -288,6 +294,9 @@ impl Workbench {
             out_proc: None,
             out_scroll: UniformListScrollHandle::new(),
             term_run: None,
+            term_wrap: Default::default(),
+            out_wrap: Default::default(),
+            panel_width: Rc::default(),
             out_run: None,
             term_hist_ix: None,
             problems: Vec::new(),
@@ -869,8 +878,10 @@ impl Workbench {
             .pr_2()
             .gap_2()
             .flex_none()
-            .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
+            .child(div().when(self.view != SideView::Agent, |d| d.flex_1()).text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
+            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_switch(cx)).child(div().flex_1()))
             .when(self.view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
+            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_tools(cx)))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
                 h.child(tool_button("x-newfile", IconName::Plus, "New File", cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
                     .child(tool_button("x-newdir", IconName::FolderClosed, "New Folder", cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))

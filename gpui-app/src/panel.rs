@@ -33,6 +33,16 @@ pub(crate) struct RunInfo {
     pub command: String,
 }
 
+/// One visual row of a panel: a whole line, or one wrapped piece of it.
+pub(crate) struct Row {
+    pub line: usize,
+    pub text: SharedString,
+    pub first: bool,
+}
+
+/// (lines fingerprint, rows) for one panel; see `wrapped_rows`.
+pub(crate) type WrapCache = std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
+
 /// A Python error to show in the editor (wavy underline + hover message).
 #[derive(Clone)]
 pub(crate) struct Problem {
@@ -326,9 +336,9 @@ impl Workbench {
         }
         let took = run.as_ref().map(|r| term::elapsed(r.started.elapsed())).unwrap_or_default();
         let (text, ok) = match code {
-            Some(0) => ("done".to_string(), true),
-            Some(c) => (format!("exit code {c}"), false),
-            None => ("stopped".to_string(), false),
+            Some(0) => ("Finished".to_string(), true),
+            Some(c) => (format!("Failed (exit code {c})"), false),
+            None => ("Stopped".to_string(), false),
         };
         let mut status = Line::new(&text, LineKind::Status);
         status.err = !ok;
@@ -440,8 +450,18 @@ impl Workbench {
 
     // ------------------------------------------------------------ render
 
-    fn render_line(&self, i: usize, l: &Line, terminal: bool, cx: &mut Context<Self>) -> AnyElement {
-        let base = h_flex().id(("pl", i)).h(theme::u(20.)).w_full().px_3().gap_2().whitespace_nowrap().overflow_hidden();
+    /// One visual row. `shown` is the row's text (a wrapped piece of the line, already
+    /// made readable by `term::display_text`); `first` is false on continuation rows.
+    fn render_line(&self, i: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, cx: &mut Context<Self>) -> AnyElement {
+        let base = h_flex()
+            .id(("pl", i))
+            .h(theme::u(20.))
+            .w_full()
+            .px_3()
+            .gap_2()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .when(!first, |b| b.pl(theme::u(12.) + theme::u(16.)));
         let text = |s: &SharedString, col: theme::Tok| div().text_color(c(col)).child(s.clone());
         // One callout across several fixed-height rows: a tinted full-width band with a red edge.
         let card = |row: Stateful<Div>, inner: Div| {
@@ -470,9 +490,14 @@ impl Workbench {
                 .into_any_element(),
             LineKind::Status => {
                 let (mark, col) = if l.err { ("✕", theme::DANGER) } else { ("✓", theme::GREEN) };
+                let took: SharedString = match (l.meta.is_empty(), l.err) {
+                    (true, _) => "".into(),
+                    (false, false) => format!("in {}", l.meta).into(),
+                    (false, true) => format!("· {}", l.meta).into(),
+                };
                 base.child(div().text_color(c(col)).child(mark))
-                    .child(text(&l.text, if l.err { theme::DANGER } else { theme::FG_DIM }))
-                    .when(!l.meta.is_empty(), |h| h.child(text(&format!("· {}", l.meta).into(), theme::FG_DIM)))
+                    .child(text(&l.text, if l.err { theme::DANGER } else { theme::FG_MUTED }))
+                    .when(!took.is_empty(), |h| h.child(text(&took, theme::FG_DIM)))
                     .into_any_element()
             }
             // Traceback frames and `file.py:12:` warnings: the whole line opens the file there.
@@ -485,12 +510,12 @@ impl Workbench {
                         .text_color(c(col))
                         .cursor_pointer()
                         .hover(|s| s.text_color(c(theme::BLUE)).underline())
-                        .child(l.text.clone())
+                        .child(shown.clone())
                         .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
                 )
                 .into_any_element()
             }
-            LineKind::Frame => base.child(text(&l.text, theme::FG_MUTED)).into_any_element(),
+            LineKind::Frame => base.child(text(shown, theme::FG_MUTED)).into_any_element(),
             LineKind::CardHead => {
                 let mut inner = h_flex()
                     .child(Icon::new(IconName::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)))
@@ -548,12 +573,55 @@ impl Workbench {
                     LineKind::Code => theme::FG_STRONG,
                     _ => theme::FG,
                 };
-                base.child(div().text_color(c(col)).child(l.text.clone())).into_any_element()
+                base.child(div().text_color(c(col)).child(shown.clone())).into_any_element()
             }
         }
     }
 
-    pub(crate) fn render_panel(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The panel's lines as visual rows (wrapped to `cols`), cached per panel.
+    fn wrapped_rows(&self, terminal: bool, cols: usize) -> std::rc::Rc<Vec<Row>> {
+        let (lines, cache) = if terminal { (&self.term_lines, &self.term_wrap) } else { (&self.out_lines, &self.out_wrap) };
+        let key = (
+            lines.len(),
+            lines.first().map_or(0, |l| l.text.as_ptr() as usize),
+            lines.last().map_or(0, |l| l.text.as_ptr() as usize),
+            lines.last().map_or(0, |l| l.text.len()),
+            cols,
+        );
+        let mut cache = cache.borrow_mut();
+        if cache.0 == key {
+            return cache.1.clone();
+        }
+        let mut rows = Vec::with_capacity(lines.len() + 8);
+        for (ix, l) in lines.iter().enumerate() {
+            let wraps = matches!(
+                l.kind,
+                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Code | LineKind::Hunk
+            );
+            if !wraps {
+                rows.push(Row { line: ix, text: l.text.clone(), first: true });
+                continue;
+            }
+            let shown = term::display_text(&l.text);
+            let pieces = term::wrap_ranges(&shown, cols.saturating_sub(2));
+            if pieces.len() == 1 {
+                let text: SharedString = match shown {
+                    std::borrow::Cow::Borrowed(_) => l.text.clone(),
+                    std::borrow::Cow::Owned(s) => s.into(),
+                };
+                rows.push(Row { line: ix, text, first: true });
+            } else {
+                for (n, (a, b)) in pieces.into_iter().enumerate() {
+                    rows.push(Row { line: ix, text: shown[a..b].to_string().into(), first: n == 0 });
+                }
+            }
+        }
+        let rows = std::rc::Rc::new(rows);
+        *cache = (key, rows.clone());
+        rows
+    }
+
+    pub(crate) fn render_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = |id: &'static str, label: &'static str, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
             let on = this.panel_tab == which;
             // VS Code's panel tabs: small caps label, a 1px underline on the open one.
@@ -613,24 +681,57 @@ impl Workbench {
             }));
 
         let terminal = self.panel_tab == PanelTab::Terminal;
-        let (count, scroll) = if terminal { (self.term_lines.len(), self.term_scroll.clone()) } else { (self.out_lines.len(), self.out_scroll.clone()) };
+        let count = if terminal { self.term_lines.len() } else { self.out_lines.len() };
+        let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
+        // Long lines wrap to the panel's width instead of being cut off. The width comes
+        // from the probe below (last frame); the rows are cached until lines or width change.
+        let font_size = theme::u(13.);
+        let em = {
+            let ts = window.text_system();
+            let id = ts.resolve_font(&font(self.settings.font_family.clone()));
+            ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.)
+        };
+        let width = self.panel_width.get();
+        let cols = if width <= 0. { 160 } else { (((width - f32::from(theme::u(24.)) - 14.) / em).floor() as usize).max(24) };
+        let rows = self.wrapped_rows(terminal, cols);
         let list = uniform_list(
             "panel-lines",
-            count,
+            rows.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
                     .map(|i| {
+                        let row = &rows[i];
                         let lines = if terminal { &this.term_lines } else { &this.out_lines };
-                        this.render_line(i, &lines[i], terminal, cx)
+                        match lines.get(row.line) {
+                            Some(l) => this.render_line(i, l, &row.text, row.first, terminal, cx),
+                            None => div().id(("pl", i)).h(theme::u(20.)).into_any_element(),
+                        }
                     })
                     .collect::<Vec<_>>()
             }),
         )
         .track_scroll(&scroll)
-        .flex_1()
+        .size_full()
         .py_1()
         .font_family(self.settings.font_family.clone())
-        .text_size(theme::u(13.));
+        .text_size(font_size);
+        let probe = {
+            let cell = self.panel_width.clone();
+            let id = cx.entity_id();
+            canvas(
+                move |bounds, _, cx| {
+                    let w = f32::from(bounds.size.width);
+                    if (cell.get() - w).abs() > 0.5 {
+                        cell.set(w);
+                        cx.defer(move |cx| cx.notify(id));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        };
+        let list = div().relative().flex_1().min_h_0().child(probe).child(list);
 
         let empty = count == 0 && terminal;
         v_flex()

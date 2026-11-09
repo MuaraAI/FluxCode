@@ -1,6 +1,6 @@
 [package]
 name = "fluxcode-gpui"
-version = "0.7.0-dev.2026-11-09-1258"
+version = "0.7.1-dev.2026-11-09-1303"
 description = "FluxCode - native GPUI edition (no WebView)"
 edition = "2021"
 license = "GPL-3.0-or-later"

@@ -830,6 +830,75 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
+/// The user's home folder, lower-cased, for shortening paths to `~`.
+fn home_lower() -> &'static str {
+    static HOME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).map(|h| h.trim_end_matches(['\\', '/']).to_lowercase()).unwrap_or_default()
+    })
+}
+
+/// How a line reads on screen: pip's long "already satisfied … site-packages"
+/// lines become "customtkinter 6.0.0 is already installed", and the home folder
+/// becomes `~`. The stored text stays as printed (links and error parsing use it).
+pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(rest) = text.strip_prefix("Requirement already satisfied: ") {
+        let pkg = rest.split(" in ").next().unwrap_or(rest).trim();
+        let ver = text
+            .trim_end()
+            .strip_suffix(')')
+            .and_then(|t| t.rsplit_once('('))
+            .map(|(_, v)| v)
+            .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        return match ver {
+            Some(v) => format!("{pkg} {v} is already installed").into(),
+            None => format!("{pkg} is already installed").into(),
+        };
+    }
+    let home = home_lower();
+    if home.len() < 4 {
+        return text.into();
+    }
+    let lower = text.to_lowercase();
+    // to_lowercase keeps byte offsets for ASCII paths; bail out otherwise.
+    if lower.len() != text.len() || !lower.contains(home) {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (i, _) in lower.match_indices(home) {
+        out.push_str(&text[last..i]);
+        out.push('~');
+        last = i + home.len();
+    }
+    out.push_str(&text[last..]);
+    out.into()
+}
+
+/// Split a line into rows of at most `cols` characters, breaking after a space,
+/// `\` or `/` when one is near the end, so paths wrap at a folder boundary.
+/// Returns byte ranges.
+pub fn wrap_ranges(s: &str, cols: usize) -> Vec<(usize, usize)> {
+    let cols = cols.max(8);
+    let idx: Vec<usize> = s.char_indices().map(|(i, _)| i).chain(std::iter::once(s.len())).collect();
+    let n = idx.len() - 1;
+    if n <= cols {
+        return vec![(0, s.len())];
+    }
+    let mut out = Vec::new();
+    let mut start = 0; // char index
+    while n - start > cols {
+        let hard = start + cols;
+        let chars: Vec<char> = s[idx[start]..idx[hard]].chars().collect();
+        let soft = chars.iter().rposition(|c| matches!(c, ' ' | '\\' | '/' | ',')).filter(|p| *p >= cols / 2).map(|p| start + p + 1);
+        let end = soft.unwrap_or(hard);
+        out.push((idx[start], idx[end]));
+        start = end;
+    }
+    out.push((idx[start], s.len()));
+    out
+}
+
 /// "3.2s", "120ms", "1m 05s".
 pub fn elapsed(d: std::time::Duration) -> String {
     let ms = d.as_millis();
@@ -959,6 +1028,25 @@ mod tests {
         let e = parse_python_error(&lines, "py", &d).unwrap();
         assert_eq!(e.line, Some(3));
         assert_eq!(e.caret, Some((5, 6)));
+    }
+
+    #[test]
+    fn friendly_pip_lines() {
+        let t = "Requirement already satisfied: customtkinter in c:\\users\\x\\python312\\lib\\site-packages (from -r requirements.txt (line 1)) (6.0.0)";
+        assert_eq!(display_text(t), "customtkinter 6.0.0 is already installed");
+        assert_eq!(display_text("Requirement already satisfied: pip in c:\\p"), "pip is already installed");
+        assert_eq!(display_text("plain line"), "plain line");
+    }
+
+    #[test]
+    fn wraps_at_folder_boundaries() {
+        let s = "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages";
+        let rows = wrap_ranges(s, 30);
+        assert!(rows.len() > 1);
+        assert!(rows.iter().all(|(a, b)| s[*a..*b].chars().count() <= 30));
+        assert_eq!(rows.iter().map(|(a, b)| &s[*a..*b]).collect::<String>(), s);
+        assert!(s[rows[0].0..rows[0].1].ends_with('\\'));
+        assert_eq!(wrap_ranges("short", 30), vec![(0, 5)]);
     }
 
     #[test]

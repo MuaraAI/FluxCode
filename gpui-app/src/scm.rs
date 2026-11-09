@@ -113,6 +113,8 @@ pub struct Scm {
     pub dirty_dirs: Rc<HashSet<String>>,
     /// A commit went through: empty the message box on the next render (needs a Window).
     pub clear_message: bool,
+    /// When the last refresh started (focus changes refresh at most every 2 s).
+    pub last_refresh: Option<std::time::Instant>,
 }
 
 impl Scm {
@@ -143,6 +145,7 @@ impl Scm {
                 marks: Rc::default(),
                 dirty_dirs: Rc::default(),
                 clear_message: false,
+                last_refresh: None,
             },
             sub,
         )
@@ -301,6 +304,7 @@ impl Workbench {
             return;
         }
         self.scm.refreshing = true;
+        self.scm.last_refresh = Some(std::time::Instant::now());
         let with_log = self.scm.show_graph;
         cx.spawn(async move |this, cx| {
             let snap = cx.background_spawn(async move { snapshot(&root, with_log) }).await;

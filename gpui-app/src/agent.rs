@@ -188,7 +188,7 @@ fn opencode_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}… (Enter to send)", agent_name())));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…", agent_name())));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { shift: false, .. } = ev {
                 this.agent_send(window, cx);
@@ -669,14 +669,57 @@ impl Workbench {
                     .pr_2()
                     .gap_1()
                     .flex_none()
-                    .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(agent_name().to_uppercase()))
-                    .child(tool_button("ag-dock-close", IconName::Close, "Hide OpenCode (Ctrl+Shift+A shows it)", cx, |this, _, cx| {
+                    .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(agent_name().to_uppercase()))
+                    .child(self.render_agent_switch(cx))
+                    .child(div().flex_1())
+                    .child(self.render_agent_tools(cx))
+                    .child(tool_button("ag-dock-close", IconName::Close, "Hide (Ctrl+Shift+A shows it again)", cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
                     })),
             )
             .child(div().flex_1().min_h_0().child(self.render_agent(window, cx)))
             .into_any_element()
+    }
+
+    /// The ON/OFF switch, shown right of the panel title.
+    pub(crate) fn render_agent_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
+        let weak = cx.entity().downgrade();
+        Switch::new("ag-on")
+            .checked(on)
+            .small()
+            .tooltip(if on { format!("{} is on. Click to turn it off", agent_name()) } else { format!("{} is off. Click to turn it on", agent_name()) })
+            .on_click(move |checked, _, cx| {
+                let checked = *checked;
+                _ = weak.update(cx, |this, cx| this.agent_set_on(checked, cx));
+            })
+    }
+
+    /// History and move-to-other-side, as icons in the panel title row.
+    pub(crate) fn render_agent_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let right = self.settings.agent_right;
+        h_flex()
+            .gap_px()
+            .child(
+                Button::new("ag-history-btn")
+                    .icon(if self.agent.show_history { gpui_kit::component::Icon::new(IconName::Bot) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
+                    .xsmall()
+                    .ghost()
+                    .tooltip(if self.agent.show_history { "Back to the chat" } else { "Saved chats" })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent.show_history = !this.agent.show_history;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("ag-dock")
+                    .icon(if right { IconName::PanelLeft } else { IconName::PanelRight })
+                    .xsmall()
+                    .ghost()
+                    .tooltip(if right { "Move to the left side bar" } else { "Move to the right side" })
+                    .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
+            )
     }
 
     fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -793,49 +836,21 @@ impl Workbench {
             Status::Busy => (theme::BLUE, "Working…".into()),
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
-        // The dot marks the agent process's real state (off, starting, ready, working, error);
-        // the switch turns the process on and off.
+        // The header holds the switch and tools; here only a short line while it is
+        // starting or working (with Stop), so the chat keeps the room.
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
-        let weak = cx.entity().downgrade();
         let header = h_flex()
             .px_3()
-            .pb_2()
+            .pb_1()
             .gap_2()
             .text_xs()
-            .child(
-                Switch::new("ag-on")
-                    .checked(on)
-                    .small()
-                    .tooltip(if on { format!("Turn {} off", agent_name()) } else { format!("Turn {} on", agent_name()) })
-                    .on_click(move |checked, _, cx| {
-                        let checked = *checked;
-                        _ = weak.update(cx, |this, cx| this.agent_set_on(checked, cx));
-                    }),
-            )
-            .child(div().size(px(7.)).rounded_full().bg(c(dot)))
-            .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
-            .when(a.status == Status::Busy, |h| {
-                h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
-            })
-            .child(
-                Button::new("ag-history-btn")
-                    .label(if a.show_history { "Chat" } else { "History" })
-                    .xsmall()
-                    .ghost()
-                    .tooltip("Saved chats, and New chat")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.agent.show_history = !this.agent.show_history;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("ag-dock")
-                    .icon(if self.settings.agent_right { IconName::PanelLeft } else { IconName::PanelRight })
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if self.settings.agent_right { "Move to the left side bar" } else { "Move to the right side" })
-                    .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
-            );
+            .when(matches!(a.status, Status::Starting | Status::Busy), |h| {
+                h.child(div().size(px(6.)).rounded_full().bg(c(dot)))
+                    .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
+                    .when(a.status == Status::Busy, |h| {
+                        h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
+                    })
+            });
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
         }
@@ -847,9 +862,9 @@ impl Workbench {
                     .text_sm()
                     .text_color(c(theme::FG_DIM))
                     .child(if on {
-                        format!("Ask {} to explain, fix or write code. The active file is sent with your message.", agent_name())
+                        "Ask about the open file, or anything else.".to_string()
                     } else {
-                        format!("{} is off. Switch it on, or just send a message: it starts by itself.", agent_name())
+                        format!("{} is off. Type a message and it turns on by itself.", agent_name())
                     }),
             );
         }
