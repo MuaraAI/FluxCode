@@ -108,6 +108,8 @@ pub struct Scm {
     pub actions_loaded: bool,
     /// File whose Discard button was clicked once (the second click discards).
     pub confirm_discard: Option<String>,
+    /// "Remove Git from this folder" was chosen and waits for a yes.
+    pub confirm_uninit: bool,
     /// Lower-cased absolute path → letter, for the explorer (shared with its row closure).
     pub marks: Rc<HashMap<String, char>>,
     /// Lower-cased folders that contain changes.
@@ -143,6 +145,7 @@ impl Scm {
                 show_actions: false,
                 actions_loaded: false,
                 confirm_discard: None,
+                confirm_uninit: false,
                 marks: Rc::default(),
                 dirty_dirs: Rc::default(),
                 clear_message: false,
@@ -294,6 +297,22 @@ fn snapshot(dir: &Path, with_log: bool) -> Snapshot {
         .unwrap_or_default()
     });
     Snapshot { repo: Some(repo), status, log }
+}
+
+/// Rows drawn per section. Thousands of rows (each with its buttons) made the
+/// panel slow; past this the list says how many more there are.
+const MAX_ROWS: usize = 200;
+
+/// "… and N more" under a capped section.
+fn more_rows(total: usize) -> Option<Div> {
+    (total > MAX_ROWS).then(|| {
+        div()
+            .px(theme::u(18.))
+            .py_1()
+            .text_xs()
+            .text_color(c(theme::FG_DIM))
+            .child(crate::trf!("… and {n} more files (Stage All includes them)"; n => total - MAX_ROWS))
+    })
 }
 
 impl Workbench {
@@ -728,6 +747,37 @@ impl Workbench {
             );
 
         let mut body = v_flex().id("scm-body").flex_1().min_h_0().overflow_y_scroll().pb_2();
+        if s.confirm_uninit {
+            // The whole repository path (the home folder as ~), so it is clear which one goes.
+            let home = std::env::var("USERPROFILE").unwrap_or_default();
+            let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
+            if !home.is_empty() && where_.starts_with(&home) {
+                where_ = format!("~{}", &where_[home.len()..]);
+            }
+            body = body.child(
+                v_flex()
+                    .mx_3()
+                    .mb_2()
+                    .p_2()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::DANGER))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Remove Git from {0}?"; 0 => where_)))
+                    .child(div().text_color(c(theme::FG_MUTED)).child(tr("The .git folder (commits, branches, settings) goes to the Recycle Bin. Your files stay as they are.")))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Button::new("scm-uninit-yes").label(tr("Remove Git")).xsmall().danger().on_click(cx.listener(|this, _, _, cx| this.scm_remove_git(cx))))
+                            .child(Button::new("scm-uninit-no").label(tr("Cancel")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
+                                this.scm.confirm_uninit = false;
+                                cx.notify();
+                            }))),
+                    ),
+            );
+        }
         body = body.child(
             v_flex()
                 .px_3()
@@ -870,7 +920,7 @@ impl Workbench {
 
         if !st.conflicts.is_empty() {
             body = body.child(section("scm-sec-conf", "Merge Changes".into(), st.conflicts.len(), true));
-            for (i, ch) in st.conflicts.iter().enumerate() {
+            for (i, ch) in st.conflicts.iter().enumerate().take(MAX_ROWS) {
                 body = body.child(file_row(i, 2, ch, self, cx));
             }
         }
@@ -880,18 +930,57 @@ impl Workbench {
                     this.scm_stage(None, false, cx);
                 })),
             ));
-            for (i, ch) in st.staged.iter().enumerate() {
+            for (i, ch) in st.staged.iter().enumerate().take(MAX_ROWS) {
                 body = body.child(file_row(i, 1, ch, self, cx));
             }
+            body = body.children(more_rows(st.staged.len()));
         }
         body = body.child(section("scm-sec-changes", "Changes".into(), st.changes.len(), true).when(!st.changes.is_empty(), |h| {
             h.child(Button::new("scm-stage-all").icon(Icon::new(IconName::Plus)).ghost().xsmall().tooltip(tr("Stage All")).on_click(cx.listener(|this, _, _, cx| {
                 this.scm_stage(None, true, cx);
             })))
         }));
-        for (i, ch) in st.changes.iter().enumerate() {
+        // Lots of untracked files (a server folder, build output): offer to ignore the
+        // folders they are in, biggest first, before listing them.
+        let untracked = st.changes.iter().filter(|c| c.code == 'U').count();
+        if untracked > 200 {
+            let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            for ch in st.changes.iter().filter(|c| c.code == 'U') {
+                if let Some((top, _)) = ch.path.split_once('/') {
+                    *by.entry(top).or_default() += 1;
+                }
+            }
+            let mut top: Vec<(&str, usize)> = by.into_iter().collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1));
+            body = body.child(
+                v_flex()
+                    .mx_3()
+                    .my_1()
+                    .p_2()
+                    .gap_1()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("{n} untracked files"; n => untracked)))
+                    .child(div().text_color(c(theme::FG_DIM)).child(tr("Folders with the most of them. Ignore the ones git should not track (they go to .gitignore).")))
+                    .children(top.into_iter().take(6).enumerate().map(|(i, (dir, n))| {
+                        let pattern = format!("{dir}/");
+                        h_flex()
+                            .gap_2()
+                            .h(theme::u(24.))
+                            .child(Icon::new(IconName::Folder).size(theme::u(13.)).text_color(c(theme::FOLDER)))
+                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(pattern.clone()))
+                            .child(div().flex_none().text_color(c(theme::FG_DIM)).child(n.to_string()))
+                            .child(Button::new(("scm-ignore", i)).label(tr("Ignore")).xsmall().on_click(cx.listener(move |this, _, _, cx| this.scm_ignore(pattern.clone(), cx))))
+                    })),
+            );
+        }
+        for (i, ch) in st.changes.iter().enumerate().take(MAX_ROWS) {
             body = body.child(file_row(i, 0, ch, self, cx));
         }
+        body = body.children(more_rows(st.changes.len()));
         if st.count() == 0 {
             body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No changes. The working tree matches the last commit.")));
         }
@@ -1093,6 +1182,8 @@ impl Workbench {
                     .separator()
                     .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
                     .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
+                    .separator()
+                    .menu(tr("Remove Git from This Folder…"), Box::new(ScmRemoveGit))
             }))
     }
 
@@ -1131,6 +1222,65 @@ impl Workbench {
     pub(crate) fn on_scm_fetch(&mut self, _: &ScmFetch, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_run("Fetching…", vec![git_step(&["fetch", "--prune"])], cx, |this, _, _| this.status = tr("Fetched").into());
     }
+    pub(crate) fn on_scm_remove_git(&mut self, _: &ScmRemoveGit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.scm.repo.is_some() {
+            self.scm.confirm_uninit = true;
+            self.view = SideView::Scm;
+            self.sidebar_open = true;
+            cx.notify();
+        }
+    }
+
+    /// Undo "Initialize Repository": the `.git` folder goes to the Recycle Bin
+    /// (history and settings with it); the project's files are not touched.
+    fn scm_remove_git(&mut self, cx: &mut Context<Self>) {
+        self.scm.confirm_uninit = false;
+        let Some(repo) = self.scm.repo.clone() else { return };
+        let git = repo.join(".git");
+        self.scm.busy = Some(tr("Removing Git…").into());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_spawn(async move { crate::core::delete_path(&git) }).await;
+            _ = this.update(cx, |this, cx| {
+                this.scm.busy = None;
+                match r {
+                    Ok(()) => {
+                        this.scm.repo = None;
+                        this.scm.status = RepoStatus::default();
+                        this.scm.marks = Rc::default();
+                        this.scm.dirty_dirs = Rc::default();
+                        this.status = crate::trf!("Git removed from {0}. The .git folder is in the Recycle Bin."; 0 => repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).into();
+                    }
+                    Err(e) => this.scm.error = Some(e),
+                }
+                this.scm_refresh(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Add `pattern` (a folder like `libraries/`) to the repository's .gitignore.
+    fn scm_ignore(&mut self, pattern: String, cx: &mut Context<Self>) {
+        let Some(repo) = self.scm.repo.clone() else { return };
+        let path = repo.join(".gitignore");
+        let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+        if text.lines().any(|l| l.trim() == pattern) {
+            return;
+        }
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&pattern);
+        text.push('\n');
+        match std::fs::write(&path, text) {
+            Ok(()) => self.status = crate::trf!("{0} added to .gitignore"; 0 => pattern).into(),
+            Err(e) => self.scm.error = Some(e.to_string()),
+        }
+        self.scm_refresh(cx);
+        cx.notify();
+    }
+
     pub(crate) fn on_scm_stage_all(&mut self, _: &ScmStageAll, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_stage(None, true, cx);
     }

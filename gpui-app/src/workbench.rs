@@ -35,7 +35,7 @@ actions!(
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
-        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
+        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull
     ]
@@ -1779,6 +1779,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_scm_unstage_all))
             .on_action(cx.listener(Self::on_scm_create_pr))
             .on_action(cx.listener(Self::on_scm_open_github))
+            .on_action(cx.listener(Self::on_scm_remove_git))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))
