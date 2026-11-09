@@ -17,6 +17,7 @@ apa yang bisa dilakukan sekarang, apa bedanya dengan sebelumnya, dan apa yang be
 | Placeholder kotak chat | terpotong di panel sempit | pendek: "Tanya OpenCode..." |
 | Harness | OpenCode, Mira, Mura | OpenCode, Mura |
 | Breadcrumb file di luar workspace | path lengkap dari C:\ | nama file saja |
+| Pengaturan agent | daftar panjang, harus scroll | satu layar: model jadi dropdown, sisanya deretan tombol |
 
 ### Yang berubah
 
@@ -32,6 +33,10 @@ apa yang bisa dilakukan sekarang, apa bedanya dengan sebelumnya, dan apa yang be
   dijelaskan dengan kalimat biasa.
 - Mira (`omm`) dihapus. Pengaturan lama yang memilih Mira sekarang memakai Mura.
 - Placeholder kotak chat dipendekkan supaya tidak terpotong.
+- Pengaturan OpenCode/Mura jadi ringkas dan muat tanpa scroll: satu baris per pengaturan
+  (label kiri, pilihan kanan, membungkus kalau panel sempit). Model jadi satu dropdown dengan
+  model gratis di grup paling atas, mode jadi deretan tombol dengan deskripsi mode yang dipilih
+  di bawahnya, lalu effort, akses dan mati-saat-nganggur.
 
 ## 0.9.0-dev (9 November 2026)
 

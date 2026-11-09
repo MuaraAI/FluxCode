@@ -354,9 +354,10 @@ The agent panel:
 - Memory stays out of the way: one dim line under the message ("Saved to memory",
   "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
 - **Settings for the agent** (title menu → *settings*, or the model button under the input):
-  everything the harness offers over ACP (`configOptions`), as native controls: its agent
-  modes with their descriptions, the **model** (OpenCode Zen's free models grouped first,
-  then one group per provider) and the **effort** (the levels the model offers, such as Default / Low / High / Max). Choices
+  everything the harness offers over ACP (`configOptions`), as native controls on one screen
+  with no scrolling (label left, control right, wrapping when the panel is narrow): its agent
+  modes as buttons with the chosen mode's description, the **model** as one dropdown (OpenCode
+  Zen's free models grouped first, then one group per provider) and the **effort** (the levels the model offers, such as Default / Low / High / Max). Choices
   apply to the running session and are reused for new ones. The same view has FluxCode's
   auto-approve and idle-stop switches and opens OpenCode's config file. When a prompt
   fails because of the model (no credentials, quota), the panel says to pick another one.

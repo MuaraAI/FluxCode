@@ -3246,28 +3246,96 @@ impl Workbench {
             )
     }
 
-    /// The harness's own settings for this session, as native controls: mode
-    /// (its agents), model (free ones first, then per provider) and effort.
+    /// The harness's own settings for this session, compact enough to see at once:
+    /// one row per setting (label left, control right, wrapping in a narrow panel).
+    /// Few choices are a row of buttons; long lists (models) are one dropdown, free
+    /// models grouped first. Nothing here runs until a choice is made.
     fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let name = agent_name();
-        let section = |title: String| div().px_3().pt_4().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title);
+        let weak = cx.entity().downgrade();
         let header = h_flex()
             .px_3()
-            .py_1()
+            .h(theme::u(32.))
             .gap_2()
             .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} settings"; name => name)))
             .child(Button::new("ag-opt-back").label(crate::i18n::tr("Back to the chat")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
                 this.agent.show_options = false;
                 cx.notify();
             })));
-        let mut body = v_flex().id("ag-options").flex_1().min_h_0().pb_3().overflow_y_scroll();
+        // label | control, the control column wraps on its own when the panel is narrow
+        let row = |label: SharedString, control: AnyElement| {
+            h_flex()
+                .px_3()
+                .py_1p5()
+                .gap_3()
+                .items_start()
+                .child(div().w(theme::u(64.)).flex_none().pt_0p5().text_xs().text_color(c(theme::FG_MUTED)).child(label))
+                .child(div().flex_1().min_w_0().child(control))
+                .into_any_element()
+        };
+        let buttons = |opt: &ConfigOpt| {
+            let mut choices = opt.choices.clone();
+            if opt.category == "thought_level" {
+                choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
+            }
+            h_flex()
+                .gap_1()
+                .flex_wrap()
+                .children(choices.into_iter().map(|(v, n, _)| {
+                    let id = opt.id.clone();
+                    let on = opt.current == v;
+                    Button::new(SharedString::from(format!("ag-opt-{id}-{v}")))
+                        .label(n)
+                        .xsmall()
+                        .when(on, |b| b.primary())
+                        .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
+                }))
+                .into_any_element()
+        };
+        let dropdown = |opt: &ConfigOpt| {
+            let current = opt.current_name().rsplit('/').next().unwrap_or("").to_string();
+            let groups: Vec<(String, Vec<(String, String)>)> = if opt.category == "model" {
+                model_groups(&opt.choices)
+            } else {
+                vec![(String::new(), opt.choices.iter().map(|c| (c.0.clone(), c.1.clone())).collect())]
+            };
+            let (id, cur, weak) = (opt.id.clone(), opt.current.clone(), weak.clone());
+            Button::new(SharedString::from(format!("ag-opt-{}", opt.id)))
+                .label(current)
+                .xsmall()
+                .dropdown_caret(true)
+                .dropdown_menu(move |mut m: gpui_kit::component::menu::PopupMenu, _, _| {
+                    m = m.min_w(px(240.)).max_h(px(380.)).scrollable(true);
+                    for (gi, (group, models)) in groups.iter().enumerate() {
+                        if gi > 0 {
+                            m = m.separator();
+                        }
+                        let title = match group.as_str() {
+                            "free" => crate::i18n::tr("Free (OpenCode Zen)").to_string(),
+                            g => g.to_string(),
+                        };
+                        if !title.is_empty() {
+                            m = m.item(gpui_kit::component::menu::PopupMenuItem::label(title));
+                        }
+                        for (v, n) in models {
+                            let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
+                            m = m.item(gpui_kit::component::menu::PopupMenuItem::new(n.clone()).checked(*v == cur).on_click(move |_, _, cx| {
+                                _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
+                            }));
+                        }
+                    }
+                    m
+                })
+                .into_any_element()
+        };
+        let mut body = v_flex().id("ag-options").flex_1().min_h_0().pt_1().pb_2().overflow_y_scroll();
         if a.config.is_empty() {
             let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
             body = body.child(
                 v_flex()
                     .px_3()
-                    .py_3()
+                    .py_2()
                     .gap_2()
                     .text_xs()
                     .text_color(c(theme::FG_MUTED))
@@ -3290,113 +3358,85 @@ impl Workbench {
         };
         let mut opts: Vec<&ConfigOpt> = a.config.iter().collect();
         opts.sort_by_key(|o| order(o));
-        let row = |key: SharedString, on: bool, title: String, desc: String| {
-            h_flex()
-                .id(key)
-                .mx_2()
-                .px_2()
-                .py_1()
-                .gap_2()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(c(theme::SELECT)))
-                .hover(|s| s.bg(c(theme::BG_HOVER)))
-                .child(div().w(theme::u(14.)).flex_none().when(on, |d| d.child(Icon::new(IconName::Check).xsmall().text_color(c(theme::ACCENT_TEXT)))))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().truncate().text_xs().text_color(c(if on { theme::FG_STRONG } else { theme::FG })).child(title))
-                        .when(!desc.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(desc))),
-                )
-        };
         for o in opts {
-            match o.category.as_str() {
-                "thought_level" => {
-                    // Few short choices: one segmented row, "default" first.
-                    let mut choices = o.choices.clone();
-                    choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
-                    body = body.child(section(crate::i18n::tr("Effort").to_string())).child(
-                        h_flex().px_3().gap_1().flex_wrap().children(choices.into_iter().map(|(v, n, _)| {
-                            let id = o.id.clone();
-                            let on = o.current == v;
-                            Button::new(SharedString::from(format!("ag-opt-{id}-{v}")))
-                                .label(n)
-                                .xsmall()
-                                .when(on, |b| b.primary())
-                                .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
-                        })),
-                    ).child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("How long the model thinks before it answers. More thinking is slower and more careful.")));
-                }
-                "model" => {
-                    body = body.child(section(crate::i18n::tr("Model").to_string()));
-                    for (group, models) in model_groups(&o.choices) {
-                        let title = if group == "free" { crate::i18n::tr("Free (OpenCode Zen)").to_string() } else if group.is_empty() { String::new() } else { group };
-                        body = body.when(!title.is_empty(), |b| b.child(div().px_4().pt_2().pb_px().text_xs().text_color(c(theme::FG_DIM)).child(title)));
-                        for (v, n) in models {
-                            let id = o.id.clone();
-                            let on = o.current == v;
-                            body = body.child(
-                                row(SharedString::from(format!("ag-opt-{id}-{v}")), on, n, String::new())
-                                    .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx))),
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    let title = if o.category == "mode" { crate::i18n::tr("Agent mode").to_string() } else { o.name.clone() };
-                    body = body.child(section(title));
-                    for (v, n, d) in o.choices.clone() {
-                        let id = o.id.clone();
-                        let on = o.current == v;
-                        body = body.child(
-                            row(SharedString::from(format!("ag-opt-{id}-{v}")), on, n, d)
-                                .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx))),
-                        );
-                    }
-                }
-            }
+            let label: SharedString = match o.category.as_str() {
+                "mode" => crate::i18n::tr("Mode").into(),
+                "model" => crate::i18n::tr("Model").into(),
+                "thought_level" => crate::i18n::tr("Effort").into(),
+                _ => o.name.clone().into(),
+            };
+            let control = if o.category == "model" || o.choices.len() > 6 {
+                dropdown(o)
+            } else if o.category == "mode" {
+                // The chosen mode's description in one dim line (the full text in its tooltip).
+                let desc = o.choices.iter().find(|c| c.0 == o.current).map(|c| c.2.clone()).unwrap_or_default();
+                let full: SharedString = desc.clone().into();
+                v_flex()
+                    .gap_1()
+                    .child(buttons(o))
+                    .when(!desc.is_empty(), |v| {
+                        v.child(
+                            div()
+                                .id("ag-opt-mode-desc")
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
+                                .child(desc),
+                        )
+                    })
+                    .into_any_element()
+            } else {
+                buttons(o)
+            };
+            body = body.child(row(label, control));
         }
-        // FluxCode's side of the agent, and OpenCode's own config file.
+        // FluxCode's own side of the agent.
         let s = &self.settings;
-        let toggle = |id: &'static str, on: bool| Button::new(id).label(if on { crate::i18n::tr("On") } else { crate::i18n::tr("Off") }).xsmall().when(on, |b| b.primary());
+        let access = s.access().to_string();
         body = body
-            .child(section(crate::i18n::tr("In FluxCode").to_string()))
-            .child(
+            .child(div().mx_3().my_1().h(px(1.)).bg(c(theme::BORDER)))
+            .child(row(
+                crate::i18n::tr("Access").into(),
                 h_flex()
-                    .px_3()
-                    .py_1()
-                    .gap_2()
+                    .gap_1()
                     .flex_wrap()
-                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Access")))
-                    .children([("read", crate::i18n::tr("Read only")), ("write", crate::i18n::tr("Read & write")), ("full", crate::i18n::tr("Full access"))].into_iter().map(|(id, name)| {
-                        let on = s.access() == id;
+                    .children([("read", crate::i18n::tr("Read only")), ("write", crate::i18n::tr("Read & write")), ("full", crate::i18n::tr("Full access"))].into_iter().map(|(id, n)| {
                         Button::new(SharedString::from(format!("ag-opt-access-{id}")))
-                            .label(name)
+                            .label(n)
                             .xsmall()
-                            .when(on, |b| b.primary())
+                            .when(access == id, |b| b.primary())
                             .on_click(cx.listener(move |this, _, _, cx| this.agent_set_access(id, cx)))
-                    })),
-            )
-            .child(
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
+                crate::i18n::tr("Idle").into(),
                 h_flex()
-                    .px_3()
-                    .py_1()
+                    .items_start()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Turn off after 10 idle minutes to free memory")))
-                    .child(toggle("ag-opt-idle", s.agent_idle_min > 0).on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.agent_idle_min = if this.settings.agent_idle_min == 0 { 10 } else { 0 };
-                        this.settings.save();
-                        cx.notify();
-                    }))),
-            );
+                    .child(
+                        Button::new("ag-opt-idle")
+                            .label(if s.agent_idle_min > 0 { crate::i18n::tr("On") } else { crate::i18n::tr("Off") })
+                            .xsmall()
+                            .when(s.agent_idle_min > 0, |b| b.primary())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.settings.agent_idle_min = if this.settings.agent_idle_min == 0 { 10 } else { 0 };
+                                this.settings.save();
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().min_w_0().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("Turns off after 10 quiet minutes to free memory")))
+                    .into_any_element(),
+            ));
         if name == "OpenCode" {
             if let Some(cfg) = opencode_config_file() {
                 body = body.child(
-                    h_flex().px_3().pt_2().child(
+                    h_flex().px_3().pt_1().child(
                         Button::new("ag-opt-cfg")
                             .label(crate::i18n::tr("Open OpenCode's config file"))
                             .xsmall()
+                            .ghost()
                             .on_click(cx.listener(move |this, _, w, cx| this.open_file(cfg.clone(), w, cx))),
                     ),
                 );
