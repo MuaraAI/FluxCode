@@ -1,0 +1,40 @@
+# FluxCode takes code changes only from members of the MuaraAI organization.
+# Pull requests from anyone else are closed with a note pointing to Issues.
+# Runs on pull_request_target without checking out the pull request's code.
+
+name: Pull request gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            if (['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association)) return;
+            // Members whose organization membership is private show up as CONTRIBUTOR or NONE.
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: pr.user.login });
+              if (['admin', 'maintain', 'write'].includes(data.permission)) return;
+            } catch (e) {
+              core.info(`permission lookup failed: ${e.message}`);
+            }
+            const body = [
+              `Thanks for taking the time, @${pr.user.login}.`,
+              '',
+              `FluxCode takes code changes only from members of the ${owner} organization, so this pull request was closed automatically.`,
+              '',
+              `If you found a bug or have an idea, please [open an issue](https://github.com/${owner}/${repo}/issues/new/choose) and describe it there. The team reads every issue, and fixes ship in the next build.`,
+            ].join('\n');
+            await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+            await github.rest.pulls.update({ owner, repo, pull_number: pr.number, state: 'closed' });

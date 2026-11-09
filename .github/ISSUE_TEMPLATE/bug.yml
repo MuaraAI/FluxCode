@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in FluxCode does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bot checks every new issue for earlier reports of the same problem and for the build you use. Searching the [existing issues](https://github.com/MuaraAI/FluxCode/issues?q=is%3Aissue) first saves you the wait.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a folder with ...
+        2. Press ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: Help > About FluxCode copies it to the clipboard.
+      placeholder: BuildDev-2026-11-09-17-30-12
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (X11)
+        - Linux (Wayland)
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or logs
+      description: Optional. Drop images here; paste error text as text.

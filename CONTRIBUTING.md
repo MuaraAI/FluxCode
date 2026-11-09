@@ -1,38 +1,32 @@
-# Contributing to FluxCode
+# Contributing
 
-Thanks for helping build FluxCode! FluxCode is free and open source under the
-[GNU GPL v3.0 or later](LICENSE): you may use, fork, change and share it, as
-long as what you distribute stays under the same license.
+FluxCode is open source under the [GNU GPL v3.0 or later](LICENSE): you may use,
+study, fork, change and share it, as long as what you distribute stays under the
+same license.
 
-## How to contribute
+## Issues: open to everyone
 
-1. Open an issue first for anything bigger than a small fix, so we can agree
-   on the approach.
-2. Fork the repository, create a branch, and make your change.
-3. Build and test it (see the README's *Build from source*):
+[Open an issue](https://github.com/MuaraAI/FluxCode/issues/new/choose) for a bug or an
+idea. The forms ask for what is needed to act on it. For bugs, that includes the build
+ID: Help > About FluxCode copies it.
 
-   ```bash
-   npm install
-   npx tauri build --no-bundle
-   node scripts/test-app.mjs
-   ```
+A bot checks each new issue within a minute. It lists earlier issues that look like the
+same problem (open, or closed as fixed) and tells you when a newer build exists. It
+only comments and labels; people decide what happens next.
 
-   All checks of `scripts/test-app.mjs` must pass, and new behavior should get
-   a check there.
-4. Open a pull request against `main` describing what changed and why, with a
-   screenshot for UI changes.
+## Pull requests: MuaraAI members only
 
-## Guidelines
+The code is written by members of the [MuaraAI](https://github.com/MuaraAI)
+organization. Pull requests from anyone else are closed automatically with a pointer to
+Issues. A clear issue gets a fix into the next build faster than an outside pull request
+would.
 
-- **Light first.** No new runtime dependency without a reason; lazy-load
-  anything that isn't needed at startup; measure memory with the test script.
-- Keep the VS Code layout and keybindings unless there's a clear improvement.
-- Plain JavaScript and CSS on the frontend, Rust for anything that touches the
-  machine. Colors come from theme variables (`src/theme.js`), never hard-coded.
-- Write commit messages that explain *why*.
+## For members
 
-## Contributor terms
-
-By opening a pull request you license your contribution under the
-GPL-3.0-or-later (the same license as the project), and you confirm it is your
-own work or properly licensed to you under GPL-compatible terms.
+- Branch from `main`; open a pull request. CI builds Windows and Linux and runs the
+  unit tests (`cargo test --bin fluxcode`).
+- Merging into `main` publishes a `BuildDev-...` release, and installed copies offer it.
+  Add what changed to the top of [CHANGELOG.md](CHANGELOG.md) when it matters to users.
+- Light first: no new dependency without a reason, nothing running in the background
+  that the user did not ask for, and no telemetry.
+- Commit messages say what changed and why, in plain words.

@@ -1,0 +1,542 @@
+//! Development-build updates from GitHub Releases.
+//!
+//! Every push to `main` publishes a release tagged `BuildDev-YYYY-MM-DD-HH-MM-SS`
+//! (see `.github/workflows/build.yml`). FluxCode asks GitHub for the release list
+//! at start and every 6 hours, and offers the newest build when its tag sorts after
+//! the running one. The request carries no identifier: no build ID, no machine or
+//! user ID, no cookie. It is one plain `GET` through the system `curl`, the same
+//! way the GitHub sign-in works, so no HTTP stack is compiled in.
+//!
+//! Installing replaces the running executable in place: the new file is written
+//! next to it, the running one is renamed to `<name>.old` (Windows allows renaming
+//! a running exe, Linux allows replacing it), the new one takes its name, and the
+//! app restarts. The `.old` file is removed on the next start.
+
+use gpui_kit::component::{
+    button::{Button, ButtonVariants},
+    h_flex, v_flex, Icon, IconName, Sizable,
+};
+use gpui_kit::{prelude::FluentBuilder, *};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::i18n::tr;
+use crate::theme::{self, c};
+use crate::workbench::Workbench;
+
+/// This build, e.g. `BuildDev-2026-11-09-17-30-12` (set by build.rs).
+pub const BUILD: &str = env!("FLUXCODE_BUILD");
+const RELEASES: &str = "https://api.github.com/repos/MuaraAI/FluxCode/releases?per_page=20";
+/// How often a running FluxCode looks again.
+const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// First look, after start-up work has settled.
+const FIRST: Duration = Duration::from_secs(4);
+
+#[cfg(windows)]
+const ASSET_SUFFIX: &str = "windows-x64.zip";
+#[cfg(not(windows))]
+const ASSET_SUFFIX: &str = "linux-x64.tar.gz";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Release {
+    pub tag: String,
+    /// Release notes, Markdown as written on GitHub.
+    pub notes: String,
+    pub page: String,
+    pub url: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum Phase {
+    #[default]
+    Idle,
+    Available(Release),
+    Downloading(Release),
+    Installing(Release),
+    Failed(Option<Release>, String),
+}
+
+#[derive(Default)]
+pub struct UpdateUi {
+    pub phase: Phase,
+    /// Bytes on disk while downloading (polled from the file size).
+    pub done: u64,
+    /// "Later" hides the card for this tag until the next start.
+    pub hidden: Option<String>,
+    /// A check started from the menu reports "up to date" too.
+    pub manual: bool,
+}
+
+fn curl() -> std::process::Command {
+    crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
+}
+
+/// Ask GitHub for the newest BuildDev release that has a file for this platform.
+/// `Ok(None)`: this build is the newest.
+pub fn check() -> Result<Option<Release>, String> {
+    let out = curl()
+        .args(["-s", "-S", "-f", "-L", "--max-time", "20"])
+        .args(["-H", "Accept: application/vnd.github+json", "-H", "User-Agent: FluxCode", RELEASES])
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() { "GitHub did not answer".into() } else { err });
+    }
+    let list: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    Ok(newest(&list, BUILD))
+}
+
+/// The newest release in GitHub's list that is newer than `current` and carries
+/// this platform's archive. Tags are zero-padded, so they sort as text.
+fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
+    list.as_array()?
+        .iter()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .filter_map(|r| {
+            let tag = r["tag_name"].as_str()?;
+            if !tag.starts_with("BuildDev-") || tag <= current {
+                return None;
+            }
+            let asset = r["assets"].as_array()?.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(ASSET_SUFFIX)))?;
+            Some(Release {
+                tag: tag.to_string(),
+                notes: r["body"].as_str().unwrap_or_default().to_string(),
+                page: r["html_url"].as_str().unwrap_or_default().to_string(),
+                url: asset["browser_download_url"].as_str()?.to_string(),
+                size: asset["size"].as_u64().unwrap_or(0),
+            })
+        })
+        .max_by(|a, b| a.tag.cmp(&b.tag))
+}
+
+/// Up to `n` lines from the notes' first bullet list, without Markdown marks.
+pub fn highlights(notes: &str, n: usize) -> Vec<String> {
+    notes
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")))
+        .map(plain)
+        .filter(|l| !l.is_empty())
+        .take(n)
+        .collect()
+}
+
+/// `**bold**`, `` `code` `` and `[text](url)` as plain text.
+fn plain(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('[') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + 1..];
+        match (tail.find("]("), tail.find(')')) {
+            (Some(close), Some(end)) if close < end => {
+                out.push_str(&tail[..close]);
+                rest = &tail[end + 1..];
+            }
+            _ => {
+                out.push('[');
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace('`', "")
+}
+
+fn download_path(r: &Release) -> PathBuf {
+    std::env::temp_dir().join(format!("FluxCode-{}-{ASSET_SUFFIX}", r.tag))
+}
+
+fn download(r: &Release, to: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_file(to);
+    let out = curl()
+        .args(["-s", "-S", "-f", "-L", "--max-time", "900", "-H", "User-Agent: FluxCode", "-o"])
+        .arg(to)
+        .arg(&r.url)
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let got = std::fs::metadata(to).map(|m| m.len()).unwrap_or(0);
+    if r.size > 0 && got != r.size {
+        return Err(format!("download incomplete ({got} of {} bytes)", r.size));
+    }
+    Ok(())
+}
+
+/// The new executable's bytes from the downloaded archive.
+#[cfg(windows)]
+fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
+    let b = std::fs::read(archive).map_err(|e| e.to_string())?;
+    let entries = crate::docs::zip_entries(&b).ok_or("the download is not a valid ZIP")?;
+    let (_, off, csize, method, _) = entries
+        .iter()
+        .find(|e| e.0.rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case("FluxCode.exe")))
+        .ok_or("FluxCode.exe is missing from the download")?;
+    let data = b.get(*off..*off + *csize).ok_or("the ZIP is cut short")?;
+    match method {
+        0 => Ok(data.to_vec()),
+        8 => miniz_oxide::inflate::decompress_to_vec_with_limit(data, 512 << 20).map_err(|e| format!("{e:?}")),
+        m => Err(format!("unsupported ZIP compression ({m})")),
+    }
+}
+
+#[cfg(not(windows))]
+fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
+    let dir = std::env::temp_dir().join("fluxcode-update");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let out = std::process::Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&dir).output().map_err(|e| format!("tar could not start ({e})"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    // The archive holds one folder with the `fluxcode` binary in it.
+    let found = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .flat_map(|p| [p.join("fluxcode"), p])
+        .find(|p| p.is_file() && p.file_name().is_some_and(|n| n == "fluxcode"))
+        .ok_or("fluxcode is missing from the download")?;
+    let bytes = std::fs::read(found).map_err(|e| e.to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    bytes
+}
+
+fn sibling(exe: &Path, ext: &str) -> PathBuf {
+    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    exe.with_file_name(format!("{name}.{ext}"))
+}
+
+/// Put the downloaded build in place of the running executable.
+fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bytes = unpack(archive)?;
+    let new = sibling(&exe, "new");
+    let old = sibling(&exe, "old");
+    std::fs::write(&new, &bytes).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => format!("no permission to write to {}", exe.parent().unwrap_or(&exe).display()),
+        _ => e.to_string(),
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(&exe, &old).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::rename(&new, &exe) {
+        let _ = std::fs::rename(&old, &exe);
+        return Err(e.to_string());
+    }
+    let _ = std::fs::remove_file(archive);
+    // Settings > Apps shows the build that is installed.
+    #[cfg(windows)]
+    {
+        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\FluxCode";
+        if crate::proc::command("reg").args(["query", key]).output().is_ok_and(|o| o.status.success()) {
+            let _ = crate::proc::command("reg").args(["add", key, "/v", "DisplayVersion", "/d", tag, "/f"]).output();
+        }
+    }
+    let _ = tag;
+    Ok(exe)
+}
+
+/// Remove what the last update left behind.
+pub fn cleanup() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::fs::remove_file(sibling(&exe, "old"));
+        let _ = std::fs::remove_file(sibling(&exe, "new"));
+    }
+}
+
+impl Workbench {
+    /// Look for a new build now and then every few hours (when the setting is on).
+    pub(crate) fn start_update_checks(&mut self, cx: &mut Context<Self>) {
+        cleanup();
+        cx.spawn(async move |this, cx| {
+            let mut wait = FIRST;
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = EVERY;
+                let on = this.update(cx, |this, _| this.settings.update_check).unwrap_or(false);
+                if !on {
+                    continue;
+                }
+                let busy = this
+                    .update(cx, |this, _| matches!(this.update.phase, Phase::Downloading(_) | Phase::Installing(_)))
+                    .unwrap_or(true);
+                if busy {
+                    continue;
+                }
+                let r = cx.background_spawn(async move { check() }).await;
+                if this.update(cx, |this, cx| this.update_checked(r, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Help → Check for Updates.
+    pub(crate) fn check_updates_now(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.update.phase, Phase::Downloading(_) | Phase::Installing(_)) {
+            return;
+        }
+        self.update.manual = true;
+        self.update.hidden = None;
+        self.status = tr("Checking for a new build…").into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_spawn(async move { check() }).await;
+            _ = this.update(cx, |this, cx| this.update_checked(r, cx));
+        })
+        .detach();
+    }
+
+    fn update_checked(&mut self, r: Result<Option<Release>, String>, cx: &mut Context<Self>) {
+        let manual = std::mem::take(&mut self.update.manual);
+        match r {
+            Ok(Some(rel)) => {
+                if manual {
+                    self.status = crate::trf!("{0} is available"; 0 => rel.tag).into();
+                }
+                // Same build as before: keep its state (the card may be hidden by Later).
+                if !matches!(&self.update.phase, Phase::Available(a) if a.tag == rel.tag) {
+                    self.update.phase = Phase::Available(rel);
+                }
+            }
+            Ok(None) if manual => self.status = crate::trf!("You have the newest build ({0})"; 0 => BUILD).into(),
+            Err(e) if manual => self.status = crate::trf!("Could not check for updates: {0}"; 0 => e).into(),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn update_start(&mut self, cx: &mut Context<Self>) {
+        let rel = match &self.update.phase {
+            Phase::Available(r) | Phase::Failed(Some(r), _) => r.clone(),
+            _ => return,
+        };
+        let path = download_path(&rel);
+        self.update.phase = Phase::Downloading(rel.clone());
+        self.update.done = 0;
+        cx.notify();
+        // Progress: the file's size on disk, a few times a second.
+        let poll = path.clone();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            let size = std::fs::metadata(&poll).map(|m| m.len()).unwrap_or(0);
+            let going = this
+                .update(cx, |this, cx| {
+                    let going = matches!(this.update.phase, Phase::Downloading(_));
+                    if going && size != this.update.done {
+                        this.update.done = size;
+                        cx.notify();
+                    }
+                    going
+                })
+                .unwrap_or(false);
+            if !going {
+                break;
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            let r2 = rel.clone();
+            let p2 = path.clone();
+            let got = cx.background_spawn(async move { download(&r2, &p2) }).await;
+            if let Err(e) = got {
+                _ = this.update(cx, |this, cx| {
+                    this.update.phase = Phase::Failed(Some(rel), e);
+                    cx.notify();
+                });
+                return;
+            }
+            _ = this.update(cx, |this, cx| {
+                this.update.phase = Phase::Installing(rel.clone());
+                cx.notify();
+            });
+            let tag = rel.tag.clone();
+            let done = cx.background_spawn(async move { install(&path, &tag) }).await;
+            _ = this.update(cx, |this, cx| match done {
+                Ok(exe) => {
+                    this.save_session(cx);
+                    match std::process::Command::new(&exe).spawn() {
+                        Ok(_) => cx.quit(),
+                        Err(e) => {
+                            this.update.phase = Phase::Failed(None, crate::trf!("Installed, but FluxCode could not restart ({0}). Open it again."; 0 => e));
+                            cx.notify();
+                        }
+                    }
+                }
+                Err(e) => {
+                    this.update.phase = Phase::Failed(Some(rel), e);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The card in the bottom-right corner: new build, download progress, or what failed.
+    pub(crate) fn render_update(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let u = &self.update;
+        let rel = match &u.phase {
+            Phase::Idle => return None,
+            Phase::Available(r) => {
+                if u.hidden.as_deref() == Some(r.tag.as_str()) {
+                    return None;
+                }
+                Some(r)
+            }
+            Phase::Downloading(r) | Phase::Installing(r) => Some(r),
+            Phase::Failed(r, _) => r.as_ref(),
+        };
+        let tag: SharedString = rel.map(|r| r.tag.clone()).unwrap_or_default().into();
+        let close = matches!(u.phase, Phase::Available(_) | Phase::Failed(..));
+        let head = h_flex()
+            .gap_2()
+            .items_center()
+            .child(Icon::new(IconName::ArrowDown).size(theme::u(14.)).text_color(c(theme::ACCENT)))
+            .child(
+                div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(match &u.phase {
+                    Phase::Downloading(_) => tr("Downloading the new build"),
+                    Phase::Installing(_) => tr("Installing…"),
+                    Phase::Failed(..) => tr("The update did not finish"),
+                    _ => tr("A new build is ready"),
+                }),
+            )
+            .when(close, |h| {
+                h.child(
+                    Button::new("upd-close")
+                        .icon(IconName::Close)
+                        .ghost()
+                        .xsmall()
+                        .tooltip(tr("Later"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            match &this.update.phase {
+                                Phase::Available(r) => this.update.hidden = Some(r.tag.clone()),
+                                _ => this.update.phase = Phase::Idle,
+                            }
+                            cx.notify();
+                        })),
+                )
+            });
+        let mut body = v_flex().gap_1().text_xs();
+        if !tag.is_empty() {
+            body = body.child(
+                div()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(crate::trf!("{0}, you have {1}"; 0 => tag, 1 => BUILD)),
+            );
+        }
+        match &u.phase {
+            Phase::Available(r) => {
+                for line in highlights(&r.notes, 3) {
+                    body = body.child(h_flex().gap_1p5().items_start().child(div().text_color(c(theme::FG_DIM)).child("·")).child(div().flex_1().min_w_0().text_color(c(theme::FG)).child(line)));
+                }
+            }
+            Phase::Downloading(r) => {
+                let frac = if r.size > 0 { (u.done as f32 / r.size as f32).clamp(0., 1.) } else { 0. };
+                let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.);
+                body = body
+                    .child(
+                        div()
+                            .mt_1()
+                            .h(px(4.))
+                            .w_full()
+                            .rounded(px(2.))
+                            .bg(c(theme::BG_HOVER))
+                            .child(div().h_full().rounded(px(2.)).bg(c(theme::ACCENT)).w(relative(frac))),
+                    )
+                    .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("{0} of {1} MB"; 0 => mb(u.done), 1 => mb(r.size))));
+            }
+            Phase::Installing(_) => {
+                body = body.child(div().text_color(c(theme::FG_DIM)).child(tr("FluxCode restarts on its own in a moment. Your open files and folders come back.")));
+            }
+            Phase::Failed(_, e) => {
+                body = body.child(div().text_color(c(theme::FG)).child(e.clone()));
+            }
+            Phase::Idle => {}
+        }
+        let page = rel.map(|r| r.page.clone()).unwrap_or_default();
+        let actions = match &u.phase {
+            Phase::Available(_) | Phase::Failed(Some(_), _) => Some(
+                h_flex()
+                    .pt_1()
+                    .gap_2()
+                    .child(
+                        Button::new("upd-go")
+                            .label(if matches!(u.phase, Phase::Failed(..)) { tr("Try again") } else { tr("Update and restart") })
+                            .primary()
+                            .xsmall()
+                            .on_click(cx.listener(|this, _, _, cx| this.update_start(cx))),
+                    )
+                    .when(!page.is_empty(), |h| {
+                        h.child(Button::new("upd-notes").label(tr("What's new")).ghost().xsmall().on_click(move |_, _, cx| cx.open_url(&page)))
+                    }),
+            ),
+            _ => None,
+        };
+        // Slides up and fades in once when it appears (240 ms), then stays still.
+        let card = v_flex()
+            .id("update-card")
+            .absolute()
+            .right(px(12.))
+            .w(theme::u(340.))
+            .max_w(relative(0.9))
+            .p_3()
+            .gap_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .bg(c(theme::BG_ELEVATED))
+            .shadow_lg()
+            .occlude()
+            .child(head)
+            .child(body)
+            .children(actions);
+        let key: SharedString = format!("update-in-{tag}").into();
+        Some(
+            card.with_animation(key, Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()), |el, t| {
+                el.bottom(theme::u(34.) + px((1. - t) * 10.)).opacity(t)
+            })
+            .into_any_element(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: that brings in gpui's own `test` attribute.
+    use super::{highlights, newest, ASSET_SUFFIX, BUILD};
+
+    #[test]
+    fn picks_the_newest_newer_build_with_this_platforms_file() {
+        let text = r#"[
+            { "tag_name": "BuildDev-2026-11-10-08-00-00", "draft": false, "body": "- **Faster** start\n- See [notes](https://x)",
+              "html_url": "https://github.com/r/1", "assets": [{ "name": "FluxCode-BuildDev-2026-11-10-08-00-00-SUFFIX", "browser_download_url": "https://dl/1", "size": 10 }] },
+            { "tag_name": "BuildDev-2026-11-11-08-00-00", "draft": true, "assets": [] },
+            { "tag_name": "BuildDev-2026-11-12-08-00-00", "draft": false, "assets": [{ "name": "something-else.zip", "browser_download_url": "x", "size": 1 }] },
+            { "tag_name": "gpui-v0.9.1-dev", "draft": false, "assets": [] }
+        ]"#
+        .replace("SUFFIX", ASSET_SUFFIX);
+        let list: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let r = newest(&list, "BuildDev-2026-11-09-17-00-00").unwrap();
+        assert_eq!(r.tag, "BuildDev-2026-11-10-08-00-00");
+        assert_eq!(r.size, 10);
+        assert_eq!(highlights(&r.notes, 3), vec!["Faster start", "See notes"]);
+        assert!(newest(&list, "BuildDev-2026-11-10-08-00-00").is_none());
+    }
+
+    #[test]
+    fn build_id_has_the_expected_shape() {
+        // BuildDev-YYYY-MM-DD-HH-MM-SS
+        assert_eq!(BUILD.len(), "BuildDev-2026-11-09-17-30-12".len());
+        assert!(BUILD.starts_with("BuildDev-"));
+    }
+}

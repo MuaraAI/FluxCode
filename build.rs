@@ -1,0 +1,89 @@
+//! Build ID and Windows resources.
+//!
+//! FluxCode has no version number while it is in development. Each build is named
+//! after the moment it was made: `BuildDev-YYYY-MM-DD-HH-MM-SS`. CI and
+//! `packaging/windows/build.ps1` pass it in `FLUXCODE_BUILD` (Asia/Jakarta time);
+//! a plain `cargo build` falls back to the current UTC time. The app reads it as
+//! `env!("FLUXCODE_BUILD")` and the updater compares it with release tags.
+//!
+//! On Windows the FluxCode icon becomes resource ID 1 (GPUI uses it for the window
+//! and taskbar) and the build ID goes into the version info Explorer shows. The .rc
+//! file is written into OUT_DIR because MinGW windres breaks on spaces in paths.
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+    println!("cargo:rerun-if-env-changed=FLUXCODE_BUILD");
+
+    let build = match std::env::var("FLUXCODE_BUILD") {
+        Ok(b) if valid(&b) => b,
+        Ok(b) if !b.is_empty() => panic!("FLUXCODE_BUILD must look like BuildDev-2026-11-09-17-30-12, got {b:?}"),
+        _ => utc_now(),
+    };
+    println!("cargo:rustc-env=FLUXCODE_BUILD={build}");
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    std::fs::copy(manifest.join("assets/icon.ico"), out.join("fluxcode.ico")).expect("copy icon");
+
+    // Numeric file version from the build time: year, MMDD, HHMM, seconds.
+    let n: Vec<u16> = build.split('-').skip(1).map(|p| p.parse().unwrap_or(0)).collect();
+    let (y, md, hm, s) = (n[0], n[1] * 100 + n[2], n[3] * 100 + n[4], n[5]);
+    let rc = format!(
+        r#"1 ICON "fluxcode.ico"
+1 VERSIONINFO
+FILEVERSION {y},{md},{hm},{s}
+PRODUCTVERSION {y},{md},{hm},{s}
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "MuaraAI"
+      VALUE "FileDescription", "FluxCode Development"
+      VALUE "ProductName", "FluxCode Development"
+      VALUE "FileVersion", "{build}"
+      VALUE "ProductVersion", "{build}"
+      VALUE "OriginalFilename", "FluxCode.exe"
+      VALUE "LegalCopyright", "Copyright (C) 2026 MuaraAI and contributors. GPL-3.0-or-later"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#
+    );
+    let rc_path = out.join("fluxcode.rc");
+    std::fs::write(&rc_path, rc).expect("write rc");
+    embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional().expect("embed resources");
+}
+
+/// `BuildDev-` followed by six dash-separated numbers of the right widths.
+fn valid(b: &str) -> bool {
+    let Some(rest) = b.strip_prefix("BuildDev-") else { return false };
+    let parts: Vec<&str> = rest.split('-').collect();
+    let widths = [4, 2, 2, 2, 2, 2];
+    parts.len() == 6 && parts.iter().zip(widths).all(|(p, w)| p.len() == w && p.bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// The current UTC time as a build ID (no date crate in the build script).
+fn utc_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant's days_from_civil, inverted.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("BuildDev-{y:04}-{m:02}-{d:02}-{:02}-{:02}-{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}

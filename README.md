@@ -1,535 +1,127 @@
 # FluxCode
 
-A lightweight code editor for Windows and Linux with the VS Code look and feel, built on
-**Tauri 2 (Rust)** + **CodeMirror 6**. There's no bundled Chromium: the UI runs
-in the system's native webview (WebView2 on Windows, WebKitGTK on Linux), and
-everything that touches the machine (files, processes, the terminal, the preview server)
-runs in Rust.
+A native code editor for Windows and Linux, written in Rust and drawn by the GPU.
+One small program with an AI agent panel, a Python-friendly terminal, built-in Source
+Control, and read-only views for files other editors refuse to open. No telemetry.
 
-There is also a **native GPUI edition** (no WebView, one process, ~2x faster start and
-~80 % less resident memory); see [GPUI edition](#gpui-edition-native-no-webview).
+[![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?label=build&sort=date)](https://github.com/MuaraAI/FluxCode/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-FluxCode is **free and open source** under the
-[GNU General Public License v3.0 or later](LICENSE).
+![FluxCode with a Rust file open, the explorer on the left and the agent panel on the right](assets/screenshot.png)
 
-> Status: **development build `0.5.2-dev.2026-11-07-1545`** — not a final
-> release. Focus: Python apps and the web (HTML, CSS, JavaScript/TypeScript).
-> Dev builds are versioned `<version>-dev.<YYYY-MM-DD>-<HHMM>` and show a
-> **DEV** badge in the title bar.
+FluxCode is in development. There are no version numbers yet: every change merged into
+`main` becomes a build named after the moment it was made, like
+`BuildDev-2026-11-09-17-30-12`, and installed copies offer it on their own.
 
-## Install
+## Download
 
-### Windows
-Download `FluxCode_<version>_x64-setup.exe` from the
-[Releases](https://github.com/MuaraAI/FluxCode/releases) page and run it. It
-installs for your user only (no admin rights) into
-`%LOCALAPPDATA%\FluxCode`, adds FluxCode to the Start Menu, Windows Search and
-the Desktop, and is removed from Settings → Apps → Installed apps. A portable
-zip is attached too.
+Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
 
-### Linux (Debian, Ubuntu, Arch, CachyOS, ARM64)
-
-Download the binary package for your distro from the [Releases](https://github.com/MuaraAI/FluxCode/releases) page:
-
-- **Debian / Ubuntu (`.deb`)** (x86_64 & arm64):
-  ```bash
-  sudo dpkg -i fluxcode_<version>_amd64.deb # or arm64.deb
-  sudo apt-get install -f # install system runtime dependencies if missing
-  ```
-- **Arch Linux / CachyOS**:
-  Install using the `PKGBUILD` provided in `packages/arch/`:
-  ```bash
-  cd packages/arch
-  makepkg -si
-  ```
-- **Universal Linux (`.AppImage`)** (x86_64 & aarch64):
-  ```bash
-  chmod +x FluxCode_<version>_x86_64.AppImage
-  ./FluxCode_<version>_x86_64.AppImage
-  ```
-
-System dependencies on Linux: `webkit2gtk-4.1`, `libayatana-appindicator`, `openssl`.
-## What works now
-
-**Workbench**
-- VS Code layout: menus (File, Edit, Selection, View, Run, Terminal, Help),
-  centered command center, layout toggles, tabs (with preview tabs),
-  breadcrumbs, panel (Output + Terminal), status bar. Seamless frameless window
-  on Windows and native desktop decorations on Linux (GNOME, KDE, Hyprland, etc.)
-- Opens inside the monitor's work area (never under taskbars; maximized
-  on small screens) and reopens where you left it
-- **Settings** (gear in the activity bar, Ctrl+, or the command palette):
-  one searchable VS Code-style page — Appearance, Editor, Terminal, Accounts,
-  OpenCode. Changes apply instantly and update in place (the page never
-  jumps); **Reset to default** asks to confirm first
-- **Color theme** (Ctrl+K Ctrl+T, with live preview while you arrow through
-  the list): 8 presets (dark and light) or your own **Accent / Background /
-  Text** colors. Every other color — panels, borders, selections, syntax
-  highlighting, terminal ANSI colors — is derived from those and, with
-  **auto contrast**, adjusted to meet WCAG contrast ratios (text 7:1, muted
-  text and code 4.5:1), with live contrast scores
-- **Fonts**: the interface uses the VS Code default on Windows (Segoe UI,
-  three sizes); code and the terminal use Cascadia Code, Consolas or
-  JetBrains Mono. Line numbers are zero-padded (`01`, `02` … `10`) so the
-  gutter never shifts
-- **Command palette** (Ctrl+Shift+P) also finds every setting: theme, fonts,
-  interface size, terminal shell / font size / cursor, GitHub sign-in,
-  OpenCode — each opens a quick pick or the right Settings section. Narrow
-  windows fold the menu bar into a ☰ button so it never collides with the
-  command center
-- **Run and Debug** view (Ctrl+Shift+D): what F5 does for the active file and
-  the runners found on this machine (Python, Node.js, Live Preview)
-- **One icon system**: every file type is the same 16×16 tile (tinted
-  background + simple glyph) so names line up; flat folders; UI icons on one
-  24px grid with 1.5px strokes
-- **Live Preview** with a compact header (file + folder), Fit / Tablet (768px)
-  / Phone (390px) sizes, a thin loading bar instead of a white flash, and it
-  follows whichever HTML file you switch to
-- **Its own icon set** (UI icons, file-type badges, folder icons), drawn for
-  this project
-- Smooth, cheap animations (opacity/transform only); respects "reduce motion"
-- **Auto Save** (on by default, File → Auto Save): saves 0.7 s after you stop
-  typing and when you switch to another app
-- Search view (Ctrl+Shift+F): find in files with highlighted results in the
-  list and in the editor; Quick Open (Ctrl+P), Command Palette (Ctrl+Shift+P)
-
-**Languages** (each loaded only when a file needs it)
-
-| Language | Editing | F5 does |
+| System | File | Install |
 | --- | --- | --- |
-| Python | highlight, smart indent, completion, snippets, `import` of stdlib / PyPI / `requirements.txt` modules | run with live output, `input()`, clickable tracebacks, `.venv` detection |
-| JavaScript / TypeScript | highlight, JSX/TSX, every browser API, Node.js globals and modules, npm packages (`package.json` first) in `import`/`require`, snippets | run with Node.js (TypeScript via Node's type stripping), clickable stack traces |
-| HTML / CSS | highlight, auto-close tags, **Emmet** (`!`, `ul>li*3>a`, `div.card#main`, `input:email`, `m10-20`, `df`, `bgc#fff` …), tag completion in text | **Live Preview** inside FluxCode |
-| PHP / Laravel / Blade | highlight, PHP functions, facades (`Route::`, `DB::` …), Eloquent / request methods after `->`, helpers, `use Illuminate\…`, Blade directives, snippets | — |
-| JSON | `package.json` / `composer.json` keys, npm and Packagist package names in dependencies | — |
-| Markdown, Rust | highlight | — |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64.zip` | Extract, double-click `Install.cmd`. No admin rights. |
+| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract, run `./install.sh`. No root. |
 
-**Completion** is VS Code-like: suggestions appear as you type, **Tab** or
-Enter accepts them, Tab then walks through the snippet's fields, and Tab on an
-Emmet abbreviation expands it directly. Words from the open file are offered
-last. Everything is static data loaded with the language — no language
-server process, so it costs nothing while idle.
+Both install for your user only and keep themselves up to date: when a new build is out,
+a card in the bottom-right corner offers it, and one click downloads it, swaps the
+program and reopens your folders. Settings > Updates turns the check off.
 
-**Live Preview** (HTML/CSS/JS): a tiny Rust server on `127.0.0.1` serves the
-workspace folder; the preview pane reloads after every save (auto save makes
-it live while you type). No polling: pages wait on a long-poll request.
-Open in Browser is one click. Requests outside the folder are refused.
+## What it does
 
-## Flux Terminal
+- **Editor**: syntax colors for about 200 languages (picked by file name, extension or
+  `#!` line), multi-root workspaces, drag a folder onto the window to add or switch,
+  Go to File (`Ctrl+P`), Find in Files, smooth wheel scrolling, auto save, four themes,
+  your own background image, English or Bahasa Indonesia.
+- **Files that are not text** open read-only instead of failing: binaries as hex, Word,
+  Excel, PowerPoint, OpenDocument and PDF as text, ZIP/JAR/APK as a file list, SQLite as
+  tables with their SQL and row counts.
+- **AI agent panel** (`Ctrl+L`) for any [ACP](https://agentclientprotocol.com) agent:
+  [OpenCode](https://opencode.ai) or MuaraAI's Mura. Pick the model, effort and mode in
+  the panel; choose Read only, Read & write or Full access; see every file the agent
+  changed this turn with a diff and per-file undo; edit a sent message and the answer
+  restarts from there. The agent gets an overview of the workspace with its first message,
+  and a local memory you can read, edit or switch off.
+- **Terminal and Run** (`F5`): Python errors become a card with a clickable file and line
+  and, for a missing module, a Fix button; typos like `pip i` are corrected before running.
+- **Source Control** (`Ctrl+Shift+G`): stage, commit, push, pull, sync, amend, a commit
+  graph, pull requests and GitHub Actions runs through `gh`, and Remove Git to undo a
+  `git init`. Thousands of untracked files stay fast, with a one-click `.gitignore`.
 
-FluxCode's own terminal, written from scratch (no xterm.js, no PTY, no shell
-idling in the background). ``Ctrl+` `` or the **TERMINAL** tab; its path bar
-and tools sit in the panel header to leave room for output.
+## FluxCode, Zed and VS Code
 
-- **No `cd` needed**: click any part of the path bar (long paths fold into
-  `…`), use ▾ for subfolders or the root `/` / drive button, or type a folder
-  name, `..`, `...`, `~`, `-` (back), `D:` or absolute `/path` and press Enter
+All three are good editors made for different people. This is where each stands today.
 
-- **Inline suggestions** while you type (history, files/folders, commands),
-  shown next to the text with a `Tab` hint: **Tab** (or →) completes it;
-  with no suggestion, Tab opens a completion picker
-- **Blocks**: folder, status (✓ / ✗ exit code), duration, copy / rerun / stop
-- Native, clickable `ls` / `dir`; colored command line; ANSI colors and
-  progress bars; clickable tracebacks; multiple terminals; Ctrl+C, Ctrl+L
-- Bare `python` / `py` / `node` start their interactive REPL
-- Terminal Settings (⚙, or Settings → Terminal): shell (cmd, PowerShell,
-  pwsh on Windows; bash, zsh, fish, sh on Linux), font size, cursor style,
-  smooth caret, hidden files, revoke
-  permissions — the popover updates in place and always stays inside the
-  window. Clear (the icon next to ✕, or Ctrl+L) fades the old blocks out;
-  the drive menu marks the current drive
-- Signed in to GitHub (Settings → Accounts)? `gh` and token-aware tools get
-  `GH_TOKEN` / `GITHUB_TOKEN` automatically
-- **Permissions first**: the terminal only works in folders you allowed —
-  the open workspace (for the session), a folder allowed once or always, or
-  full disk access. This is a consent gate for where commands run, not a
-  sandbox: a command can still reach any path your operating system account can
-
-
-## OpenCode (AI agent)
-
-The **OpenCode** view (robot icon, Ctrl+Shift+A) runs the
-[OpenCode](https://opencode.ai) CLI inside FluxCode over the
-[Agent Client Protocol](https://agentclientprotocol.com) (ACP). Install it
-once (`npm i -g @opencode/cli`, v2 or newer) and sign in with
-`opencode auth login`; FluxCode finds it on PATH or in the npm global folder.
-
-- Starts `opencode acp` only when you send the first message, in the open
-  folder; **Stop when idle** (default on) quits it after 10 minutes and the
-  next message starts it again
-- Streams the answer, the agent's plan, tool calls (with diffs and output)
-  and thoughts into a light transcript
-- **Live edits, like Cursor**: a file the agent changes opens in the editor
-  at once with the hunks inline — added lines green, removed lines red — and
-  **Keep / Undo** on every hunk. A **Changes** list in the view shows every
-  file touched this session with +/− counts and Keep / Undo per file or for
-  all of them
-- Mode, model and effort are picked from light custom menus (no native
-  `<select>`); the status shows the context tokens used
-- Permission requests appear inline (allow once / always / reject), or set
-  **Auto-approve tools** in Settings; modes (build / plan) and `/commands`
-  come from OpenCode itself
-- The active file can be attached to each prompt (chip in the composer)
-
-**GitHub** (Settings → Accounts): sign in with a personal access token
-(verified through api.github.com, stored in your FluxCode config folder) or
-reuse the GitHub CLI's login. The token is passed to Flux Terminal commands
-and to OpenCode as `GH_TOKEN`.
-
-## Resource use
-
-GPU acceleration in WebView2 is off by default (its GPU process alone used
-~155 MB) and what remains runs in-process. Set `FLUXCODE_GPU=1` to turn it on.
-
-Measured by `scripts/test-app.mjs` on this machine (Windows 11, all
-processes including WebView2 and the programs being run):
-
-| Moment | Processes | Private memory |
-| --- | --- | --- |
-| Idle, `examples/` open | 6 | **~112 MB** |
-| After running Python and Node | 6 | ~135 MB |
-| Live Preview open (one extra page process) | 7 | ~175 MB |
-| Preview closed again | 6 | ~159 MB |
-| VS Code, no extensions, fresh profile (for comparison) | 9 | ~1,577 MB |
-
-Executable: 3.6 MB. Idle CPU: near zero. Completion data and the OpenCode
-view are lazy chunks: nothing is loaded until a matching file or the view is
-opened.
-
-About the OpenCode process: the CLI is a ~260 MB Bun executable that uses
-roughly 150–300 MB of memory of its own while a session is open. FluxCode
-cannot make that smaller — it only makes sure the process exists while you
-use it (start on first message, stop when idle). A whole-stack total under
-50 MB is therefore not reachable with WebView2 plus OpenCode; FluxCode's own
-share stays as above.
-
-## GPUI edition (native, no WebView)
-
-What changed in each version, with before/after numbers: [gpui-app/CHANGELOG.md](gpui-app/CHANGELOG.md) (in Indonesian).
-
-[`gpui-app/`](gpui-app/) is a second FluxCode front end built on
-[GPUI](https://gpui.rs) (Zed's GPU-accelerated Rust UI framework) and
-[gpui-component](https://github.com/longbridge/gpui-kit). The UI is drawn by the GPU
-(DirectX 11 on Windows) in **one process**, without a browser engine. It reuses the Rust
-backend logic of the Tauri app (search, processes, OpenCode/ACP, preview server, GitHub).
-
-Benchmark on the same machine (Windows 11, AMD Radeon integrated graphics), release builds,
-median of 5 runs, this repository open; Tauri numbers include every WebView2 process
-([full report](docs/gpui-vs-tauri.md), script: `scripts/bench-gpui-vs-tauri.ps1`):
-
-| | Tauri (WebView2) | GPUI | |
+| | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
-| Start to painted UI | 506 ms | **273 ms** | ~1.9x faster |
-| Processes | 6 | **1** | |
-| Idle memory, private | 113 MB | **101 MB** | -10 % |
-| Idle memory, working set | 336 MB | **60 MB** | -82 % |
-| Large file (60k lines), working set | 386 MB | **76 MB** | highlighting off above 2 MB |
-| CPU while typing in the large file | 77 % | **11 %** | % of one core |
-| CPU while scrolling the large file | 63 % | **11 %** | |
-| CPU idle | 10 % | **2 %** | |
-| Executable | **3.9 MB** (+ system WebView2) | 26.4 MB (self-contained) | |
+| Built with | Rust, GPUI (GPU-drawn) | Rust, GPUI (GPU-drawn) | TypeScript on Electron (Chromium + Node.js) |
+| Systems | Windows, Linux | macOS, Linux, Windows | Windows, macOS, Linux, web |
+| What you download | one program, about 16 MB | an installer | an installer |
+| Telemetry | none | on by default, can be turned off | on by default in Microsoft's build, can be turned off |
+| Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
+| Debugger | not yet (Run only) | yes | yes |
+| Extensions | none | yes | the largest catalog |
+| AI agent | any ACP agent, three access levels, per-turn changes with undo, local memory | its own agent and ACP agents | GitHub Copilot and extensions |
+| Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
+| Real-time collaboration | no | built in | Live Share extension |
+| Remote development | no | SSH | SSH, containers, WSL |
+| Interface languages | English, Bahasa Indonesia | English | many, through language packs |
+| Maturity | development builds | stable releases | stable, widely used |
+| License | GPL-3.0-or-later | GPL-3.0 (the editor) | MIT for Code - OSS; Microsoft's build has its own license |
 
-**Look** (Settings → Appearance):
+**Pick FluxCode** if you want a small, quiet editor on Windows or Linux with an agent you
+can keep on a short leash, and you open logs, databases and documents next to your code.
+**Pick Zed** for macOS, language servers out of the box and pair programming.
+**Pick VS Code** when you need a specific extension, a debugger or remote development.
 
-- Four color themes: **FluxDark** (near-black, crimson accent), **FluxCream** (warm paper
-  light), **FluxMono** (grey UI, red only for errors) and **FluxRed** (surfaces tinted deep
-  red). `Ctrl+K Ctrl+T` switches to the next one. The interface's text colors reach WCAG AA
-  4.5:1 on every surface (syntax colors come from gpui-component's highlight themes).
-- **Background image**: any PNG/JPEG/WebP/GIF/BMP from your PC shows through the panels
-  (the file is only referenced, never copied). The code side of the editor lets less of
-  it through than the right edge. *Subtle* and *Balanced* keep all text at 4.5:1 even over
-  a white picture; *Strong* says in Settings that dim text can drop below that.
-- **Interface size** Compact / Medium (default) / Large scales menus, tabs, the explorer,
-  panels and icons; the editor font has its own size.
-- Code reading: indentation guides show how far each block reaches, and spaces can show
-  as faint dots (Settings → Whitespace dots).
-- One outline icon set in the explorer, tabs and search, tinted by file type; folders the
-  explorer does not open (`.git`, `node_modules`, `dist`, …) are listed dimmed.
+## Privacy
 
-**Files** (Explorer, tabs, Go to File):
+FluxCode sends nothing about you. The only request it makes by itself is the update
+check: a plain `GET` of the release list from github.com, with no build ID, machine ID or
+cookie, at start and every 6 hours (Settings > Updates turns it off). Everything else goes
+out only when you start it: the agent you run, `git`, and GitHub when you sign in.
 
-- Syntax colors for about 200 languages (bat's grammar set through syntect, which replaced
-  the 19 tree-sitter grammars and is lighter), picked by file name (`Dockerfile`,
-  `Gemfile`, `.env.local`, `requirements-dev.txt`, ...), extension, or the `#!` line of
-  scripts without one. The status bar names the language.
-- Files a text editor can't show open as a read-only view instead of an error:
-  Word / Excel / PowerPoint / OpenDocument as their text (sheets as tab-separated rows),
-  PDFs as their text, ZIP-based archives (zip, jar, whl, apk, ...) as a file list with
-  sizes, SQLite databases as their tables with SQL and row counts, and anything else
-  binary as a hex dump (first 64 KB). A line above the view says what it is. Empty files
-  say so. UTF-16 text (with a BOM) opens as text.
-- Drop folders or files on the window: files open in tabs; a folder opens when none is
-  open, otherwise FluxCode asks whether to **add it to the workspace** (next to the open
-  folder, as its own root in the explorer) or **switch** to it. Go to File, Find in Files,
-  `@` and the agent cover every folder of the workspace; right-click an added folder to
-  remove it. The workspace is restored on the next start.
-
-**Scrolling**: a mouse-wheel notch in the code editor and in the agent chat glides three
-lines in about 100 ms (like VS Code's smooth scrolling) instead of jumping; quick notches add
-up. It moves one step per screen frame and does nothing between glides. Touchpads keep
-the editor's own pixel scrolling. Whitespace dots are off by default (Settings turns them on).
-
-**Language**: English or Bahasa Indonesia (Settings → Language; *Automatic* follows
-Windows' display language or regional format). Menus, panels, the agent panel and
-messages switch at once.
-
-**GPUI Fast**: the GPUI edition builds on [GPUI Fast](https://github.com/longbridge/gpui-fast)
-(retained mode) by default. Measured against standard GPUI, same source and profile, same
-machine (median of 5 runs, large-file scroll 3 runs; `--no-default-features` builds the
-standard one):
-
-| | GPUI | GPUI Fast |
-| --- | --- | --- |
-| Start to painted UI | 373 ms | 372 ms |
-| Idle memory, private / working set | 99.8 / 105 MB | 100.1 / 105.6 MB |
-| Idle CPU | 2.3 % | **1.2 %** |
-| Scrolling a 30k-line file (highlighted) | 18.7 % | 18.0 % |
-| Executable | 26.6 MB | 27.6 MB |
-
-Most of FluxCode's scrolling cost is the code editor's own text layout, which retained
-mode does not skip, so the gain here is mainly while idle.
-
-Already in the GPUI edition: explorer (new/rename/delete to the Recycle Bin), tabs,
-tree-sitter editor for 20 languages, auto save, find in files, terminal, Run (F5) with
-Output, completion + Emmet, OpenCode panel with Keep/Undo, Live Preview, settings,
-GitHub sign-in, session restore. Not yet: debugger, Quick Open, window position restore,
-`.flx` viewer. The parity table is in [docs/gpui-vs-tauri.md](docs/gpui-vs-tauri.md).
-
-The GPUI terminal is tuned for Python:
-
-- **Clear errors.** A Python error ends the run with a card: the error type, the file and
-  line (click to jump there), the code line, a plain-language hint and, when the fix is
-  obvious (a missing module), a **Fix** button that runs `py -m pip install <package>`.
-  The line is also underlined in the editor and counted in the status bar.
-- **Auto-correct** before a command runs, shown on a line of its own: `pip i` →
-  `pip install` (also `un`, `ls`, `up`, typos like `isntall`), command typos (`pyhton`),
-  and file names with one close match (`-r reqirmemts.txt` → `requirements.txt`,
-  `py ap` → `py app.py`).
-- **Consistent colors**: stderr is no longer red by default; only real errors are. pip's
-  `[notice]` lines are dimmed, warnings amber, `Successfully installed` green. Each
-  command shows its exit status and time.
-- Up/Down history, Tab completes file and folder names, Ctrl+C stops the program,
-  the prompt shows the folder, the venv and the Python version.
-- With no venv, Run (F5) uses the `py` launcher on Windows, the same Python that
-  `py -m pip install` installs into.
-
-OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
-its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
-MuaraAI's Mura harness is installed, the panel uses it instead of OpenCode
-(both speak ACP); the title menu switches between them. (Mira / `omm` was removed in 0.9.1.)
-
-The agent panel:
-
-- `/` lists commands (Tab fills, Enter runs): FluxCode's own (`/remember`, `/new`, `/history`,
-  `/memory`, `/stop`) and the ones the agent announces over ACP (OpenCode's `/review`, `/compact`, ...).
-- The agent turns off after 10 quiet minutes to free its memory (OpenCode runs
-  several hundred MB) and resumes the same session on the next message (Settings can turn this off).
-- `@file` (or `@folder`) adds files to a message, with a fuzzy file list (Up/Down, Tab or
-  Enter). Chips above the input show what goes along with the message: the open file, the
-  selection, the last error (when the message is about an error), terminal output (when it
-  mentions the output), and each `@file`. Click a chip to leave it out.
-- The input grows with the text (up to 8 lines, then scrolls). Enter sends, Shift+Enter adds a
-  line. Attach files with the paperclip, by dropping them on the panel, or by pasting (Ctrl+V
-  with files or a screenshot on the clipboard). Images go to the agent as images when it
-  accepts them; text and code go inline; Word, Excel, PowerPoint and OpenDocument files are
-  read natively and sent as text; PDFs and other files are sent as links the agent can open.
-- Messages sent while the agent is still answering wait in a queue above the input. They go
-  out together once the answer ends, or right away with Send now (which stops the current
-  answer and tells the agent why). The X removes a queued message.
-- **Mura** ([MuaraAI/Mura-Harness](https://github.com/MuaraAI/Mura-Harness), one Rust binary,
-  `mura acp`) is in the title menu next to OpenCode, and the
-  first choice when it is installed. It stays a separate program: build it with
-  `cargo build --release -p mura-cli` and put `mura.exe` on PATH or in `~/.local/bin`;
-  set its provider once with `mura setup`. Its personas (Core, Scout, Planner, Reviewer,
-  Security), models and effort show in the agent settings.
-- **Access** (eye / pencil / shield button under the input, or Settings): *Read only* (it reads
-  and explains; edits and commands it asks for are refused, and it is told so), *Read & write*
-  (file edits go through, with Undo in the Changes card; commands ask), *Full access* (nothing
-  asks). It applies to what the agent asks permission for or writes through FluxCode.
-- While the agent works, its state shows in the input's bottom row, not above the chat.
-- Memory is native (Rust), with no background process: the store is parsed once and kept in RAM
-  until the file changes, and it is read only when a message goes out or the Memory view opens.
-  The agent is told not to run its own memory skill (`ant_memory.py`), so no Python starts.
-  The Memory view has an on/off switch; off means nothing is read, saved or sent.
-- Memory stays out of the way: one dim line under the message ("Saved to memory",
-  "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
-- **Settings for the agent** (title menu → *settings*, or the model button under the input):
-  everything the harness offers over ACP (`configOptions`), as native controls on one screen
-  with no scrolling (label left, control right, wrapping when the panel is narrow): its agent
-  modes as buttons with the chosen mode's description, the **model** as one dropdown (OpenCode
-  Zen's free models grouped first, then one group per provider) and the **effort** (the levels the model offers, such as Default / Low / High / Max). Choices
-  apply to the running session and are reused for new ones. The same view has FluxCode's
-  auto-approve and idle-stop switches and opens OpenCode's config file. When a prompt
-  fails because of the model (no credentials, quota), the panel says to pick another one.
-- The chips above the input (open file, selection, error, terminal output, `@file`,
-  attachments, Workspace) have an × on the left that leaves them out (+ adds them back);
-  clicking the name goes to what it stands for (the file, the error line, the terminal).
-- **Edit a message** (pencil next to it): the chat goes back to that message, and Enter
-  sends the new text to a fresh session that gets everything before it as context, so the
-  answer starts over from there.
-- **Workspace context**: the first message of a session (and the next one after the
-  workspace changes) carries an overview: the folders, what each project is (from
-  package.json, Cargo.toml, pyproject/requirements, go.mod, composer.json, Makefile,
-  workflows, Docker, ...), the README's first lines, top-level layout, files per language,
-  git branch and uncommitted changes, and the open tabs. A *Workspace* chip shows when it
-  goes along (click to leave it out).
-- **Changes**: every file the agent edits this turn is listed above the input with the
-  lines it added and removed (+12 -3), like a worktree. Click the name to open the file, the
-  diff button for a unified diff in a tab, the undo button to put that file back; Undo all and
-  Keep all are in the card's header. FluxCode reads a file just before an edit runs (or takes
-  the old text from the agent's diff), so this works for edits the agent makes itself too.
-- Switching between OpenCode and Mura keeps the chat: a divider marks the switch, and the new
-  agent gets the conversation so far with its first message.
-- Answers render as Markdown, with the agent's reasoning folded under Thinking; code blocks have Copy and Insert (at the cursor in the open
-  file). Tool calls show what kind they are (read, edit, search, run, web) and their state.
-- History lists FluxCode's own chats and the sessions OpenCode (or Mura) saved for the open
-  folder. Opening one resumes it in place (ACP `session/load`), with its history replayed.
-- Memory is a native port of [AoC Memory](https://github.com/MyKineID/aoc-memory-for-ai-agent):
-  notes strengthen when they help and fade when unused, recalled by `P = tau * eta^2`. The
-  agent saves facts with a final `REMEMBER: ...` line; you can add them with `/remember ...`
-  or in the Memory view. Keeping the agent's changes reinforces the notes it used; Undo
-  weakens them. The store is `~/.ant-memory/trails.json` (or `ANT_MEMORY_DIR`), shared with
-  `ant_memory.py`.
-
-**Source Control** (`Ctrl+Shift+G`), modeled on VS Code's git extension but lighter: one
-`git status --porcelain=v2 --branch -z` call per refresh gives the files, branch and
-ahead/behind (VS Code makes three calls), and it refreshes on save, after git commands and
-when the window regains focus.
-
-- Staged / Changes / Merge Changes with VS Code's letters and colors, stage, unstage,
-  discard (two clicks; untracked files go to the Recycle Bin), and a colored diff in Output.
-- Commit box (Enter commits), **Commit All** when nothing is staged (VS Code's smart commit),
-  Commit & Push, Commit & Sync, Amend. Pull (`--autostash`), Push, Sync, Fetch, Publish Branch.
-- Graph of the last 60 commits with branch pills; click a commit for its summary.
-- **Pull requests**: `gh pr create --fill` (pushes first) and a link to the PR.
-- **Deploy**: lists the repository's GitHub Actions workflows with a Run button
-  (`gh workflow run` on the current branch, for workflows with `workflow_dispatch`) and the
-  latest runs with their status.
-- Badge with the change count on the activity bar, branch and sync state in the status bar,
-  M/U/D letters and colors in the explorer.
-
-Build and install it for your user (Start Menu + Settings → Apps entry):
-
-```powershell
-cd gpui-app
-cargo build --release --manifest-path tools/fxc-shim/Cargo.toml   # SDK-free HLSL compiler shim
-$env:GPUI_FXC_PATH = "<target>/release/fxc-shim.exe"
-cargo build --release
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-See [gpui-app/README.md](gpui-app/README.md) for the details (target dir without spaces
-for MinGW, the optional in-window preview).
-
-## Keybindings
+## Shortcuts
 
 | Action | Keys |
 | --- | --- |
-| Command Palette / Go to File | `Ctrl+Shift+P`, `F1` / `Ctrl+P` |
-| Open Folder / Open File / New File | `Ctrl+K Ctrl+O` / `Ctrl+O` / `Ctrl+N` |
-| Save / Save As / Save All | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+K S` |
-| Close Editor / Close All | `Ctrl+W` / `Ctrl+K Ctrl+W` |
-| Next / Previous Editor | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
-| Toggle Side Bar / Panel | `Ctrl+B` / `Ctrl+J` |
-| Settings / Color Theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
-| Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
-| Open / close the agent panel (GPUI edition) | `Ctrl+L` | (also the Agent button in the status bar)
-| Accept suggestion / expand Emmet / next snippet field | `Tab` |
-| Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
-| Run or Preview / Stop | `F5` / `Shift+F5` |
-| Find / Replace / Go to Line | `Ctrl+F` / `Ctrl+H` / `Ctrl+G` |
-| Find in Files / Explorer | `Ctrl+Shift+F` / `Ctrl+Shift+E` |
-| Source Control (GPUI edition) | `Ctrl+Shift+G` |
-| Word Wrap / Zoom | `Alt+Z` / `Ctrl+=`, `Ctrl+-`, `Ctrl+0` |
-| Next occurrence / Comment / Delete line | `Ctrl+D` / `Ctrl+/` / `Ctrl+Shift+K` |
-| Move line / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` |
+| Go to File / Find in Files | `Ctrl+P` / `Ctrl+Shift+F` |
+| Open File / Open Folder | `Ctrl+O` / `Ctrl+K Ctrl+O` |
+| Save / Save All / Close tab | `Ctrl+S` / `Ctrl+Alt+S` / `Ctrl+W` |
+| Agent panel | `Ctrl+L` |
+| Explorer / Source Control / Run | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` |
+| Side bar / Panel / Terminal | `Ctrl+B` / `Ctrl+J` / ``Ctrl+` `` |
+| Run file / Stop | `F5` / `Shift+F5` |
+| Settings / Next theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 
 ## Build from source
 
-**Windows.** Requirements: Node.js 22+, Rust (GNU toolchain), MinGW-w64
-binutils (e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`), WebView2
-(built into Windows 10/11).
+Rust stable, then:
 
-```bash
-npm install
-npx tauri dev                # run with hot reload
-npx tauri build --no-bundle  # optimized FluxCode exe
-npx tauri build              # exe + NSIS installer (bundle/nsis/*-setup.exe)
-node scripts/test-app.mjs    # end-to-end test of the built exe
+```sh
+cargo build --release          # target/release/fluxcode(.exe)
+cargo test --bin fluxcode
 ```
 
-Build output goes to `C:/Users/User/.fluxcode-target` (see
-`src-tauri/.cargo/config.toml`), because MinGW's `windres` can't handle spaces
-in the project path.
+- **Windows**: HLSL shaders need `fxc.exe` from the Windows SDK, or set `GPUI_FXC_PATH`
+  to `tools/fxc-shim` built with `cargo build --release --manifest-path tools/fxc-shim/Cargo.toml`.
+  With the GNU toolchain, use a `CARGO_TARGET_DIR` without spaces (MinGW `windres`).
+  `packaging/windows/build.ps1 -Install` builds, packs and installs like a release.
+- **Linux**: `pkg-config clang libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+  libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype6-dev libvulkan-dev` (Debian
+  and Ubuntu names).
+- Builds name themselves from `FLUXCODE_BUILD` (`BuildDev-YYYY-MM-DD-HH-MM-SS`); without
+  it, from the current UTC time.
 
-**Linux** (Debian/Ubuntu shown; the same code, WebKitGTK instead of WebView2):
+## Contributing
 
-```bash
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf build-essential curl wget file libssl-dev
-npm install
-CARGO_TARGET_DIR=target npx tauri dev
-CARGO_TARGET_DIR=target npx tauri build --bundles deb,appimage   # bundle/deb/*.deb, bundle/appimage/*.AppImage
-```
+FluxCode is open source, and **issues are open to everyone**: report a bug or suggest an
+idea through [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). A bot
+checks each new issue for earlier reports of the same problem and for an outdated build.
 
-`CARGO_TARGET_DIR` overrides the Windows-only path in `.cargo/config.toml`.
-On Linux the terminal runs commands through `bash` (or `sh`/`zsh`/`pwsh` if
-installed), the drive menu lists `/` and mounted volumes, and OpenCode is
-found on PATH or in `~/.opencode/bin`. Not yet exercised on real hardware:
-the Linux build is compiled and bundled by CI (`.github/workflows/build.yml`),
-which produces `.deb` and `.AppImage` artifacts for every push and pull
-request, labelled as development builds.
-
-`scripts/test-app.mjs` drives the real app through WebView2's DevTools
-protocol (no real keyboard/mouse input, throwaway profile): it runs every
-example, checks the results, saves screenshots and measures memory.
-
-## Project layout
-
-```
-src/                     frontend (plain JS + CSS)
-  main.js                workbench: explorer, tabs, panel, preview, auto save, commands, palette
-  editor.js              CodeMirror setup, theme, Tab behaviour, indent guides, search highlights
-  complete/              completion: emmet.js, html.js, css.js, javascript.js, python.js, php.js, json.js
-  terminal.js            Flux Terminal (lazy-loaded)
-  agent.js               OpenCode over ACP: JSON-RPC client + transcript view (lazy-loaded)
-  settings.js            Settings panel (lazy-loaded)
-  prefs.js               shared preference store (terminal, agent, editor)
-  languages.js           lazy language registry
-  icons.js               FluxCode icon set + file-type badges
-  theme.js               theme engine: presets, derived palette, auto contrast, fonts
-src-tauri/src/lib.rs     file system, search, process runner, Python/Node detection
-src-tauri/src/acp.rs     spawns `opencode acp` and bridges its stdio to the view
-src-tauri/src/github.rs  GitHub account (token / gh), verified with the system curl
-src-tauri/src/terminal.rs    terminal runner, native listing, folder-access grants
-src-tauri/src/preview.rs     Live Preview server
-src-tauri/src/window_state.rs  work-area placement, remembered window bounds
-scripts/test-app.mjs     end-to-end test (CDP)
-examples/                python/, js/ (JS + TS), web/ (HTML + CSS + JS)
-```
-
-## Roadmap
-
-1. Language servers: basedpyright/ruff (Python), TypeScript, HTML/CSS
-   diagnostics, go-to-definition and hover
-2. npm / composer scripts runner; OpenCode: session history, image input
-3. Rust: `cargo run`/`cargo check` with clickable errors, rust-analyzer
-4. Flux Terminal: optional PTY mode for full-screen programs; Git status,
-   minimap, settings UI, bracket pair colors
-5. Extensions: an Open VSX–compatible host is a long-term goal. Microsoft's
-   proprietary extensions (Pylance, C# Dev Kit, Remote-SSH, …) are licensed
-   only for Microsoft's VS Code, so FluxCode uses open alternatives
+**Pull requests are accepted only from members of the MuaraAI organization**; others are
+closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each
+build: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Copyright (C) 2026 MuaraAI and contributors.
-
-FluxCode is free software: you can redistribute it and/or modify it under the
-terms of the **GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version** — see [LICENSE](LICENSE). Anyone may use, study, share and change it;
-if you distribute a modified version, you must share its source under the same
-license. FluxCode comes with no warranty.
-
-Third-party components keep their own licenses
-([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)); all of them are compatible
-with the GPL v3.
+[GPL-3.0-or-later](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

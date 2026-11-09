@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FluxCode Development
+GenericName=Code Editor
+Comment=Lightweight native code editor with an AI agent panel
+Exec=fluxcode %F
+Icon=fluxcode
+Terminal=false
+Categories=Development;TextEditor;IDE;
+MimeType=text/plain;inode/directory;
+StartupWMClass=fluxcode
+Keywords=code;editor;python;web;rust;
