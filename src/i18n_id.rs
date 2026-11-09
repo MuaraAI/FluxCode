@@ -302,7 +302,7 @@ pub const ID: &[(&str, &str)] = &[
     ("The update did not finish", "Pembaruan belum selesai"),
     ("A new build is ready", "Ada build baru"),
     ("Later", "Nanti"),
-    ("{0}, you have {1}", "{0}, punyamu {1}"),
+    ("Installed: {0}", "Terpasang: {0}"),
     ("{0} of {1} MB", "{0} dari {1} MB"),
     ("FluxCode restarts on its own in a moment. Your open files and folders come back.", "FluxCode akan dibuka ulang sebentar lagi. File dan folder yang terbuka akan kembali."),
     ("Try again", "Coba lagi"),
