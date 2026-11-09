@@ -5,6 +5,13 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Update card polish (9 November 2026)
+
+- The update card names the new build on its own line and the installed one below it.
+- Its notes show the first sentence of each point instead of cutting lines mid-sentence.
+- Tested end to end on Windows: a local build found `BuildDev-2026-11-09-17-58-21`,
+  downloaded it with a progress bar, replaced itself and reopened as the new build.
+
 ## First public build (9 November 2026)
 
 FluxCode is public, builds for Windows and Linux on every change, and updates itself.
@@ -57,7 +64,6 @@ FluxCode is public, builds for Windows and Linux on every change, and updates it
 ### Not tested by hand yet
 
 - The Linux build on a desktop. CI compiles it and runs the unit tests on Ubuntu 22.04.
-- Updating from this build to the next one, which needs a second release to exist.
 
 ## 0.9.1-dev (9 November 2026)
 

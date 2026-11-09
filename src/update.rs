@@ -111,13 +111,33 @@ fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
         .max_by(|a, b| a.tag.cmp(&b.tag))
 }
 
-/// Up to `n` lines from the notes' first bullet list, without Markdown marks.
+/// The first sentence of up to `n` bullets from the notes, without Markdown marks.
+/// A bullet can wrap over several indented lines.
 pub fn highlights(notes: &str, n: usize) -> Vec<String> {
-    notes
-        .lines()
-        .map(str::trim)
-        .filter_map(|l| l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")))
-        .map(plain)
+    let mut bullets: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in notes.lines() {
+        let t = line.trim();
+        if let Some(b) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            bullets.push(b.to_string());
+            open = true;
+        } else if open && !t.is_empty() && line.starts_with(' ') {
+            let last = bullets.last_mut().expect("open bullet");
+            last.push(' ');
+            last.push_str(t);
+        } else {
+            open = false;
+        }
+    }
+    bullets
+        .iter()
+        .map(|b| {
+            let b = plain(b);
+            match b.find(". ") {
+                Some(i) => b[..=i].to_string(),
+                None => b,
+            }
+        })
         .filter(|l| !l.is_empty())
         .take(n)
         .collect()
@@ -428,11 +448,9 @@ impl Workbench {
             });
         let mut body = v_flex().gap_1().text_xs();
         if !tag.is_empty() {
-            body = body.child(
-                div()
-                    .text_color(c(theme::FG_MUTED))
-                    .child(crate::trf!("{0}, you have {1}"; 0 => tag, 1 => BUILD)),
-            );
+            body = body
+                .child(div().text_color(c(theme::FG)).child(tag.clone()))
+                .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("Installed: {0}"; 0 => BUILD)));
         }
         match &u.phase {
             Phase::Available(r) => {
@@ -530,6 +548,8 @@ mod tests {
         assert_eq!(r.tag, "BuildDev-2026-11-10-08-00-00");
         assert_eq!(r.size, 10);
         assert_eq!(highlights(&r.notes, 3), vec!["Faster start", "See notes"]);
+        let wrapped = "## What changed\n\n- One thing that wraps\n  onto a second line. More detail.\n- Two\n\nText";
+        assert_eq!(highlights(wrapped, 3), vec!["One thing that wraps onto a second line.", "Two"]);
         assert!(newest(&list, "BuildDev-2026-11-10-08-00-00").is_none());
     }
 
