@@ -171,6 +171,9 @@ pub struct Workbench {
     pub(crate) root: Option<PathBuf>,
     /// New development builds from GitHub Releases (update.rs).
     pub(crate) update: crate::update::UpdateUi,
+    /// Where the title bar menus end (window x), measured each frame, so the search
+    /// box can stay centered without covering longer menu names.
+    pub(crate) title_menu_end: Rc<std::cell::Cell<f32>>,
     /// Folders added next to `root`, and folders dropped on the window.
     pub(crate) workspace: crate::workspace::Workspace,
     /// Focus of the "add or switch" question after a folder drop.
@@ -382,6 +385,7 @@ impl Workbench {
             github_input,
             preview: None,
             update: Default::default(),
+            title_menu_end: Rc::default(),
             _subs: subs,
         };
         let restore = root.is_none() && open.is_empty();
@@ -1101,15 +1105,46 @@ impl Workbench {
                     .menu(tr("Check for Updates"), Box::new(CheckUpdates))
                     .menu(tr("About FluxCode"), Box::new(About))
             }))
+            .child({
+                let cell = self.title_menu_end.clone();
+                let id = cx.entity_id();
+                canvas(
+                    move |b, _, cx| {
+                        let x = f32::from(b.origin.x);
+                        if (cell.get() - x).abs() > 0.5 {
+                            cell.set(x);
+                            cx.defer(move |cx| cx.notify(id));
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .w(px(0.))
+                .h_full()
+            })
             .child(drag("tb-drag"));
         // Too narrow for a centered box: Ctrl+P still opens Go to File.
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
             return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1()))).into_any_element();
         }
-        // Centered in the window, not in the space after the menus, so it lines up with
-        // the Go to File box. The overlay has no hitbox: clicks pass to the bar below.
-        let center_layer = div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().when(show_center, |d| d.child(center));
+        // Centered in the window (on the same line as the Go to File box) while that
+        // leaves the menus free; with longer menu names (Bahasa Indonesia, narrow
+        // windows) it moves right of them and shrinks before the window buttons.
+        // The layer has no hitbox: clicks pass to the bar below.
+        let win_w = f32::from(window.viewport_size().width);
+        let box_w = f32::from(theme::u(420.)).min(win_w * 0.3);
+        let menus = self.title_menu_end.get() + 12.;
+        let left = ((win_w - box_w) / 2.).max(menus);
+        let w = box_w.min(win_w - 46. * 3. - 12. - left);
+        let center_layer = div()
+            .absolute()
+            .top_0()
+            .left(px(left))
+            .w(px(w.max(0.)))
+            .h_full()
+            .flex()
+            .items_center()
+            .when(show_center && w >= 180., |d| d.child(center.w_full().max_w(relative(1.))));
         // Windows: our own min / max / close, as plain buttons (always clickable).
         let maximized = window.is_maximized();
         let ctl = |id: &'static str, icon: IconName, close: bool| {

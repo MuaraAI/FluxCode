@@ -5,6 +5,19 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## About section, title bar and README screenshots (9 November 2026)
+
+| | Before | After |
+| --- | --- | --- |
+| Settings | no word about the project | About FluxCode: open source, in development, links to the repository, issues and changelog |
+| Long setting descriptions | ran off the right edge and pushed the buttons out of view | wrap under the title; the buttons stay visible |
+| Title bar in Bahasa Indonesia | the search box covered the Bantuan menu | the box moves right of the menus; centered whenever there is room |
+| README | one screenshot | seven, in pairs of the same size, each with a description |
+
+- Settings > About FluxCode says FluxCode is open source and still in development, and
+  links to the repository, the issue form and this changelog.
+- Debug builds no longer stop when Settings opens (the theme cards set two hover styles).
+
 ## Update card polish (9 November 2026)
 
 - The update card names the new build on its own line and the installed one below it.
