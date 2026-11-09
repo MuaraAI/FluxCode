@@ -401,7 +401,7 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Source Control
     GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2,
     // Agent panel
-    TextCursorInput, Brain, Pencil, AtSign, Paperclip
+    TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert
 ]);
 
 #[cfg(test)]

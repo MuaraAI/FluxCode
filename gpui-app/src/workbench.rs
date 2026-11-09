@@ -37,7 +37,7 @@ actions!(
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMira, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
-        AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent
+        AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull
     ]
 );
 
@@ -1732,6 +1732,9 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_insert_code))
             .on_action(cx.listener(Self::on_agent_show_options))
             .on_action(cx.listener(Self::on_toggle_agent))
+            .on_action(cx.listener(|this, _: &AgentAccessRead, _, cx| this.agent_set_access("read", cx)))
+            .on_action(cx.listener(|this, _: &AgentAccessWrite, _, cx| this.agent_set_access("write", cx)))
+            .on_action(cx.listener(|this, _: &AgentAccessFull, _, cx| this.agent_set_access("full", cx)))
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))

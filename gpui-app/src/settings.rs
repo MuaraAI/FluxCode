@@ -77,6 +77,9 @@ pub struct Settings {
     /// effort and mode), as "harness:option" → value. Applied to each new
     /// session when the harness still offers that value.
     pub agent_options: std::collections::HashMap<String, String>,
+    /// What the agent may do without asking: "read" (read only), "write" (read and
+    /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
+    pub agent_access: String,
 }
 
 impl Default for Settings {
@@ -99,6 +102,7 @@ impl Default for Settings {
             agent_idle_min: 10,
             language: "auto".into(),
             agent_options: Default::default(),
+            agent_access: String::new(),
         }
     }
 }
@@ -110,6 +114,15 @@ impl Settings {
     pub fn save(&self) {
         save_json("settings.json", self);
     }
+    /// The agent's access level: "read", "write" or "full".
+    pub fn access(&self) -> &str {
+        match self.agent_access.as_str() {
+            "read" | "write" | "full" => &self.agent_access,
+            _ if self.agent_auto_approve => "full",
+            _ => "write",
+        }
+    }
+
     /// The background image, if one is set and the file is still there.
     pub fn background(&self) -> Option<&Path> {
         self.bg_image.as_deref().filter(|p| p.is_file())
@@ -366,6 +379,20 @@ impl Workbench {
                     }))
             }))
             .into_any_element();
+        let access = s.access().to_string();
+        let access_controls = h_flex()
+            .gap_1()
+            .children([("read", tr("Read only")), ("write", tr("Read & write")), ("full", tr("Full access"))].into_iter().map(|(id, name)| {
+                Button::new(SharedString::from(format!("access-{id}")))
+                    .label(name)
+                    .xsmall()
+                    .when(access == id, |b| b.primary())
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        this.settings.agent_access = id.into();
+                        this.apply_settings(w, cx);
+                    }))
+            }))
+            .into_any_element();
         let vis_desc: SharedString = match vis {
             Visibility::Strong => tr("Strong: the picture shows clearly. Over very bright pictures, dim text (line numbers, hints) can drop below comfortable contrast.").into(),
             _ => tr("How much of the picture shows through the panels. The code side of the editor always gets less of it than the right edge.").into(),
@@ -423,9 +450,9 @@ impl Workbench {
             .child(row(tr("Auto save"), tr("Save a file shortly after you stop typing.").into(), toggle("as", s.auto_save, |w| w.settings.auto_save = !w.settings.auto_save)))
             .child(section(tr("OpenCode and GitHub")))
             .child(row(
-                tr("OpenCode: auto-approve"),
-                tr("Let the agent edit files and run commands without asking each time.").into(),
-                toggle("aa", s.agent_auto_approve, |w| w.settings.agent_auto_approve = !w.settings.agent_auto_approve),
+                tr("AI agent: access"),
+                tr("Read only: it reads and explains, edits and commands are refused. Read & write: it edits files (Undo is under the chat), commands ask first. Full access: nothing asks.").into(),
+                access_controls,
             ))
             .child(row(
                 tr("AI agent: turn off when idle"),

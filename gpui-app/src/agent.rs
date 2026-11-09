@@ -617,6 +617,12 @@ impl Workbench {
         cx.notify();
     }
 
+    pub(crate) fn agent_set_access(&mut self, level: &str, cx: &mut Context<Self>) {
+        self.settings.agent_access = level.into();
+        self.settings.save();
+        cx.notify();
+    }
+
     pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, _: &mut Window, cx: &mut Context<Self>) {
         self.agent_open_options(cx);
     }
@@ -1096,9 +1102,25 @@ impl Workbench {
                             .collect()
                     })
                     .unwrap_or_default();
-                if self.settings.agent_auto_approve {
-                    if let Some((oid, ..)) = options.iter().find(|o| o.2.starts_with("allow")) {
+                // The access level answers what it can; the rest asks.
+                let kind = params.pointer("/toolCall/kind").and_then(Value::as_str).unwrap_or("other");
+                let reads = matches!(kind, "read" | "search" | "fetch" | "think");
+                let writes = matches!(kind, "edit" | "delete" | "move");
+                let auto = match self.settings.access() {
+                    "full" => Some(true),
+                    "write" if reads || writes => Some(true),
+                    "read" if reads => Some(true),
+                    "read" => Some(false),
+                    _ => None,
+                };
+                if let Some(allow) = auto {
+                    let want = if allow { "allow" } else { "reject" };
+                    if let Some((oid, ..)) = options.iter().find(|o| o.2.starts_with(want)) {
                         let oid = oid.clone();
+                        if !allow {
+                            self.agent.items.push(Item::Note(crate::trf!("Refused (read only): {0}"; 0 => title), false));
+                            cx.notify();
+                        }
                         respond(self, Ok(json!({ "outcome": { "outcome": "selected", "optionId": oid } })));
                         return;
                     }
@@ -1128,6 +1150,9 @@ impl Workbench {
                     json!({ "content": content })
                 });
                 respond(self, result);
+            }
+            ("fs/write_text_file", Some(_)) if self.settings.access() == "read" => {
+                respond(self, Err(crate::i18n::tr("FluxCode is in read-only mode: files can't be changed. Describe the change instead.").into()));
             }
             ("fs/write_text_file", Some(p)) => {
                 let content = params.get("content").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1871,6 +1896,11 @@ impl Workbench {
             ) }));
             self.agent.items.push(Item::MemoryUsed(trails.len()));
         }
+        if self.settings.access() == "read" {
+            blocks.push(json!({ "type": "text", "text":
+                "FluxCode is in read-only mode for this message: read files and explain, but do not edit files or run commands \
+                 that change anything. If a change is needed, describe it or show it as a code block." }));
+        }
         if !self.agent.hinted {
             self.agent.hinted = true;
             blocks.push(json!({ "type": "text", "text":
@@ -2032,7 +2062,7 @@ impl Workbench {
         for (i, t) in a.memories.iter().enumerate() {
             let id = t.id.clone();
             let strength = (t.tau / 2.0).clamp(0.04, 1.0) as f32;
-            let scope = if t.tags.iter().any(|x| x.starts_with("project:")) { "this project" } else { "all projects" };
+            let scope = if t.tags.iter().any(|x| x.starts_with("project:")) { crate::i18n::tr("this project") } else { crate::i18n::tr("all projects") };
             list = list.child(
                 v_flex()
                     .id(("ag-mem", i))
@@ -2050,7 +2080,7 @@ impl Workbench {
                             .child(div().w(theme::u(48.)).h(px(3.)).rounded_full().bg(c(theme::BORDER)).child(
                                 div().h_full().rounded_full().w(relative(strength)).bg(c(theme::ACCENT_TEXT)),
                             ))
-                            .child(format!("{:.2} · {} · used {}×", t.tau, scope, t.success))
+                            .child(crate::trf!("{tau} · {scope} · used {n}×"; tau => format!("{:.2}", t.tau), scope => scope, n => t.success))
                             .child(div().flex_1())
                             .child(Button::new(("ag-mem-del", i)).icon(IconName::Delete).ghost().xsmall().tooltip(tr("Forget (moves it to the archive)")).on_click(
                                 cx.listener(move |this, _, _, cx| {
@@ -2127,6 +2157,16 @@ impl Workbench {
             );
         }
         v.into_any_element()
+    }
+
+    /// "Working…" / "Starting…" for the input box's bottom row (nothing while idle).
+    fn agent_status_line(&self) -> Option<(theme::Tok, String)> {
+        match &self.agent.status {
+            Status::Busy => Some((theme::BLUE, crate::i18n::tr("Working…").into())),
+            Status::Starting if self.agent.loading_id.is_some() => Some((theme::FG_MUTED, crate::i18n::tr("Opening the session…").into())),
+            Status::Starting => Some((theme::FG_MUTED, crate::i18n::tr("Starting…").into())),
+            _ => None,
+        }
     }
 
     /// Click on a chip's name: show what it stands for.
@@ -2325,15 +2365,9 @@ impl Workbench {
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
-        let header = h_flex()
-            .px_3()
-            .pb_1()
-            .gap_2()
-            .text_xs()
-            .when(matches!(a.status, Status::Starting | Status::Busy), |h| {
-                h.child(div().size(px(6.)).rounded_full().bg(c(dot)))
-                    .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
-            });
+        // The working / starting state is shown in the input box's bottom row.
+        let _ = (dot, label);
+        let header = div();
         if a.show_memory {
             return v_flex().size_full().child(self.render_memory(cx)).into_any_element();
         }
@@ -2406,26 +2440,41 @@ impl Workbench {
             log = log.child(match item {
                 Item::User(t) => {
                     after_user = true;
+                    let group = SharedString::from(format!("ag-user-{i}"));
+                    let editing = a.editing == Some(i);
                     v_flex()
                         .items_end()
                         .gap_1()
                         .pt_1()
+                        .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User)))
                         .child(
                             h_flex()
+                                .group(group.clone())
+                                .w_full()
+                                .justify_end()
+                                .items_center()
                                 .gap_1()
+                                // Edit sits left of the bubble, dim until pointed at.
                                 .child(
-                                    Button::new(("ag-edit", i))
-                                        .icon(Icon::new(gpui_kit::assets::IconName::Pencil))
-                                        .xsmall()
-                                        .ghost()
-                                        .tooltip(crate::i18n::tr("Edit this message"))
-                                        .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx))),
+                                    div()
+                                        .id(("ag-edit", i))
+                                        .flex_none()
+                                        .size(theme::u(22.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(4.))
+                                        .cursor_pointer()
+                                        .text_color(c(theme::FG_DIM))
+                                        .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
+                                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
+                                        .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
+                                        .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
                                 )
-                                .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User))),
-                        )
-                        .child(
+                                .child(
                             div()
-                                .max_w(relative(0.92))
+                                .max_w(relative(0.88))
                                 .px_2p5()
                                 .py_1p5()
                                 .rounded(px(8.))
@@ -2435,6 +2484,7 @@ impl Workbench {
                                 .text_sm()
                                 .text_color(c(theme::FG_STRONG))
                                 .child(t.clone()),
+                                ),
                         )
                         .into_any_element()
                 }
@@ -2936,6 +2986,10 @@ impl Workbench {
                         // "provider/Model name" reads as just the model name here, plus a non-default effort.
                         let current = m.current_name();
                         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
+                        // "Free" is said by the group in the settings list; here it only takes room.
+                        if let Some(s) = short.strip_suffix(" Free") {
+                            short = s.to_string();
+                        }
                         if let Some(e) = a.config.iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
                             short = format!("{short} · {}", e.current_name());
                         }
@@ -2961,7 +3015,41 @@ impl Workbench {
                                 .child(Icon::new(IconName::ChevronDown).xsmall()),
                         )
                     })
-                    .child(div().flex_1())
+                    .child({
+                        let level = self.settings.access().to_string();
+                        let (icon, label) = match level.as_str() {
+                            "read" => (Icon::new(IconName::Eye), crate::i18n::tr("Read only")),
+                            "full" => (Icon::new(gpui_kit::assets::IconName::ShieldAlert), crate::i18n::tr("Full access")),
+                            _ => (Icon::new(gpui_kit::assets::IconName::Pencil), crate::i18n::tr("Read & write")),
+                        };
+                        // Icon only (eye / pencil / shield): the row stays one line in a narrow panel.
+                        Button::new("ag-access")
+                            .icon(icon)
+                            .ghost()
+                            .xsmall()
+                            .flex_none()
+                            .tooltip(crate::trf!("Access: {level}. What the agent may do without asking"; level => label))
+                            .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
+                                m.min_w(px(230.))
+                                    .menu_with_check(crate::i18n::tr("Read only: reads and explains"), level == "read", Box::new(crate::workbench::AgentAccessRead))
+                                    .menu_with_check(crate::i18n::tr("Read & write: edits files, commands ask"), level == "write", Box::new(crate::workbench::AgentAccessWrite))
+                                    .menu_with_check(crate::i18n::tr("Full access: nothing asks"), level == "full", Box::new(crate::workbench::AgentAccessFull))
+                            })
+                    })
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_end()
+                            .gap_1p5()
+                            .px_1()
+                            .overflow_hidden()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .when_some(self.agent_status_line(), |h, (dot, label)| {
+                                h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot))).child(div().min_w_0().truncate().child(label))
+                            }),
+                    )
                     .child(if busy && !has_text {
                         // A solid square in the accent: the one action while the agent works.
                         send_btn("ag-stop", true, tr("Stop the answer"))
@@ -3104,12 +3192,16 @@ impl Workbench {
                     .px_3()
                     .py_1()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Edit files and run commands without asking")))
-                    .child(toggle("ag-opt-aa", s.agent_auto_approve).on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.agent_auto_approve = !this.settings.agent_auto_approve;
-                        this.settings.save();
-                        cx.notify();
-                    }))),
+                    .flex_wrap()
+                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Access")))
+                    .children([("read", crate::i18n::tr("Read only")), ("write", crate::i18n::tr("Read & write")), ("full", crate::i18n::tr("Full access"))].into_iter().map(|(id, name)| {
+                        let on = s.access() == id;
+                        Button::new(SharedString::from(format!("ag-opt-access-{id}")))
+                            .label(name)
+                            .xsmall()
+                            .when(on, |b| b.primary())
+                            .on_click(cx.listener(move |this, _, _, cx| this.agent_set_access(id, cx)))
+                    })),
             )
             .child(
                 h_flex()

@@ -336,6 +336,11 @@ The agent panel:
   `cargo build --release -p mura-cli` and put `mura.exe` on PATH or in `~/.local/bin`;
   set its provider once with `mura setup`. Its personas (Core, Scout, Planner, Reviewer,
   Security), models and effort show in the agent settings.
+- **Access** (eye / pencil / shield button under the input, or Settings): *Read only* (it reads
+  and explains; edits and commands it asks for are refused, and it is told so), *Read & write*
+  (file edits go through, with Undo in the changes card; commands ask), *Full access* (nothing
+  asks). It applies to what the agent asks permission for or writes through FluxCode.
+- While the agent works, its state shows in the input's bottom row, not above the chat.
 - Memory stays out of the way: one dim line under the message ("Saved to memory",
   "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
 - **Settings for the agent** (title menu → *settings*, or the model button under the input):
