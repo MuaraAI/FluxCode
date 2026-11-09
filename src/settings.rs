@@ -14,6 +14,10 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+const REPO_URL: &str = "https://github.com/MuaraAI/FluxCode";
+const ISSUES_URL: &str = "https://github.com/MuaraAI/FluxCode/issues/new/choose";
+const CHANGELOG_URL: &str = "https://github.com/MuaraAI/FluxCode/blob/main/CHANGELOG.md";
+
 pub(crate) fn config_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -255,13 +259,15 @@ impl Workbench {
                 .border_b_1()
                 .border_color(c(theme::BORDER))
                 .child(
+                    // min_w_0: lets the description wrap instead of pushing the control off screen.
                     v_flex()
                         .flex_1()
+                        .min_w_0()
                         .gap_1()
                         .child(div().text_sm().text_color(c(theme::FG_STRONG)).child(title))
                         .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(desc)),
                 )
-                .child(control)
+                .child(div().flex_none().child(control))
         };
         let stepper = |id: &'static str, value: String, f: fn(&mut Workbench, i32)| {
             h_flex()
@@ -303,8 +309,8 @@ impl Workbench {
                 .cursor_pointer()
                 .border_2()
                 .border_color(if on { c(theme::ACCENT) } else { c(theme::BORDER) })
-                .hover(|s| s.border_color(c(theme::BORDER_STRONG)))
-                .when(on, |d| d.hover(|s| s.border_color(c(theme::ACCENT))))
+                // One hover style (gpui allows only one): the active card keeps its accent.
+                .hover(move |s| s.border_color(c(if on { theme::ACCENT } else { theme::BORDER_STRONG })))
                 .on_click(cx.listener(move |this, _, w, cx| this.set_theme(id, w, cx)))
                 .child(
                     h_flex()
@@ -499,8 +505,31 @@ impl Workbench {
                 crate::trf!("FluxCode asks github.com for its list of releases at start and every 6 hours. Nothing about you, this PC or your files is sent. This is {0}."; 0 => crate::update::BUILD).into(),
                 update_controls,
             ))
+            .child(section(tr("About FluxCode")))
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(theme::u(760.))
+                    .py_3()
+                    .gap_2()
+                    .text_xs()
+                    .child(div().text_color(c(theme::FG)).child(tr("FluxCode is open source under the GPL-3.0 license and still in development, so expect rough edges and frequent builds. The code, every build and the issue tracker are on GitHub.")))
+                    .child(div().text_color(c(theme::FG_MUTED)).child(tr("A MuaraAI project, built by a first-semester university student in Indonesia.")))
+                    .child(
+                        h_flex()
+                            .pt_1()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(Button::new("about-repo").label(tr("Open the repository")).xsmall().on_click(|_, _, cx| cx.open_url(REPO_URL)))
+                            .child(Button::new("about-issue").label(tr("Report a problem")).xsmall().ghost().on_click(|_, _, cx| cx.open_url(ISSUES_URL)))
+                            .child(Button::new("about-changes").label(tr("What changed")).xsmall().ghost().on_click(|_, _, cx| cx.open_url(CHANGELOG_URL))),
+                    )
+                    .child(div().text_color(c(theme::FG_DIM)).child(format!("github.com/MuaraAI/FluxCode · {}", crate::update::BUILD))),
+            )
             .child(
                 div()
+                    .w_full()
+                    .max_w(theme::u(760.))
                     .pt_4()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
