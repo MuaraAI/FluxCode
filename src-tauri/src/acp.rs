@@ -42,31 +42,26 @@ pub struct Info {
 }
 
 /// Where the ACP AI Agent CLI lives: prioritize native MuaraAI `mura` (Mura Harness),
-/// then fallback to `omm` or `opencode`.
+/// then fallback to `opencode`.
 fn find_agent() -> Option<PathBuf> {
-    // 1. Priority: native `mura` (Mura Harness) or `omm`
+    // 1. Priority: native `mura` (Mura Harness)
     let mut candidates: Vec<PathBuf> = Vec::new();
     if !cfg!(windows) {
         if let Ok(home) = std::env::var("HOME") {
             candidates.push(Path::new(&home).join(".local").join("bin").join("mura"));
             candidates.push(Path::new(&home).join(".cargo").join("bin").join("mura"));
-            candidates.push(Path::new(&home).join(".local").join("bin").join("omm"));
-            candidates.push(Path::new(&home).join(".cargo").join("bin").join("omm"));
         }
         if let Some(path) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&path) {
                 candidates.push(dir.join("mura"));
-                candidates.push(dir.join("omm"));
             }
         }
         candidates.push(PathBuf::from("/usr/local/bin/mura"));
-        candidates.push(PathBuf::from("/usr/local/bin/omm"));
     }
     if cfg!(windows) {
         if let Some(path) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&path) {
                 candidates.push(dir.join("mura.exe"));
-                candidates.push(dir.join("omm.exe"));
             }
         }
         for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA"] {
@@ -75,9 +70,6 @@ fn find_agent() -> Option<PathBuf> {
                 candidates.push(b.join(".cargo").join("bin").join("mura.exe"));
                 candidates.push(b.join(".local").join("bin").join("mura.exe"));
                 candidates.push(b.join("Programs").join("mura").join("mura.exe"));
-                candidates.push(b.join(".cargo").join("bin").join("omm.exe"));
-                candidates.push(b.join(".local").join("bin").join("omm.exe"));
-                candidates.push(b.join("Programs").join("omm").join("omm.exe"));
             }
         }
     }
@@ -155,7 +147,6 @@ pub fn acp_info(acp: State<'_, Acp>) -> Info {
                 raw.trim()
                     .trim_start_matches("opencode")
                     .trim_start_matches("mura")
-                    .trim_start_matches("omm")
                     .trim()
                     .to_string()
             });
@@ -165,7 +156,7 @@ pub fn acp_info(acp: State<'_, Acp>) -> Info {
     Info { path, version, running }
 }
 
-/// Start ACP agent (`mura acp`, `omm acp` or `opencode acp`) in `cwd` (stopping a previous one first).
+/// Start ACP agent (`mura acp` or `opencode acp`) in `cwd` (stopping a previous one first).
 /// Each stdout line arrives as an `acp-line` event; stderr as `acp-log`; the end as `acp-exit`.
 #[tauri::command]
 pub fn acp_start(app: AppHandle, acp: State<'_, Acp>, cwd: Option<String>) -> Result<String, String> {

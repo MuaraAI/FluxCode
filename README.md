@@ -315,8 +315,8 @@ The GPUI terminal is tuned for Python:
 
 OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
 its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
-MuaraAI's Mura harness is installed, the panel uses it instead of OpenCode
-(both speak ACP); the title menu switches between them. (Mira / `omm` was removed in 0.9.1.)
+MuaraAI's Mura Harness (`mura`) is installed, the panel uses it instead of OpenCode
+(both speak ACP); the title menu switches between them.
 
 The agent panel:
 

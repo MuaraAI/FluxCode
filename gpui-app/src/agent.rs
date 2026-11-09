@@ -278,14 +278,13 @@ pub fn mura_installed() -> bool {
     *f.get_or_insert_with(|| find_mura().is_some())
 }
 
-/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 3 Mura
-/// ("mira" from older settings means Mura now).
+/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 3 Mura Harness.
 static CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn set_choice(cli: &str) {
     let v = match cli {
         "opencode" => 1,
-        "mura" | "mira" => 3,
+        "mura" => 3,
         _ => 0,
     };
     CHOICE.store(v, std::sync::atomic::Ordering::Relaxed);
@@ -1994,7 +1993,7 @@ impl Workbench {
         self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": [] }));
     }
 
-    /// Resume a session OpenCode (or Mira) saved: its history replays into the panel
+    /// Resume a session OpenCode or Mura Harness saved: its history replays into the panel
     /// and the next message continues it.
     fn agent_open_remote(&mut self, id: String, cx: &mut Context<Self>) {
         self.agent.save_chat();

@@ -220,7 +220,7 @@ export function openSettings(ctx) {
     let st;
     try { st = await ctx.agent.status(); } catch (e) { st = { error: `${e}` }; }
     if (!card.isConnected) return;
-    const name = st?.path && /mura|omm/i.test(st.path) ? "Mura Harness" : "OpenCode";
+    const name = st?.path && /mura/i.test(st.path) ? "Mura Harness" : "OpenCode";
     card.innerHTML = st?.path
       ? `<div class="oc-status"><span class="oc-dot ${st.running ? "on" : ""}"></span><div><b>${name} ${esc(st.version ?? "")}</b><span>${st.running ? "running" : "not running"} · <code>${esc(st.path)}</code></span></div></div>
          <div class="gh-actions"><button class="btn-secondary" data-ap="oc-open">Open Agent view</button>${st.running ? '<button class="btn-secondary" data-ap="oc-stop">Stop agent</button>' : ""}</div>`
