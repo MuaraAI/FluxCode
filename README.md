@@ -285,7 +285,26 @@ The GPUI terminal is tuned for Python:
   `py -m pip install` installs into.
 
 OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
-its header, or Settings), has an ON/OFF switch, and keeps a history of chats.
+its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
+MuaraAI's `omm` (Mira) harness is installed, the panel uses it instead of OpenCode
+(both speak ACP; the panel is then titled MIRA).
+
+**Source Control** (`Ctrl+Shift+G`), modeled on VS Code's git extension but lighter: one
+`git status --porcelain=v2 --branch -z` call per refresh gives the files, branch and
+ahead/behind (VS Code makes three calls), and it refreshes on save, after git commands and
+when the window regains focus.
+
+- Staged / Changes / Merge Changes with VS Code's letters and colors, stage, unstage,
+  discard (two clicks; untracked files go to the Recycle Bin), and a colored diff in Output.
+- Commit box (Enter commits), **Commit All** when nothing is staged (VS Code's smart commit),
+  Commit & Push, Commit & Sync, Amend. Pull (`--autostash`), Push, Sync, Fetch, Publish Branch.
+- Graph of the last 60 commits with branch pills; click a commit for its summary.
+- **Pull requests**: `gh pr create --fill` (pushes first) and a link to the PR.
+- **Deploy**: lists the repository's GitHub Actions workflows with a Run button
+  (`gh workflow run` on the current branch, for workflows with `workflow_dispatch`) and the
+  latest runs with their status.
+- Badge with the change count on the activity bar, branch and sync state in the status bar,
+  M/U/D letters and colors in the explorer.
 
 Build and install it for your user (Start Menu + Settings → Apps entry):
 
@@ -317,6 +336,7 @@ for MinGW, the optional in-window preview).
 | Run or Preview / Stop | `F5` / `Shift+F5` |
 | Find / Replace / Go to Line | `Ctrl+F` / `Ctrl+H` / `Ctrl+G` |
 | Find in Files / Explorer | `Ctrl+Shift+F` / `Ctrl+Shift+E` |
+| Source Control (GPUI edition) | `Ctrl+Shift+G` |
 | Word Wrap / Zoom | `Alt+Z` / `Ctrl+=`, `Ctrl+-`, `Ctrl+0` |
 | Next occurrence / Comment / Delete line | `Ctrl+D` / `Ctrl+/` / `Ctrl+Shift+K` |
 | Move line / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` |

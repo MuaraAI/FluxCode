@@ -34,6 +34,7 @@ impl Workbench {
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
         let target = self.ctx_target.clone();
         let dirs = self.dirs.clone();
+        let (marks, dirty_dirs) = (self.scm.marks.clone(), self.scm.dirty_dirs.clone());
         let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
             let item = entry.item();
             let id = item.id.to_string();
@@ -59,14 +60,34 @@ impl Workbench {
                 Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint))
             };
             let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
-            let label_color = if skipped { c(theme::FG_DIM) } else { c(theme::FG) };
+            // Git decorations like VS Code: the letter on the right, the name in its color,
+            // and a dot on folders that contain changes.
+            let key = id.replace('/', "\\").to_lowercase();
+            let mark = if is_dir { None } else { marks.get(&key).copied() };
+            let dir_dirty = is_dir && dirty_dirs.contains(&key);
+            let label_color = match mark {
+                _ if skipped => c(theme::FG_DIM),
+                Some(m) => c(crate::scm::code_color(m)),
+                None if dir_dirty => c(theme::WARN),
+                None => c(theme::FG),
+            };
             ListItem::new(ix)
                 .w_full()
                 .h(theme::u(20.))
                 .px_1()
                 .pl(theme::u(10.) * entry.depth() + theme::u(6.))
                 .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
-                .child(h_flex().gap_1().text_color(label_color).child(lead).child(item.label.clone()))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .pr_2()
+                        .text_color(label_color)
+                        .child(lead)
+                        .child(div().flex_1().truncate().when(mark == Some('D'), |d| d.line_through()).child(item.label.clone()))
+                        .when_some(mark, |h, m| h.child(div().text_xs().font_weight(FontWeight::BOLD).child(m.to_string())))
+                        .when(dir_dirty, |h| h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN)))),
+                )
                 .on_click({
                     let view = view.clone();
                     let item = item.clone();

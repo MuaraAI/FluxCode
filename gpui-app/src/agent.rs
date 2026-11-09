@@ -115,6 +115,35 @@ pub struct AgentState {
     _sub: Subscription,
 }
 
+/// MuaraAI's native `omm` (oh-my-mira) harness, preferred over OpenCode when
+/// installed (same search as the Tauri app's `find_agent`, feat/omm-acp-integration).
+fn find_omm() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "omm.exe" } else { "omm" };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join(exe)));
+    }
+    for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOME"] {
+        if let Ok(base) = std::env::var(var) {
+            let b = Path::new(&base);
+            candidates.push(b.join(".cargo").join("bin").join(exe));
+            candidates.push(b.join(".local").join("bin").join(exe));
+            candidates.push(b.join("Programs").join("omm").join(exe));
+        }
+    }
+    if !cfg!(windows) {
+        candidates.push(PathBuf::from("/usr/local/bin/omm"));
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Which harness the panel talks to: "Mira" (omm) when installed, else "OpenCode".
+/// Looked up once; both speak ACP over stdio (`<cli> acp`).
+pub fn agent_name() -> &'static str {
+    static NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| if find_omm().is_some() { "Mira" } else { "OpenCode" })
+}
+
 /// Where the OpenCode CLI lives (same search as the Tauri app).
 fn find_opencode() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -144,7 +173,7 @@ fn find_opencode() -> Option<PathBuf> {
 }
 
 fn opencode_cmd() -> Option<std::process::Command> {
-    if let Some(exe) = find_opencode() {
+    if let Some(exe) = find_omm().or_else(find_opencode) {
         return Some(proc::command(exe.to_string_lossy().as_ref()));
     }
     if cfg!(windows)
@@ -159,7 +188,7 @@ fn opencode_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Ask OpenCode… (Enter to send)"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}… (Enter to send)", agent_name())));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { shift: false, .. } = ev {
                 this.agent_send(window, cx);
@@ -246,7 +275,7 @@ impl Workbench {
             return;
         }
         let Some(mut cmd) = opencode_cmd() else {
-            self.agent.status = Status::Error("OpenCode was not found. Install it with `npm i -g opencode-ai` or from opencode.ai.".into());
+            self.agent.status = Status::Error("No agent found. Install Mira (`omm`, from MuaraAI) or OpenCode (`npm i -g opencode-ai`).".into());
             cx.notify();
             return;
         };
@@ -268,7 +297,7 @@ impl Workbench {
                     }),
                 );
             }
-            Err(e) => self.agent.status = Status::Error(format!("OpenCode could not start: {e}")),
+            Err(e) => self.agent.status = Status::Error(format!("{} could not start: {e}", agent_name())),
         }
         cx.notify();
     }
@@ -362,7 +391,8 @@ impl Workbench {
         self.agent.pending.clear();
         if self.agent.status != Status::Off {
             let tail = self.agent.log_tail.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("\n");
-            self.agent.status = Status::Error(if tail.is_empty() { "OpenCode stopped.".into() } else { format!("OpenCode stopped:\n{tail}") });
+            let name = agent_name();
+            self.agent.status = Status::Error(if tail.is_empty() { format!("{name} stopped.") } else { format!("{name} stopped:\n{tail}") });
         }
         cx.notify();
     }
@@ -639,7 +669,7 @@ impl Workbench {
                     .pr_2()
                     .gap_1()
                     .flex_none()
-                    .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child("OPENCODE"))
+                    .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(agent_name().to_uppercase()))
                     .child(tool_button("ag-dock-close", IconName::Close, "Hide OpenCode (Ctrl+Shift+A shows it)", cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
@@ -776,7 +806,7 @@ impl Workbench {
                 Switch::new("ag-on")
                     .checked(on)
                     .small()
-                    .tooltip(if on { "Turn OpenCode off" } else { "Turn OpenCode on" })
+                    .tooltip(if on { format!("Turn {} off", agent_name()) } else { format!("Turn {} on", agent_name()) })
                     .on_click(move |checked, _, cx| {
                         let checked = *checked;
                         _ = weak.update(cx, |this, cx| this.agent_set_on(checked, cx));
@@ -817,9 +847,9 @@ impl Workbench {
                     .text_sm()
                     .text_color(c(theme::FG_DIM))
                     .child(if on {
-                        "Ask OpenCode to explain, fix or write code. The active file is sent with your message."
+                        format!("Ask {} to explain, fix or write code. The active file is sent with your message.", agent_name())
                     } else {
-                        "OpenCode is off. Switch it on, or just send a message: it starts by itself."
+                        format!("{} is off. Switch it on, or just send a message: it starts by itself.", agent_name())
                     }),
             );
         }

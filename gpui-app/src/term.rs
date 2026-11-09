@@ -34,6 +34,8 @@ pub enum LineKind {
     Fixed,
     /// The end of a command: exit status and time.
     Status,
+    /// `@@ -5,3 +5,4 @@` in a diff.
+    Hunk,
     /// Error card rows (see `PyError`).
     CardHead,
     CardMsg,

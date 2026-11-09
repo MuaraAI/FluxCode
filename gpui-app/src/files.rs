@@ -173,5 +173,7 @@ pub fn folder_icon(name: &str, open: bool) -> IconName {
 // (about 0.5 KiB of SVG each); see `main.rs` for the asset source.
 gpui_kit::assets::icon_assets!(pub FileIcons, [
     File, FileCode, FileBraces, FileText, FileImage, FileLock, FileCog, FileTerminal, FileArchive,
-    FileMusic, FileVideoCamera, FileType, FileSpreadsheet, FileKey, FolderGit
+    FileMusic, FileVideoCamera, FileType, FileSpreadsheet, FileKey, FolderGit,
+    // Source Control
+    GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2
 ]);

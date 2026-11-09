@@ -33,7 +33,8 @@ actions!(
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
-        GoToProblem
+        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
+        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub
     ]
 );
 
@@ -51,6 +52,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-f", FindInFiles, None),
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
+        KeyBinding::new("ctrl-shift-g", ScmShow, None),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
@@ -79,6 +81,7 @@ pub(crate) enum SideView {
     Explorer,
     Search,
     Run,
+    Scm,
     Agent,
 }
 
@@ -181,6 +184,7 @@ pub struct Workbench {
     /// "Python 3.15.0" for the terminal header (detected in the background).
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
+    pub(crate) scm: crate::scm::Scm,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -201,7 +205,7 @@ impl Workbench {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let term_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command (Tab completes, ↑ for history)"));
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("Personal access token"));
-        let subs = vec![
+        let mut subs = vec![
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
                     this.commit_pending(window, cx);
@@ -240,6 +244,14 @@ impl Workbench {
         let settings = crate::settings::Settings::load();
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
+        let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
+        subs.push(scm_sub);
+        // Like VS Code: re-read git state when the window comes back to the front.
+        subs.push(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.scm_refresh(cx);
+            }
+        }));
         let mut this = Self {
             root: None,
             tree,
@@ -281,6 +293,7 @@ impl Workbench {
             problems: Vec::new(),
             python_version: None,
             agent,
+            scm,
             preview_server: None,
             github: crate::github::load(),
             github_input,
@@ -308,6 +321,7 @@ impl Workbench {
         self.refresh_tree(cx);
         self.save_session(cx);
         self.detect_python(cx);
+        self.scm_refresh(cx);
         cx.notify();
     }
 
@@ -441,7 +455,7 @@ impl Workbench {
         self.save_session(cx);
     }
 
-    fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
         let doc = &mut self.docs[ix];
         let text = doc.editor.read(cx).value();
         match core::write_text(&doc.path, &text, doc.crlf) {
@@ -451,6 +465,7 @@ impl Workbench {
                 if let Some(s) = &self.preview_server {
                     s.reload();
                 }
+                self.scm_refresh(cx);
                 true
             }
             Err(e) => {
@@ -712,6 +727,7 @@ impl Workbench {
                     m.menu("Explorer", Box::new(ShowExplorer))
                         .menu("Search", Box::new(FindInFiles))
                         .menu("Run", Box::new(ShowRun))
+                        .menu("Source Control", Box::new(ScmShow))
                         .menu("OpenCode", Box::new(ShowAgent))
                         .separator()
                         .menu("Toggle Sidebar", Box::new(ToggleSidebar))
@@ -755,7 +771,7 @@ impl Workbench {
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // VS Code's pattern: the active view gets a 2px accent line on the left and full-strength icon.
-        let item = |id: &'static str, icon: IconName, active: bool, _this: &Self, _cx: &mut Context<Self>| {
+        let item = |id: &'static str, icon: Icon, active: bool, _this: &Self, _cx: &mut Context<Self>| {
             div()
                 .id(id)
                 .relative()
@@ -767,9 +783,9 @@ impl Workbench {
                 .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
                 .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .when(active, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).bg(c(theme::ACCENT))))
-                .child(Icon::new(icon).size(theme::u(17.)))
+                .child(icon.size(theme::u(17.)))
         };
-        let view_item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
+        let view_item = |id: &'static str, icon: Icon, view: SideView, this: &Self, cx: &mut Context<Self>| {
             // OpenCode docked right: its icon shows and hides that dock instead.
             if view == SideView::Agent && this.settings.agent_right {
                 let active = this.agent_open && !this.settings_open;
@@ -798,16 +814,42 @@ impl Workbench {
             .bg(c(theme::BG_TITLE))
             .border_r_1()
             .border_color(c(theme::BORDER))
-            .child(view_item("ab-explorer", IconName::FolderOpen, SideView::Explorer, self, cx))
-            .child(view_item("ab-search", IconName::Search, SideView::Search, self, cx))
-            .child(view_item("ab-run", IconName::Play, SideView::Run, self, cx))
-            .child(view_item("ab-agent", IconName::Bot, SideView::Agent, self, cx))
+            .child(view_item("ab-explorer", Icon::new(IconName::FolderOpen), SideView::Explorer, self, cx))
+            .child(view_item("ab-search", Icon::new(IconName::Search), SideView::Search, self, cx))
+            .child({
+                let n = self.scm.status.count();
+                div()
+                    .relative()
+                    .child(view_item("ab-scm", Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
+                    .when(n > 0, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .right(theme::u(4.))
+                                .bottom(theme::u(5.))
+                                .min_w(theme::u(15.))
+                                .h(theme::u(15.))
+                                .px_1()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(c(theme::ACCENT))
+                                .text_color(c(theme::ON_ACCENT))
+                                .text_size(theme::u(9.5))
+                                .font_weight(FontWeight::BOLD)
+                                .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
+                        )
+                    })
+            })
+            .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
+            .child(view_item("ab-agent", Icon::new(IconName::Bot), SideView::Agent, self, cx))
             .child(div().flex_1())
             .child(
                 div()
                     .id(("ab-settings", 0usize))
                     .pb_1()
-                    .child(item("ab-settings", IconName::Settings, self.settings_open, self, cx))
+                    .child(item("ab-settings", Icon::new(IconName::Settings), self.settings_open, self, cx))
                     .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx))),
             )
     }
@@ -818,7 +860,8 @@ impl Workbench {
             SideView::Explorer => "EXPLORER",
             SideView::Search => "SEARCH",
             SideView::Run => "RUN",
-            SideView::Agent => "OPENCODE",
+            SideView::Scm => "SOURCE CONTROL",
+            SideView::Agent => if crate::agent::agent_name() == "Mira" { "MIRA" } else { "OPENCODE" },
         };
         let header = h_flex()
             .h(theme::u(35.))
@@ -827,6 +870,7 @@ impl Workbench {
             .gap_2()
             .flex_none()
             .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
+            .when(self.view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
                 h.child(tool_button("x-newfile", IconName::Plus, "New File", cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
                     .child(tool_button("x-newdir", IconName::FolderClosed, "New Folder", cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
@@ -836,6 +880,7 @@ impl Workbench {
             SideView::Explorer => self.render_explorer(window, cx),
             SideView::Search => self.render_search(cx),
             SideView::Run => self.render_run_view(cx),
+            SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
         v_flex()
@@ -1023,6 +1068,38 @@ impl Workbench {
             .text_xs()
             .text_color(c(theme::FG_MUTED))
             .when_some(folder, |h, f| h.child(seg(f.into()).pl_3().text_color(c(theme::FG))))
+            .when_some(self.scm.status.branch.clone().filter(|_| self.scm.repo.is_some()), |h, b| {
+                let st = &self.scm.status;
+                let dirty = if st.count() > 0 { "*" } else { "" };
+                let sync = match &st.upstream {
+                    None => "Publish".to_string(),
+                    Some(_) => format!("{}↓ {}↑", st.behind, st.ahead),
+                };
+                h.child(
+                    h_flex()
+                        .id("sb-branch")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(c(theme::BG_HOVER)))
+                        .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(13.)))
+                        .child(format!("{b}{dirty}"))
+                        .on_click(cx.listener(|this, _, w, cx| this.on_scm_show(&ScmShow, w, cx))),
+                )
+                .child(
+                    h_flex()
+                        .id("sb-sync")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(c(theme::BG_HOVER)))
+                        .child(Icon::new(if st.upstream.is_some() { gpui_kit::assets::IconName::RefreshCcw } else { gpui_kit::assets::IconName::CloudUpload }).size(theme::u(13.)))
+                        .child(if self.scm.busy.is_some() { "…".to_string() } else { sync })
+                        .on_click(cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx))),
+                )
+            })
             // Only a running program gets a marker: it is the one state worth noticing here.
             .when(running, |h| {
                 h.child(
@@ -1156,6 +1233,10 @@ impl Render for Workbench {
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
+        if self.scm.clear_message {
+            self.scm.clear_message = false;
+            self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));
+        }
         // Interface size: rem-based spacing and text follow this; fixed sizes use theme::u.
         window.set_rem_size(theme::rem());
         let editor_view: AnyElement = match &self.preview {
@@ -1212,6 +1293,18 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_term_interrupt))
             .on_action(cx.listener(Self::on_term_escape))
             .on_action(cx.listener(Self::on_go_to_problem))
+            .on_action(cx.listener(Self::on_scm_show))
+            .on_action(cx.listener(Self::on_scm_commit_push))
+            .on_action(cx.listener(Self::on_scm_commit_sync))
+            .on_action(cx.listener(Self::on_scm_commit_amend))
+            .on_action(cx.listener(Self::on_scm_pull))
+            .on_action(cx.listener(Self::on_scm_push))
+            .on_action(cx.listener(Self::on_scm_sync))
+            .on_action(cx.listener(Self::on_scm_fetch))
+            .on_action(cx.listener(Self::on_scm_stage_all))
+            .on_action(cx.listener(Self::on_scm_unstage_all))
+            .on_action(cx.listener(Self::on_scm_create_pr))
+            .on_action(cx.listener(Self::on_scm_open_github))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))

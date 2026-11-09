@@ -15,6 +15,7 @@ mod panel;
 mod preview;
 mod preview_ui;
 mod proc;
+mod scm;
 mod search;
 mod settings;
 mod term;

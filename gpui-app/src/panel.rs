@@ -542,6 +542,7 @@ impl Workbench {
                 let col = match k {
                     LineKind::Err | LineKind::Caret => theme::DANGER,
                     LineKind::Warn => theme::WARN,
+                    LineKind::Hunk => theme::BLUE,
                     LineKind::Dim => theme::FG_DIM,
                     LineKind::Success => theme::GREEN,
                     LineKind::Code => theme::FG_STRONG,
