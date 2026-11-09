@@ -42,6 +42,9 @@ enum Req {
     SetOption,
 }
 
+/// Stands for the older ACP session modes (`modes`, `session/set_mode`) among the config options.
+const MODE_ID: &str = "__mode";
+
 /// One setting the harness offers for the session (ACP `configOptions`):
 /// model, effort (thought_level), mode, or anything else it adds.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,6 +100,8 @@ pub enum Item {
     Note(String, bool),
     /// A fact the agent asked to keep (saved to memory).
     Saved(String),
+    /// This many memory notes went with the message.
+    MemoryUsed(usize),
     /// The chat continues with another harness from here (a branch, not a new chat).
     Branch(String),
 }
@@ -282,13 +287,40 @@ fn find_omm() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 2 Mira.
+/// MuaraAI's Mura harness (`mura`, one Rust binary, github.com/MuaraAI/Mura-Harness),
+/// installed on its own next to FluxCode (its README puts it in ~/.local/bin).
+fn find_mura() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "mura.exe" } else { "mura" };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join(exe)));
+    }
+    for var in ["USERPROFILE", "HOME"] {
+        if let Ok(base) = std::env::var(var) {
+            let b = Path::new(&base);
+            candidates.push(b.join(".local").join("bin").join(exe));
+            candidates.push(b.join(".fluxcode").join("bin").join(exe));
+            candidates.push(b.join(".cargo").join("bin").join(exe));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+static MURA_FOUND: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+pub fn mura_installed() -> bool {
+    let Ok(mut f) = MURA_FOUND.lock() else { return find_mura().is_some() };
+    *f.get_or_insert_with(|| find_mura().is_some())
+}
+
+/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 2 Mira, 3 Mura.
 static CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn set_choice(cli: &str) {
     let v = match cli {
         "opencode" => 1,
         "mira" => 2,
+        "mura" => 3,
         _ => 0,
     };
     CHOICE.store(v, std::sync::atomic::Ordering::Relaxed);
@@ -326,6 +358,8 @@ pub fn agent_name() -> &'static str {
     match CHOICE.load(std::sync::atomic::Ordering::Relaxed) {
         1 => "OpenCode",
         2 => "Mira",
+        3 => "Mura",
+        _ if mura_installed() => "Mura",
         _ if mira_installed() => "Mira",
         _ => "OpenCode",
     }
@@ -360,10 +394,12 @@ fn find_opencode() -> Option<PathBuf> {
 }
 
 fn opencode_cmd() -> Option<std::process::Command> {
-    let exe = if agent_name() == "Mira" { find_omm() } else { find_opencode() };
-    if agent_name() == "Mira" {
-        return exe.map(|e| proc::command(e.to_string_lossy().as_ref()));
+    match agent_name() {
+        "Mira" => return find_omm().map(|e| proc::command(e.to_string_lossy().as_ref())),
+        "Mura" => return find_mura().map(|e| proc::command(e.to_string_lossy().as_ref())),
+        _ => {}
     }
+    let exe = find_opencode();
     if let Some(exe) = exe {
         return Some(proc::command(exe.to_string_lossy().as_ref()));
     }
@@ -529,7 +565,33 @@ impl Workbench {
                     .unwrap_or_default(),
             })
             .filter(|o| !o.id.is_empty() && !o.choices.is_empty())
+            .map(|mut o| {
+                // Harnesses that leave out `category` (Mura) still name their options plainly.
+                if o.category.is_empty() {
+                    o.category = match o.id.as_str() {
+                        "model" => "model",
+                        "effort" | "reasoning" | "reasoning_effort" | "thought_level" => "thought_level",
+                        "mode" | "agent" => "mode",
+                        _ => "",
+                    }
+                    .into();
+                }
+                o
+            })
             .collect();
+        // The older ACP way to offer modes: `modes.availableModes`, switched with session/set_mode.
+        if let Some(m) = v.get("modes").filter(|m| m.is_object()) {
+            if !self.agent.config.iter().any(|o| o.category == "mode") {
+                let choices: Vec<(String, String, String)> = m
+                    .get("availableModes")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(|c| (str_of(c, "id"), str_of(c, "name"), str_of(c, "description"))).filter(|c| !c.0.is_empty()).collect())
+                    .unwrap_or_default();
+                if !choices.is_empty() {
+                    self.agent.config.push(ConfigOpt { id: MODE_ID.into(), name: "Mode".into(), category: "mode".into(), current: str_of(m, "currentModeId"), choices });
+                }
+            }
+        }
     }
 
     /// Change one session setting (model, effort, mode, ...). `remember` keeps it
@@ -546,7 +608,11 @@ impl Workbench {
             o.current = value.clone();
         }
         if let Some(session) = self.agent.session.clone() {
-            self.agent_request(Req::SetOption, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
+            if id == MODE_ID {
+                self.agent_request(Req::SetOption, "session/set_mode", json!({ "sessionId": session, "modeId": value }));
+            } else {
+                self.agent_request(Req::SetOption, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
+            }
         }
         cx.notify();
     }
@@ -637,6 +703,8 @@ impl Workbench {
         let Some(mut cmd) = opencode_cmd() else {
             self.agent.status = Status::Error(if agent_name() == "Mira" {
                 crate::i18n::tr("Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.").into()
+            } else if agent_name() == "Mura" {
+                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick OpenCode in the panel title menu.").into()
             } else {
                 "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mira in the panel title menu.".into()
             });
@@ -1231,6 +1299,10 @@ impl Workbench {
         self.agent_use("mira", w, cx);
     }
 
+    pub(crate) fn on_agent_use_mura(&mut self, _: &crate::workbench::AgentUseMura, w: &mut Window, cx: &mut Context<Self>) {
+        self.agent_use("mura", w, cx);
+    }
+
     /// The panel title: the harness name, which opens a menu to pick OpenCode or Mira.
     pub(crate) fn render_agent_picker(&self) -> impl IntoElement {
         let name = agent_name();
@@ -1243,6 +1315,7 @@ impl Workbench {
             .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
                 let mira = if mira_installed() { "Mira (omm)" } else { crate::i18n::tr("Mira (omm), not installed") };
                 m.min_w(px(220.))
+                    .menu_with_check(if mura_installed() { "Mura" } else { crate::i18n::tr("Mura, not installed") }, name == "Mura", Box::new(crate::workbench::AgentUseMura))
                     .menu_with_check("OpenCode", name == "OpenCode", Box::new(crate::workbench::AgentUseOpenCode))
                     .menu_with_check(mira, name == "Mira", Box::new(crate::workbench::AgentUseMira))
                     .separator()
@@ -1796,7 +1869,7 @@ impl Workbench {
                 "Notes from earlier sessions (FluxCode memory, may be outdated; ignore them if they don't fit):\n{}",
                 list.join("\n")
             ) }));
-            self.agent.items.push(Item::Note(if trails.len() == 1 { crate::i18n::tr("Used 1 note from memory").to_string() } else { crate::trf!("Used {n} notes from memory"; n => trails.len()) }, false));
+            self.agent.items.push(Item::MemoryUsed(trails.len()));
         }
         if !self.agent.hinted {
             self.agent.hinted = true;
@@ -2325,7 +2398,7 @@ impl Workbench {
             if matches!(item, Item::Branch(_)) {
                 after_user = true;
             }
-            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::Branch(_));
+            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::MemoryUsed(_) | Item::Branch(_));
             if starts_answer {
                 log = log.child(speaker(name, Icon::new(IconName::Bot)));
                 after_user = false;
@@ -2488,26 +2561,39 @@ impl Workbench {
                             .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
                     }))
                     .into_any_element(),
+                // Notes: the icon sits in a box one text line tall, so it centers on the first line.
                 Item::Note(t, err) => h_flex()
                     .items_start()
                     .gap_1p5()
                     .text_xs()
+                    .line_height(theme::u(18.))
                     .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
-                    .child(Icon::new(if *err { IconName::CircleX } else { IconName::Info }).size(theme::u(12.)).flex_none())
+                    .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
                     .child(div().flex_1().min_w_0().child(t.clone()))
                     .into_any_element(),
-                Item::Saved(t) => h_flex()
-                    .gap_1p5()
-                    .items_start()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(4.))
-                    .bg(c(theme::BG_ELEVATED))
-                    .text_xs()
-                    .text_color(c(theme::FG_MUTED))
-                    .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)).flex_none())
-                    .child(div().flex_1().min_w_0().child(crate::trf!("Saved to memory: {t}"; t => t)))
-                    .into_any_element(),
+                // Memory stays out of the way: one dim line, the full note in its tooltip and in the Memory view.
+                Item::Saved(t) => {
+                    let full: SharedString = t.clone().into();
+                    memory_line(("ag-mem-saved", i), crate::i18n::tr("Saved to memory"), t.clone())
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.agent.show_memory = true;
+                            this.agent_refresh_memories();
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
+                Item::MemoryUsed(n) => memory_line(
+                    ("ag-mem-used", i),
+                    if *n == 1 { crate::i18n::tr("Used 1 note from memory") } else { "" },
+                    if *n == 1 { String::new() } else { crate::trf!("Used {n} notes from memory"; n => n) },
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.agent.show_memory = true;
+                    this.agent_refresh_memories();
+                    cx.notify();
+                }))
+                .into_any_element(),
             });
         }
 
@@ -2524,8 +2610,20 @@ impl Workbench {
                 .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Allow: {0}?"; 0 => p.title)))
                 .child(h_flex().gap_1().flex_wrap().children(p.options.iter().enumerate().map(|(i, (oid, name, kind))| {
                     let oid = oid.clone();
-                    let b = Button::new(("perm", i)).label(name.clone()).xsmall();
-                    let b = if kind.starts_with("allow") { b.primary() } else { b };
+                    // One loud choice (allow once); the lasting ones and reject stay quiet.
+                    let label: String = match kind.as_str() {
+                        "allow_once" => crate::i18n::tr("Allow once").into(),
+                        "allow_always" => crate::i18n::tr("Always allow").into(),
+                        "reject_once" => crate::i18n::tr("Reject").into(),
+                        "reject_always" => crate::i18n::tr("Always reject").into(),
+                        _ => name.clone(),
+                    };
+                    let b = Button::new(("perm", i)).label(label).xsmall();
+                    let b = match kind.as_str() {
+                        "allow_once" => b.primary(),
+                        k if k.starts_with("reject") => b.ghost(),
+                        _ => b,
+                    };
                     b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
                 })))
         });
@@ -2543,7 +2641,7 @@ impl Workbench {
                 .text_xs()
                 .child(
                     h_flex()
-                        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(format!("{} file(s) changed by the agent", a.changes.len())))
+                        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(if a.changes.len() == 1 { crate::i18n::tr("1 file changed by the agent").to_string() } else { crate::trf!("{n} files changed by the agent"; n => a.changes.len()) }))
                         .child(Button::new("ag-keep-all").label(tr("Keep all")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
                             this.agent_reinforce_turn();
@@ -2916,7 +3014,7 @@ impl Workbench {
                         crate::trf!("{name} lists its models and settings once it is on."; name => name)
                     })
                     .when(!on, |v| {
-                        v.child(Button::new("ag-opt-on").label(crate::trf!("Turn {name} on"; name => name)).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_set_on(true, cx))))
+                        v.child(h_flex().child(Button::new("ag-opt-on").label(crate::trf!("Turn {name} on"; name => name)).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_set_on(true, cx)))))
                     }),
             );
         }
@@ -3068,6 +3166,27 @@ impl Workbench {
             let _ = store.reinforce(&id);
         }
     }
+}
+
+/// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
+fn line_icon(icon: Icon) -> Div {
+    div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
+}
+
+/// One dim, single-line row about memory: brain icon, a label, then the note cut to fit.
+fn memory_line(id: impl Into<ElementId>, label: &'static str, rest: String) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .h(theme::u(20.))
+        .gap_1p5()
+        .min_w_0()
+        .cursor_pointer()
+        .text_xs()
+        .text_color(c(theme::FG_DIM))
+        .hover(|s| s.text_color(c(theme::FG_MUTED)))
+        .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
+        .when(!label.is_empty(), |h| h.child(div().flex_none().child(label)))
+        .when(!rest.is_empty(), |h| h.child(div().flex_1().min_w_0().truncate().child(rest)))
 }
 
 /// The composer's icon buttons: one 24 px square each, icon centered.

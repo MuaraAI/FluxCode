@@ -330,6 +330,14 @@ The agent panel:
 - Messages sent while the agent is still answering wait in a queue above the input. They go
   out together once the answer ends, or right away with Send now (which stops the current
   answer and tells the agent why). The X removes a queued message.
+- **Mura** ([MuaraAI/Mura-Harness](https://github.com/MuaraAI/Mura-Harness), one Rust binary,
+  `mura acp`) is the third harness in the title menu, next to OpenCode and Mira, and the
+  first choice when it is installed. It stays a separate program: build it with
+  `cargo build --release -p mura-cli` and put `mura.exe` on PATH or in `~/.local/bin`;
+  set its provider once with `mura setup`. Its personas (Core, Scout, Planner, Reviewer,
+  Security), models and effort show in the agent settings.
+- Memory stays out of the way: one dim line under the message ("Saved to memory",
+  "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
 - **Settings for the agent** (title menu → *settings*, or the model button under the input):
   everything the harness offers over ACP (`configOptions`), as native controls: its agent
   modes with their descriptions, the **model** (OpenCode Zen's free models grouped first,

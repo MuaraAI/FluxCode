@@ -36,7 +36,7 @@ actions!(
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentUseMira, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentUseOpenCode, AgentUseMira, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent
     ]
 );
@@ -1189,7 +1189,11 @@ impl Workbench {
             SideView::Search => tr("SEARCH"),
             SideView::Run => tr("RUN"),
             SideView::Scm => tr("SOURCE CONTROL"),
-            SideView::Agent => if crate::agent::agent_name() == "Mira" { "MIRA" } else { "OPENCODE" },
+            SideView::Agent => match crate::agent::agent_name() {
+                "Mira" => "MIRA",
+                "Mura" => "MURA",
+                _ => "OPENCODE",
+            },
         };
         // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
@@ -1720,6 +1724,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_quick_down))
             .on_action(cx.listener(Self::on_agent_use_opencode))
             .on_action(cx.listener(Self::on_agent_use_mira))
+            .on_action(cx.listener(Self::on_agent_use_mura))
             .on_action(cx.listener(Self::on_agent_mention_up))
             .on_action(cx.listener(Self::on_agent_mention_down))
             .on_action(cx.listener(Self::on_agent_mention_accept))
