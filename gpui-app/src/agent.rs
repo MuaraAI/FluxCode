@@ -2,7 +2,9 @@
 //! `src-tauri/src/acp.rs` (process) and `src/agent.js` (protocol + UI).
 //! `opencode acp` speaks newline-delimited JSON-RPC on stdio.
 
+use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
+use crate::memory;
 use crate::proc;
 use crate::theme::{self, c};
 use crate::workbench::{tool_button, SideView, Workbench};
@@ -13,12 +15,12 @@ use gpui_kit::component::{
     menu::DropdownMenu,
     switch::Switch,
     text::TextView,
-    v_flex, IconName, Sizable,
+    v_flex, Disableable, Icon, IconName, Sizable,
 };
 use serde::{Deserialize, Serialize};
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, PartialEq)]
@@ -34,6 +36,7 @@ pub enum Status {
 enum Req {
     Initialize,
     NewSession,
+    LoadSession,
     Prompt,
 }
 
@@ -41,9 +44,12 @@ pub enum Item {
     User(String),
     Text(String),
     Thought(String),
-    Tool { id: String, title: String, status: String },
+    /// `kind` is ACP's tool kind: read, edit, delete, move, search, execute, think, fetch, other.
+    Tool { id: String, title: String, status: String, kind: String },
     Plan(Vec<(String, String)>),
     Note(String, bool),
+    /// A fact the agent asked to keep (saved to memory).
+    Saved(String),
 }
 
 pub struct Permission {
@@ -113,7 +119,29 @@ pub struct AgentState {
     /// An earlier chat reopened from history: sent with the next message so a
     /// fresh OpenCode session knows what was said.
     carry: Option<String>,
+    /// `@file` being typed: (offset of `@`, matching files, selected row).
+    pub mention: Option<(usize, Vec<usize>, usize)>,
+    /// Context chips the user switched off: "file", "sel", "err", "out", or "@path".
+    pub off_ctx: HashSet<String>,
+    /// Sessions OpenCode / Mira saved for this folder: 0 not loaded, 1 loading, 2 loaded.
+    pub remote: Vec<RemoteSession>,
+    pub remote_state: u8,
+    pub remote_err: Option<String>,
+    /// The harness can resume an old session (ACP `loadSession`).
+    can_load: bool,
+    /// Resume this session once the agent has started.
+    pending_load: Option<String>,
+    /// Replaying this session's history right now.
+    loading_id: Option<String>,
+    pub show_memory: bool,
+    memory_input: Entity<InputState>,
+    /// Memory trails sent with the current turn (reinforced on Keep, weakened on Undo).
+    turn_memories: Vec<String>,
+    /// The REMEMBER instruction went out in this session.
+    hinted: bool,
+    pub memories: Vec<memory::Trail>,
     _sub: Subscription,
+    _sub2: Subscription,
 }
 
 /// MuaraAI's native `omm` (oh-my-mira) harness, preferred over OpenCode when
@@ -214,11 +242,24 @@ fn opencode_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…", agent_name())));
-        let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { shift: false, .. } = ev {
-                this.agent_send(window, cx);
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…  (@ adds a file)", agent_name())));
+        let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
+            InputEvent::PressEnter { shift: false, .. } if this.agent.mention.is_some() => this.agent_mention_accept(window, cx),
+            InputEvent::PressEnter { shift: false, .. } => this.agent_send(window, cx),
+            InputEvent::Change => this.agent_update_mention(cx),
+            _ => {}
+        });
+        let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder("Remember something about this project…"));
+        let sub2 = cx.subscribe_in(&memory_input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                let text = this.agent.memory_input.read(cx).value().to_string();
+                this.agent.memory_input.update(cx, |s, cx| s.set_value("", window, cx));
+                this.agent_remember(&text, cx);
             }
+        });
+        // Memory evaporates once per start, off the UI thread (same rule as `ant_memory.py decay`).
+        std::thread::spawn(|| {
+            let _ = memory::Store::default().decay();
         });
         Self {
             status: Status::Off,
@@ -239,7 +280,21 @@ impl AgentState {
             chat_id: None,
             show_history: false,
             carry: None,
+            mention: None,
+            off_ctx: HashSet::new(),
+            remote: Vec::new(),
+            remote_state: 0,
+            remote_err: None,
+            can_load: false,
+            pending_load: None,
+            loading_id: None,
+            show_memory: false,
+            memory_input,
+            turn_memories: Vec::new(),
+            hinted: false,
+            memories: Vec::new(),
             _sub: sub,
+            _sub2: sub2,
         }
     }
 
@@ -272,6 +327,13 @@ impl AgentState {
 
     pub fn owns(&self, id: u32) -> bool {
         self.proc_id == Some(id)
+    }
+
+    fn append_user(&mut self, text: &str) {
+        match self.items.last_mut() {
+            Some(Item::User(t)) => t.push_str(text),
+            _ => self.items.push(Item::User(text.into())),
+        }
     }
 
     fn append(&mut self, thought: bool, text: &str) {
@@ -340,6 +402,8 @@ impl Workbench {
         self.agent.session = None;
         self.agent.pending.clear();
         self.agent.permission = None;
+        self.agent.hinted = false;
+        self.agent.loading_id = None;
         cx.notify();
     }
 
@@ -349,6 +413,11 @@ impl Workbench {
             return;
         }
         self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.agent.mention = None;
+        if let Some(fact) = text.strip_prefix("/remember ").or_else(|| text.strip_prefix("/ingat ")) {
+            self.agent_remember(fact, cx);
+            return;
+        }
         self.agent.items.push(Item::User(text.clone()));
         self.agent.scroll.scroll_to_bottom();
         match (&self.agent.status, &self.agent.session) {
@@ -367,18 +436,8 @@ impl Workbench {
         if let Some(earlier) = self.agent.carry.take() {
             prompt.push(json!({ "type": "text", "text": format!("Earlier messages of this conversation, for context:\n\n{earlier}\n\n---\n") }));
         }
-        prompt.push(json!({ "type": "text", "text": text }));
-        // Include the active file, like the Tauri panel's "include file" default.
-        if let Some(ix) = self.active.filter(|ix| self.docs[*ix].image.is_none()) {
-            let d = &self.docs[ix];
-            let body = d.editor.read(cx).value();
-            if body.len() < 200_000 {
-                prompt.push(json!({
-                    "type": "resource",
-                    "resource": { "uri": format!("file:///{}", d.path.to_string_lossy().replace('\\', "/")), "text": body.to_string(), "mimeType": "text/plain" }
-                }));
-            }
-        }
+        prompt.push(json!({ "type": "text", "text": text.clone() }));
+        prompt.extend(self.agent_context_blocks(&text, cx));
         self.agent.status = Status::Busy;
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
     }
@@ -452,8 +511,21 @@ impl Workbench {
         let result = msg.get("result").cloned().unwrap_or(Value::Null);
         match kind {
             Req::Initialize => {
+                self.agent.can_load = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
                 let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
-                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+                match self.agent.pending_load.take() {
+                    Some(id) if self.agent.can_load => self.agent_load_session(id),
+                    _ => self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] })),
+                }
+            }
+            Req::LoadSession => {
+                self.agent.session = self.agent.loading_id.take();
+                self.agent.status = Status::Ready;
+                self.agent.hinted = false;
+                self.agent.save_chat();
+                if let Some(text) = self.agent.queued_prompt.take() {
+                    self.agent_prompt(text, cx);
+                }
             }
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
@@ -469,6 +541,7 @@ impl Workbench {
                 }
                 self.agent.permission = None;
                 self.agent.status = Status::Ready;
+                self.agent_take_remembers();
                 self.agent.save_chat();
                 self.refresh_tree(cx);
             }
@@ -484,16 +557,24 @@ impl Workbench {
         let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
             "agent_message_chunk" => self.agent.append(false, &text(u)),
+            // Only while an old session replays; live prompts are shown when sent.
+            "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
             "agent_thought_chunk" => self.agent.append(true, &text(u)),
             "tool_call" => self.agent.items.push(Item::Tool {
                 id: s(u, "toolCallId").unwrap_or_default(),
                 title: s(u, "title").unwrap_or_else(|| "Tool".into()),
                 status: s(u, "status").unwrap_or_else(|| "pending".into()),
+                kind: s(u, "kind").unwrap_or_else(|| "other".into()),
             }),
             "tool_call_update" => {
                 let id = s(u, "toolCallId").unwrap_or_default();
                 for item in self.agent.items.iter_mut().rev() {
-                    if let Item::Tool { id: tid, title, status } = item {
+                    if let Item::Tool { id: tid, title, status, kind } = item {
+                        if *tid == id {
+                            if let Some(k) = s(u, "kind") {
+                                *kind = k;
+                            }
+                        }
                         if *tid == id {
                             if let Some(t) = s(u, "title") {
                                 *title = t;
@@ -774,6 +855,21 @@ impl Workbench {
         h_flex()
             .gap_px()
             .child(
+                Button::new("ag-memory-btn")
+                    .icon(Icon::new(gpui_kit::assets::IconName::Brain))
+                    .xsmall()
+                    .ghost()
+                    .tooltip(if self.agent.show_memory { "Back to the chat" } else { "Memory: what the agent remembers" })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent.show_memory = !this.agent.show_memory;
+                        this.agent.show_history = false;
+                        if this.agent.show_memory {
+                            this.agent_refresh_memories();
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
                 Button::new("ag-history-btn")
                     .icon(if self.agent.show_history { gpui_kit::component::Icon::new(IconName::Bot) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
                     .xsmall()
@@ -781,6 +877,10 @@ impl Workbench {
                     .tooltip(if self.agent.show_history { "Back to the chat" } else { "Saved chats" })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_history = !this.agent.show_history;
+                        this.agent.show_memory = false;
+                        if this.agent.show_history {
+                            this.agent_load_remote_list(cx);
+                        }
                         cx.notify();
                     })),
             )
@@ -853,7 +953,7 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, _, cx| this.agent_new_chat(cx))),
                 ),
             )
-            .child(list)
+            .child(list.child(self.render_remote_sessions(cx)))
             .into_any_element()
     }
 
@@ -884,6 +984,10 @@ impl Workbench {
             return;
         }
         let ch = self.agent.changes.remove(ix);
+        let store = memory::Store::default();
+        for id in std::mem::take(&mut self.agent.turn_memories) {
+            let _ = store.fail(&id);
+        }
         let r = match &ch.before {
             Some(b) => std::fs::write(&ch.path, b).map_err(|e| e.to_string()),
             None => core::delete_path(&ch.path),
@@ -899,17 +1003,565 @@ impl Workbench {
         cx.notify();
     }
 
+    // ------------------------------------------------------------ @mentions
+
+    /// Re-read the input after each change: is an `@file` being typed?
+    pub(crate) fn agent_update_mention(&mut self, cx: &mut Context<Self>) {
+        let (text, cursor) = {
+            let s = self.agent.input.read(cx);
+            (s.value().to_string(), s.cursor())
+        };
+        let Some((at, q)) = agent_ctx::mention_query(&text, cursor) else {
+            if self.agent.mention.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        let qb: Vec<u8> = q.to_lowercase().into_bytes();
+        let mut scored: Vec<(i32, usize)> = self
+            .all_lower
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| crate::quick::fuzzy_lower(&qb, p.as_bytes()).map(|s| (s, i)))
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        let hits: Vec<usize> = scored.into_iter().take(8).map(|(_, i)| i).collect();
+        self.agent.mention = Some((at, hits, 0));
+        cx.notify();
+    }
+
+    /// Put the highlighted file into the message as `@relative/path `.
+    pub(crate) fn agent_mention_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((at, hits, sel)) = self.agent.mention.take() else { return };
+        let Some(&ix) = hits.get(sel) else {
+            cx.notify();
+            return;
+        };
+        let rel = self.rel_path(&self.all_files[ix]).replace('\\', "/");
+        let (text, cursor) = {
+            let s = self.agent.input.read(cx);
+            (s.value().to_string(), s.cursor().min(s.value().len()))
+        };
+        let new = format!("{}@{} {}", &text[..at], rel, &text[cursor..]);
+        let caret = (text[..at].chars().count() + rel.chars().count() + 2) as u32;
+        self.agent.input.update(cx, |s, cx| {
+            s.set_value(new, window, cx);
+            s.set_cursor_position(gpui_kit::component::input::Position::new(0, caret), window, cx);
+        });
+        self.agent.mention = None;
+        cx.notify();
+    }
+
+    pub(crate) fn on_agent_mention_up(&mut self, _: &crate::workbench::AgentMentionUp, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, _, sel)) = self.agent.mention.as_mut() {
+            *sel = sel.saturating_sub(1);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_agent_mention_down(&mut self, _: &crate::workbench::AgentMentionDown, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, hits, sel)) = self.agent.mention.as_mut() {
+            if *sel + 1 < hits.len() {
+                *sel += 1;
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_agent_mention_accept(&mut self, _: &crate::workbench::AgentMentionAccept, w: &mut Window, cx: &mut Context<Self>) {
+        self.agent_mention_accept(w, cx);
+    }
+
+    pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _: &mut Window, cx: &mut Context<Self>) {
+        if self.agent.mention.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn rel_path(&self, full: &str) -> String {
+        let root = self.root.as_deref().map(|r| r.to_string_lossy().len()).unwrap_or(0);
+        full.get(root..).map(|s| s.trim_start_matches(['\\', '/']).to_string()).unwrap_or_else(|| full.to_string())
+    }
+
+    // ------------------------------------------------------------ context
+
+    /// What goes with the next message, exactly as the chips above the input show it:
+    /// (key, label, icon, on). The same list builds the prompt, so what you see is sent.
+    fn agent_chips(&self, cx: &App) -> Vec<(String, String, Icon, bool)> {
+        let text = self.agent.input.read(cx).value().to_string();
+        let off = |k: &str| self.agent.off_ctx.contains(k);
+        let mut chips = Vec::new();
+        if let Some(d) = self.active.map(|ix| &self.docs[ix]).filter(|d| d.image.is_none()) {
+            chips.push(("file".into(), d.name.to_string(), Icon::new(IconName::FileText), !off("file")));
+            let ed = d.editor.read(cx);
+            let range = ed.selected_range();
+            if !range.is_empty() {
+                let v = ed.value();
+                let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
+                let label = if a == b { format!("Selection · line {a}") } else { format!("Selection · lines {a}-{b}") };
+                chips.push(("sel".into(), label, Icon::new(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
+            }
+        }
+        if agent_ctx::wants_error(&text) {
+            if let Some(p) = self.problems.first() {
+                let name = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let kind = p.message.split(':').next().unwrap_or("Error").to_string();
+                chips.push(("err".into(), format!("{kind} · {name}:{}", p.line), Icon::new(IconName::CircleX), !off("err")));
+            } else if self.agent_last_failure().is_some() {
+                chips.push(("err".into(), "Last failed command".into(), Icon::new(IconName::CircleX), !off("err")));
+            }
+        }
+        if agent_ctx::wants_output(&text) && !self.term_lines.is_empty() {
+            chips.push(("out".into(), "Terminal output".into(), Icon::new(IconName::SquareTerminal), !off("out")));
+        }
+        for m in agent_ctx::mentions(&text) {
+            if let Some(root) = &self.root {
+                if root.join(&m).exists() {
+                    let name = Path::new(&m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(m.clone());
+                    let key = format!("@{m}");
+                    let on = !off(&key);
+                    chips.push((key, name, Icon::new(gpui_kit::assets::IconName::AtSign), on));
+                }
+            }
+        }
+        chips
+    }
+
+    /// The last command that failed in the terminal (or the last failed run), with its output.
+    fn agent_last_failure(&self) -> Option<String> {
+        for lines in [&self.term_lines, &self.out_lines] {
+            let end = lines.iter().rposition(|l| l.kind == crate::term::LineKind::Status && l.err)?;
+            let start = lines[..end].iter().rposition(|l| l.kind == crate::term::LineKind::Cmd).unwrap_or(0);
+            let body: Vec<&str> = lines[start..=end].iter().map(|l| l.text.as_ref()).collect();
+            let tail = body.len().saturating_sub(60);
+            return Some(body[tail..].join("\n"));
+        }
+        None
+    }
+
+    /// Context blocks for a prompt: the chips that are on, memory, and the
+    /// one-time note that lets the agent save facts with `REMEMBER:`.
+    fn agent_context_blocks(&mut self, text: &str, cx: &mut Context<Self>) -> Vec<Value> {
+        let chips = self.agent_chips(cx);
+        let mut blocks = Vec::new();
+        let resource = |path: &Path, body: String| {
+            json!({ "type": "resource", "resource": { "uri": format!("file:///{}", path.to_string_lossy().replace('\\', "/")), "text": body, "mimeType": "text/plain" } })
+        };
+        for (key, _, _, on) in &chips {
+            if !on {
+                continue;
+            }
+            match key.as_str() {
+                "file" => {
+                    if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
+                        let body = d.editor.read(cx).value().to_string();
+                        if body.len() < 200_000 {
+                            blocks.push(resource(&d.path, body));
+                        }
+                    }
+                }
+                "sel" => {
+                    if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
+                        let ed = d.editor.read(cx);
+                        let r = ed.selected_range();
+                        let v = ed.value();
+                        let (a, b) = agent_ctx::line_span(&v, r.start, r.end);
+                        let sel = v.get(r.clone()).unwrap_or("").to_string();
+                        let rel = self.rel_path(&d.path.to_string_lossy());
+                        blocks.push(json!({ "type": "text", "text": format!(
+                            "The user selected lines {a}-{b} of {rel}; the question is most likely about this part:\n```{}\n{sel}\n```",
+                            agent_ctx::fence_lang(&d.path)
+                        ) }));
+                    }
+                }
+                "err" => {
+                    let mut t = String::from("The most recent error in FluxCode (the user is probably asking about it):\n");
+                    for p in &self.problems {
+                        t.push_str(&format!("- {} at {}:{}\n", p.message, self.rel_path(&p.path.to_string_lossy()), p.line));
+                    }
+                    if let Some(f) = self.agent_last_failure() {
+                        t.push_str(&format!("```\n{f}\n```\n"));
+                    }
+                    blocks.push(json!({ "type": "text", "text": t }));
+                }
+                "out" => {
+                    let n = self.term_lines.len();
+                    let tail: Vec<&str> = self.term_lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
+                    blocks.push(json!({ "type": "text", "text": format!("Recent terminal output:\n```\n{}\n```", tail.join("\n")) }));
+                }
+                k if k.starts_with('@') => {
+                    if let Some(root) = &self.root {
+                        let p = root.join(&k[1..]);
+                        if p.is_file() {
+                            if let Ok(f) = core::read_text(&p) {
+                                if f.text.len() < 200_000 {
+                                    blocks.push(resource(&p, f.text));
+                                }
+                            }
+                        } else if p.is_dir() {
+                            let names: Vec<String> = std::fs::read_dir(&p)
+                                .map(|rd| rd.flatten().take(200).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                                .unwrap_or_default();
+                            blocks.push(json!({ "type": "text", "text": format!("Contents of the folder {}:\n{}", &k[1..], names.join("\n")) }));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Memory: the few trails that match this question (P = tau * eta^2).
+        let file = self.active.map(|ix| self.docs[ix].name.to_string()).unwrap_or_default();
+        let trails = memory::Store::default().recall(&format!("{text} {file}"), 4, Some(&self.memory_scope()));
+        self.agent.turn_memories = trails.iter().map(|t| t.id.clone()).collect();
+        if !trails.is_empty() {
+            let list: Vec<String> = trails.iter().map(|t| format!("- {}", t.content)).collect();
+            blocks.push(json!({ "type": "text", "text": format!(
+                "Notes from earlier sessions (FluxCode memory, may be outdated; ignore them if they don't fit):\n{}",
+                list.join("\n")
+            ) }));
+            self.agent.items.push(Item::Note(format!("Used {} note{} from memory", trails.len(), if trails.len() == 1 { "" } else { "s" }), false));
+        }
+        if !self.agent.hinted {
+            self.agent.hinted = true;
+            blocks.push(json!({ "type": "text", "text":
+                "FluxCode note: answer in the language the user writes in. When you learn a lasting fact about this project \
+                 (how to run, test or deploy it, a convention, a decision), end your reply with one line `REMEMBER: <fact>`. \
+                 FluxCode saves it to the user's memory and hides the line." }));
+        }
+        blocks
+    }
+
+    pub(crate) fn memory_scope(&self) -> String {
+        let name = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        format!("project:{name}")
+    }
+
+    /// `REMEMBER:` lines at the end of the last answer go to memory and out of the text.
+    fn agent_take_remembers(&mut self) {
+        let Some(ix) = self.agent.items.iter().rposition(|i| matches!(i, Item::Text(_))) else { return };
+        let Item::Text(t) = &self.agent.items[ix] else { return };
+        let (kept, facts) = memory::take_remember_lines(t);
+        if facts.is_empty() {
+            return;
+        }
+        self.agent.items[ix] = Item::Text(kept);
+        let store = memory::Store::default();
+        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
+        for f in facts {
+            if store.add(&f, &tags).is_ok() {
+                self.agent.items.push(Item::Saved(f));
+            }
+        }
+    }
+
+    /// Save a fact the user typed (`/remember ...` or the Memory view).
+    pub(crate) fn agent_remember(&mut self, text: &str, cx: &mut Context<Self>) {
+        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
+        match memory::Store::default().add(text, &tags) {
+            Ok(_) => {
+                self.agent.items.push(Item::Saved(text.trim().to_string()));
+                self.agent_refresh_memories();
+            }
+            Err(e) => self.agent.items.push(Item::Note(e, true)),
+        }
+        cx.notify();
+    }
+
+    fn agent_refresh_memories(&mut self) {
+        let scope = self.memory_scope();
+        self.agent.memories = memory::Store::default()
+            .list()
+            .into_iter()
+            .filter(|t| t.tags.iter().any(|x| *x == scope) || !t.tags.iter().any(|x| x.starts_with("project:")))
+            .collect();
+    }
+
+    // ------------------------------------------------------------ OpenCode / Mira sessions
+
+    fn agent_load_session(&mut self, id: String) {
+        let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+        self.agent.loading_id = Some(id.clone());
+        self.agent.status = Status::Starting;
+        self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": [] }));
+    }
+
+    /// Resume a session OpenCode (or Mira) saved: its history replays into the panel
+    /// and the next message continues it.
+    fn agent_open_remote(&mut self, id: String, cx: &mut Context<Self>) {
+        self.agent.save_chat();
+        self.agent.items.clear();
+        self.agent.chat_id = None;
+        self.agent.carry = None;
+        self.agent.show_history = false;
+        match self.agent.status {
+            Status::Ready if self.agent.proc_id.is_some() => {
+                if self.agent.can_load {
+                    self.agent_load_session(id);
+                } else {
+                    self.agent.items.push(Item::Note(format!("{} can't reopen saved sessions.", agent_name()), true));
+                }
+            }
+            Status::Starting | Status::Busy => self.agent.items.push(Item::Note("Wait for the current answer, then open the session again.".into(), true)),
+            _ => {
+                self.agent.pending_load = Some(id);
+                self.agent_start(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Read the harness's saved sessions for this folder (`<cli> session list --format json`), off the UI thread.
+    fn agent_load_remote_list(&mut self, cx: &mut Context<Self>) {
+        if self.agent.remote_state == 1 {
+            return;
+        }
+        let (Some(root), Some(mut cmd)) = (self.root.clone(), opencode_cmd()) else {
+            self.agent.remote_state = 2;
+            self.agent.remote_err = Some(format!("{} isn't installed, so its sessions can't be read.", agent_name()));
+            return;
+        };
+        let harness = agent_name();
+        cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
+        self.agent.remote_state = 1;
+        self.agent.remote_err = None;
+        cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_spawn(async move {
+                    let out = cmd.output().map_err(|e| e.to_string())?;
+                    agent_ctx::parse_session_list(&String::from_utf8_lossy(&out.stdout), harness)
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.agent.remote_state = 2;
+                match res {
+                    Ok(list) => this.agent.remote = list,
+                    Err(e) => this.agent.remote_err = Some(e),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    // ------------------------------------------------------------ code blocks
+
+    pub(crate) fn on_agent_insert_code(&mut self, _: &crate::workbench::AgentInsertCode, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(code) = PENDING_INSERT.lock().ok().and_then(|mut p| p.take()) else { return };
+        match self.active.filter(|ix| self.docs[*ix].image.is_none()) {
+            Some(ix) => {
+                let name = self.docs[ix].name.clone();
+                let lines = code.lines().count();
+                self.docs[ix].editor.update(cx, |s, cx| s.replace(code, window, cx));
+                let h = self.docs[ix].editor.focus_handle(cx);
+                h.focus(window, cx);
+                self.status = format!("Inserted {lines} line{} into {name}", if lines == 1 { "" } else { "s" }).into();
+            }
+            None => {
+                cx.write_to_clipboard(ClipboardItem::new_string(code));
+                self.status = "No file is open: the code was copied instead".into();
+            }
+        }
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------ render
+
+    fn render_memory(&self, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().gap_1().overflow_y_scroll();
+        if a.memories.is_empty() {
+            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(
+                "Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help.",
+            ));
+        }
+        for (i, t) in a.memories.iter().enumerate() {
+            let id = t.id.clone();
+            let strength = (t.tau / 2.0).clamp(0.04, 1.0) as f32;
+            let scope = if t.tags.iter().any(|x| x.starts_with("project:")) { "this project" } else { "all projects" };
+            list = list.child(
+                v_flex()
+                    .id(("ag-mem", i))
+                    .px_2()
+                    .py_1p5()
+                    .gap_1()
+                    .rounded(px(4.))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(div().text_xs().text_color(c(theme::FG)).child(t.content.clone()))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(div().w(theme::u(48.)).h(px(3.)).rounded_full().bg(c(theme::BORDER)).child(
+                                div().h_full().rounded_full().w(relative(strength)).bg(c(theme::ACCENT_TEXT)),
+                            ))
+                            .child(format!("{:.2} · {} · used {}×", t.tau, scope, t.success))
+                            .child(div().flex_1())
+                            .child(Button::new(("ag-mem-del", i)).icon(IconName::Delete).ghost().xsmall().tooltip("Forget (moves it to the archive)").on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    let _ = memory::Store::default().forget(&id);
+                                    this.agent_refresh_memories();
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            );
+        }
+        v_flex()
+            .size_full()
+            .child(div().px_3().pb_2().child(Input::new(&a.memory_input).small()))
+            .child(list)
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(format!("Stored in {} (shared with ant_memory.py)", memory::dir().join("trails.json").display())),
+            )
+            .into_any_element()
+    }
+
+    fn render_remote_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let name = agent_name();
+        let mut v = v_flex().gap_px().child(
+            div()
+                .px_2()
+                .pt_3()
+                .pb_1()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(format!("{} SESSIONS IN THIS FOLDER", name.to_uppercase())),
+        );
+        if a.remote_state == 1 {
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("Reading {name}'s sessions…")));
+        }
+        if let Some(e) = &a.remote_err {
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(e.clone()));
+        }
+        if a.remote_state == 2 && a.remote.is_empty() && a.remote_err.is_none() {
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{name} has no saved sessions for this folder.")));
+        }
+        for (i, s) in a.remote.iter().enumerate() {
+            let id = s.id.clone();
+            let current = a.session.as_deref() == Some(s.id.as_str());
+            v = v.child(
+                h_flex()
+                    .id(("ag-remote", i))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .gap_2()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(current, |d| d.bg(c(theme::SELECT)))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(Icon::new(IconName::Bot).size(theme::u(14.)).text_color(c(theme::FG_DIM)))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().truncate().text_color(c(theme::FG_STRONG)).child(s.title.clone()))
+                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(format!("{} · {}", s.harness, ago(s.updated)))),
+                    )
+                    .when(current, |h| h.child(div().text_xs().text_color(c(theme::GREEN)).child("open")))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Resume this session here").build(w, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| this.agent_open_remote(id.clone(), cx))),
+            );
+        }
+        v.into_any_element()
+    }
+
+    fn render_context_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let chips = self.agent_chips(cx);
+        h_flex().px_3().pb_1().gap_1().flex_wrap().children(chips.into_iter().enumerate().map(|(i, (key, label, icon, on))| {
+            h_flex()
+                .id(("ag-chip", i))
+                .max_w(theme::u(200.))
+                .h(theme::u(20.))
+                .px_1p5()
+                .gap_1()
+                .rounded(px(4.))
+                .border_1()
+                .cursor_pointer()
+                .text_xs()
+                .border_color(c(if on { theme::BORDER_STRONG } else { theme::BORDER }))
+                .bg(if on { c(theme::BG_ELEVATED) } else { gpui_kit::transparent_black() })
+                .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
+                .hover(|s| s.border_color(c(theme::FG_DIM)))
+                .child(icon.size(theme::u(12.)))
+                .child(div().truncate().when(!on, |d| d.line_through()).child(label))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(if on { "Sent with your message. Click to leave it out" } else { "Left out. Click to send it" })
+                        .build(w, cx)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.agent.off_ctx.remove(&key) {
+                        this.agent.off_ctx.insert(key.clone());
+                    }
+                    cx.notify();
+                }))
+        }))
+    }
+
+    fn render_mention_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, hits, sel) = self.agent.mention.as_ref()?;
+        let mut list = v_flex()
+            .mx_3()
+            .mb_1()
+            .py_1()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
+            .shadow_md();
+        if hits.is_empty() {
+            list = list.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child("No file matches"));
+        }
+        for (row, &ix) in hits.iter().enumerate() {
+            let rel = self.rel_path(&self.all_files[ix]);
+            let (dir, name) = match rel.rfind(['\\', '/']) {
+                Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
+                None => (String::new(), rel.clone()),
+            };
+            let (icon, tint) = crate::files::icon_for(&name);
+            list = list.child(
+                h_flex()
+                    .id(("ag-mention", row))
+                    .mx_1()
+                    .px_2()
+                    .h(theme::u(22.))
+                    .gap_2()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(row == *sel, |d| d.bg(c(theme::SELECT)))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
+                    .child(div().flex_none().text_xs().text_color(c(theme::FG_STRONG)).child(name))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        if let Some(m) = this.agent.mention.as_mut() {
+                            m.2 = row;
+                        }
+                        this.agent_mention_accept(w, cx);
+                    })),
+            );
+        }
+        Some(list.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child("↑↓ choose · Tab or Enter adds · Esc closes")).into_any_element())
+    }
+
     pub(crate) fn render_agent(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let (dot, label) = match &a.status {
             Status::Off => (theme::FG_DIM, "Off".to_string()),
+            Status::Starting if a.loading_id.is_some() => (theme::FG_MUTED, "Opening the session…".into()),
             Status::Starting => (theme::FG_MUTED, "Starting…".into()),
             Status::Ready => (theme::GREEN, "Ready".into()),
             Status::Busy => (theme::BLUE, "Working…".into()),
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
-        // The header holds the switch and tools; here only a short line while it is
-        // starting or working (with Stop), so the chat keeps the room.
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
         let header = h_flex()
             .px_3()
@@ -923,20 +1575,23 @@ impl Workbench {
                         h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
                     })
             });
+        if a.show_memory {
+            return v_flex().size_full().child(self.render_memory(cx)).into_any_element();
+        }
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
         }
 
+        let name = agent_name();
         let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
-            let name = agent_name();
             let missing = name == "Mira" && !mira_installed();
             let hint = if missing {
                 "Mira (omm) isn't installed on this PC yet. Pick OpenCode in the title menu for now.".to_string()
             } else if on {
-                "It can read the file you have open. Check its edits before you keep them.".to_string()
+                "Type @ to add a file. Your open file, selection and last error go along when they help.".to_string()
             } else {
-                "Off for now. Your first message turns it on.".to_string()
+                "Off for now. Your first message turns it on. Type @ to add a file.".to_string()
             };
             log = log.child(
                 v_flex()
@@ -946,7 +1601,7 @@ impl Workbench {
                     .justify_center()
                     .gap_2()
                     .px_4()
-                    .child(gpui_kit::component::Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
+                    .child(Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
                     .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("Ask {name}")))
                     .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint)),
             );
@@ -954,61 +1609,161 @@ impl Workbench {
         if let Status::Error(e) = &a.status {
             log = log.child(div().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
         }
+        // The agent's name heads each answer, like a chat: after every user message.
+        let speaker = |who: &str, icon: Icon| {
+            h_flex()
+                .pt_1()
+                .gap_1p5()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(icon.size(theme::u(13.)))
+                .child(who.to_string())
+        };
+        let mut after_user = true;
         for (i, item) in a.items.iter().enumerate() {
+            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_));
+            if starts_answer {
+                log = log.child(speaker(name, Icon::new(IconName::Bot)));
+                after_user = false;
+            }
             log = log.child(match item {
-                Item::User(t) => div()
-                    .p_2()
-                    .rounded(px(6.))
-                    .bg(c(theme::BG_ELEVATED))
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG))
+                Item::User(t) => {
+                    after_user = true;
+                    v_flex()
+                        .items_end()
+                        .gap_1()
+                        .pt_1()
+                        .child(speaker("You", Icon::new(IconName::User)))
+                        .child(
+                            div()
+                                .max_w(relative(0.92))
+                                .px_2p5()
+                                .py_1p5()
+                                .rounded(px(8.))
+                                .bg(c(theme::BG_ELEVATED))
+                                .border_1()
+                                .border_color(c(theme::BORDER_STRONG))
+                                .text_sm()
+                                .text_color(c(theme::FG_STRONG))
+                                .child(t.clone()),
+                        )
+                        .into_any_element()
+                }
+                Item::Text(t) => TextView::markdown(("ag-md", i), t.clone())
                     .text_sm()
-                    .text_color(c(theme::FG_STRONG))
-                    .child(t.clone())
+                    .code_block_actions(|block, _, _| {
+                        let (copy, insert) = (block.code().to_string(), block.code().to_string());
+                        // A solid strip so the buttons never sit on top of the code.
+                        h_flex()
+                            .gap_px()
+                            .p_px()
+                            .rounded(px(4.))
+                            .bg(c(theme::BG_ELEVATED))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .child(
+                                Button::new("cb-copy")
+                                    .icon(IconName::Copy)
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Copy")
+                                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                            )
+                            .child(
+                                Button::new("cb-insert")
+                                    .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Insert at the cursor in the open file (replaces the selection)")
+                                    .on_click(move |_, w, cx| {
+                                        if let Ok(mut p) = PENDING_INSERT.lock() {
+                                            *p = Some(insert.clone());
+                                        }
+                                        w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
+                                    }),
+                            )
+                    })
                     .into_any_element(),
-                Item::Text(t) => TextView::markdown(("ag-md", i), t.clone()).text_sm().into_any_element(),
-                Item::Thought(t) => div()
+                Item::Thought(t) => h_flex()
+                    .gap_1p5()
+                    .items_start()
                     .text_xs()
                     .italic()
                     .text_color(c(theme::FG_DIM))
-                    .child(format!("Thinking: {}", t.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>()))
+                    .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
+                    .child(div().flex_1().min_w_0().line_clamp(2).child(t.chars().rev().take(240).collect::<Vec<_>>().into_iter().rev().collect::<String>()))
                     .into_any_element(),
-                Item::Tool { title, status, .. } => {
-                    let (mark, col) = match status.as_str() {
-                        "completed" => ("✓", theme::GREEN),
-                        "failed" => ("✕", theme::DANGER),
-                        "in_progress" => ("…", theme::BLUE),
-                        _ => ("•", theme::FG_DIM),
+                Item::Tool { title, status, kind, .. } => {
+                    let (state_icon, col): (Icon, theme::Tok) = match status.as_str() {
+                        "completed" => (Icon::new(IconName::CircleCheck), theme::GREEN),
+                        "failed" => (Icon::new(IconName::CircleX), theme::DANGER),
+                        "in_progress" => (Icon::new(IconName::LoaderCircle), theme::BLUE),
+                        _ => (Icon::new(IconName::Dash), theme::FG_DIM),
+                    };
+                    let kind_icon: Icon = match kind.as_str() {
+                        "read" => Icon::new(IconName::FileText),
+                        "edit" => Icon::new(gpui_kit::assets::IconName::Pencil),
+                        "delete" => Icon::new(IconName::Delete),
+                        "move" => Icon::new(IconName::ArrowRight),
+                        "search" => Icon::new(IconName::Search),
+                        "execute" => Icon::new(IconName::SquareTerminal),
+                        "fetch" => Icon::new(IconName::Globe),
+                        "think" => Icon::new(gpui_kit::assets::IconName::Brain),
+                        _ => Icon::new(IconName::Settings2),
                     };
                     h_flex()
                         .gap_2()
                         .px_2()
-                        .py_1()
+                        .h(theme::u(24.))
                         .rounded(px(4.))
                         .bg(c(theme::BG_ELEVATED))
                         .border_1()
                         .border_color(c(theme::BORDER))
                         .text_xs()
-                        .child(div().text_color(c(col)).child(mark))
-                        .child(div().truncate().text_color(c(theme::FG)).child(title.clone()))
+                        .child(kind_icon.size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
+                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(title.clone()))
+                        .child(state_icon.size(theme::u(13.)).text_color(c(col)))
                         .into_any_element()
                 }
                 Item::Plan(entries) => v_flex()
                     .gap_1()
+                    .p_2()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(c(theme::BORDER))
                     .text_xs()
                     .children(entries.iter().map(|(t, st)| {
-                        let mark = match st.as_str() {
-                            "completed" => "☑",
-                            "in_progress" => "▶",
-                            _ => "☐",
+                        let (icon, col) = match st.as_str() {
+                            "completed" => (IconName::CircleCheck, theme::GREEN),
+                            "in_progress" => (IconName::LoaderCircle, theme::BLUE),
+                            _ => (IconName::Dash, theme::FG_DIM),
                         };
-                        div().text_color(c(theme::FG_MUTED)).child(format!("{mark} {t}"))
+                        h_flex()
+                            .gap_1p5()
+                            .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
+                            .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
                     }))
                     .into_any_element(),
-                Item::Note(t, err) => div()
+                Item::Note(t, err) => h_flex()
+                    .items_start()
+                    .gap_1p5()
                     .text_xs()
                     .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
-                    .child(t.clone())
+                    .child(Icon::new(if *err { IconName::CircleX } else { IconName::Info }).size(theme::u(12.)).flex_none())
+                    .child(div().flex_1().min_w_0().child(t.clone()))
+                    .into_any_element(),
+                Item::Saved(t) => h_flex()
+                    .gap_1p5()
+                    .items_start()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(4.))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)).flex_none())
+                    .child(div().flex_1().min_w_0().child(format!("Saved to memory: {t}")))
                     .into_any_element(),
             });
         }
@@ -1048,6 +1803,7 @@ impl Workbench {
                         .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(format!("{} file(s) changed by the agent", a.changes.len())))
                         .child(Button::new("ag-keep-all").label("Keep all").xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
+                            this.agent_reinforce_turn();
                             cx.notify();
                         }))),
                 )
@@ -1068,19 +1824,50 @@ impl Workbench {
                             if i < this.agent.changes.len() {
                                 this.agent.changes.remove(i);
                             }
+                            this.agent_reinforce_turn();
                             cx.notify();
                         })))
                         .child(Button::new(("ag-undo", i)).label("Undo").xsmall().on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx))))
                 }))
         });
 
+        let busy = a.status == Status::Busy;
         v_flex()
             .size_full()
             .child(header)
             .child(log)
             .when_some(permission, |v, p| v.child(p))
             .when_some(changes, |v, ch| v.child(ch))
-            .child(div().p_3().child(Input::new(&a.input).small()))
+            .children(self.render_mention_popup(cx))
+            .child(self.render_context_row(cx))
+            .child(
+                h_flex()
+                    .px_3()
+                    .pb_3()
+                    .gap_1()
+                    .child(div().flex_1().key_context("AgentInput").child(Input::new(&a.input).small()))
+                    .child(
+                        Button::new("ag-send")
+                            .icon(IconName::ArrowUp)
+                            .small()
+                            .when(!busy, |b| b.primary())
+                            .disabled(busy)
+                            .tooltip("Send (Enter)")
+                            .on_click(cx.listener(|this, _, w, cx| this.agent_send(w, cx))),
+                    ),
+            )
             .into_any_element()
     }
+
+    /// The memories used in this turn helped (the user kept the changes).
+    fn agent_reinforce_turn(&mut self) {
+        let store = memory::Store::default();
+        for id in std::mem::take(&mut self.agent.turn_memories) {
+            let _ = store.reinforce(&id);
+        }
+    }
 }
+
+/// Code from an answer's Insert button, handed to `on_agent_insert_code` (the
+/// button's closure can't hold the workbench, so it goes through an action).
+static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);

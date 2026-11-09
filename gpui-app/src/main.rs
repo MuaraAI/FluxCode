@@ -6,12 +6,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod agent_ctx;
 mod complete;
 mod core;
 mod explorer;
 mod files;
 mod github;
 mod panel;
+mod memory;
 mod preview;
 mod preview_ui;
 mod proc;

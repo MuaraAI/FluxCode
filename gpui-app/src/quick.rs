@@ -50,6 +50,17 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
         prev = Some(pos);
         at = pos + 1;
     }
+    // Typed text found whole beats letters scattered along the path: name starts
+    // with it, name contains it, path contains it.
+    let name = &p[name_start..];
+    let contains = |hay: &[u8]| hay.windows(q.len()).any(|w| w == q);
+    if name.starts_with(q) {
+        score += 100;
+    } else if contains(name) {
+        score += 60;
+    } else if contains(p) {
+        score += 25;
+    }
     Some(score * 10 - p.len() as i32)
 }
 
@@ -240,5 +251,8 @@ mod tests {
         assert!(fuzzy("apy", "app.py").is_some());
         assert!(fuzzy("zz", "app.py").is_none());
         assert!(fuzzy("req", "requirements.txt").unwrap() > fuzzy("req", "src\\query\\r.txt").unwrap_or(i32::MIN));
+        // whole word in the name beats letters spread over a long path
+        assert!(fuzzy("rea", "readme.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
+        assert!(fuzzy("rea", "docs\\area.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
     }
 }

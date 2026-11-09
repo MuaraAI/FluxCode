@@ -35,7 +35,8 @@ actions!(
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentUseMira
+        AgentUseOpenCode, AgentUseMira, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentInsertCode
     ]
 );
 
@@ -58,6 +59,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
         KeyBinding::new("down", QuickDown, Some("QuickOpen > Input")),
         KeyBinding::new("escape", QuickClose, Some("QuickOpen > Input")),
+        // Agent input: the @file list.
+        KeyBinding::new("up", AgentMentionUp, Some("AgentInput > Input")),
+        KeyBinding::new("down", AgentMentionDown, Some("AgentInput > Input")),
+        KeyBinding::new("tab", AgentMentionAccept, Some("AgentInput > Input")),
+        KeyBinding::new("escape", AgentMentionClose, Some("AgentInput > Input")),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
@@ -1619,6 +1625,11 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_quick_down))
             .on_action(cx.listener(Self::on_agent_use_opencode))
             .on_action(cx.listener(Self::on_agent_use_mira))
+            .on_action(cx.listener(Self::on_agent_mention_up))
+            .on_action(cx.listener(Self::on_agent_mention_down))
+            .on_action(cx.listener(Self::on_agent_mention_accept))
+            .on_action(cx.listener(Self::on_agent_mention_close))
+            .on_action(cx.listener(Self::on_agent_insert_code))
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))

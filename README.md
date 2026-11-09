@@ -287,7 +287,24 @@ The GPUI terminal is tuned for Python:
 OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
 its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
 MuaraAI's `omm` (Mira) harness is installed, the panel uses it instead of OpenCode
-(both speak ACP; the panel is then titled MIRA).
+(both speak ACP); the title menu switches between them.
+
+The agent panel:
+
+- `@file` (or `@folder`) adds files to a message, with a fuzzy file list (Up/Down, Tab or
+  Enter). Chips above the input show what goes along with the message: the open file, the
+  selection, the last error (when the message is about an error), terminal output (when it
+  mentions the output), and each `@file`. Click a chip to leave it out.
+- Answers render as Markdown; code blocks have Copy and Insert (at the cursor in the open
+  file). Tool calls show what kind they are (read, edit, search, run, web) and their state.
+- History lists FluxCode's own chats and the sessions OpenCode (or Mira) saved for the open
+  folder. Opening one resumes it in place (ACP `session/load`), with its history replayed.
+- Memory is a native port of [AoC Memory](https://github.com/MyKineID/aoc-memory-for-ai-agent):
+  notes strengthen when they help and fade when unused, recalled by `P = tau * eta^2`. The
+  agent saves facts with a final `REMEMBER: ...` line; you can add them with `/remember ...`
+  or in the Memory view. Keeping the agent's changes reinforces the notes it used; Undo
+  weakens them. The store is `~/.ant-memory/trails.json` (or `ANT_MEMORY_DIR`), shared with
+  `ant_memory.py`.
 
 **Source Control** (`Ctrl+Shift+G`), modeled on VS Code's git extension but lighter: one
 `git status --porcelain=v2 --branch -z` call per refresh gives the files, branch and

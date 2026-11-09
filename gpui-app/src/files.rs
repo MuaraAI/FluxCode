@@ -193,5 +193,7 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     File, FileCode, FileBraces, FileText, FileImage, FileLock, FileCog, FileTerminal, FileArchive,
     FileMusic, FileVideoCamera, FileType, FileSpreadsheet, FileKey, FolderGit, Clock,
     // Source Control
-    GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2
+    GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2,
+    // Agent panel
+    TextCursorInput, Brain, Pencil, AtSign
 ]);
