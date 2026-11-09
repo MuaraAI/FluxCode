@@ -17,6 +17,16 @@ pub struct Node {
     children: Option<Vec<Node>>,
 }
 
+/// Every leaf of a scan (files, and skipped folders listed without children).
+pub fn flatten(nodes: &[Node], out: &mut Vec<String>) {
+    for n in nodes {
+        match &n.children {
+            Some(ch) => flatten(ch, out),
+            None => out.push(n.id.clone()),
+        }
+    }
+}
+
 pub fn scan(root: &Path) -> Vec<Node> {
     let mut budget = MAX_ENTRIES;
     walk(root, &mut budget)

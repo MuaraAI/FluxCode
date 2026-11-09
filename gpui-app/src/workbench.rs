@@ -34,7 +34,8 @@ actions!(
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
-        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub
+        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
+        AgentUseOpenCode, AgentUseMira
     ]
 );
 
@@ -53,6 +54,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
+        KeyBinding::new("ctrl-p", QuickOpenFile, None),
+        KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
+        KeyBinding::new("down", QuickDown, Some("QuickOpen > Input")),
+        KeyBinding::new("escape", QuickClose, Some("QuickOpen > Input")),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
@@ -146,6 +151,11 @@ pub struct Workbench {
     pub(crate) sidebar_open: bool,
     /// The OpenCode chat docked on the right is showing (settings.agent_right).
     pub(crate) agent_open: bool,
+    /// Widths of the side bar and that dock (logical px), and which edge is being
+    /// dragged: 0 none, 1 side bar, 2 dock.
+    pub(crate) agent_width: f32,
+    pub(crate) sidebar_width: f32,
+    pub(crate) resizing: u8,
     pub(crate) focus: FocusHandle,
     pub(crate) status: SharedString,
     pub(crate) settings: crate::settings::Settings,
@@ -189,6 +199,9 @@ pub struct Workbench {
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
+    pub(crate) quick: crate::quick::QuickOpen,
+    /// Every file of the open folder (from the explorer's scan), for Go to File.
+    pub(crate) all_files: Rc<Vec<String>>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -246,10 +259,13 @@ impl Workbench {
         .detach();
 
         let settings = crate::settings::Settings::load();
+        crate::agent::set_choice(&settings.agent_cli);
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
         subs.push(scm_sub);
+        let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
+        subs.push(quick_sub);
         // Like VS Code: re-read git state when the window comes back to the front.
         subs.push(cx.observe_window_activation(window, |this, window, cx| {
             // Alt-Tab back and forth should not start a git process each time.
@@ -267,6 +283,9 @@ impl Workbench {
             view: SideView::Explorer,
             sidebar_open: true,
             agent_open: false,
+            agent_width: 380.,
+            sidebar_width: 260.,
+            resizing: 0,
             focus,
             status: SharedString::default(),
             settings,
@@ -303,6 +322,8 @@ impl Workbench {
             python_version: None,
             agent,
             scm,
+            quick,
+            all_files: Rc::default(),
             preview_server: None,
             github: crate::github::load(),
             github_input,
@@ -353,10 +374,14 @@ impl Workbench {
         // Walk the folder off the UI thread, then hand the items to the tree.
         cx.spawn(async move |this, cx| {
             let nodes = cx.background_spawn(async move { files::scan(&root) }).await;
+            let mut flat = Vec::new();
+            files::flatten(&nodes, &mut flat);
             let mut dirs = std::collections::HashSet::new();
             let items = files::to_items(nodes, &mut dirs);
+            let all = crate::quick::file_list(flat, &dirs);
             _ = tree.update(cx, |state, cx| state.set_items(items, cx));
             _ = this.update(cx, |this, cx| {
+                this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
                 cx.notify();
             });
@@ -690,92 +715,150 @@ impl Workbench {
             .dropdown_menu(move |menu, _, _| items(menu.min_w(px(220.))))
     }
 
-    fn render_title_bar(&self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let folder = self
             .root
             .as_deref()
             .and_then(Path::file_name)
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "no folder open".into());
-        TitleBar::new().child(
-            h_flex()
-                .w_full()
-                .pr_2()
+            .map(|n| n.to_string_lossy().into_owned());
+        // Empty parts of the bar move the window (double-click maximizes). See wintitle.rs
+        // for why this is done by hand on Windows.
+        let drag = |id: &'static str| {
+            div().id(id).flex_1().h_full().min_w(px(8.)).on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
+                if cfg!(windows) {
+                    if ev.click_count >= 2 {
+                        window.zoom_window();
+                    } else {
+                        crate::wintitle::begin_move();
+                    }
+                }
+            })
+        };
+        // The search box in the middle: Go to File, like VS Code's command center.
+        let label = match &folder {
+            Some(f) => format!("Search files in {f}"),
+            None => "Open a folder to search its files".to_string(),
+        };
+        let center = h_flex()
+            .id("cmd-center")
+            .flex_shrink_1()
+            .min_w(px(0.))
+            .w(theme::u(420.))
+            .h(theme::u(24.))
+            .px_2()
+            .gap_2()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .bg(c(theme::BG_SIDE))
+            .border_1()
+            .border_color(c(theme::BORDER))
+            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Go to File (Ctrl+P)").build(w, cx))
+            .on_click(cx.listener(|this, _, w, cx| this.on_quick_open(&QuickOpenFile, w, cx)))
+            .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
+            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
+            .child(div().flex_none().text_color(c(theme::FG_DIM)).child("Ctrl+P"));
+        let row = h_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .pl_3()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(c(theme::FG_MUTED))
+            .child(div().mr_2().flex_none().text_sm().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child("FluxCode"))
+            .child(Self::render_menu("m-file", "File", |m| {
+                m.menu("Go to File...", Box::new(QuickOpenFile))
+                    .menu("Open File...", Box::new(OpenFile))
+                    .menu("Open Folder...", Box::new(OpenFolder))
+                    .separator()
+                    .menu("New File...", Box::new(ExplorerNewFile))
+                    .menu("New Folder...", Box::new(ExplorerNewFolder))
+                    .separator()
+                    .menu("Save", Box::new(Save))
+                    .menu("Save All", Box::new(SaveAll))
+                    .separator()
+                    .menu("Settings", Box::new(ShowSettings))
+                    .separator()
+                    .menu("Close Editor", Box::new(CloseTab))
+                    .menu("Exit", Box::new(Quit))
+            }))
+            .child(Self::render_menu("m-edit", "Edit", |m| {
+                m.menu("Undo", Box::new(gpui_kit::component::input::Undo))
+                    .menu("Redo", Box::new(gpui_kit::component::input::Redo))
+                    .separator()
+                    .menu("Cut", Box::new(gpui_kit::component::input::Cut))
+                    .menu("Copy", Box::new(gpui_kit::component::input::Copy))
+                    .menu("Paste", Box::new(gpui_kit::component::input::Paste))
+                    .separator()
+                    .menu("Find", Box::new(gpui_kit::component::input::Search))
+                    .menu("Find in Files", Box::new(FindInFiles))
+            }))
+            .child(Self::render_menu("m-view", "View", |m| {
+                m.menu("Explorer", Box::new(ShowExplorer))
+                    .menu("Search", Box::new(FindInFiles))
+                    .menu("Source Control", Box::new(ScmShow))
+                    .menu("Run", Box::new(ShowRun))
+                    .menu("AI Agent", Box::new(ShowAgent))
+                    .separator()
+                    .menu("Toggle Sidebar", Box::new(ToggleSidebar))
+                    .menu("Toggle Panel", Box::new(TogglePanel))
+                    .menu("Output", Box::new(ShowOutput))
+            }))
+            .child(Self::render_menu("m-run", "Run", |m| {
+                m.menu("Run File", Box::new(RunFile))
+                    .menu("Stop", Box::new(StopRun))
+                    .separator()
+                    .menu("Live Preview", Box::new(TogglePreview))
+            }))
+            .child(Self::render_menu("m-term", "Terminal", |m| m.menu("Toggle Terminal", Box::new(ToggleTerminal))))
+            .child(Self::render_menu("m-help", "Help", |m| {
+                m.menu("Next Color Theme", Box::new(NextTheme)).separator().menu("About FluxCode", Box::new(About))
+            }))
+            .child(drag("tb-drag-l"))
+            .child(center)
+            .child(drag("tb-drag-r"));
+        if !cfg!(windows) {
+            return TitleBar::new().child(row).into_any_element();
+        }
+        // Windows: our own min / max / close, as plain buttons (always clickable).
+        let maximized = window.is_maximized();
+        let ctl = |id: &'static str, icon: IconName, close: bool| {
+            div()
+                .id(id)
+                .w(px(46.))
+                .h_full()
+                .flex()
+                .flex_none()
                 .items_center()
-                .gap_1()
-                .text_xs()
+                .justify_center()
                 .text_color(c(theme::FG_MUTED))
-                .child(div().mr_2().text_sm().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child("FluxCode"))
-                .child(Self::render_menu("m-file", "File", |m| {
-                    m.menu("Open File...", Box::new(OpenFile))
-                        .menu("Open Folder...", Box::new(OpenFolder))
-                        .separator()
-                        .menu("New File...", Box::new(ExplorerNewFile))
-                        .menu("New Folder...", Box::new(ExplorerNewFolder))
-                        .separator()
-                        .menu("Save", Box::new(Save))
-                        .menu("Save All", Box::new(SaveAll))
-                        .separator()
-                        .menu("Settings", Box::new(ShowSettings))
-                        .separator()
-                        .menu("Close Editor", Box::new(CloseTab))
-                        .menu("Exit", Box::new(Quit))
-                }))
-                .child(Self::render_menu("m-edit", "Edit", |m| {
-                    m.menu("Undo", Box::new(gpui_kit::component::input::Undo))
-                        .menu("Redo", Box::new(gpui_kit::component::input::Redo))
-                        .separator()
-                        .menu("Cut", Box::new(gpui_kit::component::input::Cut))
-                        .menu("Copy", Box::new(gpui_kit::component::input::Copy))
-                        .menu("Paste", Box::new(gpui_kit::component::input::Paste))
-                        .separator()
-                        .menu("Find", Box::new(gpui_kit::component::input::Search))
-                        .menu("Find in Files", Box::new(FindInFiles))
-                }))
-                .child(Self::render_menu("m-view", "View", |m| {
-                    m.menu("Explorer", Box::new(ShowExplorer))
-                        .menu("Search", Box::new(FindInFiles))
-                        .menu("Run", Box::new(ShowRun))
-                        .menu("Source Control", Box::new(ScmShow))
-                        .menu("OpenCode", Box::new(ShowAgent))
-                        .separator()
-                        .menu("Toggle Sidebar", Box::new(ToggleSidebar))
-                        .menu("Toggle Panel", Box::new(TogglePanel))
-                        .menu("Output", Box::new(ShowOutput))
-                }))
-                .child(Self::render_menu("m-run", "Run", |m| {
-                    m.menu("Run File", Box::new(RunFile))
-                        .menu("Stop", Box::new(StopRun))
-                        .separator()
-                        .menu("Live Preview", Box::new(TogglePreview))
-                }))
-                .child(Self::render_menu("m-term", "Terminal", |m| {
-                    m.menu("Toggle Terminal", Box::new(ToggleTerminal))
-                }))
-                .child(Self::render_menu("m-help", "Help", |m| {
-                    m.menu("Next Color Theme", Box::new(NextTheme)).separator().menu("About FluxCode", Box::new(About))
-                }))
-                .child(div().flex_1())
-                .child(
-                    h_flex()
-                        .id("cmd-center")
-                        .w(theme::u(380.))
-                        .h(theme::u(24.))
-                        .px_2()
-                        .gap_2()
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .bg(c(theme::BG_SIDE))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
-                        .on_click(cx.listener(|this, _, w, cx| this.on_find_in_files(&FindInFiles, w, cx)))
-                        .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_1().text_color(c(theme::FG)).child(folder))
-                        .child(div().text_color(c(theme::FG_DIM)).child("Ctrl+Shift+F")),
-                )
-                .child(div().flex_1()),
-        )
+                .hover(move |s| {
+                    if close {
+                        s.bg(gpui_kit::Hsla::from(rgb(0xe81123))).text_color(gpui_kit::white())
+                    } else {
+                        s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))
+                    }
+                })
+                .child(Icon::new(icon).small())
+        };
+        h_flex()
+            .id("title-bar")
+            .w_full()
+            .h(theme::u(34.))
+            .flex_none()
+            .bg(c(theme::BG_TITLE))
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .child(row)
+            .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
+            .child(
+                ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
+                    .on_click(|_, w, _| w.zoom_window()),
+            )
+            .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+            .into_any_element()
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -872,14 +955,21 @@ impl Workbench {
             SideView::Scm => "SOURCE CONTROL",
             SideView::Agent => if crate::agent::agent_name() == "Mira" { "MIRA" } else { "OPENCODE" },
         };
+        // With a folder open the Explorer header names it, like VS Code's root row.
+        let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
+            (SideView::Explorer, Some(name)) => name.to_string_lossy().to_uppercase().into(),
+            _ => title.into(),
+        };
         let header = h_flex()
             .h(theme::u(35.))
             .pl_5()
             .pr_2()
             .gap_2()
             .flex_none()
-            .child(div().when(self.view != SideView::Agent, |d| d.flex_1()).text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
-            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_switch(cx)).child(div().flex_1()))
+            .when(self.view != SideView::Agent, |h| {
+                h.child(div().flex_1().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
+            })
+            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_picker()).child(self.render_agent_switch(cx)).child(div().flex_1()))
             .when(self.view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
             .when(self.view == SideView::Agent, |h| h.child(self.render_agent_tools(cx)))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
@@ -1179,6 +1269,12 @@ fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
         }))
 }
 
+/// A panel's content may not grow its slot: anything wider is clipped, so a long
+/// tab row or prompt can't push the next panel past the window edge.
+fn clip(e: AnyElement) -> AnyElement {
+    div().size_full().min_w_0().min_h_0().overflow_hidden().child(e).into_any_element()
+}
+
 /// Keep at most this many lines per panel.
 const MAX_LINES: usize = 10_000;
 
@@ -1252,31 +1348,57 @@ impl Render for Workbench {
         window.set_rem_size(theme::rem());
         let editor_view: AnyElement = match &self.preview {
             Some(_) => h_resizable("editor-preview-split")
-                .child(resizable_panel().child(self.render_editor_area(window, cx)))
+                .child(resizable_panel().child(clip(self.render_editor_area(window, cx))))
                 .child(resizable_panel().size(px(520.)).size_range(px(240.)..px(1400.)).child(self.render_preview(cx)))
                 .into_any_element(),
             None => self.render_editor_area(window, cx),
         };
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
-                .child(resizable_panel().child(editor_view))
-                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(self.render_panel(window, cx)))
+                .child(resizable_panel().child(clip(editor_view)))
+                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(self.render_panel(window, cx).into_any_element())))
                 .into_any_element()
         } else {
             editor_view
         };
+        // Side bar and right dock are fixed-width columns dragged by their inner edge;
+        // the editor in between takes what is left and never pushes them out.
+        let handle = |id: &'static str, which: u8, this: &Self, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .w(px(4.))
+                .h_full()
+                .flex_none()
+                .cursor_col_resize()
+                .hover(|s| s.bg(c(theme::ACCENT)))
+                .when(this.resizing == which, |d| d.bg(c(theme::ACCENT)))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                    this.resizing = which;
+                    cx.notify();
+                }))
+        };
         let center: AnyElement = if self.sidebar_open {
-            h_resizable("workbench-split")
-                .child(resizable_panel().size(px(260.)).size_range(px(160.)..px(600.)).child(self.render_side_bar(window, cx)))
-                .child(resizable_panel().child(editor_and_panel))
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(div().w(px(self.sidebar_width)).flex_none().h_full().overflow_hidden().child(self.render_side_bar(window, cx)))
+                .child(handle("sidebar-resize", 1, self, cx))
+                .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel))
                 .into_any_element()
         } else {
             editor_and_panel
         };
+        // The right dock is a fixed-width column (dragged by its left edge), so it always
+        // fits in the window: the editor side gives up the space, never the dock.
         let center: AnyElement = if self.settings.agent_right && self.agent_open {
-            h_resizable("agent-split")
-                .child(resizable_panel().child(center))
-                .child(resizable_panel().size(px(380.)).size_range(px(260.)..px(900.)).child(self.render_agent_dock(window, cx)))
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
+                .child(handle("agent-resize", 2, self, cx))
+                .child(div().w(px(self.agent_width)).flex_none().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)))
                 .into_any_element()
         } else {
             center
@@ -1305,6 +1427,28 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_term_escape))
             .on_action(cx.listener(Self::on_go_to_problem))
             .on_action(cx.listener(Self::on_scm_show))
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                let total = f32::from(window.viewport_size().width);
+                let x = f32::from(ev.position.x);
+                match this.resizing {
+                    1 => this.sidebar_width = (x - f32::from(theme::u(40.))).clamp(160., (total * 0.45).max(200.)),
+                    2 => this.agent_width = (total - x).clamp(260., (total * 0.6).max(300.)),
+                    _ => return,
+                }
+                cx.notify();
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.resizing != 0 {
+                    this.resizing = 0;
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_quick_close))
+            .on_action(cx.listener(Self::on_quick_up))
+            .on_action(cx.listener(Self::on_quick_down))
+            .on_action(cx.listener(Self::on_agent_use_opencode))
+            .on_action(cx.listener(Self::on_agent_use_mira))
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))
@@ -1348,5 +1492,6 @@ impl Render for Workbench {
             .child(self.render_title_bar(window, cx))
             .child(main)
             .child(self.render_status_bar(cx))
+            .when(self.quick.open, |v| v.child(self.render_quick_open(cx)))
     }
 }

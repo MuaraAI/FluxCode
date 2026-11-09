@@ -15,12 +15,14 @@ mod panel;
 mod preview;
 mod preview_ui;
 mod proc;
+mod quick;
 mod scm;
 mod search;
 mod settings;
 mod term;
 mod theme;
 mod ui;
+mod wintitle;
 mod workbench;
 
 use gpui_kit::component::TitleBar;

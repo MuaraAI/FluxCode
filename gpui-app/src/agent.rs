@@ -10,6 +10,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
+    menu::DropdownMenu,
     switch::Switch,
     text::TextView,
     v_flex, IconName, Sizable,
@@ -137,11 +138,32 @@ fn find_omm() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// Which harness the panel talks to: "Mira" (omm) when installed, else "OpenCode".
-/// Looked up once; both speak ACP over stdio (`<cli> acp`).
+/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 2 Mira.
+static CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_choice(cli: &str) {
+    let v = match cli {
+        "opencode" => 1,
+        "mira" => 2,
+        _ => 0,
+    };
+    CHOICE.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Is MuaraAI's `omm` (Mira) on this PC? Looked up once.
+pub fn mira_installed() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| find_omm().is_some())
+}
+
+/// Which harness the panel talks to. Both speak ACP over stdio (`<cli> acp`).
 pub fn agent_name() -> &'static str {
-    static NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    NAME.get_or_init(|| if find_omm().is_some() { "Mira" } else { "OpenCode" })
+    match CHOICE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => "OpenCode",
+        2 => "Mira",
+        _ if mira_installed() => "Mira",
+        _ => "OpenCode",
+    }
 }
 
 /// Where the OpenCode CLI lives (same search as the Tauri app).
@@ -173,7 +195,11 @@ fn find_opencode() -> Option<PathBuf> {
 }
 
 fn opencode_cmd() -> Option<std::process::Command> {
-    if let Some(exe) = find_omm().or_else(find_opencode) {
+    let exe = if agent_name() == "Mira" { find_omm() } else { find_opencode() };
+    if agent_name() == "Mira" {
+        return exe.map(|e| proc::command(e.to_string_lossy().as_ref()));
+    }
+    if let Some(exe) = exe {
         return Some(proc::command(exe.to_string_lossy().as_ref()));
     }
     if cfg!(windows)
@@ -275,7 +301,11 @@ impl Workbench {
             return;
         }
         let Some(mut cmd) = opencode_cmd() else {
-            self.agent.status = Status::Error("No agent found. Install Mira (`omm`, from MuaraAI) or OpenCode (`npm i -g opencode-ai`).".into());
+            self.agent.status = Status::Error(if agent_name() == "Mira" {
+                "Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.".into()
+            } else {
+                "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mira in the panel title menu.".into()
+            });
             cx.notify();
             return;
         };
@@ -659,6 +689,8 @@ impl Workbench {
     pub(crate) fn render_agent_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .bg(c(theme::BG_SIDE))
             .border_l_1()
             .border_color(c(theme::BORDER))
@@ -669,7 +701,7 @@ impl Workbench {
                     .pr_2()
                     .gap_1()
                     .flex_none()
-                    .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(agent_name().to_uppercase()))
+                    .child(self.render_agent_picker())
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
                     .child(self.render_agent_tools(cx))
@@ -680,6 +712,46 @@ impl Workbench {
             )
             .child(div().flex_1().min_h_0().child(self.render_agent(window, cx)))
             .into_any_element()
+    }
+
+    /// Switch the harness from the title menu. A running agent is stopped first.
+    fn agent_use(&mut self, cli: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.agent_cli == cli {
+            return;
+        }
+        self.agent.save_chat();
+        self.agent_stop(cx);
+        self.settings.agent_cli = cli.into();
+        self.settings.save();
+        set_choice(cli);
+        let name = agent_name();
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…"), window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn on_agent_use_opencode(&mut self, _: &crate::workbench::AgentUseOpenCode, w: &mut Window, cx: &mut Context<Self>) {
+        self.agent_use("opencode", w, cx);
+    }
+
+    pub(crate) fn on_agent_use_mira(&mut self, _: &crate::workbench::AgentUseMira, w: &mut Window, cx: &mut Context<Self>) {
+        self.agent_use("mira", w, cx);
+    }
+
+    /// The panel title: the harness name, which opens a menu to pick OpenCode or Mira.
+    pub(crate) fn render_agent_picker(&self) -> impl IntoElement {
+        let name = agent_name();
+        Button::new("ag-pick")
+            .label(name.to_uppercase())
+            .ghost()
+            .xsmall()
+            .dropdown_caret(true)
+            .tooltip("Choose the AI agent")
+            .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
+                let mira = if mira_installed() { "Mira (omm)" } else { "Mira (omm), not installed" };
+                m.min_w(px(220.))
+                    .menu_with_check("OpenCode", name == "OpenCode", Box::new(crate::workbench::AgentUseOpenCode))
+                    .menu_with_check(mira, name == "Mira", Box::new(crate::workbench::AgentUseMira))
+            })
     }
 
     /// The ON/OFF switch, shown right of the panel title.
@@ -856,16 +928,27 @@ impl Workbench {
         }
 
         let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
-        if a.items.is_empty() {
+        if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
+            let name = agent_name();
+            let missing = name == "Mira" && !mira_installed();
+            let hint = if missing {
+                "Mira (omm) isn't installed on this PC yet. Pick OpenCode in the title menu for now.".to_string()
+            } else if on {
+                "It can read the file you have open. Check its edits before you keep them.".to_string()
+            } else {
+                "Off for now. Your first message turns it on.".to_string()
+            };
             log = log.child(
-                div()
-                    .text_sm()
-                    .text_color(c(theme::FG_DIM))
-                    .child(if on {
-                        "Ask about the open file, or anything else.".to_string()
-                    } else {
-                        format!("{} is off. Type a message and it turns on by itself.", agent_name())
-                    }),
+                v_flex()
+                    .size_full()
+                    .min_h(theme::u(220.))
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .px_4()
+                    .child(gpui_kit::component::Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
+                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("Ask {name}")))
+                    .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint)),
             );
         }
         if let Status::Error(e) = &a.status {

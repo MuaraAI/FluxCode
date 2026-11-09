@@ -63,6 +63,8 @@ pub struct Settings {
     /// OpenCode docks on the right of the editor (like a chat beside the code)
     /// instead of in the left side bar.
     pub agent_right: bool,
+    /// Which agent harness the panel runs: "auto" (Mira when installed), "opencode" or "mira".
+    pub agent_cli: String,
 }
 
 impl Default for Settings {
@@ -80,6 +82,7 @@ impl Default for Settings {
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
             agent_right: true,
+            agent_cli: "auto".into(),
         }
     }
 }
