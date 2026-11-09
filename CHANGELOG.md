@@ -78,7 +78,7 @@ FluxCode is public, builds for Windows and Linux on every change, and updates it
   the folders holding most of them, each with **Ignore** (adds it to `.gitignore`).
   Tested with 2,801 files: the panel opens at once.
 - Status bar: Agent button with `Ctrl+L`; it lights up once on the first three launches.
-- Mira (`omm`) removed; settings that chose it now use Mura.
+- Mira (`omm`) removed; the panel runs OpenCode or Mura Harness.
 
 ## 0.9.0-dev (9 November 2026)
 
