@@ -122,7 +122,7 @@ pub struct Scm {
 
 impl Scm {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
-        let message = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Message (Enter to commit)")));
+        let message = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Commit message")));
         let sub = cx.subscribe_in(&message, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 this.scm_commit(After::Nothing, false, window, cx);
@@ -751,9 +751,11 @@ impl Workbench {
             // The whole repository path (the home folder as ~), so it is clear which one goes.
             let home = std::env::var("USERPROFILE").unwrap_or_default();
             let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
+            let full: SharedString = where_.clone().into();
             if !home.is_empty() && where_.starts_with(&home) {
                 where_ = format!("~{}", &where_[home.len()..]);
             }
+            let folder = s.repo.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             body = body.child(
                 v_flex()
                     .mx_3()
@@ -765,7 +767,15 @@ impl Workbench {
                     .border_color(c(theme::DANGER))
                     .bg(c(theme::BG_ELEVATED))
                     .text_xs()
-                    .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Remove Git from {0}?"; 0 => where_)))
+                    .child(div().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child(crate::trf!("Remove Git from {0}?"; 0 => folder)))
+                    .child(
+                        div()
+                            .id("scm-uninit-path")
+                            .truncate()
+                            .text_color(c(theme::FG_DIM))
+                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
+                            .child(where_),
+                    )
                     .child(div().text_color(c(theme::FG_MUTED)).child(tr("The .git folder (commits, branches, settings) goes to the Recycle Bin. Your files stay as they are.")))
                     .child(
                         h_flex()

@@ -433,7 +433,7 @@ for MinGW, the optional in-window preview).
 | Toggle Side Bar / Panel | `Ctrl+B` / `Ctrl+J` |
 | Settings / Color Theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 | Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
-| Open / close the agent panel (GPUI edition) | `Ctrl+L` |
+| Open / close the agent panel (GPUI edition) | `Ctrl+L` | (also the Agent button in the status bar)
 | Accept suggestion / expand Emmet / next snippet field | `Tab` |
 | Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
 | Run or Preview / Stop | `F5` / `Shift+F5` |

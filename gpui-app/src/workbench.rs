@@ -298,6 +298,11 @@ impl Workbench {
 
         let settings = crate::settings::Settings::load();
         crate::i18n::set(&settings.language);
+        let mut settings = settings;
+        if settings.agent_hint < AGENT_HINT_LAUNCHES {
+            settings.agent_hint += 1;
+            settings.save();
+        }
         crate::agent::set_choice(&settings.agent_cli);
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
@@ -859,6 +864,10 @@ impl Workbench {
 
     /// Ctrl+L: open the agent panel with the caret in its input, or close it.
     fn on_toggle_agent(&mut self, _: &ToggleAgent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.agent_hint < AGENT_HINT_DONE {
+            self.settings.agent_hint = AGENT_HINT_DONE;
+            self.settings.save();
+        }
         let open = if self.settings.agent_right { self.agent_open } else { self.sidebar_open && self.view == SideView::Agent };
         if !open {
             return self.on_show_agent(&ShowAgent, window, cx);
@@ -997,7 +1006,14 @@ impl Workbench {
             .border_color(c(theme::BORDER))
             .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Go to File (Ctrl+P)")).build(w, cx))
-            .on_click(cx.listener(|this, _, w, cx| this.on_quick_open(&QuickOpenFile, w, cx)))
+            // Opens on the press, and keeps the press from the title bar's drag area
+            // underneath: that area starts a Windows window-move on mouse-down, which
+            // delayed or swallowed the click (Ctrl+P never went through it).
+            .occlude()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| {
+                cx.stop_propagation();
+                this.on_quick_open(&QuickOpenFile, w, cx);
+            }))
             .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
             .child(div().flex_none().text_color(c(theme::FG_DIM)).child("Ctrl+P"));
@@ -1415,7 +1431,7 @@ impl Workbench {
                         .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
                         .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
                         .child(shortcut(tr("Run file"), "F5"))
-                        .child(shortcut(tr("OpenCode"), "Ctrl+Shift+A"))
+                        .child(shortcut(tr("AI agent"), "Ctrl+L"))
                         .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
                         .child(shortcut(tr("Settings"), "Ctrl+,")),
                 )
@@ -1516,6 +1532,7 @@ impl Workbench {
                 )
             })
             .child(div().px_2().flex_1().truncate().text_color(c(theme::FG)).child(self.status.clone()))
+            .child(self.render_agent_hint(cx))
             .when(!pos.is_empty(), |h| {
                 h.child(seg(pos.into())).when(!is_image, |h| h.child(seg(crlf.into())).child(seg("UTF-8".into()))).child(seg(lang.into()))
             })
@@ -1844,7 +1861,7 @@ impl Workbench {
         self.term_input.update(cx, |s, cx| s.set_placeholder(tr("Type a command (Tab completes, ↑ for history)"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
-        self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Message (Enter to commit)"), window, cx));
+        self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
         let name = crate::agent::agent_name();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
@@ -1997,5 +2014,54 @@ impl Workbench {
         target.set(point(cur.x + diff.x * k, cur.y + diff.y * k), cx);
         cx.notify();
         self.smooth_next_frame(window, cx);
+    }
+}
+
+/// The status bar's agent button highlights once at start on the first launches,
+/// until Ctrl+L has been used.
+const AGENT_HINT_LAUNCHES: u8 = 3;
+const AGENT_HINT_DONE: u8 = 100;
+
+impl Workbench {
+    /// "Agent  Ctrl+L" in the status bar: opens or closes the panel and teaches the
+    /// shortcut. On the first launches it lights up once (one 1.6 s fade, no loop).
+    fn render_agent_hint(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = if self.settings.agent_right { self.agent_open } else { self.sidebar_open && self.view == SideView::Agent };
+        let teach = self.settings.agent_hint <= AGENT_HINT_LAUNCHES && !open;
+        let chip = h_flex()
+            .id("sb-agent")
+            .h_full()
+            .px_2()
+            .gap_1p5()
+            .cursor_pointer()
+            .when(open, |h| h.text_color(c(theme::FG)))
+            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Open or close the AI agent (Ctrl+L)")).build(w, cx))
+            .on_click(cx.listener(|this, _, w, cx| this.on_toggle_agent(&ToggleAgent, w, cx)))
+            .child(Icon::new(IconName::Bot).size(theme::u(13.)))
+            .child(tr("Agent"))
+            .child(
+                div()
+                    .px_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .text_color(c(theme::FG_DIM))
+                    .child("Ctrl+L"),
+            );
+        if !teach {
+            return chip.into_any_element();
+        }
+        // One soft rise and fall of the accent behind it, then still.
+        let accent = c(theme::ACCENT);
+        chip.with_animation(
+            "sb-agent-hint",
+            Animation::new(std::time::Duration::from_millis(1600)).with_easing(ease_in_out),
+            move |el, t| {
+                let a = (t * std::f32::consts::PI).sin() * 0.35;
+                el.bg(accent.opacity(a))
+            },
+        )
+        .into_any_element()
     }
 }
