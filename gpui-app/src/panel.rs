@@ -7,6 +7,7 @@
 //! line (click to jump there; the line is also underlined in the editor), a hint
 //! in plain words and, when there is an obvious fix, a button that runs it.
 
+use crate::i18n::tr;
 use crate::proc::{self, python};
 use crate::term::{self, LineKind, PyError};
 use crate::theme::{self, c};
@@ -188,7 +189,7 @@ impl Workbench {
             Ok(p) if p.is_dir() => {
                 self.term_cwd = PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
             }
-            _ => push_line(&mut self.term_lines, &format!("No folder named '{arg}' here."), LineKind::Err),
+            _ => push_line(&mut self.term_lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err),
         }
     }
 
@@ -231,7 +232,7 @@ impl Workbench {
         if choices.len() > 1 {
             let shown: Vec<String> = choices.iter().take(40).cloned().collect();
             let more = choices.len().saturating_sub(40);
-            let text = if more > 0 { format!("{}   … {more} more", shown.join("   ")) } else { shown.join("   ") };
+            let text = if more > 0 { crate::trf!("{0}   … {more} more"; 0 => shown.join("   "), more => more) } else { shown.join("   ") };
             push_line(&mut self.term_lines, &text, LineKind::Dim);
             self.term_scroll.scroll_to_bottom();
             cx.notify();
@@ -263,7 +264,7 @@ impl Workbench {
     /// F5: run the active file and stream its output to the Output panel.
     pub(crate) fn on_run_file(&mut self, _: &RunFile, _: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else {
-            self.status = "Open a file to run it".into();
+            self.status = tr("Open a file to run it").into();
             cx.notify();
             return;
         };
@@ -277,7 +278,7 @@ impl Workbench {
         }
         let path = self.docs[ix].path.clone();
         let Some((program, args)) = run_command_for(&path, self.root.as_deref()) else {
-            self.status = format!("Don't know how to run {}", self.docs[ix].name).into();
+            self.status = crate::trf!("Don't know how to run {0}"; 0 => self.docs[ix].name).into();
             cx.notify();
             return;
         };
@@ -304,7 +305,7 @@ impl Workbench {
                 self.out_proc = Some(id);
                 self.out_run = Some(RunInfo { started: Instant::now(), block: self.out_lines.len(), python: program.clone(), cwd, command: shown.join(" ") });
             }
-            Err(e) => push_line(&mut self.out_lines, &format!("Couldn't start '{program}': {e}"), LineKind::Err),
+            Err(e) => push_line(&mut self.out_lines, &crate::trf!("Couldn't start '{program}': {e}"; program => program, e => e), LineKind::Err),
         }
         self.panel_open = true;
         self.panel_tab = PanelTab::Output;
@@ -337,7 +338,7 @@ impl Workbench {
         let took = run.as_ref().map(|r| term::elapsed(r.started.elapsed())).unwrap_or_default();
         let (text, ok) = match code {
             Some(0) => ("Finished".to_string(), true),
-            Some(c) => (format!("Failed (exit code {c})"), false),
+            Some(c) => (crate::trf!("Failed (exit code {c})"; c => c), false),
             None => ("Stopped".to_string(), false),
         };
         let mut status = Line::new(&text, LineKind::Status);
@@ -401,7 +402,7 @@ impl Workbench {
     /// Open `path` at `line` (from a traceback link or the status bar).
     pub(crate) fn open_location(&mut self, path: PathBuf, line: u32, col: u32, window: &mut Window, cx: &mut Context<Self>) {
         if !path.is_file() {
-            self.status = format!("{} doesn't exist", path.display()).into();
+            self.status = crate::trf!("{0} doesn't exist"; 0 => path.display()).into();
             cx.notify();
             return;
         }
@@ -438,7 +439,7 @@ impl Workbench {
         self.panel_tab = PanelTab::Terminal;
         if self.term_running() {
             self.set_term_input(command, window, cx);
-            self.status = "The terminal is busy: the fix is in the prompt, press Enter when it's free".into();
+            self.status = tr("The terminal is busy: the fix is in the prompt, press Enter when it's free").into();
             cx.notify();
             return;
         }
@@ -485,14 +486,14 @@ impl Workbench {
                 .child(div().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::MEDIUM).child(l.text.clone()))
                 .into_any_element(),
             LineKind::Fixed => base
-                .child(div().text_color(c(theme::BLUE)).child("↳ auto-corrected"))
+                .child(div().text_color(c(theme::BLUE)).child(tr("↳ auto-corrected")))
                 .child(text(&l.text, theme::FG_MUTED))
                 .into_any_element(),
             LineKind::Status => {
                 let (mark, col) = if l.err { ("✕", theme::DANGER) } else { ("✓", theme::GREEN) };
                 let took: SharedString = match (l.meta.is_empty(), l.err) {
                     (true, _) => "".into(),
-                    (false, false) => format!("in {}", l.meta).into(),
+                    (false, false) => crate::trf!("in {0}"; 0 => l.meta).into(),
                     (false, true) => format!("· {}", l.meta).into(),
                 };
                 base.child(div().text_color(c(col)).child(mark))
@@ -557,7 +558,7 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.88))
                             .child(Icon::new(IconName::Play).size(theme::u(12.)))
-                            .child("Fix")
+                            .child(tr("Fix"))
                             .on_click(cx.listener(move |this, _, w, cx| this.run_fix(&cmd, w, cx))),
                     )
                     .child(text(&l.text, theme::FG)),
@@ -652,8 +653,8 @@ impl Workbench {
             .px_3()
             .gap_4()
             .flex_none()
-            .child(tab("p-term", "TERMINAL", PanelTab::Terminal, self, cx))
-            .child(tab("p-out", "OUTPUT", PanelTab::Output, self, cx))
+            .child(tab("p-term", tr("TERMINAL"), PanelTab::Terminal, self, cx))
+            .child(tab("p-out", tr("OUTPUT"), PanelTab::Output, self, cx))
             .child(div().flex_1())
             .when_some(self.python_version.clone(), |h, v| {
                 h.child(
@@ -748,8 +749,8 @@ impl Workbench {
                         .gap_1()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .child("Run any command, for example  py app.py  or  pip install -r requirements.txt")
-                        .child("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you"),
+                        .child(tr("Run any command, for example  py app.py  or  pip install -r requirements.txt"))
+                        .child(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you")),
                 )
             })
             .child(list)
@@ -770,7 +771,7 @@ impl Workbench {
                         .text_size(theme::u(13.))
                         .when(busy, |h| {
                             h.child(div().size(px(6.)).rounded_full().bg(c(theme::BLUE)))
-                                .child(div().text_color(c(theme::BLUE)).child("running · input"))
+                                .child(div().text_color(c(theme::BLUE)).child(tr("running · input")))
                         })
                         .when(!busy, |h| {
                             h.when_some(venv, |h, v| {
@@ -793,7 +794,7 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
         let shown = file.strip_prefix(cwd).map(|p| p.display().to_string()).unwrap_or_else(|_| {
             file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
         });
-        head.meta = format!("{shown}, line {line}").into();
+        head.meta = crate::trf!("{shown}, line {line}"; shown => shown, line => line).into();
         head.link = Some((file.display().to_string().into(), line));
     }
     lines.push(head);

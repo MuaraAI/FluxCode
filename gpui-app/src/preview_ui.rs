@@ -1,5 +1,6 @@
 //! Live Preview panel (right of the editor).
 
+use crate::i18n::tr;
 use crate::preview::PreviewServer;
 #[allow(unused_imports)]
 use crate::theme::{self, c};
@@ -17,7 +18,7 @@ impl Workbench {
         }
         let file = self.active.map(|a| self.docs[a].path.clone());
         let Some(root) = self.root.clone().or_else(|| file.as_ref().and_then(|f| f.parent().map(|p| p.to_path_buf()))) else {
-            self.status = "Open a folder or an HTML file to preview it".into();
+            self.status = tr("Open a folder or an HTML file to preview it").into();
             cx.notify();
             return;
         };
@@ -25,7 +26,7 @@ impl Workbench {
             match PreviewServer::start(&root) {
                 Ok(s) => self.preview_server = Some(s),
                 Err(e) => {
-                    self.status = format!("Preview server failed: {e}").into();
+                    self.status = crate::trf!("Preview server failed: {e}"; e => e).into();
                     cx.notify();
                     return;
                 }
@@ -43,7 +44,7 @@ impl Workbench {
                     let entity = cx.new(|_| view);
                     self.preview = Some((entity, url));
                 }
-                Err(e) => self.status = format!("WebView2 is not available: {e}").into(),
+                Err(e) => self.status = crate::trf!("WebView2 is not available: {e}"; e => e).into(),
             }
         }
         // Default build: no WebView in the process at all. The page opens in the
@@ -52,7 +53,7 @@ impl Workbench {
         {
             let _ = window;
             cx.open_url(&url);
-            self.status = format!("Live Preview: {url} (reloads on save)").into();
+            self.status = crate::trf!("Live Preview: {url} (reloads on save)"; url => url).into();
         }
         cx.notify();
     }

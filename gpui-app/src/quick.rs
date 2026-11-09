@@ -4,6 +4,7 @@
 //! The file list comes from the explorer's scan (no extra disk walk), and the
 //! match is a small subsequence score, so it stays instant on large folders.
 
+use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::component::{
@@ -74,7 +75,7 @@ pub struct QuickOpen {
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Type part of a file name"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type part of a file name")));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::Change => this.quick_filter(cx),
             InputEvent::PressEnter { .. } => this.quick_accept(window, cx),
@@ -85,11 +86,6 @@ impl QuickOpen {
 }
 
 impl Workbench {
-    fn rel<'a>(&self, path: &'a str) -> &'a str {
-        let root = self.root.as_deref().map(|r| r.to_string_lossy().len()).unwrap_or(0);
-        path.get(root..).map(|s| s.trim_start_matches(['\\', '/'])).unwrap_or(path)
-    }
-
     pub(crate) fn quick_filter(&mut self, cx: &mut Context<Self>) {
         let q = self.quick.input.read(cx).value().to_string();
         let files = self.all_files.clone();
@@ -161,14 +157,14 @@ impl Workbench {
         let q = &self.quick;
         let mut list = v_flex().id("quick-list").max_h(theme::u(420.)).overflow_y_scroll().py_1();
         if q.hits.is_empty() {
-            list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child("No file matches. Try fewer letters."));
+            list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No file matches. Try fewer letters.")));
         }
         for (row, &ix) in q.hits.iter().enumerate() {
             let full = &self.all_files[ix];
-            let rel = self.rel(full);
+            let rel = self.rel_display(full);
             let (dir, name) = match rel.rfind(['\\', '/']) {
                 Some(i) => (&rel[..i], &rel[i + 1..]),
-                None => ("", rel),
+                None => ("", rel.as_str()),
             };
             let (icon, tint) = crate::files::icon_for(name);
             let selected = row == q.sel;
@@ -218,6 +214,7 @@ impl Workbench {
                 div().absolute().top(theme::u(38.)).left_0().right_0().flex().justify_center().child(
                     v_flex()
                         .id("quick-open")
+                        .occlude()
                         .w(theme::u(600.))
                         .max_w(relative(0.92))
                         .rounded(px(8.))

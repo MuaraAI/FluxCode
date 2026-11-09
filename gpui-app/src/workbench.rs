@@ -2,6 +2,7 @@
 //! run, OpenCode), editor tabs, bottom panel (terminal, output) and status
 //! bar — the same layout as the Tauri FluxCode.
 
+use crate::i18n::tr;
 use crate::core;
 use crate::files;
 use crate::proc::{ProcEvent, Procs};
@@ -36,7 +37,7 @@ actions!(
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMira, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
-        AgentInsertCode
+        AgentInsertCode, RemoveFolder, AgentShowOptions
     ]
 );
 
@@ -128,7 +129,15 @@ impl Line {
 pub(crate) struct Doc {
     pub path: PathBuf,
     pub name: SharedString,
+    /// Highlighter token ("python", "kt", "Dockerfile"); "image" for an image tab.
+    #[allow(dead_code)]
     pub lang: &'static str,
+    /// Status-bar name of the language or view ("Python", "Hex", "PDF").
+    pub label: &'static str,
+    /// A view of a file the editor can't hold as text (hex, PDF text, ...): never saved.
+    pub read_only: bool,
+    /// One line above the editor: what a view shows, or that the file is empty.
+    pub banner: Option<SharedString>,
     pub crlf: bool,
     pub editor: Entity<EditorState>,
     pub dirty: bool,
@@ -158,6 +167,10 @@ pub(crate) enum PendingOp {
 
 pub struct Workbench {
     pub(crate) root: Option<PathBuf>,
+    /// Folders added next to `root`, and folders dropped on the window.
+    pub(crate) workspace: crate::workspace::Workspace,
+    /// Focus of the "add or switch" question after a folder drop.
+    pub(crate) drop_focus: FocusHandle,
     pub(crate) tree: Entity<TreeState>,
     /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
@@ -239,9 +252,9 @@ impl Workbench {
         focus.focus(window, cx);
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let term_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command (Tab completes, ↑ for history)"));
-        let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("Personal access token"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
+        let term_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type a command (Tab completes, ↑ for history)")));
+        let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
         let mut subs = vec![
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -279,6 +292,7 @@ impl Workbench {
         .detach();
 
         let settings = crate::settings::Settings::load();
+        crate::i18n::set(&settings.language);
         crate::agent::set_choice(&settings.agent_cli);
         crate::agent::set_mira_path(settings.mira_path.clone());
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
@@ -297,6 +311,8 @@ impl Workbench {
         }));
         let mut this = Self {
             root: None,
+            workspace: Default::default(),
+            drop_focus: cx.focus_handle(),
             tree,
             dirs: Rc::default(),
             docs: Vec::new(),
@@ -393,21 +409,24 @@ impl Workbench {
 
     pub(crate) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
+        let roots = self.roots();
         let tree = self.tree.clone();
         // Walk the folder off the UI thread, then hand the items to the tree.
+        // More than one folder: each is a top-level node, open to start with.
         cx.spawn(async move |this, cx| {
-            let nodes = cx.background_spawn(async move { files::scan(&root) }).await;
+            let multi = roots.len() > 1;
+            let nodes = cx.background_spawn(async move { if multi { files::scan_roots(&roots) } else { files::scan(&root) } }).await;
             let mut flat = Vec::new();
             files::flatten(&nodes, &mut flat);
             let mut dirs = std::collections::HashSet::new();
-            let items = files::to_items(nodes, &mut dirs);
+            let mut items = files::to_items(nodes, &mut dirs);
+            if multi {
+                items = items.into_iter().map(|i| i.expanded(true)).collect();
+            }
             let all = crate::quick::file_list(flat, &dirs);
             _ = tree.update(cx, |state, cx| state.set_items(items, cx));
             _ = this.update(cx, |this, cx| {
-                let root_len = this.root.as_deref().map_or(0, |r| r.to_string_lossy().len());
-                this.all_lower = Rc::new(
-                    all.iter().map(|p| p.get(root_len..).unwrap_or(p).trim_start_matches(['\\', '/']).to_lowercase()).collect(),
-                );
+                this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
                 cx.notify();
@@ -425,22 +444,37 @@ impl Workbench {
             self.open_image(path, window, cx);
             return;
         }
-        let file = match core::read_text(&path) {
-            Ok(f) => f,
+        let bytes = match read_head(&path) {
+            Ok(b) => b,
             Err(e) => {
                 self.status = format!("{}: {e}", path.display()).into();
                 cx.notify();
                 return;
             }
         };
-        // gpui-component's tree-sitter highlighter keeps styles for the whole
-        // document (~+170 MB for a 3.5 MB / 60k-line JS file), so very large
-        // files open as plain text, like VS Code's large-file mode.
-        let large = file.text.len() > LARGE_FILE_BYTES;
-        let lang = if large { "text" } else { files::language_for(&path) };
-        if large {
-            self.status = "Large file: syntax highlighting is off".into();
+        // Files a text editor can't show (binary, Office, PDF, SQLite, ZIP) open
+        // as a read-only view instead of an error.
+        let view = crate::viewer::view(&path, &bytes);
+        let read_only = view.is_some();
+        let (text, crlf, mut lang, mut label, banner) = match view {
+            Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
+            None => {
+                let file = core::decode_text(&bytes);
+                let first = file.text.lines().next().unwrap_or("");
+                let (lang, label) = files::language_for(&path, first);
+                let banner = file.text.is_empty().then(|| crate::i18n::tr("This file is empty. Anything you type is saved to it.").to_string());
+                (file.text, file.crlf, lang, label, banner)
+            }
+        };
+        // Very large files open as plain text, like VS Code's large-file mode:
+        // highlighting keeps styles for the whole document.
+        let large = text.len() > LARGE_FILE_BYTES;
+        if large && !read_only {
+            lang = "text";
+            label = "Plain Text";
+            self.status = crate::i18n::tr("Large file: syntax colors are off").into();
         }
+        let file = core::FileText { text, crlf };
         let s = &self.settings;
         let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
         let editor = cx.new(|cx| {
@@ -448,19 +482,25 @@ impl Workbench {
                 .language(lang)
                 .line_number(true)
                 // Vertical guides show how far each block reaches; spaces show as faint dots.
-                .indent_guides(true)
-                .show_whitespaces(dots)
+                .indent_guides(!read_only)
+                .show_whitespaces(dots && !read_only)
                 .tab_size(TabSize { tab_size: tab, hard_tabs: false })
                 .soft_wrap(wrap)
                 .default_value(file.text)
         });
         let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        crate::complete::attach(&editor, lang, &file_name, cx);
+        if read_only {
+            editor.update(cx, |e, cx| e.set_readonly(true, cx));
+        } else {
+            crate::complete::attach(&editor, lang, &file_name, cx);
+        }
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
-                if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor) {
+                if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor && !d.read_only) {
                     d.dirty = true;
+                    // The "empty file" note goes once there is text.
+                    d.banner = None;
                     d.gen += 1;
                     let gen = d.gen;
                     if auto {
@@ -480,7 +520,8 @@ impl Workbench {
             cx.notify();
         });
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
-        self.docs.push(Doc { path, name, lang, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None });
+        let banner = banner.map(SharedString::from);
+        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }
@@ -496,6 +537,9 @@ impl Workbench {
             path,
             name,
             lang: "image",
+            label: "Image",
+            read_only: true,
+            banner: None,
             crlf: false,
             editor,
             dirty: false,
@@ -641,8 +685,8 @@ impl Workbench {
     }
 
     pub(crate) fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
-        // An image tab has no text to write (writing its empty editor would wipe the file).
-        if self.docs[ix].image.is_some() {
+        // Image tabs and read-only views have no text to write (writing it would wipe the file).
+        if self.docs[ix].image.is_some() || self.docs[ix].read_only {
             return true;
         }
         let doc = &mut self.docs[ix];
@@ -650,7 +694,7 @@ impl Workbench {
         match core::write_text(&doc.path, &text, doc.crlf) {
             Ok(()) => {
                 doc.dirty = false;
-                self.status = format!("Saved {}", doc.name).into();
+                self.status = crate::trf!("Saved {0}"; 0 => doc.name).into();
                 if let Some(s) = &self.preview_server {
                     s.reload();
                 }
@@ -658,7 +702,7 @@ impl Workbench {
                 true
             }
             Err(e) => {
-                self.status = format!("Save failed: {e}").into();
+                self.status = crate::trf!("Save failed: {e}"; e => e).into();
                 false
             }
         }
@@ -666,9 +710,10 @@ impl Workbench {
 
     // ----------------------------------------------------------- session
 
-    fn save_session(&self, _: &mut Context<Self>) {
+    pub(crate) fn save_session(&self, _: &mut Context<Self>) {
         crate::settings::Session {
             root: self.root.clone(),
+            extra: self.workspace.extra.clone(),
             files: self.docs.iter().map(|d| d.path.clone()).collect(),
             active: self.active,
         }
@@ -677,6 +722,7 @@ impl Workbench {
 
     fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
+        self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
         if let Some(root) = s.root.filter(|r| r.is_dir()) {
             self.open_folder(root, cx);
         }
@@ -721,9 +767,20 @@ impl Workbench {
         });
         cx.spawn_in(window, async move |this, cx| {
             let path = paths.await.ok()?.ok()??.into_iter().next()?;
-            this.update(cx, |this, cx| this.open_folder(path, cx)).ok()
+            this.update(cx, |this, cx| {
+                this.workspace.extra.clear();
+                this.open_folder(path, cx)
+            })
+            .ok()
         })
         .detach();
+    }
+
+    pub(crate) fn on_remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.ctx_target.borrow_mut().take();
+        if let Some(p) = target {
+            self.remove_folder(&p, cx);
+        }
     }
 
     fn on_open_file(&mut self, _: &OpenFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -815,7 +872,7 @@ impl Workbench {
     }
 
     fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
-        self.status = format!("FluxCode {} (GPUI edition)", env!("CARGO_PKG_VERSION")).into();
+        self.status = crate::trf!("FluxCode {0} (GPUI edition)"; 0 => env!("CARGO_PKG_VERSION")).into();
         cx.notify();
     }
 
@@ -891,7 +948,8 @@ impl Workbench {
         };
         // The search box in the middle: Go to File, like VS Code's command center.
         let label = match &folder {
-            Some(f) => format!("Search files in {f}"),
+            Some(_) if !self.workspace.extra.is_empty() => tr("Search files in the workspace").to_string(),
+            Some(f) => crate::trf!("Search files in {f}"; f => f),
             None => "Open a folder to search its files".to_string(),
         };
         let center = h_flex()
@@ -910,7 +968,7 @@ impl Workbench {
             .border_1()
             .border_color(c(theme::BORDER))
             .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Go to File (Ctrl+P)").build(w, cx))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Go to File (Ctrl+P)")).build(w, cx))
             .on_click(cx.listener(|this, _, w, cx| this.on_quick_open(&QuickOpenFile, w, cx)))
             .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
@@ -924,54 +982,54 @@ impl Workbench {
             .gap_1()
             .text_xs()
             .text_color(c(theme::FG_MUTED))
-            .child(div().mr_2().flex_none().text_sm().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child("FluxCode"))
-            .child(Self::render_menu("m-file", "File", |m| {
-                m.menu("Go to File...", Box::new(QuickOpenFile))
-                    .menu("Open File...", Box::new(OpenFile))
-                    .menu("Open Folder...", Box::new(OpenFolder))
+            .child(div().mr_2().flex_none().text_sm().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::SEMIBOLD).child(tr("FluxCode")))
+            .child(Self::render_menu("m-file", tr("File"), |m| {
+                m.menu(tr("Go to File..."), Box::new(QuickOpenFile))
+                    .menu(tr("Open File..."), Box::new(OpenFile))
+                    .menu(tr("Open Folder..."), Box::new(OpenFolder))
                     .separator()
-                    .menu("New File...", Box::new(ExplorerNewFile))
-                    .menu("New Folder...", Box::new(ExplorerNewFolder))
+                    .menu(tr("New File..."), Box::new(ExplorerNewFile))
+                    .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
                     .separator()
-                    .menu("Save", Box::new(Save))
-                    .menu("Save All", Box::new(SaveAll))
+                    .menu(tr("Save"), Box::new(Save))
+                    .menu(tr("Save All"), Box::new(SaveAll))
                     .separator()
-                    .menu("Settings", Box::new(ShowSettings))
+                    .menu(tr("Settings"), Box::new(ShowSettings))
                     .separator()
-                    .menu("Close Editor", Box::new(CloseTab))
-                    .menu("Exit", Box::new(Quit))
+                    .menu(tr("Close Editor"), Box::new(CloseTab))
+                    .menu(tr("Exit"), Box::new(Quit))
             }))
-            .child(Self::render_menu("m-edit", "Edit", |m| {
-                m.menu("Undo", Box::new(gpui_kit::component::input::Undo))
-                    .menu("Redo", Box::new(gpui_kit::component::input::Redo))
+            .child(Self::render_menu("m-edit", tr("Edit"), |m| {
+                m.menu(tr("Undo"), Box::new(gpui_kit::component::input::Undo))
+                    .menu(tr("Redo"), Box::new(gpui_kit::component::input::Redo))
                     .separator()
-                    .menu("Cut", Box::new(gpui_kit::component::input::Cut))
-                    .menu("Copy", Box::new(gpui_kit::component::input::Copy))
-                    .menu("Paste", Box::new(gpui_kit::component::input::Paste))
+                    .menu(tr("Cut"), Box::new(gpui_kit::component::input::Cut))
+                    .menu(tr("Copy"), Box::new(gpui_kit::component::input::Copy))
+                    .menu(tr("Paste"), Box::new(gpui_kit::component::input::Paste))
                     .separator()
-                    .menu("Find", Box::new(gpui_kit::component::input::Search))
-                    .menu("Find in Files", Box::new(FindInFiles))
+                    .menu(tr("Find"), Box::new(gpui_kit::component::input::Search))
+                    .menu(tr("Find in Files"), Box::new(FindInFiles))
             }))
-            .child(Self::render_menu("m-view", "View", |m| {
-                m.menu("Explorer", Box::new(ShowExplorer))
-                    .menu("Search", Box::new(FindInFiles))
-                    .menu("Source Control", Box::new(ScmShow))
-                    .menu("Run", Box::new(ShowRun))
-                    .menu("AI Agent", Box::new(ShowAgent))
+            .child(Self::render_menu("m-view", tr("View"), |m| {
+                m.menu(tr("Explorer"), Box::new(ShowExplorer))
+                    .menu(tr("Search"), Box::new(FindInFiles))
+                    .menu(tr("Source Control"), Box::new(ScmShow))
+                    .menu(tr("Run"), Box::new(ShowRun))
+                    .menu(tr("AI Agent"), Box::new(ShowAgent))
                     .separator()
-                    .menu("Toggle Sidebar", Box::new(ToggleSidebar))
-                    .menu("Toggle Panel", Box::new(TogglePanel))
-                    .menu("Output", Box::new(ShowOutput))
+                    .menu(tr("Toggle Sidebar"), Box::new(ToggleSidebar))
+                    .menu(tr("Toggle Panel"), Box::new(TogglePanel))
+                    .menu(tr("Output"), Box::new(ShowOutput))
             }))
-            .child(Self::render_menu("m-run", "Run", |m| {
-                m.menu("Run File", Box::new(RunFile))
-                    .menu("Stop", Box::new(StopRun))
+            .child(Self::render_menu("m-run", tr("Run"), |m| {
+                m.menu(tr("Run File"), Box::new(RunFile))
+                    .menu(tr("Stop"), Box::new(StopRun))
                     .separator()
-                    .menu("Live Preview", Box::new(TogglePreview))
+                    .menu(tr("Live Preview"), Box::new(TogglePreview))
             }))
-            .child(Self::render_menu("m-term", "Terminal", |m| m.menu("Toggle Terminal", Box::new(ToggleTerminal))))
-            .child(Self::render_menu("m-help", "Help", |m| {
-                m.menu("Next Color Theme", Box::new(NextTheme)).separator().menu("About FluxCode", Box::new(About))
+            .child(Self::render_menu("m-term", tr("Terminal"), |m| m.menu(tr("Toggle Terminal"), Box::new(ToggleTerminal))))
+            .child(Self::render_menu("m-help", tr("Help"), |m| {
+                m.menu(tr("Next Color Theme"), Box::new(NextTheme)).separator().menu(tr("About FluxCode"), Box::new(About))
             }))
             .child(drag("tb-drag"));
         // Too narrow for a centered box: Ctrl+P still opens Go to File.
@@ -1111,14 +1169,15 @@ impl Workbench {
     fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Small uppercase view titles follow VS Code, whose layout this workbench mirrors.
         let title = match self.view {
-            SideView::Explorer => "EXPLORER",
-            SideView::Search => "SEARCH",
-            SideView::Run => "RUN",
-            SideView::Scm => "SOURCE CONTROL",
+            SideView::Explorer => tr("EXPLORER"),
+            SideView::Search => tr("SEARCH"),
+            SideView::Run => tr("RUN"),
+            SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => if crate::agent::agent_name() == "Mira" { "MIRA" } else { "OPENCODE" },
         };
         // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
+            (SideView::Explorer, Some(_)) if !self.workspace.extra.is_empty() => tr("WORKSPACE").into(),
             (SideView::Explorer, Some(name)) => name.to_string_lossy().to_uppercase().into(),
             _ => title.into(),
         };
@@ -1135,9 +1194,9 @@ impl Workbench {
             .when(self.view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
             .when(self.view == SideView::Agent, |h| h.child(self.render_agent_tools(cx)))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
-                h.child(tool_button("x-newfile", IconName::Plus, "New File", cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
-                    .child(tool_button("x-newdir", IconName::FolderClosed, "New Folder", cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
-                    .child(tool_button("x-refresh", IconName::RefreshCw, "Refresh", cx, |this, w, cx| this.on_explorer_refresh(&ExplorerRefresh, w, cx)))
+                h.child(tool_button("x-newfile", IconName::Plus, tr("New File"), cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
+                    .child(tool_button("x-newdir", IconName::FolderClosed, tr("New Folder"), cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
+                    .child(tool_button("x-refresh", IconName::RefreshCw, tr("Refresh"), cx, |this, w, cx| this.on_explorer_refresh(&ExplorerRefresh, w, cx)))
             });
         let body: AnyElement = match self.view {
             SideView::Explorer => self.render_explorer(window, cx),
@@ -1164,12 +1223,12 @@ impl Workbench {
             .text_sm()
             .child(match &file {
                 Some(f) => self
-                    .action_button("run-file", format!("Run {f}"), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
+                    .action_button("run-file", crate::trf!("Run {f}"; f => f), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
                     .into_any_element(),
-                None => div().text_xs().text_color(c(theme::FG_DIM)).child("Open a file to run it.").into_any_element(),
+                None => div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Open a file to run it.")).into_any_element(),
             })
             .when(self.out_proc.is_some(), |v| {
-                v.child(self.action_button("stop-run", "Stop", ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
+                v.child(self.action_button("stop-run", tr("Stop"), ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
             })
             .child(
                 div()
@@ -1236,7 +1295,7 @@ impl Workbench {
     /// The active file's path below the tabs: folder › folder › file.
     fn render_breadcrumbs(&self, ix: usize) -> impl IntoElement {
         let d = &self.docs[ix];
-        let rel = self.root.as_deref().and_then(|r| d.path.strip_prefix(r).ok()).unwrap_or(&d.path);
+        let rel = PathBuf::from(self.rel_display(&d.path.to_string_lossy()));
         let parts: Vec<String> = rel.components().map(|p| p.as_os_str().to_string_lossy().into_owned()).collect();
         let last = parts.len().saturating_sub(1);
         h_flex()
@@ -1264,6 +1323,23 @@ impl Workbench {
                 .child(self.render_tabs(cx))
                 .child(self.render_breadcrumbs(ix))
                 .when(self.docs[ix].image.is_some(), |v| v.child(div().flex_1().min_h_0().child(self.render_image(ix, window, cx))))
+                .when_some(self.docs[ix].banner.clone(), |v, b| {
+                    v.child(
+                        h_flex()
+                            .flex_none()
+                            .mx_3()
+                            .mb_1()
+                            .px_2()
+                            .py_1()
+                            .gap_2()
+                            .rounded(px(4.))
+                            .bg(c(theme::BG_ELEVATED))
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(Icon::new(if self.docs[ix].read_only { IconName::Eye } else { IconName::Info }).small().text_color(c(theme::FG_DIM)))
+                            .child(div().min_w_0().truncate().child(b)),
+                    )
+                })
                 .when(self.docs[ix].image.is_none(), |v| v.child(
                     div().flex_1().min_h_0().child(
                         Editor::new(&self.docs[ix].editor)
@@ -1285,25 +1361,25 @@ impl Workbench {
                     v_flex()
                         .items_center()
                         .gap_1()
-                        .child(div().text_size(theme::u(40.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child("FluxCode"))
-                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child("Lightweight. Native. One process.")),
+                        .child(div().text_size(theme::u(40.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
+                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Lightweight. Native. One process."))),
                 )
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(self.action_button("w-open-folder", "Open folder", ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
-                        .child(self.action_button("w-open-file", "Open file", ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                        .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
+                        .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
                 )
                 .child(
                     v_flex()
                         .gap_2()
                         .pt_2()
-                        .child(shortcut("Find in files", "Ctrl+Shift+F"))
-                        .child(shortcut("Toggle terminal", "Ctrl+`"))
-                        .child(shortcut("Run file", "F5"))
-                        .child(shortcut("OpenCode", "Ctrl+Shift+A"))
-                        .child(shortcut("Next color theme", "Ctrl+K Ctrl+T"))
-                        .child(shortcut("Settings", "Ctrl+,")),
+                        .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
+                        .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
+                        .child(shortcut(tr("Run file"), "F5"))
+                        .child(shortcut(tr("OpenCode"), "Ctrl+Shift+A"))
+                        .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
+                        .child(shortcut(tr("Settings"), "Ctrl+,")),
                 )
                 .into_any_element(),
         }
@@ -1318,11 +1394,12 @@ impl Workbench {
             Some(ix) => {
                 let d = &self.docs[ix];
                 let p = d.editor.read(cx).cursor_position();
-                (format!("Ln {}, Col {}", p.line + 1, p.character + 1), files::language_label(d.lang))
+                (crate::trf!("Ln {0}, Col {1}"; 0 => p.line + 1, 1 => p.character + 1), d.label)
             }
             None => (String::new(), ""),
         };
-        let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some());
+        // Images and read-only views have no line endings or encoding to show.
+        let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
         let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
         let running = self.out_proc.is_some() || self.term_proc.is_some();
         let seg = |s: SharedString| div().h_full().px_2().flex().items_center().child(s);
@@ -1381,7 +1458,7 @@ impl Workbench {
                         .text_color(c(theme::GREEN))
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
                         .child(div().size(px(6.)).rounded_full().bg(c(theme::GREEN)))
-                        .child("Running")
+                        .child(tr("Running"))
                         .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
                 )
             })
@@ -1530,6 +1607,7 @@ impl Render for Workbench {
                 .into_any_element(),
             None => self.render_editor_area(window, cx),
         };
+        let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(clip(editor_view)))
@@ -1631,6 +1709,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_mention_accept))
             .on_action(cx.listener(Self::on_agent_mention_close))
             .on_action(cx.listener(Self::on_agent_insert_code))
+            .on_action(cx.listener(Self::on_agent_show_options))
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))
@@ -1671,9 +1750,45 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_reveal))
             .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_reload_preview))
+            .on_action(cx.listener(Self::on_remove_folder))
+            // Folders and files dropped anywhere (the agent panel keeps its own drops).
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)))
             .child(self.render_title_bar(window, cx))
             .child(main)
             .child(self.render_status_bar(cx))
             .when(self.quick.open, |v| v.child(self.render_quick_open(cx)))
+            .children(self.render_drop_ask(cx))
+    }
+}
+
+/// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.
+fn read_head(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() <= core::MAX_FILE_BYTES {
+        return std::fs::read(path).map_err(|e| e.to_string());
+    }
+    let mut buf = vec![0; 64 * 1024];
+    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut buf)).map_err(|e| e.to_string())?;
+    buf.truncate(n);
+    // NUL bytes make the viewer show it as binary even when it is huge text.
+    if !buf.contains(&0) {
+        return Err(crate::trf!("{0} is too large to open ({1} MB)."; 0 => path.display(), 1 => meta.len() / 1024 / 1024));
+    }
+    Ok(buf)
+}
+
+impl Workbench {
+    /// After a language change: the text set once at creation (input placeholders).
+    pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
+        self.term_input.update(cx, |s, cx| s.set_placeholder(tr("Type a command (Tab completes, ↑ for history)"), window, cx));
+        self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
+        self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
+        self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Message (Enter to commit)"), window, cx));
+        let name = crate::agent::agent_name();
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => name), window, cx));
+        self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
+        cx.notify();
     }
 }

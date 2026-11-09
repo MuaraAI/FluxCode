@@ -1,6 +1,6 @@
 [package]
 name = "fluxcode-gpui"
-version = "0.8.2-dev.2026-11-09-1413"
+version = "0.9.0-dev.2026-11-09-1500"
 description = "FluxCode - native GPUI edition (no WebView)"
 edition = "2021"
 license = "GPL-3.0-or-later"
@@ -14,14 +14,9 @@ path = "src/main.rs"
 embed-resource = "3"
 
 [dependencies]
-gpui-kit = { version = "=0.9.0", default-features = false, features = [
-    "component", "assets",
-    "tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-tsx",
-    "tree-sitter-html", "tree-sitter-css", "tree-sitter-markdown", "tree-sitter-markdown-inline",
-    "tree-sitter-python", "tree-sitter-rust", "tree-sitter-php", "tree-sitter-toml",
-    "tree-sitter-yaml", "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-go",
-    "tree-sitter-java", "tree-sitter-lua", "tree-sitter-sql",
-] }
+# Syntax colors from syntect with bat's grammar set: about 200 languages in a few MB,
+# where tree-sitter needs a compiled grammar (often 1-3 MB) per language.
+gpui-kit = { version = "=0.9.0", default-features = false, features = ["component", "assets", "syntect"] }
 anyhow = "1"
 futures = "0.3"
 lsp-types = { version = "0.97", features = ["proposed"] }

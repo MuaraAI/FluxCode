@@ -2,6 +2,7 @@
 //! `src-tauri/src/acp.rs` (process) and `src/agent.js` (protocol + UI).
 //! `opencode acp` speaks newline-delimited JSON-RPC on stdio.
 
+use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
 use crate::memory;
@@ -38,6 +39,52 @@ enum Req {
     NewSession,
     LoadSession,
     Prompt,
+    SetOption,
+}
+
+/// One setting the harness offers for the session (ACP `configOptions`):
+/// model, effort (thought_level), mode, or anything else it adds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfigOpt {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub current: String,
+    /// (value, name, description)
+    pub choices: Vec<(String, String, String)>,
+}
+
+impl ConfigOpt {
+    fn current_name(&self) -> &str {
+        self.choices.iter().find(|c| c.0 == self.current).map(|c| c.1.as_str()).unwrap_or(&self.current)
+    }
+}
+
+/// Models grouped for the picker: free ones first, then one group per provider.
+/// Names lose the "provider/" prefix (the group says it) and a trailing "Free".
+pub fn model_groups(choices: &[(String, String, String)]) -> Vec<(String, Vec<(String, String)>)> {
+    let mut free = Vec::new();
+    let mut by: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for (value, name, _) in choices {
+        let provider = value.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
+        let short = name.split_once('/').map(|(_, n)| n).unwrap_or(name).trim().to_string();
+        let is_free = value.ends_with("-free") || short.to_lowercase().ends_with(" free");
+        if is_free {
+            let clean = short.strip_suffix(" Free").or_else(|| short.strip_suffix(" free")).unwrap_or(&short).to_string();
+            free.push((value.clone(), clean));
+            continue;
+        }
+        match by.iter_mut().find(|g| g.0 == provider) {
+            Some(g) => g.1.push((value.clone(), short)),
+            None => by.push((provider, vec![(value.clone(), short)])),
+        }
+    }
+    let mut out = Vec::new();
+    if !free.is_empty() {
+        out.push(("free".to_string(), free));
+    }
+    out.extend(by);
+    out
 }
 
 pub enum Item {
@@ -141,7 +188,7 @@ pub struct AgentState {
     pub changes: Vec<Change>,
     /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
-    input: Entity<TextareaState>,
+    pub(crate) input: Entity<TextareaState>,
     scroll: ScrollHandle,
     /// Saved chats, newest first.
     pub history: Vec<Chat>,
@@ -166,16 +213,26 @@ pub struct AgentState {
     /// Replaying this session's history right now.
     loading_id: Option<String>,
     pub show_memory: bool,
-    memory_input: Entity<InputState>,
+    pub(crate) memory_input: Entity<InputState>,
     /// Memory trails sent with the current turn (reinforced on Keep, weakened on Undo).
     turn_memories: Vec<String>,
     /// The REMEMBER instruction went out in this session.
     hinted: bool,
+    /// Signature of the workspace overview the agent has (0: none yet this session).
+    ws_sig: u64,
     pub memories: Vec<memory::Trail>,
     /// `/command` list while a `/` is being typed: (matches, selected row).
     pub slash: Option<(Vec<SlashCmd>, usize)>,
     /// Commands the agent announced for this session.
     pub commands: Vec<SlashCmd>,
+    /// Settings the harness offers for this session (model, effort, mode, ...).
+    pub config: Vec<ConfigOpt>,
+    /// The settings view (model, effort, mode) is showing instead of the chat.
+    pub show_options: bool,
+    /// Editing an earlier message (index in `items`): Enter restarts from there.
+    pub editing: Option<usize>,
+    /// The next answer that ends was cancelled on purpose (an edit): no "cancelled" note.
+    quiet_stop: bool,
     /// Stamp of the last finished turn; the idle timer only fires if it's unchanged.
     last_active: Option<std::time::Instant>,
     /// Resuming after an idle stop: the replayed history is already on screen.
@@ -256,11 +313,11 @@ pub struct SlashCmd {
 fn builtin_commands() -> Vec<SlashCmd> {
     let c = |name: &str, desc: &str, takes_input: bool| SlashCmd { name: name.into(), desc: desc.into(), builtin: true, takes_input };
     vec![
-        c("remember", "Save a fact about this project to memory", true),
-        c("new", "Start a new chat", false),
-        c("history", "Saved chats and agent sessions for this folder", false),
-        c("memory", "What the agent remembers", false),
-        c("stop", "Turn the agent off", false),
+        c("remember", crate::i18n::tr("Save a fact about this project to memory"), true),
+        c("new", crate::i18n::tr("Start a new chat"), false),
+        c("history", crate::i18n::tr("Saved chats and agent sessions for this folder"), false),
+        c("memory", crate::i18n::tr("What the agent remembers"), false),
+        c("stop", crate::i18n::tr("Turn the agent off"), false),
     ]
 }
 
@@ -327,7 +384,7 @@ impl AgentState {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .submit_on_enter(true)
-                .placeholder(format!("Ask {}…  @ adds a file, / for commands", agent_name()))
+                .placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => agent_name()))
         });
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => this.agent_slash_accept(window, cx),
@@ -336,7 +393,7 @@ impl AgentState {
             InputEvent::Change => this.agent_update_mention(cx),
             _ => {}
         });
-        let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder("Remember something about this project…"));
+        let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Remember something about this project…")));
         let sub2 = cx.subscribe_in(&memory_input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 let text = this.agent.memory_input.read(cx).value().to_string();
@@ -383,9 +440,14 @@ impl AgentState {
             memory_input,
             turn_memories: Vec::new(),
             hinted: false,
+            ws_sig: 0,
             memories: Vec::new(),
             slash: None,
             commands: Vec::new(),
+            config: Vec::new(),
+            show_options: false,
+            editing: None,
+            quiet_stop: false,
             last_active: None,
             silent_load: false,
             resume_id: None,
@@ -447,6 +509,120 @@ impl Workbench {
         }
     }
 
+    /// The "model" select from ACP `configOptions` (session/new, session/load,
+    /// set_config_option results and config_option_update notifications).
+    fn agent_take_config(&mut self, v: &Value) {
+        let Some(opts) = v.get("configOptions").and_then(Value::as_array) else { return };
+        let str_of = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        self.agent.config = opts
+            .iter()
+            .filter(|o| o.get("type").and_then(Value::as_str).unwrap_or("select") == "select")
+            .map(|o| ConfigOpt {
+                id: str_of(o, "id"),
+                name: str_of(o, "name"),
+                category: str_of(o, "category"),
+                current: str_of(o, "currentValue"),
+                choices: o
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().map(|c| (str_of(c, "value"), str_of(c, "name"), str_of(c, "description"))).filter(|c| !c.0.is_empty()).collect())
+                    .unwrap_or_default(),
+            })
+            .filter(|o| !o.id.is_empty() && !o.choices.is_empty())
+            .collect();
+    }
+
+    /// Change one session setting (model, effort, mode, ...). `remember` keeps it
+    /// for new sessions of this harness.
+    pub(crate) fn agent_set_option(&mut self, id: &str, value: String, remember: bool, cx: &mut Context<Self>) {
+        if remember {
+            let key = format!("{}:{id}", self.settings.agent_cli);
+            if self.settings.agent_options.get(&key) != Some(&value) {
+                self.settings.agent_options.insert(key, value.clone());
+                self.settings.save();
+            }
+        }
+        if let Some(o) = self.agent.config.iter_mut().find(|o| o.id == id) {
+            o.current = value.clone();
+        }
+        if let Some(session) = self.agent.session.clone() {
+            self.agent_request(Req::SetOption, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, _: &mut Window, cx: &mut Context<Self>) {
+        self.agent_open_options(cx);
+    }
+
+    fn agent_open_options(&mut self, cx: &mut Context<Self>) {
+        self.agent.show_options = true;
+        self.agent.show_memory = false;
+        self.agent.show_history = false;
+        if self.settings.agent_right {
+            self.agent_open = true;
+        } else {
+            self.view = crate::workbench::SideView::Agent;
+            self.sidebar_open = true;
+        }
+        cx.notify();
+    }
+
+    /// Start editing an earlier message: its text goes back into the input.
+    fn agent_edit(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Item::User(t)) = self.agent.items.get(ix) else { return };
+        let t = t.clone();
+        self.agent.editing = Some(ix);
+        self.agent.input.update(cx, |s, cx| {
+            let end = t.len();
+            s.set_value(t, window, cx);
+            s.set_selected_range(end..end, cx);
+        });
+        let h = self.agent.input.focus_handle(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    fn agent_cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent.editing.take().is_some() {
+            self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+            cx.notify();
+        }
+    }
+
+    /// Send an edited message: the chat goes back to just before it, and a fresh
+    /// session gets everything said up to there as context, then the new text.
+    fn agent_send_edit(&mut self, ix: usize, text: String, cx: &mut Context<Self>) {
+        let files = std::mem::take(&mut self.agent.attachments);
+        self.agent.items.truncate(ix);
+        self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
+        self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
+        self.agent.queue = vec![Queued { text, files }];
+        self.agent.changes.clear();
+        self.agent.permission = None;
+        self.agent.resume_id = None;
+        self.agent.hinted = false;
+        self.agent.ws_sig = 0;
+        match self.agent.status {
+            Status::Busy | Status::Ready if self.agent.proc_id.is_some() => {
+                if self.agent.status == Status::Busy {
+                    self.agent.quiet_stop = true;
+                    if let Some(s) = self.agent.session.clone() {
+                        self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
+                    }
+                }
+                self.agent.session = None;
+                self.agent.status = Status::Starting;
+                let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+            }
+            Status::Starting => {}
+            _ => self.agent_start(cx),
+        }
+        self.agent.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
     fn agent_request(&mut self, kind: Req, method: &str, params: Value) {
         self.agent.next_id += 1;
         let id = self.agent.next_id;
@@ -460,7 +636,7 @@ impl Workbench {
         }
         let Some(mut cmd) = opencode_cmd() else {
             self.agent.status = Status::Error(if agent_name() == "Mira" {
-                "Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.".into()
+                crate::i18n::tr("Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.").into()
             } else {
                 "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mira in the panel title menu.".into()
             });
@@ -499,6 +675,7 @@ impl Workbench {
         self.agent.pending.clear();
         self.agent.permission = None;
         self.agent.hinted = false;
+        self.agent.ws_sig = 0;
         self.agent.loading_id = None;
         cx.notify();
     }
@@ -531,6 +708,9 @@ impl Workbench {
             }
             "/stop" => return self.agent_set_on(false, cx),
             _ => {}
+        }
+        if let Some(ix) = self.agent.editing.take() {
+            return self.agent_send_edit(ix, text, cx);
         }
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.queue.push(Queued { text, files });
@@ -567,7 +747,7 @@ impl Workbench {
         self.agent.items.push(Item::User(if shown.is_empty() { "(attachments)".into() } else { shown }));
         if !files.is_empty() {
             let names: Vec<String> = files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
-            self.agent.items.push(Item::Note(format!("Attached: {}", names.join(", ")), false));
+            self.agent.items.push(Item::Note(crate::trf!("Attached: {0}"; 0 => names.join(", ")), false));
         }
         self.agent_prompt(text, files, cx);
     }
@@ -655,9 +835,18 @@ impl Workbench {
             let m = e.get("message").and_then(Value::as_str).unwrap_or("Agent error").to_string();
             match kind {
                 Req::Prompt => {
+                    let low = m.to_lowercase();
+                    let model_problem = ["credential", "api key", "apikey", "unauthorized", "401", "403", "quota", "rate limit", "model"]
+                        .iter()
+                        .any(|k| low.contains(k));
                     self.agent.items.push(Item::Note(m, true));
+                    let models = self.agent.config.iter().find(|o| o.category == "model").map_or(0, |o| o.choices.len());
+                    if model_problem && models > 1 {
+                        self.agent.items.push(Item::Note(crate::i18n::tr("This looks like a problem with the model. Pick another one with the model button under the message box, then send again.").into(), false));
+                    }
                     self.agent.status = Status::Ready;
                 }
+                Req::SetOption => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
                 Req::LoadSession if self.agent.silent_load => {
                     self.agent.silent_load = false;
                     self.agent.loading_id = None;
@@ -686,23 +875,42 @@ impl Workbench {
                 }
             }
             Req::LoadSession => {
+                self.agent_take_config(&result);
                 self.agent.session = self.agent.loading_id.take();
                 self.agent.status = Status::Ready;
                 self.agent.silent_load = false;
                 self.agent_schedule_idle(cx);
                 self.agent.hinted = false;
+                self.agent.ws_sig = 0;
                 self.agent.save_chat();
                 self.agent_flush_queue(cx);
             }
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
+                self.agent_take_config(&result);
+                // What was picked last time (model, effort, mode), when the harness still offers it.
+                let harness = self.settings.agent_cli.clone();
+                let wanted: Vec<(String, String)> = self
+                    .agent
+                    .config
+                    .iter()
+                    .filter_map(|o| {
+                        let v = self.settings.agent_options.get(&format!("{harness}:{}", o.id))?;
+                        (o.current != *v && o.choices.iter().any(|c| c.0 == *v)).then(|| (o.id.clone(), v.clone()))
+                    })
+                    .collect();
+                for (id, v) in wanted {
+                    self.agent_set_option(&id, v, false, cx);
+                }
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(cx);
                 self.agent_flush_queue(cx);
             }
+            Req::SetOption => self.agent_take_config(&result),
             Req::Prompt => {
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
-                if stop != "end_turn" {
+                let quiet = std::mem::take(&mut self.agent.quiet_stop);
+                if stop != "end_turn" && !quiet {
                     self.agent.items.push(Item::Note(stop.replace('_', " "), false));
                 }
                 self.agent.permission = None;
@@ -721,6 +929,10 @@ impl Workbench {
             return;
         }
         let Some(u) = params.get("update") else { return };
+        if u.get("sessionUpdate").and_then(Value::as_str) == Some("config_option_update") {
+            self.agent_take_config(u);
+            return;
+        }
         if u.get("sessionUpdate").and_then(Value::as_str) == Some("available_commands_update") {
             self.agent.commands = u
                 .get("availableCommands")
@@ -976,7 +1188,7 @@ impl Workbench {
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
                     .child(self.render_agent_tools(cx))
-                    .child(tool_button("ag-dock-close", IconName::Close, "Hide (Ctrl+Shift+A shows it again)", cx, |this, _, cx| {
+                    .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+Shift+A shows it again)"), cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
                     })),
@@ -1000,10 +1212,11 @@ impl Workbench {
         // Same chat, new harness: it gets the conversation so far with its first message.
         if self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))) {
             self.agent.carry = Some(transcript(&self.agent.items));
-            self.agent.items.push(Item::Branch(format!("Continued with {name}. It gets the conversation with {old} above as context.")));
+            self.agent.items.push(Item::Branch(crate::trf!("Continued with {name}. It gets the conversation with {old} above as context."; name => name, old => old)));
         }
         self.agent.resume_id = None;
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…  @ adds a file, / for commands"), window, cx));
+        self.agent.config.clear();
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
         }
@@ -1026,12 +1239,14 @@ impl Workbench {
             .ghost()
             .xsmall()
             .dropdown_caret(true)
-            .tooltip("Choose the AI agent")
+            .tooltip(tr("Choose the AI agent"))
             .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
-                let mira = if mira_installed() { "Mira (omm)" } else { "Mira (omm), not installed" };
+                let mira = if mira_installed() { "Mira (omm)" } else { crate::i18n::tr("Mira (omm), not installed") };
                 m.min_w(px(220.))
                     .menu_with_check("OpenCode", name == "OpenCode", Box::new(crate::workbench::AgentUseOpenCode))
                     .menu_with_check(mira, name == "Mira", Box::new(crate::workbench::AgentUseMira))
+                    .separator()
+                    .menu(crate::trf!("{name} settings: model, effort, mode…"; name => name), Box::new(crate::workbench::AgentShowOptions))
             })
     }
 
@@ -1059,7 +1274,7 @@ impl Workbench {
                     .icon(Icon::new(gpui_kit::assets::IconName::Brain))
                     .xsmall()
                     .ghost()
-                    .tooltip(if self.agent.show_memory { "Back to the chat" } else { "Memory: what the agent remembers" })
+                    .tooltip(if self.agent.show_memory { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Memory: what the agent remembers") })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_memory = !this.agent.show_memory;
                         this.agent.show_history = false;
@@ -1074,7 +1289,7 @@ impl Workbench {
                     .icon(if self.agent.show_history { gpui_kit::component::Icon::new(IconName::Bot) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
                     .xsmall()
                     .ghost()
-                    .tooltip(if self.agent.show_history { "Back to the chat" } else { "Saved chats" })
+                    .tooltip(if self.agent.show_history { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Saved chats") })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_history = !this.agent.show_history;
                         this.agent.show_memory = false;
@@ -1089,7 +1304,7 @@ impl Workbench {
                     .icon(if right { IconName::PanelLeft } else { IconName::PanelRight })
                     .xsmall()
                     .ghost()
-                    .tooltip(if right { "Move to the left side bar" } else { "Move to the right side" })
+                    .tooltip(if right { crate::i18n::tr("Move to the left side bar") } else { crate::i18n::tr("Move to the right side") })
                     .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
             )
     }
@@ -1098,7 +1313,7 @@ impl Workbench {
         let a = &self.agent;
         let mut list = v_flex().id("ag-history").flex_1().min_h_0().px_2().gap_px().overflow_y_scroll();
         if a.history.is_empty() {
-            list = list.child(div().px_1().py_2().text_sm().text_color(c(theme::FG_DIM)).child("No saved chats yet. Chats are saved after each answer."));
+            list = list.child(div().px_1().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No saved chats yet. Chats are saved after each answer.")));
         }
         for (i, chat) in a.history.iter().enumerate() {
             let id = chat.id;
@@ -1132,7 +1347,7 @@ impl Workbench {
                             .icon(IconName::Delete)
                             .ghost()
                             .xsmall()
-                            .tooltip("Delete this chat")
+                            .tooltip(tr("Delete this chat"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.agent_delete_chat(id, cx);
@@ -1147,7 +1362,7 @@ impl Workbench {
                 div().px_3().pb_2().child(
                     Button::new("ag-new-chat")
                         .icon(IconName::Plus)
-                        .label("New chat")
+                        .label(tr("New chat"))
                         .small()
                         .w_full()
                         .on_click(cx.listener(|this, _, _, cx| this.agent_new_chat(cx))),
@@ -1193,8 +1408,8 @@ impl Workbench {
             None => core::delete_path(&ch.path),
         };
         self.status = match r {
-            Ok(()) => format!("Reverted {}", ch.path.display()).into(),
-            Err(e) => format!("Undo failed: {e}").into(),
+            Ok(()) => crate::trf!("Reverted {0}"; 0 => ch.path.display()).into(),
+            Err(e) => crate::trf!("Undo failed: {e}"; e => e).into(),
         };
         if self.docs.iter().any(|d| d.path == ch.path) && ch.before.is_some() {
             self.agent.reloads.push(ch.path.clone());
@@ -1310,9 +1525,11 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _w: &mut Window, cx: &mut Context<Self>) {
         if self.agent.mention.take().is_some() || self.agent.slash.take().is_some() {
             cx.notify();
+        } else if self.agent.editing.is_some() {
+            self.agent_cancel_edit(_w, cx);
         }
     }
 
@@ -1389,8 +1606,8 @@ impl Workbench {
                 this.settings.save();
                 set_mira_path(Some(path.clone()));
                 set_choice("mira");
-                this.agent.input.update(cx, |s, cx| s.set_placeholder("Ask Mira…  (@ adds a file, / for commands)", window, cx));
-                this.status = format!("Mira: using {}", path.display()).into();
+                this.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => "Mira"), window, cx));
+                this.status = crate::trf!("Mira: using {0}"; 0 => path.display()).into();
                 cx.notify();
             })
             .ok()
@@ -1399,8 +1616,7 @@ impl Workbench {
     }
 
     fn rel_path(&self, full: &str) -> String {
-        let root = self.root.as_deref().map(|r| r.to_string_lossy().len()).unwrap_or(0);
-        full.get(root..).map(|s| s.trim_start_matches(['\\', '/']).to_string()).unwrap_or_else(|| full.to_string())
+        self.rel_display(full)
     }
 
     // ------------------------------------------------------------ context
@@ -1418,7 +1634,7 @@ impl Workbench {
             if !range.is_empty() {
                 let v = ed.value();
                 let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
-                let label = if a == b { format!("Selection · line {a}") } else { format!("Selection · lines {a}-{b}") };
+                let label = if a == b { crate::trf!("Selection · line {a}"; a => a) } else { crate::trf!("Selection · lines {a}-{b}"; a => a, b => b) };
                 chips.push(("sel".into(), label, Icon::new(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
             }
         }
@@ -1428,11 +1644,14 @@ impl Workbench {
                 let kind = p.message.split(':').next().unwrap_or("Error").to_string();
                 chips.push(("err".into(), format!("{kind} · {name}:{}", p.line), Icon::new(IconName::CircleX), !off("err")));
             } else if self.agent_last_failure().is_some() {
-                chips.push(("err".into(), "Last failed command".into(), Icon::new(IconName::CircleX), !off("err")));
+                chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), Icon::new(IconName::CircleX), !off("err")));
             }
         }
         if agent_ctx::wants_output(&text) && !self.term_lines.is_empty() {
-            chips.push(("out".into(), "Terminal output".into(), Icon::new(IconName::SquareTerminal), !off("out")));
+            chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), Icon::new(IconName::SquareTerminal), !off("out")));
+        }
+        if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
+            chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), Icon::new(IconName::FolderOpen), !off("ws")));
         }
         for m in agent_ctx::mentions(&text) {
             if let Some(root) = &self.root {
@@ -1445,6 +1664,32 @@ impl Workbench {
             }
         }
         chips
+    }
+
+    /// Folders and open tabs for the workspace overview (the active tab first, with its line).
+    fn agent_ws_parts(&self, cx: &App) -> (Vec<PathBuf>, Vec<String>) {
+        let mut tabs = Vec::new();
+        if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
+            let line = d.editor.read(cx).cursor_position().line + 1;
+            tabs.push(format!("{} (active, line {line})", self.rel_path(&d.path.to_string_lossy())));
+        }
+        for (i, d) in self.docs.iter().enumerate() {
+            if Some(i) != self.active {
+                tabs.push(self.rel_path(&d.path.to_string_lossy()));
+            }
+        }
+        (self.roots(), tabs)
+    }
+
+    fn agent_ws_signature(&self, cx: &App) -> u64 {
+        let (roots, tabs) = self.agent_ws_parts(cx);
+        crate::ws_context::signature(&crate::ws_context::Inputs {
+            roots: &roots,
+            files: &self.all_files,
+            git: self.scm.repo.as_ref().map(|_| &self.scm.status),
+            tabs,
+            python: None,
+        })
     }
 
     /// The last command that failed in the terminal (or the last failed run), with its output.
@@ -1472,6 +1717,18 @@ impl Workbench {
                 continue;
             }
             match key.as_str() {
+                "ws" => {
+                    let (roots, tabs) = self.agent_ws_parts(cx);
+                    let inputs = crate::ws_context::Inputs {
+                        roots: &roots,
+                        files: &self.all_files,
+                        git: self.scm.repo.as_ref().map(|_| &self.scm.status),
+                        tabs,
+                        python: self.python_version.as_deref(),
+                    };
+                    self.agent.ws_sig = crate::ws_context::signature(&inputs);
+                    blocks.push(json!({ "type": "text", "text": crate::ws_context::overview(&inputs) }));
+                }
                 "file" => {
                     if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
                         let body = d.editor.read(cx).value().to_string();
@@ -1539,7 +1796,7 @@ impl Workbench {
                 "Notes from earlier sessions (FluxCode memory, may be outdated; ignore them if they don't fit):\n{}",
                 list.join("\n")
             ) }));
-            self.agent.items.push(Item::Note(format!("Used {} note{} from memory", trails.len(), if trails.len() == 1 { "" } else { "s" }), false));
+            self.agent.items.push(Item::Note(if trails.len() == 1 { crate::i18n::tr("Used 1 note from memory").to_string() } else { crate::trf!("Used {n} notes from memory"; n => trails.len()) }, false));
         }
         if !self.agent.hinted {
             self.agent.hinted = true;
@@ -1621,7 +1878,7 @@ impl Workbench {
                     self.agent.items.push(Item::Note(format!("{} can't reopen saved sessions.", agent_name()), true));
                 }
             }
-            Status::Starting | Status::Busy => self.agent.items.push(Item::Note("Wait for the current answer, then open the session again.".into(), true)),
+            Status::Starting | Status::Busy => self.agent.items.push(Item::Note(crate::i18n::tr("Wait for the current answer, then open the session again.").into(), true)),
             _ => {
                 self.agent.pending_load = Some(id);
                 self.agent_start(cx);
@@ -1679,11 +1936,11 @@ impl Workbench {
                 self.docs[ix].editor.update(cx, |s, cx| s.replace(code, window, cx));
                 let h = self.docs[ix].editor.focus_handle(cx);
                 h.focus(window, cx);
-                self.status = format!("Inserted {lines} line{} into {name}", if lines == 1 { "" } else { "s" }).into();
+                self.status = if lines == 1 { crate::trf!("Inserted 1 line into {name}"; name => name) } else { crate::trf!("Inserted {lines} lines into {name}"; lines => lines, name => name) }.into();
             }
             None => {
                 cx.write_to_clipboard(ClipboardItem::new_string(code));
-                self.status = "No file is open: the code was copied instead".into();
+                self.status = tr("No file is open: the code was copied instead").into();
             }
         }
         cx.notify();
@@ -1696,7 +1953,7 @@ impl Workbench {
         let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().gap_1().overflow_y_scroll();
         if a.memories.is_empty() {
             list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(
-                "Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help.",
+                crate::i18n::tr("Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help."),
             ));
         }
         for (i, t) in a.memories.iter().enumerate() {
@@ -1722,7 +1979,7 @@ impl Workbench {
                             ))
                             .child(format!("{:.2} · {} · used {}×", t.tau, scope, t.success))
                             .child(div().flex_1())
-                            .child(Button::new(("ag-mem-del", i)).icon(IconName::Delete).ghost().xsmall().tooltip("Forget (moves it to the archive)").on_click(
+                            .child(Button::new(("ag-mem-del", i)).icon(IconName::Delete).ghost().xsmall().tooltip(tr("Forget (moves it to the archive)")).on_click(
                                 cx.listener(move |this, _, _, cx| {
                                     let _ = memory::Store::default().forget(&id);
                                     this.agent_refresh_memories();
@@ -1742,7 +1999,7 @@ impl Workbench {
                     .py_2()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
-                    .child(format!("Stored in {} (shared with ant_memory.py)", memory::dir().join("trails.json").display())),
+                    .child(crate::trf!("Stored in {0} (shared with ant_memory.py)"; 0 => memory::dir().join("trails.json").display())),
             )
             .into_any_element()
     }
@@ -1761,7 +2018,7 @@ impl Workbench {
                 .child(format!("{} SESSIONS IN THIS FOLDER", name.to_uppercase())),
         );
         if a.remote_state == 1 {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("Reading {name}'s sessions…")));
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("Reading {name}'s sessions…"; name => name)));
         }
         if let Some(e) = &a.remote_err {
             v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(e.clone()));
@@ -1792,7 +2049,7 @@ impl Workbench {
                             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(format!("{} · {}", s.harness, ago(s.updated)))),
                     )
                     .when(current, |h| h.child(div().text_xs().text_color(c(theme::GREEN)).child("open")))
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Resume this session here").build(w, cx))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Resume this session here")).build(w, cx))
                     .on_click(cx.listener(move |this, _, _, cx| this.agent_open_remote(id.clone(), cx))),
             );
         }
@@ -1822,7 +2079,7 @@ impl Workbench {
                     .child(icon.size(theme::u(12.)))
                     .child(div().min_w_0().truncate().when(!on, |d| d.line_through()).child(label))
                     .tooltip(move |w, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(if on { "Sent with your message. Click to leave it out" } else { "Left out. Click to send it" })
+                        gpui_kit::component::tooltip::Tooltip::new(if on { crate::i18n::tr("Sent with your message. Click to leave it out") } else { crate::i18n::tr("Left out. Click to send it") })
                             .build(w, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1849,7 +2106,7 @@ impl Workbench {
             .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
             .shadow_md();
         if list.is_empty() {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child("No command matches"));
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No command matches")));
         }
         for (row, cmd) in list.iter().enumerate() {
             v = v.child(
@@ -1903,7 +2160,7 @@ impl Workbench {
             .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
             .shadow_md();
         if hits.is_empty() {
-            list = list.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child("No file matches"));
+            list = list.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No file matches")));
         }
         for (row, &ix) in hits.iter().enumerate() {
             let rel = self.rel_path(&self.all_files[ix]);
@@ -1934,17 +2191,17 @@ impl Workbench {
                     })),
             );
         }
-        Some(list.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child("↑↓ choose · Tab or Enter adds · Esc closes")).into_any_element())
+        Some(list.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("↑↓ choose · Tab or Enter adds · Esc closes"))).into_any_element())
     }
 
     pub(crate) fn render_agent(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let (dot, label) = match &a.status {
-            Status::Off => (theme::FG_DIM, "Off".to_string()),
-            Status::Starting if a.loading_id.is_some() => (theme::FG_MUTED, "Opening the session…".into()),
-            Status::Starting => (theme::FG_MUTED, "Starting…".into()),
-            Status::Ready => (theme::GREEN, "Ready".into()),
-            Status::Busy => (theme::BLUE, "Working…".into()),
+            Status::Off => (theme::FG_DIM, crate::i18n::tr("Off").to_string()),
+            Status::Starting if a.loading_id.is_some() => (theme::FG_MUTED, crate::i18n::tr("Opening the session…").into()),
+            Status::Starting => (theme::FG_MUTED, crate::i18n::tr("Starting…").into()),
+            Status::Ready => (theme::GREEN, crate::i18n::tr("Ready").into()),
+            Status::Busy => (theme::BLUE, crate::i18n::tr("Working…").into()),
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
@@ -1957,7 +2214,7 @@ impl Workbench {
                 h.child(div().size(px(6.)).rounded_full().bg(c(dot)))
                     .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
                     .when(a.status == Status::Busy, |h| {
-                        h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
+                        h.child(Button::new("ag-cancel").label(tr("Stop")).xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
                     })
             });
         if a.show_memory {
@@ -1965,6 +2222,9 @@ impl Workbench {
         }
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
+        }
+        if a.show_options {
+            return self.render_options(cx);
         }
 
         let name = agent_name();
@@ -1974,9 +2234,9 @@ impl Workbench {
             let hint = if missing {
                 "FluxCode can't find omm.exe (Mira) on this PC: not on PATH, in ~/.cargo/bin, ~/.local/bin or Programs\\omm. If you have it, point FluxCode to it.".to_string()
             } else if on {
-                "Type @ to add a file. Your open file, selection and last error go along when they help.".to_string()
+                crate::i18n::tr("Type @ to add a file. Your open file, selection and last error go along when they help.").to_string()
             } else {
-                "Off for now. Your first message turns it on. Type @ to add a file.".to_string()
+                crate::i18n::tr("Off for now. Your first message turns it on. Type @ to add a file.").to_string()
             };
             log = log.child(
                 v_flex()
@@ -1987,15 +2247,15 @@ impl Workbench {
                     .gap_2()
                     .px_4()
                     .child(Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
-                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("Ask {name}")))
+                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Ask {name}"; name => name)))
                     .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint))
                     .when(missing, |v| {
                         v.child(
                             h_flex()
                                 .pt_2()
                                 .gap_2()
-                                .child(Button::new("ag-pick-omm").label("Choose omm.exe…").small().primary().on_click(cx.listener(|this, _, w, cx| this.agent_choose_mira(w, cx))))
-                                .child(Button::new("ag-use-oc").label("Use OpenCode").small().on_click(cx.listener(|this, _, w, cx| {
+                                .child(Button::new("ag-pick-omm").label(tr("Choose omm.exe…")).small().primary().on_click(cx.listener(|this, _, w, cx| this.agent_choose_mira(w, cx))))
+                                .child(Button::new("ag-use-oc").label(tr("Use OpenCode")).small().on_click(cx.listener(|this, _, w, cx| {
                                     this.on_agent_use_opencode(&crate::workbench::AgentUseOpenCode, w, cx)
                                 }))),
                         )
@@ -2033,7 +2293,19 @@ impl Workbench {
                         .items_end()
                         .gap_1()
                         .pt_1()
-                        .child(speaker("You", Icon::new(IconName::User)))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    Button::new(("ag-edit", i))
+                                        .icon(Icon::new(gpui_kit::assets::IconName::Pencil))
+                                        .xsmall()
+                                        .ghost()
+                                        .tooltip(crate::i18n::tr("Edit this message"))
+                                        .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx))),
+                                )
+                                .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User))),
+                        )
                         .child(
                             div()
                                 .max_w(relative(0.92))
@@ -2066,7 +2338,7 @@ impl Workbench {
                                     .icon(IconName::Copy)
                                     .ghost()
                                     .xsmall()
-                                    .tooltip("Copy")
+                                    .tooltip(tr("Copy"))
                                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
                             )
                             .child(
@@ -2074,7 +2346,7 @@ impl Workbench {
                                     .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
                                     .ghost()
                                     .xsmall()
-                                    .tooltip("Insert at the cursor in the open file (replaces the selection)")
+                                    .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
                                     .on_click(move |_, w, cx| {
                                         if let Ok(mut p) = PENDING_INSERT.lock() {
                                             *p = Some(insert.clone());
@@ -2097,7 +2369,7 @@ impl Workbench {
                             h_flex()
                                 .gap_1p5()
                                 .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child("Thinking"))
+                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(tr("Thinking")))
                                 .when(!open, |h| h.child(div().flex_1().min_w_0().truncate().italic().child(last)))
                                 .when(open, |h| h.child(div().flex_1()))
                                 .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).flex_none()),
@@ -2190,7 +2462,7 @@ impl Workbench {
                     .text_xs()
                     .text_color(c(theme::FG_MUTED))
                     .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)).flex_none())
-                    .child(div().flex_1().min_w_0().child(format!("Saved to memory: {t}")))
+                    .child(div().flex_1().min_w_0().child(crate::trf!("Saved to memory: {t}"; t => t)))
                     .into_any_element(),
             });
         }
@@ -2205,7 +2477,7 @@ impl Workbench {
                 .border_color(c(theme::ACCENT))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
-                .child(div().text_color(c(theme::FG_STRONG)).child(format!("Allow: {}?", p.title)))
+                .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Allow: {0}?"; 0 => p.title)))
                 .child(h_flex().gap_1().flex_wrap().children(p.options.iter().enumerate().map(|(i, (oid, name, kind))| {
                     let oid = oid.clone();
                     let b = Button::new(("perm", i)).label(name.clone()).xsmall();
@@ -2228,7 +2500,7 @@ impl Workbench {
                 .child(
                     h_flex()
                         .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(format!("{} file(s) changed by the agent", a.changes.len())))
-                        .child(Button::new("ag-keep-all").label("Keep all").xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
+                        .child(Button::new("ag-keep-all").label(tr("Keep all")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
                             this.agent_reinforce_turn();
                             cx.notify();
@@ -2247,14 +2519,14 @@ impl Workbench {
                                 .child(format!("{}{}", if ch.before.is_none() { "+ " } else { "" }, ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
                                 .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx))),
                         )
-                        .child(Button::new(("ag-keep", i)).label("Keep").xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
+                        .child(Button::new(("ag-keep", i)).label(tr("Keep")).xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
                             if i < this.agent.changes.len() {
                                 this.agent.changes.remove(i);
                             }
                             this.agent_reinforce_turn();
                             cx.notify();
                         })))
-                        .child(Button::new(("ag-undo", i)).label("Undo").xsmall().on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx))))
+                        .child(Button::new(("ag-undo", i)).label(tr("Undo")).xsmall().on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx))))
                 }))
         });
 
@@ -2264,6 +2536,8 @@ impl Workbench {
             // Files dropped anywhere on the panel are attached to the next message.
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(c(theme::BG_HOVER)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                // Attached here, not opened by the window.
+                cx.stop_propagation();
                 this.agent_attach(paths.paths().to_vec(), cx);
             }))
             .child(header)
@@ -2272,6 +2546,7 @@ impl Workbench {
             .when_some(changes, |v, ch| v.child(ch))
             .children(self.render_queue(cx))
             .children(self.render_slash_popup(cx))
+            .children(self.render_edit_strip(cx))
             .children(self.render_mention_popup(cx))
             .child(self.render_composer(cx))
             .into_any_element()
@@ -2347,10 +2622,10 @@ impl Workbench {
         }
         let name = agent_name();
         let status = match &a.status {
-            Status::Busy => format!("Waiting for {name} to finish, then these are sent together"),
-            Status::Starting => format!("Sent as soon as {name} is ready"),
-            Status::Error(_) => format!("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it"),
-            _ => "Sent with your next message".to_string(),
+            Status::Busy => crate::trf!("Waiting for {name} to finish, then these are sent together"; name => name),
+            Status::Starting => crate::trf!("Sent as soon as {name} is ready"; name => name),
+            Status::Error(_) => crate::trf!("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it"; name => name),
+            _ => crate::i18n::tr("Sent with your next message").to_string(),
         };
         let busy = a.status == Status::Busy;
         Some(
@@ -2376,14 +2651,14 @@ impl Workbench {
                         .when(busy && i == 0, |h| {
                             h.child(
                                 Button::new(("ag-steer", i))
-                                    .label("Send now")
+                                    .label(tr("Send now"))
                                     .xsmall()
                                     .ghost()
-                                    .tooltip("Stop the current answer and send this now (the agent keeps the context)")
+                                    .tooltip(tr("Stop the current answer and send this now (the agent keeps the context)"))
                                     .on_click(cx.listener(|this, _, _, cx| this.agent_steer(cx))),
                             )
                         })
-                        .child(Button::new(("ag-unqueue", i)).icon(IconName::Close).xsmall().ghost().tooltip("Remove from the queue").on_click(cx.listener(move |this, _, _, cx| {
+                        .child(Button::new(("ag-unqueue", i)).icon(IconName::Close).xsmall().ghost().tooltip(tr("Remove from the queue")).on_click(cx.listener(move |this, _, _, cx| {
                             if i < this.agent.queue.len() {
                                 this.agent.queue.remove(i);
                             }
@@ -2489,7 +2764,7 @@ impl Workbench {
                             .icon(Icon::new(gpui_kit::assets::IconName::Paperclip))
                             .xsmall()
                             .ghost()
-                            .tooltip("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)")
+                            .tooltip(tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
                             .on_click(cx.listener(|this, _, w, cx| this.agent_pick_files(w, cx))),
                     )
                     .child(
@@ -2497,7 +2772,7 @@ impl Workbench {
                             .icon(Icon::new(gpui_kit::assets::IconName::AtSign))
                             .xsmall()
                             .ghost()
-                            .tooltip("Mention a file in the project")
+                            .tooltip(tr("Mention a file in the project"))
                             .on_click(cx.listener(|this, _, w, cx| {
                                 this.agent.input.update(cx, |s, cx| {
                                     let v = s.value().to_string();
@@ -2511,13 +2786,39 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
+                    .when_some(a.config.iter().find(|o| o.category == "model"), |h, m| {
+                        // "provider/Model name" reads as just the model name here, plus a non-default effort.
+                        let current = m.current_name();
+                        let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
+                        if let Some(e) = a.config.iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
+                            short = format!("{short} · {}", e.current_name());
+                        }
+                        h.child(
+                            h_flex()
+                                .id("ag-model-btn")
+                                .flex_none()
+                                .max_w(theme::u(170.))
+                                .h(theme::u(22.))
+                                .px_1p5()
+                                .gap_1()
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(c(theme::FG_MUTED))
+                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Model, effort and mode")).build(w, cx))
+                                .on_click(cx.listener(|this, _, _, cx| this.agent_open_options(cx)))
+                                .child(div().min_w_0().truncate().child(short))
+                                .child(Icon::new(IconName::ChevronDown).xsmall()),
+                        )
+                    })
                     .child(div().flex_1())
-                    .child(div().px_1().text_xs().text_color(c(theme::FG_DIM)).child(if busy { "Enter queues · Shift+Enter new line" } else { "Enter sends · Shift+Enter new line" }))
+                    .child(div().min_w_0().truncate().px_1().text_xs().text_color(c(theme::FG_DIM)).child(if busy { crate::i18n::tr("Enter queues · Shift+Enter new line") } else { crate::i18n::tr("Enter sends · Shift+Enter new line") }))
                     .child(if busy && !has_text {
                         Button::new("ag-stop")
                             .icon(IconName::Square)
                             .xsmall()
-                            .tooltip("Stop the answer")
+                            .tooltip(tr("Stop the answer"))
                             .on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx)))
                             .into_any_element()
                     } else {
@@ -2525,11 +2826,187 @@ impl Workbench {
                             .icon(IconName::ArrowUp)
                             .xsmall()
                             .when(has_text, |b| b.primary())
-                            .tooltip(if busy { "Queue (sent when the answer ends)" } else { "Send (Enter)" })
+                            .tooltip(if busy { crate::i18n::tr("Queue (sent when the answer ends)") } else { crate::i18n::tr("Send (Enter)") })
                             .on_click(cx.listener(|this, _, w, cx| this.agent_send(w, cx)))
                             .into_any_element()
                     }),
             )
+    }
+
+    /// The harness's own settings for this session, as native controls: mode
+    /// (its agents), model (free ones first, then per provider) and effort.
+    fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let name = agent_name();
+        let section = |title: String| div().px_3().pt_4().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title);
+        let header = h_flex()
+            .px_3()
+            .py_1()
+            .gap_2()
+            .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} settings"; name => name)))
+            .child(Button::new("ag-opt-back").label(crate::i18n::tr("Back to the chat")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
+                this.agent.show_options = false;
+                cx.notify();
+            })));
+        let mut body = v_flex().id("ag-options").flex_1().min_h_0().pb_3().overflow_y_scroll();
+        if a.config.is_empty() {
+            let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
+            body = body.child(
+                v_flex()
+                    .px_3()
+                    .py_3()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(if on {
+                        crate::trf!("{name} is starting. Its models and settings show here in a moment."; name => name)
+                    } else {
+                        crate::trf!("{name} lists its models and settings once it is on."; name => name)
+                    })
+                    .when(!on, |v| {
+                        v.child(Button::new("ag-opt-on").label(crate::trf!("Turn {name} on"; name => name)).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_set_on(true, cx))))
+                    }),
+            );
+        }
+        // Mode first (it changes what the agent does), then model, then effort, then the rest.
+        let order = |o: &ConfigOpt| match o.category.as_str() {
+            "mode" => 0,
+            "model" => 1,
+            "thought_level" => 2,
+            _ => 3,
+        };
+        let mut opts: Vec<&ConfigOpt> = a.config.iter().collect();
+        opts.sort_by_key(|o| order(o));
+        let row = |key: SharedString, on: bool, title: String, desc: String| {
+            h_flex()
+                .id(key)
+                .mx_2()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(c(theme::SELECT)))
+                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                .child(div().w(theme::u(14.)).flex_none().when(on, |d| d.child(Icon::new(IconName::Check).xsmall().text_color(c(theme::ACCENT_TEXT)))))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().truncate().text_xs().text_color(c(if on { theme::FG_STRONG } else { theme::FG })).child(title))
+                        .when(!desc.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(desc))),
+                )
+        };
+        for o in opts {
+            match o.category.as_str() {
+                "thought_level" => {
+                    // Few short choices: one segmented row, "default" first.
+                    let mut choices = o.choices.clone();
+                    choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
+                    body = body.child(section(crate::i18n::tr("Effort").to_string())).child(
+                        h_flex().px_3().gap_1().flex_wrap().children(choices.into_iter().map(|(v, n, _)| {
+                            let id = o.id.clone();
+                            let on = o.current == v;
+                            Button::new(SharedString::from(format!("ag-opt-{id}-{v}")))
+                                .label(n)
+                                .xsmall()
+                                .when(on, |b| b.primary())
+                                .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
+                        })),
+                    ).child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("How long the model thinks before it answers. More thinking is slower and more careful.")));
+                }
+                "model" => {
+                    body = body.child(section(crate::i18n::tr("Model").to_string()));
+                    for (group, models) in model_groups(&o.choices) {
+                        let title = if group == "free" { crate::i18n::tr("Free (OpenCode Zen)").to_string() } else if group.is_empty() { String::new() } else { group };
+                        body = body.when(!title.is_empty(), |b| b.child(div().px_4().pt_2().pb_px().text_xs().text_color(c(theme::FG_DIM)).child(title)));
+                        for (v, n) in models {
+                            let id = o.id.clone();
+                            let on = o.current == v;
+                            body = body.child(
+                                row(SharedString::from(format!("ag-opt-{id}-{v}")), on, n, String::new())
+                                    .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx))),
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    let title = if o.category == "mode" { crate::i18n::tr("Agent mode").to_string() } else { o.name.clone() };
+                    body = body.child(section(title));
+                    for (v, n, d) in o.choices.clone() {
+                        let id = o.id.clone();
+                        let on = o.current == v;
+                        body = body.child(
+                            row(SharedString::from(format!("ag-opt-{id}-{v}")), on, n, d)
+                                .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx))),
+                        );
+                    }
+                }
+            }
+        }
+        // FluxCode's side of the agent, and OpenCode's own config file.
+        let s = &self.settings;
+        let toggle = |id: &'static str, on: bool| Button::new(id).label(if on { crate::i18n::tr("On") } else { crate::i18n::tr("Off") }).xsmall().when(on, |b| b.primary());
+        body = body
+            .child(section(crate::i18n::tr("In FluxCode").to_string()))
+            .child(
+                h_flex()
+                    .px_3()
+                    .py_1()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Edit files and run commands without asking")))
+                    .child(toggle("ag-opt-aa", s.agent_auto_approve).on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.agent_auto_approve = !this.settings.agent_auto_approve;
+                        this.settings.save();
+                        cx.notify();
+                    }))),
+            )
+            .child(
+                h_flex()
+                    .px_3()
+                    .py_1()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(crate::i18n::tr("Turn off after 10 idle minutes to free memory")))
+                    .child(toggle("ag-opt-idle", s.agent_idle_min > 0).on_click(cx.listener(|this, _, _, cx| {
+                        this.settings.agent_idle_min = if this.settings.agent_idle_min == 0 { 10 } else { 0 };
+                        this.settings.save();
+                        cx.notify();
+                    }))),
+            );
+        if name == "OpenCode" {
+            if let Some(cfg) = opencode_config_file() {
+                body = body.child(
+                    h_flex().px_3().pt_2().child(
+                        Button::new("ag-opt-cfg")
+                            .label(crate::i18n::tr("Open OpenCode's config file"))
+                            .xsmall()
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(cfg.clone(), w, cx))),
+                    ),
+                );
+            }
+        }
+        v_flex().size_full().child(header).child(body).into_any_element()
+    }
+
+    /// While an earlier message is being edited: what Enter will do, and a way out.
+    fn render_edit_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.agent.editing?;
+        Some(
+            h_flex()
+                .mx_3()
+                .mb_1()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .rounded(px(4.))
+                .bg(c(theme::BG_ELEVATED))
+                .text_xs()
+                .text_color(c(theme::FG_MUTED))
+                .child(Icon::new(gpui_kit::assets::IconName::Pencil).xsmall().text_color(c(theme::ACCENT_TEXT)))
+                .child(div().flex_1().min_w_0().child(crate::i18n::tr("Editing your message. Enter sends it and the answer starts over from there. Esc cancels.")))
+                .child(Button::new("ag-edit-cancel").icon(IconName::Close).xsmall().ghost().on_click(cx.listener(|this, _, w, cx| this.agent_cancel_edit(w, cx))))
+                .into_any_element(),
+        )
     }
 
     /// The memories used in this turn helped (the user kept the changes).
@@ -2541,6 +3018,33 @@ impl Workbench {
     }
 }
 
+/// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
+fn opencode_config_file() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    let dir = PathBuf::from(home).join(".config").join("opencode");
+    ["opencode.jsonc", "opencode.json"].iter().map(|n| dir.join(n)).find(|p| p.is_file())
+}
+
 /// Code from an answer's Insert button, handed to `on_agent_insert_code` (the
 /// button's closure can't hold the workbench, so it goes through an action).
 static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+mod tests {
+    use super::model_groups;
+
+    #[test]
+    fn groups_free_models_first() {
+        let c = |v: &str, n: &str| (v.to_string(), n.to_string(), String::new());
+        let g = model_groups(&[
+            c("claude-agent/sonnet", "claude-agent/Sonnet 5.5"),
+            c("my-ai-gweh/SigmaBoy", "my-ai-gweh/SigmaBoy"),
+            c("opencode/big-pickle", "opencode/Big Pickle"),
+            c("opencode/glm-5.3-flash-free", "opencode/GLM-5.3-Flash Free"),
+        ]);
+        assert_eq!(g[0].0, "free");
+        assert_eq!(g[0].1, vec![("opencode/glm-5.3-flash-free".to_string(), "GLM-5.3-Flash".to_string())]);
+        assert_eq!(g.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["free", "claude-agent", "my-ai-gweh", "opencode"]);
+        assert_eq!(g[1].1[0].1, "Sonnet 5.5");
+    }
+}

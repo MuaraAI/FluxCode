@@ -244,6 +244,28 @@ median of 5 runs, this repository open; Tauri numbers include every WebView2 pro
 - One outline icon set in the explorer, tabs and search, tinted by file type; folders the
   explorer does not open (`.git`, `node_modules`, `dist`, …) are listed dimmed.
 
+**Files** (Explorer, tabs, Go to File):
+
+- Syntax colors for about 200 languages (bat's grammar set through syntect, which replaced
+  the 19 tree-sitter grammars and is lighter), picked by file name (`Dockerfile`,
+  `Gemfile`, `.env.local`, `requirements-dev.txt`, ...), extension, or the `#!` line of
+  scripts without one. The status bar names the language.
+- Files a text editor can't show open as a read-only view instead of an error:
+  Word / Excel / PowerPoint / OpenDocument as their text (sheets as tab-separated rows),
+  PDFs as their text, ZIP-based archives (zip, jar, whl, apk, ...) as a file list with
+  sizes, SQLite databases as their tables with SQL and row counts, and anything else
+  binary as a hex dump (first 64 KB). A line above the view says what it is. Empty files
+  say so. UTF-16 text (with a BOM) opens as text.
+- Drop folders or files on the window: files open in tabs; a folder opens when none is
+  open, otherwise FluxCode asks whether to **add it to the workspace** (next to the open
+  folder, as its own root in the explorer) or **switch** to it. Go to File, Find in Files,
+  `@` and the agent cover every folder of the workspace; right-click an added folder to
+  remove it. The workspace is restored on the next start.
+
+**Language**: English or Bahasa Indonesia (Settings → Language; *Automatic* follows
+Windows' display language or regional format). Menus, panels, the agent panel and
+messages switch at once.
+
 **GPUI Fast**: the GPUI edition builds on [GPUI Fast](https://github.com/longbridge/gpui-fast)
 (retained mode) by default. Measured against standard GPUI, same source and profile, same
 machine (median of 5 runs, large-file scroll 3 runs; `--no-default-features` builds the
@@ -308,6 +330,22 @@ The agent panel:
 - Messages sent while the agent is still answering wait in a queue above the input. They go
   out together once the answer ends, or right away with Send now (which stops the current
   answer and tells the agent why). The X removes a queued message.
+- **Settings for the agent** (title menu → *settings*, or the model button under the input):
+  everything the harness offers over ACP (`configOptions`), as native controls: its agent
+  modes with their descriptions, the **model** (OpenCode Zen's free models grouped first,
+  then one group per provider) and the **effort** (the levels the model offers, such as Default / Low / High / Max). Choices
+  apply to the running session and are reused for new ones. The same view has FluxCode's
+  auto-approve and idle-stop switches and opens OpenCode's config file. When a prompt
+  fails because of the model (no credentials, quota), the panel says to pick another one.
+- **Edit a message** (pencil next to it): the chat goes back to that message, and Enter
+  sends the new text to a fresh session that gets everything before it as context, so the
+  answer starts over from there.
+- **Workspace context**: the first message of a session (and the next one after the
+  workspace changes) carries an overview: the folders, what each project is (from
+  package.json, Cargo.toml, pyproject/requirements, go.mod, composer.json, Makefile,
+  workflows, Docker, ...), the README's first lines, top-level layout, files per language,
+  git branch and uncommitted changes, and the open tabs. A *Workspace* chip shows when it
+  goes along (click to leave it out).
 - Switching between OpenCode and Mira keeps the chat: a divider marks the switch, and the new
   agent gets the conversation so far with its first message.
 - Answers render as Markdown, with the agent's reasoning folded under Thinking; code blocks have Copy and Insert (at the cursor in the open

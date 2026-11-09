@@ -1,5 +1,6 @@
 //! Explorer side bar: file tree, context menu, new/rename/delete.
 
+use crate::i18n::tr;
 use crate::core;
 use crate::files;
 use crate::theme::{self, c};
@@ -23,8 +24,8 @@ impl Workbench {
                 .gap_3()
                 .text_sm()
                 .text_color(c(theme::FG_MUTED))
-                .child("You have not yet opened a folder.")
-                .child(self.action_button("x-open-folder", "Open folder", crate::ui::Kind::Primary, cx, |_, w, cx| {
+                .child(tr("You have not yet opened a folder."))
+                .child(self.action_button("x-open-folder", tr("Open folder"), crate::ui::Kind::Primary, cx, |_, w, cx| {
                     w.dispatch_action(Box::new(OpenFolder), cx)
                 }))
                 .into_any_element();
@@ -35,6 +36,9 @@ impl Workbench {
         let target = self.ctx_target.clone();
         let dirs = self.dirs.clone();
         let (marks, dirty_dirs) = (self.scm.marks.clone(), self.scm.dirty_dirs.clone());
+        // In a multi-folder workspace the top rows are the folders themselves.
+        let multi = !self.workspace.extra.is_empty();
+        let extra = self.workspace.extra.clone();
         let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
             let item = entry.item();
             let id = item.id.to_string();
@@ -87,7 +91,14 @@ impl Workbench {
                         .text_size(theme::u(11.5))
                         .text_color(label_color)
                         .child(lead)
-                        .child(div().flex_1().truncate().when(mark == Some('D'), |d| d.line_through()).child(item.label.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .when(multi && entry.depth() == 0, |d| d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)))
+                                .when(mark == Some('D'), |d| d.line_through())
+                                .child(item.label.clone()),
+                        )
                         .when_some(mark, |h, m| h.child(div().text_xs().font_weight(FontWeight::BOLD).child(m.to_string())))
                         .when(dir_dirty, |h| h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN)))),
                 )
@@ -107,15 +118,22 @@ impl Workbench {
                 })
         })
         .context_menu(move |_ix, entry, menu, _window, _cx| {
-            *target.borrow_mut() = Some(PathBuf::from(entry.item().id.as_ref()));
-            menu.menu("New File...", Box::new(ExplorerNewFile))
-                .menu("New Folder...", Box::new(ExplorerNewFolder))
+            let path = PathBuf::from(entry.item().id.as_ref());
+            let added = extra.contains(&path);
+            *target.borrow_mut() = Some(path);
+            let menu = if added {
+                menu.menu(tr("Remove Folder from Workspace"), Box::new(crate::workbench::RemoveFolder)).separator()
+            } else {
+                menu
+            };
+            menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
+                .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
                 .separator()
-                .menu("Rename...", Box::new(ExplorerRename))
-                .menu("Delete", Box::new(ExplorerDelete))
+                .menu(tr("Rename..."), Box::new(ExplorerRename))
+                .menu(tr("Delete"), Box::new(ExplorerDelete))
                 .separator()
-                .menu("Copy Path", Box::new(CopyPath))
-                .menu("Reveal in File Explorer", Box::new(RevealInExplorer))
+                .menu(tr("Copy Path"), Box::new(CopyPath))
+                .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
         })
         .text_size(theme::u(11.5))
         .size_full();
@@ -130,10 +148,10 @@ impl Workbench {
 
     fn render_pending(&self, op: PendingOp, cx: &mut Context<Self>) -> impl IntoElement {
         let (label, confirm) = match &op {
-            PendingOp::NewFile(d) => (format!("New file in {}", short(d)), "Create"),
-            PendingOp::NewFolder(d) => (format!("New folder in {}", short(d)), "Create"),
-            PendingOp::Rename(p) => (format!("Rename {}", short(p)), "Rename"),
-            PendingOp::Delete(p) => (format!("Move {} to the Recycle Bin?", short(p)), "Delete"),
+            PendingOp::NewFile(d) => (crate::trf!("New file in {0}"; 0 => short(d)), tr("Create")),
+            PendingOp::NewFolder(d) => (crate::trf!("New folder in {0}"; 0 => short(d)), tr("Create")),
+            PendingOp::Rename(p) => (crate::trf!("Rename {0}"; 0 => short(p)), tr("Rename")),
+            PendingOp::Delete(p) => (crate::trf!("Move {0} to the Recycle Bin?"; 0 => short(p)), tr("Delete")),
         };
         let ask_name = !matches!(op, PendingOp::Delete(_));
         v_flex()
@@ -158,7 +176,7 @@ impl Workbench {
                             .when(!matches!(op, PendingOp::Delete(_)), |b| b.primary())
                             .on_click(cx.listener(|this, _, w, cx| this.commit_pending(w, cx))),
                     )
-                    .child(Button::new("pending-cancel").label("Cancel").xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
+                    .child(Button::new("pending-cancel").label(tr("Cancel")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
                         this.pending = None;
                         cx.notify();
                     }))),
@@ -239,7 +257,7 @@ impl Workbench {
         let bad_name = name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']);
         let result = match &op {
             PendingOp::NewFile(_) | PendingOp::NewFolder(_) | PendingOp::Rename(_) if bad_name => {
-                Err(format!("\"{name}\" is not a valid name"))
+                Err(crate::trf!("\"{name}\" is not a valid name"; name => name))
             }
             PendingOp::NewFile(dir) => {
                 let p = dir.join(&name);

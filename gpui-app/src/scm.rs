@@ -9,6 +9,7 @@
 //! Commits use `git commit --quiet --file -` (message on stdin) like VS Code,
 //! including its "smart commit": with nothing staged, everything is committed.
 
+use crate::i18n::tr;
 use crate::proc;
 use crate::theme::{self, c};
 use crate::workbench::*;
@@ -119,7 +120,7 @@ pub struct Scm {
 
 impl Scm {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
-        let message = cx.new(|cx| InputState::new(window, cx).placeholder("Message (Enter to commit)"));
+        let message = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Message (Enter to commit)")));
         let sub = cx.subscribe_in(&message, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 this.scm_commit(After::Nothing, false, window, cx);
@@ -350,7 +351,7 @@ impl Workbench {
     pub(crate) fn scm_run(&mut self, label: &str, steps: Vec<Step>, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static) {
         let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else { return };
         if self.scm.busy.is_some() {
-            self.status = "Source Control is busy, try again in a moment".into();
+            self.status = tr("Source Control is busy, try again in a moment").into();
             cx.notify();
             return;
         }
@@ -468,7 +469,7 @@ impl Workbench {
     pub(crate) fn scm_sync(&mut self, cx: &mut Context<Self>) {
         let mut steps = vec![git_step(&["pull", "--autostash"])];
         steps.extend(self.push_steps());
-        self.scm_run("Syncing…", steps, cx, |this, _, _| this.status = "Synced with the remote".into());
+        self.scm_run("Syncing…", steps, cx, |this, _, _| this.status = tr("Synced with the remote").into());
     }
 
     fn scm_create_pr(&mut self, cx: &mut Context<Self>) {
@@ -678,19 +679,19 @@ impl Workbench {
     pub(crate) fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.scm;
         if self.root.is_none() {
-            return div().p_3().text_sm().text_color(c(theme::FG_DIM)).child("Open a folder to use Source Control.").into_any_element();
+            return div().p_3().text_sm().text_color(c(theme::FG_DIM)).child(tr("Open a folder to use Source Control.")).into_any_element();
         }
         if s.repo.is_none() {
             return v_flex()
                 .p_3()
                 .gap_3()
                 .text_sm()
-                .child(div().text_color(c(theme::FG_MUTED)).child("This folder is not a Git repository."))
+                .child(div().text_color(c(theme::FG_MUTED)).child(tr("This folder is not a Git repository.")))
                 .child(
-                    Button::new("scm-init").label("Initialize Repository").primary().small().w_full().on_click(cx.listener(|this, _, _, cx| {
+                    Button::new("scm-init").label(tr("Initialize Repository")).primary().small().w_full().on_click(cx.listener(|this, _, _, cx| {
                         let dir = this.root.clone();
                         this.scm.repo = dir;
-                        this.scm_run("Initializing…", vec![git_step(&["init"])], cx, |this, _, _| this.status = "Git repository created".into());
+                        this.scm_run("Initializing…", vec![git_step(&["init"])], cx, |this, _, _| this.status = tr("Git repository created").into());
                     })),
                 )
                 .into_any_element();
@@ -719,10 +720,10 @@ impl Workbench {
             .child(
                 Button::new("scm-commit-more").icon(Icon::new(IconName::ChevronDown)).primary().small().dropdown_menu(|m: PopupMenu, _, _| {
                     m.min_w(px(220.))
-                        .menu("Commit & Push", Box::new(ScmCommitPush))
-                        .menu("Commit & Sync", Box::new(ScmCommitSync))
+                        .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
+                        .menu(tr("Commit & Sync"), Box::new(ScmCommitSync))
                         .separator()
-                        .menu("Commit (Amend)", Box::new(ScmCommitAmend))
+                        .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
                 }),
             );
 
@@ -763,7 +764,7 @@ impl Workbench {
                                         .text_color(c(theme::BLUE))
                                         .cursor_pointer()
                                         .hover(|s| s.underline())
-                                        .child("Open")
+                                        .child(tr("Open"))
                                         .on_click(move |_, _, cx| cx.open_url(&url)),
                                 )
                             }),
@@ -819,7 +820,7 @@ impl Workbench {
                                     .icon(Icon::new(Ico::FileDiff))
                                     .ghost()
                                     .xsmall()
-                                    .tooltip("Show changes")
+                                    .tooltip(tr("Show changes"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
                                         this.scm_show_diff(c1.clone(), false, cx);
@@ -830,8 +831,8 @@ impl Workbench {
                                     .icon(Icon::new(Ico::Undo2))
                                     .ghost()
                                     .xsmall()
-                                    .when(confirm, |b| b.label("Discard?"))
-                                    .tooltip("Discard changes (click twice)")
+                                    .when(confirm, |b| b.label(tr("Discard?")))
+                                    .tooltip(tr("Discard changes (click twice)"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
                                         this.scm_discard(c2.clone(), cx);
@@ -839,7 +840,7 @@ impl Workbench {
                             )
                         })
                         .when(staged, |h| {
-                            h.child(Button::new(("scm-sdiff", i)).icon(Icon::new(Ico::FileDiff)).ghost().xsmall().tooltip("Show staged changes").on_click(cx.listener(
+                            h.child(Button::new(("scm-sdiff", i)).icon(Icon::new(Ico::FileDiff)).ghost().xsmall().tooltip(tr("Show staged changes")).on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     cx.stop_propagation();
                                     this.scm_show_diff(c3.clone(), true, cx);
@@ -875,7 +876,7 @@ impl Workbench {
         }
         if !st.staged.is_empty() {
             body = body.child(section("scm-sec-staged", "Staged Changes".into(), st.staged.len(), true).child(
-                Button::new("scm-unstage-all").icon(Icon::new(IconName::Minus)).ghost().xsmall().tooltip("Unstage All").on_click(cx.listener(|this, _, _, cx| {
+                Button::new("scm-unstage-all").icon(Icon::new(IconName::Minus)).ghost().xsmall().tooltip(tr("Unstage All")).on_click(cx.listener(|this, _, _, cx| {
                     this.scm_stage(None, false, cx);
                 })),
             ));
@@ -884,7 +885,7 @@ impl Workbench {
             }
         }
         body = body.child(section("scm-sec-changes", "Changes".into(), st.changes.len(), true).when(!st.changes.is_empty(), |h| {
-            h.child(Button::new("scm-stage-all").icon(Icon::new(IconName::Plus)).ghost().xsmall().tooltip("Stage All").on_click(cx.listener(|this, _, _, cx| {
+            h.child(Button::new("scm-stage-all").icon(Icon::new(IconName::Plus)).ghost().xsmall().tooltip(tr("Stage All")).on_click(cx.listener(|this, _, _, cx| {
                 this.scm_stage(None, true, cx);
             })))
         }));
@@ -892,7 +893,7 @@ impl Workbench {
             body = body.child(file_row(i, 0, ch, self, cx));
         }
         if st.count() == 0 {
-            body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child("No changes. The working tree matches the last commit."));
+            body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No changes. The working tree matches the last commit.")));
         }
 
         // Sync bar: VS Code puts this in the status bar; it also reads well here.
@@ -916,7 +917,7 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, _, cx| {
                             if this.scm.status.upstream.is_none() {
                                 let steps = this.push_steps();
-                                this.scm_run("Publishing branch…", steps, cx, |this, _, _| this.status = "Branch published".into());
+                                this.scm_run("Publishing branch…", steps, cx, |this, _, _| this.status = tr("Branch published").into());
                             } else {
                                 this.scm_sync(cx);
                             }
@@ -926,7 +927,7 @@ impl Workbench {
                     Button::new("scm-pr")
                         .icon(Icon::new(Ico::GitPullRequest))
                         .small()
-                        .tooltip("Create a pull request on GitHub (gh pr create --fill)")
+                        .tooltip(tr("Create a pull request on GitHub (gh pr create --fill)"))
                         .on_click(cx.listener(|this, _, _, cx| this.scm_create_pr(cx))),
                 ),
         );
@@ -1035,10 +1036,10 @@ impl Workbench {
                         .child(
                             Button::new(("scm-wf", i))
                                 .icon(Icon::new(IconName::Play))
-                                .label("Run")
+                                .label(tr("Run"))
                                 .ghost()
                                 .xsmall()
-                                .tooltip("gh workflow run on the current branch (needs workflow_dispatch)")
+                                .tooltip(tr("gh workflow run on the current branch (needs workflow_dispatch)"))
                                 .on_click(cx.listener(move |this, _, _, cx| this.scm_run_workflow(w.clone(), cx))),
                         ),
                 );
@@ -1079,19 +1080,19 @@ impl Workbench {
             .child(tool_button("scm-h-refresh", IconName::RefreshCw, "Refresh", cx, |this, _, cx| this.scm_refresh(cx)))
             .child(Button::new("scm-h-more").icon(Icon::new(IconName::Ellipsis)).ghost().xsmall().dropdown_menu(|m: PopupMenu, _, _| {
                 m.min_w(px(230.))
-                    .menu("Pull", Box::new(ScmPull))
-                    .menu("Push", Box::new(ScmPush))
-                    .menu("Sync (Pull, then Push)", Box::new(ScmSync))
-                    .menu("Fetch", Box::new(ScmFetch))
+                    .menu(tr("Pull"), Box::new(ScmPull))
+                    .menu(tr("Push"), Box::new(ScmPush))
+                    .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
+                    .menu(tr("Fetch"), Box::new(ScmFetch))
                     .separator()
-                    .menu("Commit & Push", Box::new(ScmCommitPush))
-                    .menu("Commit (Amend)", Box::new(ScmCommitAmend))
+                    .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
+                    .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
                     .separator()
-                    .menu("Stage All Changes", Box::new(ScmStageAll))
-                    .menu("Unstage All Changes", Box::new(ScmUnstageAll))
+                    .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
+                    .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
                     .separator()
-                    .menu("Create Pull Request", Box::new(ScmCreatePr))
-                    .menu("Open Repository on GitHub", Box::new(ScmOpenGithub))
+                    .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
+                    .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
             }))
     }
 
@@ -1117,18 +1118,18 @@ impl Workbench {
         self.scm_run("Pulling…", vec![git_step(&["pull", "--autostash"])], cx, |this, _, cx| {
             this.agent.reloads.extend(this.docs.iter().filter(|d| !d.dirty).map(|d| d.path.clone()));
             this.refresh_tree(cx);
-            this.status = "Pulled".into();
+            this.status = tr("Pulled").into();
         });
     }
     pub(crate) fn on_scm_push(&mut self, _: &ScmPush, _: &mut Window, cx: &mut Context<Self>) {
         let steps = self.push_steps();
-        self.scm_run("Pushing…", steps, cx, |this, _, _| this.status = "Pushed".into());
+        self.scm_run("Pushing…", steps, cx, |this, _, _| this.status = tr("Pushed").into());
     }
     pub(crate) fn on_scm_sync(&mut self, _: &ScmSync, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_sync(cx);
     }
     pub(crate) fn on_scm_fetch(&mut self, _: &ScmFetch, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run("Fetching…", vec![git_step(&["fetch", "--prune"])], cx, |this, _, _| this.status = "Fetched".into());
+        self.scm_run("Fetching…", vec![git_step(&["fetch", "--prune"])], cx, |this, _, _| this.status = tr("Fetched").into());
     }
     pub(crate) fn on_scm_stage_all(&mut self, _: &ScmStageAll, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_stage(None, true, cx);

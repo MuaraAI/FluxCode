@@ -68,7 +68,7 @@ fn u32le(b: &[u8], at: usize) -> Option<u32> {
 }
 
 /// The files in a ZIP archive: (name, compressed data offset, compressed size, method, size).
-fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, usize)>> {
+pub(crate) fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, usize)>> {
     // End of central directory: signature PK\5\6, searched from the end (comment ≤ 64 KiB).
     let start = b.len().saturating_sub(22 + 65_535);
     let eocd = (start..b.len().saturating_sub(21)).rev().find(|&i| b[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])?;
