@@ -41,39 +41,47 @@ pub struct Info {
     running: bool,
 }
 
-/// Where the ACP AI Agent CLI lives: prioritize native MuaraAI `omm` (oh-my-mira),
-/// then fallback to `opencode`.
+/// Where the ACP AI Agent CLI lives: prioritize native MuaraAI `mura` (Mura Harness),
+/// then fallback to `omm` or `opencode`.
 fn find_agent() -> Option<PathBuf> {
-    // 1. Priority: native `omm` (oh-my-mira)
-    let mut omm_candidates: Vec<PathBuf> = Vec::new();
+    // 1. Priority: native `mura` (Mura Harness) or `omm`
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if !cfg!(windows) {
         if let Ok(home) = std::env::var("HOME") {
-            omm_candidates.push(Path::new(&home).join(".local").join("bin").join("omm"));
-            omm_candidates.push(Path::new(&home).join(".cargo").join("bin").join("omm"));
+            candidates.push(Path::new(&home).join(".local").join("bin").join("mura"));
+            candidates.push(Path::new(&home).join(".cargo").join("bin").join("mura"));
+            candidates.push(Path::new(&home).join(".local").join("bin").join("omm"));
+            candidates.push(Path::new(&home).join(".cargo").join("bin").join("omm"));
         }
         if let Some(path) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&path) {
-                omm_candidates.push(dir.join("omm"));
+                candidates.push(dir.join("mura"));
+                candidates.push(dir.join("omm"));
             }
         }
-        omm_candidates.push(PathBuf::from("/usr/local/bin/omm"));
+        candidates.push(PathBuf::from("/usr/local/bin/mura"));
+        candidates.push(PathBuf::from("/usr/local/bin/omm"));
     }
     if cfg!(windows) {
         if let Some(path) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&path) {
-                omm_candidates.push(dir.join("omm.exe"));
+                candidates.push(dir.join("mura.exe"));
+                candidates.push(dir.join("omm.exe"));
             }
         }
         for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA"] {
             if let Ok(base) = std::env::var(var) {
                 let b = Path::new(&base);
-                omm_candidates.push(b.join(".cargo").join("bin").join("omm.exe"));
-                omm_candidates.push(b.join(".local").join("bin").join("omm.exe"));
-                omm_candidates.push(b.join("Programs").join("omm").join("omm.exe"));
+                candidates.push(b.join(".cargo").join("bin").join("mura.exe"));
+                candidates.push(b.join(".local").join("bin").join("mura.exe"));
+                candidates.push(b.join("Programs").join("mura").join("mura.exe"));
+                candidates.push(b.join(".cargo").join("bin").join("omm.exe"));
+                candidates.push(b.join(".local").join("bin").join("omm.exe"));
+                candidates.push(b.join("Programs").join("omm").join("omm.exe"));
             }
         }
     }
-    if let Some(p) = omm_candidates.into_iter().find(|p| p.is_file()) {
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
         return Some(p);
     }
 
@@ -146,6 +154,7 @@ pub fn acp_info(acp: State<'_, Acp>) -> Info {
                 let raw = String::from_utf8_lossy(&o.stdout);
                 raw.trim()
                     .trim_start_matches("opencode")
+                    .trim_start_matches("mura")
                     .trim_start_matches("omm")
                     .trim()
                     .to_string()
@@ -156,12 +165,12 @@ pub fn acp_info(acp: State<'_, Acp>) -> Info {
     Info { path, version, running }
 }
 
-/// Start ACP agent (`omm acp` or `opencode acp`) in `cwd` (stopping a previous one first).
+/// Start ACP agent (`mura acp`, `omm acp` or `opencode acp`) in `cwd` (stopping a previous one first).
 /// Each stdout line arrives as an `acp-line` event; stderr as `acp-log`; the end as `acp-exit`.
 #[tauri::command]
 pub fn acp_start(app: AppHandle, acp: State<'_, Acp>, cwd: Option<String>) -> Result<String, String> {
     stop_inner(&acp);
-    let mut cmd = agent_cmd().ok_or("No ACP agent found. Install `omm` (oh-my-mira) from MuaraAI or `opencode`.")?;
+    let mut cmd = agent_cmd().ok_or("No ACP agent found. Install `mura` from MuaraAI or `opencode`.")?;
     cmd.arg("acp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
