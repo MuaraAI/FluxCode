@@ -205,6 +205,8 @@ share stays as above.
 
 ## GPUI edition (native, no WebView)
 
+What changed in each version, with before/after numbers: [gpui-app/CHANGELOG.md](gpui-app/CHANGELOG.md) (in Indonesian).
+
 [`gpui-app/`](gpui-app/) is a second FluxCode front end built on
 [GPUI](https://gpui.rs) (Zed's GPU-accelerated Rust UI framework) and
 [gpui-component](https://github.com/longbridge/gpui-kit). The UI is drawn by the GPU
