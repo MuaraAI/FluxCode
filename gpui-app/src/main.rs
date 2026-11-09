@@ -12,6 +12,7 @@ mod agent;
 mod agent_ctx;
 mod complete;
 mod core;
+mod diff;
 mod docs;
 mod explorer;
 mod files;

@@ -66,10 +66,8 @@ pub struct Settings {
     /// OpenCode docks on the right of the editor (like a chat beside the code)
     /// instead of in the left side bar.
     pub agent_right: bool,
-    /// Which agent harness the panel runs: "auto" (Mira when installed), "opencode" or "mira".
+    /// Which agent harness the panel runs: "auto" (Mura when installed), "opencode" or "mura".
     pub agent_cli: String,
-    /// Where omm.exe (Mira) is, when it isn't on PATH or in a usual folder.
-    pub mira_path: Option<PathBuf>,
     /// Turn the agent process off after this many idle minutes (0 = never). It
     /// resumes the same session on the next message.
     pub agent_idle_min: u32,
@@ -106,7 +104,6 @@ impl Default for Settings {
             ui_size: UiSize::default(),
             agent_right: true,
             agent_cli: "auto".into(),
-            mira_path: None,
             agent_idle_min: 10,
             language: "auto".into(),
             agent_options: Default::default(),

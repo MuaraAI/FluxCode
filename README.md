@@ -264,8 +264,9 @@ median of 5 runs, this repository open; Tauri numbers include every WebView2 pro
   `@` and the agent cover every folder of the workspace; right-click an added folder to
   remove it. The workspace is restored on the next start.
 
-**Scrolling**: a mouse-wheel notch in the code editor glides three lines in about 100 ms
-(like VS Code's smooth scrolling) instead of jumping; quick notches add up. Touchpads keep
+**Scrolling**: a mouse-wheel notch in the code editor and in the agent chat glides three
+lines in about 100 ms (like VS Code's smooth scrolling) instead of jumping; quick notches add
+up. It moves one step per screen frame and does nothing between glides. Touchpads keep
 the editor's own pixel scrolling. Whitespace dots are off by default (Settings turns them on).
 
 **Language**: English or Bahasa Indonesia (Settings → Language; *Automatic* follows
@@ -314,15 +315,14 @@ The GPUI terminal is tuned for Python:
 
 OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
 its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
-MuaraAI's `omm` (Mira) harness is installed, the panel uses it instead of OpenCode
-(both speak ACP); the title menu switches between them.
+MuaraAI's Mura harness is installed, the panel uses it instead of OpenCode
+(both speak ACP); the title menu switches between them. (Mira / `omm` was removed in 0.9.1.)
 
 The agent panel:
 
 - `/` lists commands (Tab fills, Enter runs): FluxCode's own (`/remember`, `/new`, `/history`,
   `/memory`, `/stop`) and the ones the agent announces over ACP (OpenCode's `/review`, `/compact`, ...).
-- Mira: when omm.exe isn't on PATH or in a usual folder, the panel offers to choose it (saved
-  in Settings). The agent turns off after 10 quiet minutes to free its memory (OpenCode runs
+- The agent turns off after 10 quiet minutes to free its memory (OpenCode runs
   several hundred MB) and resumes the same session on the next message (Settings can turn this off).
 - `@file` (or `@folder`) adds files to a message, with a fuzzy file list (Up/Down, Tab or
   Enter). Chips above the input show what goes along with the message: the open file, the
@@ -337,14 +337,14 @@ The agent panel:
   out together once the answer ends, or right away with Send now (which stops the current
   answer and tells the agent why). The X removes a queued message.
 - **Mura** ([MuaraAI/Mura-Harness](https://github.com/MuaraAI/Mura-Harness), one Rust binary,
-  `mura acp`) is the third harness in the title menu, next to OpenCode and Mira, and the
+  `mura acp`) is in the title menu next to OpenCode, and the
   first choice when it is installed. It stays a separate program: build it with
   `cargo build --release -p mura-cli` and put `mura.exe` on PATH or in `~/.local/bin`;
   set its provider once with `mura setup`. Its personas (Core, Scout, Planner, Reviewer,
   Security), models and effort show in the agent settings.
 - **Access** (eye / pencil / shield button under the input, or Settings): *Read only* (it reads
   and explains; edits and commands it asks for are refused, and it is told so), *Read & write*
-  (file edits go through, with Undo in the changes card; commands ask), *Full access* (nothing
+  (file edits go through, with Undo in the Changes card; commands ask), *Full access* (nothing
   asks). It applies to what the agent asks permission for or writes through FluxCode.
 - While the agent works, its state shows in the input's bottom row, not above the chat.
 - Memory is native (Rust), with no background process: the store is parsed once and kept in RAM
@@ -372,11 +372,16 @@ The agent panel:
   workflows, Docker, ...), the README's first lines, top-level layout, files per language,
   git branch and uncommitted changes, and the open tabs. A *Workspace* chip shows when it
   goes along (click to leave it out).
-- Switching between OpenCode and Mira keeps the chat: a divider marks the switch, and the new
+- **Changes**: every file the agent edits this turn is listed above the input with the
+  lines it added and removed (+12 -3), like a worktree. Click the name to open the file, the
+  diff button for a unified diff in a tab, the undo button to put that file back; Undo all and
+  Keep all are in the card's header. FluxCode reads a file just before an edit runs (or takes
+  the old text from the agent's diff), so this works for edits the agent makes itself too.
+- Switching between OpenCode and Mura keeps the chat: a divider marks the switch, and the new
   agent gets the conversation so far with its first message.
 - Answers render as Markdown, with the agent's reasoning folded under Thinking; code blocks have Copy and Insert (at the cursor in the open
   file). Tool calls show what kind they are (read, edit, search, run, web) and their state.
-- History lists FluxCode's own chats and the sessions OpenCode (or Mira) saved for the open
+- History lists FluxCode's own chats and the sessions OpenCode (or Mura) saved for the open
   folder. Opening one resumes it in place (ACP `session/load`), with its history replayed.
 - Memory is a native port of [AoC Memory](https://github.com/MyKineID/aoc-memory-for-ai-agent):
   notes strengthen when they help and fade when unused, recalled by `P = tau * eta^2`. The

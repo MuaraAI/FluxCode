@@ -50,7 +50,7 @@ pub fn wants_output(text: &str) -> bool {
     ["terminal", "output", "log", "hasil", "console", "printed", "keluaran"].iter().any(|w| t.contains(w))
 }
 
-/// A session saved by OpenCode (or Mira) for the open folder.
+/// A session saved by OpenCode (or Mura) for the open folder.
 #[derive(Clone, Debug)]
 pub struct RemoteSession {
     pub id: String,

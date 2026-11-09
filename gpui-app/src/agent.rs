@@ -167,7 +167,11 @@ fn transcript(items: &[Item]) -> String {
 /// A file the agent wrote, with what was there before (None = new file).
 pub struct Change {
     pub path: PathBuf,
+    /// The file before the agent touched it (None: the agent created it).
     pub before: Option<String>,
+    /// Lines added and removed so far (counted when an edit finishes).
+    pub added: usize,
+    pub removed: usize,
 }
 
 pub struct AgentState {
@@ -207,7 +211,7 @@ pub struct AgentState {
     pub mention: Option<(usize, Vec<usize>, usize)>,
     /// Context chips the user switched off: "file", "sel", "err", "out", or "@path".
     pub off_ctx: HashSet<String>,
-    /// Sessions OpenCode / Mira saved for this folder: 0 not loaded, 1 loading, 2 loaded.
+    /// Sessions OpenCode / Mura saved for this folder: 0 not loaded, 1 loading, 2 loaded.
     pub remote: Vec<RemoteSession>,
     pub remote_state: u8,
     pub remote_err: Option<String>,
@@ -248,45 +252,6 @@ pub struct AgentState {
     _sub2: Subscription,
 }
 
-/// MuaraAI's native `omm` (oh-my-mira) harness, preferred over OpenCode when
-/// installed (same search as the Tauri app's `find_agent`, feat/omm-acp-integration).
-/// omm.exe chosen by hand (Settings / the panel's "Choose omm.exe" button).
-static MIRA_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-/// Cached answer of `mira_installed` (cleared when the path changes).
-static MIRA_FOUND: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
-
-pub fn set_mira_path(p: Option<PathBuf>) {
-    if let Ok(mut m) = MIRA_PATH.lock() {
-        *m = p;
-    }
-    if let Ok(mut f) = MIRA_FOUND.lock() {
-        *f = None;
-    }
-}
-
-fn find_omm() -> Option<PathBuf> {
-    if let Some(p) = MIRA_PATH.lock().ok().and_then(|m| m.clone()).filter(|p| p.is_file()) {
-        return Some(p);
-    }
-    let exe = if cfg!(windows) { "omm.exe" } else { "omm" };
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|d| d.join(exe)));
-    }
-    for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOME"] {
-        if let Ok(base) = std::env::var(var) {
-            let b = Path::new(&base);
-            candidates.push(b.join(".cargo").join("bin").join(exe));
-            candidates.push(b.join(".local").join("bin").join(exe));
-            candidates.push(b.join("Programs").join("omm").join(exe));
-        }
-    }
-    if !cfg!(windows) {
-        candidates.push(PathBuf::from("/usr/local/bin/omm"));
-    }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
 /// MuaraAI's Mura harness (`mura`, one Rust binary, github.com/MuaraAI/Mura-Harness),
 /// installed on its own next to FluxCode (its README puts it in ~/.local/bin).
 fn find_mura() -> Option<PathBuf> {
@@ -313,23 +278,17 @@ pub fn mura_installed() -> bool {
     *f.get_or_insert_with(|| find_mura().is_some())
 }
 
-/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 2 Mira, 3 Mura.
+/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 3 Mura
+/// ("mira" from older settings means Mura now).
 static CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn set_choice(cli: &str) {
     let v = match cli {
         "opencode" => 1,
-        "mira" => 2,
-        "mura" => 3,
+        "mura" | "mira" => 3,
         _ => 0,
     };
     CHOICE.store(v, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Is MuaraAI's `omm` (Mira) on this PC? Looked up once.
-pub fn mira_installed() -> bool {
-    let Ok(mut f) = MIRA_FOUND.lock() else { return find_omm().is_some() };
-    *f.get_or_insert_with(|| find_omm().is_some())
 }
 
 /// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
@@ -357,10 +316,8 @@ fn builtin_commands() -> Vec<SlashCmd> {
 pub fn agent_name() -> &'static str {
     match CHOICE.load(std::sync::atomic::Ordering::Relaxed) {
         1 => "OpenCode",
-        2 => "Mira",
         3 => "Mura",
         _ if mura_installed() => "Mura",
-        _ if mira_installed() => "Mira",
         _ => "OpenCode",
     }
 }
@@ -395,7 +352,6 @@ fn find_opencode() -> Option<PathBuf> {
 
 fn opencode_cmd() -> Option<std::process::Command> {
     match agent_name() {
-        "Mira" => return find_omm().map(|e| proc::command(e.to_string_lossy().as_ref())),
         "Mura" => return find_mura().map(|e| proc::command(e.to_string_lossy().as_ref())),
         _ => {}
     }
@@ -420,7 +376,7 @@ impl AgentState {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .submit_on_enter(true)
-                .placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => agent_name()))
+                .placeholder(crate::trf!("Ask {name}…"; name => agent_name()))
         });
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => this.agent_slash_accept(window, cx),
@@ -709,12 +665,10 @@ impl Workbench {
             return;
         }
         let Some(mut cmd) = opencode_cmd() else {
-            self.agent.status = Status::Error(if agent_name() == "Mira" {
-                crate::i18n::tr("Mira (omm) isn't installed on this PC. Install omm, or pick OpenCode in the menu on the panel title.").into()
-            } else if agent_name() == "Mura" {
+            self.agent.status = Status::Error(if agent_name() == "Mura" {
                 crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick OpenCode in the panel title menu.").into()
             } else {
-                "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mira in the panel title menu.".into()
+                "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mura in the panel title menu.".into()
             });
             cx.notify();
             return;
@@ -1038,14 +992,25 @@ impl Workbench {
             // Only while an old session replays; live prompts are shown when sent.
             "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
             "agent_thought_chunk" => self.agent.append(true, &text(u)),
-            "tool_call" => self.agent.items.push(Item::Tool {
-                id: s(u, "toolCallId").unwrap_or_default(),
-                title: s(u, "title").unwrap_or_else(|| "Tool".into()),
-                status: s(u, "status").unwrap_or_else(|| "pending".into()),
-                kind: s(u, "kind").unwrap_or_else(|| "other".into()),
-            }),
+            "tool_call" => {
+                let kind = s(u, "kind").unwrap_or_else(|| "other".into());
+                let status = s(u, "status").unwrap_or_else(|| "pending".into());
+                self.agent_track_edit(u, &kind, status == "completed");
+                self.agent.items.push(Item::Tool {
+                    id: s(u, "toolCallId").unwrap_or_default(),
+                    title: s(u, "title").unwrap_or_else(|| "Tool".into()),
+                    status,
+                    kind,
+                });
+            }
             "tool_call_update" => {
                 let id = s(u, "toolCallId").unwrap_or_default();
+                let known = self.agent.items.iter().rev().find_map(|i| match i {
+                    Item::Tool { id: tid, kind, .. } if *tid == id => Some(kind.clone()),
+                    _ => None,
+                });
+                let kind = s(u, "kind").or(known).unwrap_or_default();
+                self.agent_track_edit(u, &kind, s(u, "status").as_deref() == Some("completed"));
                 for item in self.agent.items.iter_mut().rev() {
                     if let Item::Tool { id: tid, title, status, kind } = item {
                         if *tid == id {
@@ -1163,7 +1128,10 @@ impl Workbench {
                 let r = core::write_text(&p, &content, crlf);
                 if r.is_ok() {
                     if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                        self.agent.changes.push(Change { path: p.clone(), before });
+                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                    }
+                    if let Some(ch) = self.agent.changes.iter_mut().find(|ch| ch.path == p) {
+                        (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
                     }
                     if self.docs.iter().any(|d| d.path == p) {
                         self.agent.reloads.push(p);
@@ -1311,7 +1279,7 @@ impl Workbench {
         }
         self.agent.resume_id = None;
         self.agent.config.clear();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => name), window, cx));
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
         }
@@ -1322,15 +1290,11 @@ impl Workbench {
         self.agent_use("opencode", w, cx);
     }
 
-    pub(crate) fn on_agent_use_mira(&mut self, _: &crate::workbench::AgentUseMira, w: &mut Window, cx: &mut Context<Self>) {
-        self.agent_use("mira", w, cx);
-    }
-
     pub(crate) fn on_agent_use_mura(&mut self, _: &crate::workbench::AgentUseMura, w: &mut Window, cx: &mut Context<Self>) {
         self.agent_use("mura", w, cx);
     }
 
-    /// The panel title: the harness name, which opens a menu to pick OpenCode or Mira.
+    /// The panel title: the harness name, which opens a menu to pick Mura or OpenCode.
     pub(crate) fn render_agent_picker(&self) -> impl IntoElement {
         let name = agent_name();
         Button::new("ag-pick")
@@ -1340,11 +1304,9 @@ impl Workbench {
             .dropdown_caret(true)
             .tooltip(tr("Choose the AI agent"))
             .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
-                let mira = if mira_installed() { "Mira (omm)" } else { crate::i18n::tr("Mira (omm), not installed") };
                 m.min_w(px(220.))
                     .menu_with_check(if mura_installed() { "Mura" } else { crate::i18n::tr("Mura, not installed") }, name == "Mura", Box::new(crate::workbench::AgentUseMura))
                     .menu_with_check("OpenCode", name == "OpenCode", Box::new(crate::workbench::AgentUseOpenCode))
-                    .menu_with_check(mira, name == "Mira", Box::new(crate::workbench::AgentUseMira))
                     .separator()
                     .menu(crate::trf!("{name} settings: model, effort, mode…"; name => name), Box::new(crate::workbench::AgentShowOptions))
             })
@@ -1491,6 +1453,77 @@ impl Workbench {
                 d.editor.update(cx, |s, cx| s.set_value(f.text, window, cx));
                 d.dirty = false;
             }
+        }
+    }
+
+    /// Follow an edit tool: keep the file as it was before (from the `diff` content
+    /// the agent sends, else read before the edit runs) and, once it finishes,
+    /// count the lines it added and removed. Feeds the Changes card.
+    fn agent_track_edit(&mut self, u: &Value, kind: &str, done: bool) {
+        let has_diff = u.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|x| x.get("type").and_then(Value::as_str) == Some("diff")));
+        if !matches!(kind, "edit" | "delete" | "move") && !has_diff {
+            return;
+        }
+        let abs = |p: &str| -> PathBuf {
+            let p = PathBuf::from(p);
+            if p.is_absolute() { p } else { self.root.clone().unwrap_or_default().join(p) }
+        };
+        let mut touched: Vec<PathBuf> = Vec::new();
+        for c in u.get("content").and_then(Value::as_array).into_iter().flatten() {
+            if c.get("type").and_then(Value::as_str) != Some("diff") {
+                continue;
+            }
+            let Some(p) = c.get("path").and_then(Value::as_str).map(abs) else { continue };
+            if !self.agent.changes.iter().any(|ch| ch.path == p) {
+                let before = c.get("oldText").and_then(Value::as_str).map(String::from);
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+            }
+            touched.push(p);
+        }
+        for l in u.get("locations").and_then(Value::as_array).into_iter().flatten() {
+            let Some(p) = l.get("path").and_then(Value::as_str).map(abs) else { continue };
+            if !self.agent.changes.iter().any(|ch| ch.path == p) {
+                if done {
+                    continue; // too late to know how it looked before
+                }
+                let before = std::fs::read_to_string(&p).ok();
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+            }
+            touched.push(p);
+        }
+        if !done {
+            return;
+        }
+        for p in touched {
+            let after = std::fs::read_to_string(&p).unwrap_or_default();
+            if let Some(ix) = self.agent.changes.iter().position(|ch| ch.path == p) {
+                let ch = &mut self.agent.changes[ix];
+                (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
+                // Looked at but not changed: not a change.
+                if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
+                    self.agent.changes.remove(ix);
+                }
+            }
+            if self.docs.iter().any(|d| d.path == p) && !self.agent.reloads.contains(&p) {
+                self.agent.reloads.push(p);
+            }
+        }
+    }
+
+    /// Open what the agent changed in a file as a unified diff, in a tab.
+    fn agent_show_diff(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ch) = self.agent.changes.get(ix) else { return };
+        let after = std::fs::read_to_string(&ch.path).unwrap_or_default();
+        let rel = self.rel_display(&ch.path.to_string_lossy()).replace('\\', "/");
+        let text = crate::diff::unified(&rel, ch.before.as_deref().unwrap_or(""), &after);
+        let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "changes".into());
+        let dir = std::env::temp_dir().join("fluxcode-diff");
+        let file = dir.join(format!("{name}.diff"));
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&file, text).is_ok() {
+            if let Some(i) = self.docs.iter().position(|d| d.path == file) {
+                self.close(i, window, cx);
+            }
+            self.open_file(file, window, cx);
         }
     }
 
@@ -1692,27 +1725,6 @@ impl Workbench {
             false,
         ));
         cx.notify();
-    }
-
-    /// Pick omm.exe by hand (when it isn't on PATH or in a usual folder).
-    fn agent_choose_mira(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Choose omm.exe (Mira)".into()) });
-        cx.spawn_in(window, async move |this, cx| {
-            let path = paths.await.ok()?.ok()??.into_iter().next()?;
-            this.update_in(cx, |this, window, cx| {
-                this.agent_stop(cx);
-                this.settings.mira_path = Some(path.clone());
-                this.settings.agent_cli = "mira".into();
-                this.settings.save();
-                set_mira_path(Some(path.clone()));
-                set_choice("mira");
-                this.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => "Mira"), window, cx));
-                this.status = crate::trf!("Mira: using {0}"; 0 => path.display()).into();
-                cx.notify();
-            })
-            .ok()
-        })
-        .detach();
     }
 
     fn rel_path(&self, full: &str) -> String {
@@ -1973,7 +1985,7 @@ impl Workbench {
             .collect();
     }
 
-    // ------------------------------------------------------------ OpenCode / Mira sessions
+    // ------------------------------------------------------------ OpenCode / Mura sessions
 
     fn agent_load_session(&mut self, id: String) {
         let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
@@ -2473,11 +2485,11 @@ impl Workbench {
         }
 
         let name = agent_name();
-        let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
+        let mut log = v_flex().id("ag-log").size_full().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
-            let missing = name == "Mira" && !mira_installed();
+            let missing = name == "Mura" && !mura_installed();
             let hint = if missing {
-                "FluxCode can't find omm.exe (Mira) on this PC: not on PATH, in ~/.cargo/bin, ~/.local/bin or Programs\\omm. If you have it, point FluxCode to it.".to_string()
+                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick OpenCode in the panel title menu.").to_string()
             } else if on {
                 crate::i18n::tr("Type @ to add a file. Your open file, selection and last error go along when they help.").to_string()
             } else {
@@ -2499,8 +2511,7 @@ impl Workbench {
                             h_flex()
                                 .pt_2()
                                 .gap_2()
-                                .child(Button::new("ag-pick-omm").label(tr("Choose omm.exe…")).small().primary().on_click(cx.listener(|this, _, w, cx| this.agent_choose_mira(w, cx))))
-                                .child(Button::new("ag-use-oc").label(tr("Use OpenCode")).small().on_click(cx.listener(|this, _, w, cx| {
+                                .child(Button::new("ag-use-oc").label(tr("Use OpenCode")).small().primary().on_click(cx.listener(|this, _, w, cx| {
                                     this.on_agent_use_opencode(&crate::workbench::AgentUseOpenCode, w, cx)
                                 }))),
                         )
@@ -2772,48 +2783,111 @@ impl Workbench {
                 })))
         });
 
+        // What the agent changed this turn, like a worktree: each file with its
+        // lines added / removed, a diff, and undo.
         let changes = (!a.changes.is_empty()).then(|| {
+            let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
+            let files = if a.changes.len() == 1 { crate::i18n::tr("1 file").to_string() } else { crate::trf!("{n} files"; n => a.changes.len()) };
+            let counts = |added: usize, removed: usize| {
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .font_family("Cascadia Code")
+                    .child(div().text_color(c(theme::GREEN)).child(format!("+{added}")))
+                    .child(div().text_color(c(theme::DANGER)).child(format!("-{removed}")))
+            };
+            let rows = a.changes.iter().enumerate().map(|(i, ch)| {
+                let path = ch.path.clone();
+                let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let rel = self.rel_display(&ch.path.to_string_lossy());
+                let dir = rel.rsplit_once(['\\', '/']).map(|(d, _)| d.to_string()).unwrap_or_default();
+                let (icon, tint) = crate::files::icon_for(&name);
+                h_flex()
+                    .id(("ag-ch", i))
+                    .px_2()
+                    .h(theme::u(26.))
+                    .gap_2()
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(
+                        h_flex()
+                            .id(("ag-ch-open", i))
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1p5()
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx)))
+                            .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
+                            .child(div().flex_none().text_color(c(theme::FG)).child(name))
+                            .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
+                            .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
+                    )
+                    .child(counts(ch.added, ch.removed))
+                    .child(
+                        div()
+                            .id(("ag-ch-diff", i))
+                            .flex_none()
+                            .size(theme::u(22.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_color(c(theme::FG_DIM))
+                            .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Show the diff")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, w, cx| this.agent_show_diff(i, w, cx)))
+                            .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.))),
+                    )
+                    .child(
+                        div()
+                            .id(("ag-ch-undo", i))
+                            .flex_none()
+                            .size(theme::u(22.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_color(c(theme::FG_DIM))
+                            .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Undo this file")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx)))
+                            .child(Icon::new(gpui_kit::assets::IconName::Undo2).size(theme::u(13.))),
+                    )
+            });
             v_flex()
                 .mx_3()
                 .mb_2()
-                .p_2()
-                .gap_1()
                 .rounded(px(6.))
                 .border_1()
                 .border_color(c(theme::BORDER))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
+                .overflow_hidden()
                 .child(
                     h_flex()
-                        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(if a.changes.len() == 1 { crate::i18n::tr("1 file changed by the agent").to_string() } else { crate::trf!("{n} files changed by the agent"; n => a.changes.len()) }))
-                        .child(Button::new("ag-keep-all").label(tr("Keep all")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
+                        .px_2()
+                        .h(theme::u(30.))
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(c(theme::BORDER))
+                        .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
+                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
+                        .child(div().flex_none().text_color(c(theme::FG_DIM)).child(files))
+                        .child(counts(add, del))
+                        .child(div().flex_1())
+                        .child(change_btn("ag-undo-all", gpui_kit::assets::IconName::Undo2, crate::i18n::tr("Undo all")).on_click(cx.listener(|this, _, _, cx| {
+                            for i in (0..this.agent.changes.len()).rev() {
+                                this.agent_undo(i, cx);
+                            }
+                        })))
+                        .child(change_btn("ag-keep-all", IconName::Check, tr("Keep all")).on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
                             this.agent_reinforce_turn();
                             cx.notify();
                         }))),
                 )
-                .children(a.changes.iter().enumerate().map(|(i, ch)| {
-                    let path = ch.path.clone();
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id(("ag-ch", i))
-                                .flex_1()
-                                .truncate()
-                                .text_color(c(theme::FG))
-                                .child(format!("{}{}", if ch.before.is_none() { "+ " } else { "" }, ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
-                                .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx))),
-                        )
-                        .child(Button::new(("ag-keep", i)).label(tr("Keep")).xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
-                            if i < this.agent.changes.len() {
-                                this.agent.changes.remove(i);
-                            }
-                            this.agent_reinforce_turn();
-                            cx.notify();
-                        })))
-                        .child(Button::new(("ag-undo", i)).label(tr("Undo")).xsmall().on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx))))
-                }))
+                .child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows))
         });
 
         v_flex()
@@ -2827,7 +2901,14 @@ impl Workbench {
                 this.agent_attach(paths.paths().to_vec(), cx);
             }))
             .child(header)
-            .child(log)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(log)
+                    .child(self.smooth_scroll_layer(crate::workbench::ScrollTarget::Handle(CHAT_SCROLL_KEY, a.scroll.clone()), cx)),
+            )
             .when_some(permission, |v, p| v.child(p))
             .when_some(changes, |v, ch| v.child(ch))
             .children(self.render_queue(cx))
@@ -3439,6 +3520,26 @@ fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window,
         .on_click(f)
         .child(Icon::new(icon).size(theme::u(11.)))
 }
+
+/// A 22 px icon button of the Changes card.
+fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(theme::u(22.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_color(c(theme::FG_DIM))
+        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
+        .child(icon.into().size(theme::u(13.)))
+}
+
+/// Smooth-scroll key of the chat log (editors use their entity id).
+const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
 
 /// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
 fn opencode_config_file() -> Option<PathBuf> {

@@ -36,7 +36,7 @@ actions!(
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentUseMira, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentUseOpenCode, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull
     ]
 );
@@ -174,6 +174,8 @@ pub struct Workbench {
     pub(crate) drop_focus: FocusHandle,
     /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
     pub(crate) smooth: Option<SmoothScroll>,
+    /// The status text last shown; a new one clears itself after a few seconds.
+    pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
     /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
@@ -297,7 +299,6 @@ impl Workbench {
         let settings = crate::settings::Settings::load();
         crate::i18n::set(&settings.language);
         crate::agent::set_choice(&settings.agent_cli);
-        crate::agent::set_mira_path(settings.mira_path.clone());
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
@@ -317,6 +318,7 @@ impl Workbench {
             workspace: Default::default(),
             drop_focus: cx.focus_handle(),
             smooth: None,
+            status_seen: SharedString::default(),
             tree,
             dirs: Rc::default(),
             docs: Vec::new(),
@@ -451,7 +453,14 @@ impl Workbench {
         let bytes = match read_head(&path) {
             Ok(b) => b,
             Err(e) => {
-                self.status = format!("{}: {e}", path.display()).into();
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                // os error 32 / 33: another program (a running server) holds the file.
+                self.status = if e.contains("os error 32") || e.contains("os error 33") {
+                    crate::trf!("{name} is in use by another program (a running server, for example), so it can't be opened now"; name => name)
+                } else {
+                    crate::trf!("Couldn't open {name}: {e}"; name => name, e => e)
+                }
+                .into();
                 cx.notify();
                 return;
             }
@@ -1193,7 +1202,6 @@ impl Workbench {
             SideView::Run => tr("RUN"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => match crate::agent::agent_name() {
-                "Mira" => "MIRA",
                 "Mura" => "MURA",
                 _ => "OPENCODE",
             },
@@ -1318,7 +1326,9 @@ impl Workbench {
     /// The active file's path below the tabs: folder › folder › file.
     fn render_breadcrumbs(&self, ix: usize) -> impl IntoElement {
         let d = &self.docs[ix];
-        let rel = PathBuf::from(self.rel_display(&d.path.to_string_lossy()));
+        // Outside the workspace (a diff, a file opened on its own): just the name.
+        let shown = self.rel_display(&d.path.to_string_lossy());
+        let rel = if shown == d.path.to_string_lossy() { PathBuf::from(d.name.as_ref()) } else { PathBuf::from(shown) };
         let parts: Vec<String> = rel.components().map(|p| p.as_os_str().to_string_lossy().into_owned()).collect();
         let last = parts.len().saturating_sub(1);
         h_flex()
@@ -1376,7 +1386,7 @@ impl Workbench {
                                 .font_family(self.settings.font_family.clone())
                                 .text_size(px(self.settings.font_size)),
                         )
-                        .child(self.smooth_scroll_layer(self.docs[ix].editor.clone(), cx)),
+                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx)),
                 ))
                 .into_any_element(),
             None => v_flex()
@@ -1619,6 +1629,22 @@ impl Focusable for Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.status != self.status_seen {
+            self.status_seen = self.status.clone();
+            if !self.status.is_empty() {
+                let shown = self.status.clone();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_secs(6)).await;
+                    _ = this.update(cx, |this, cx| {
+                        if this.status == shown {
+                            this.status = SharedString::default();
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
@@ -1731,8 +1757,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_quick_up))
             .on_action(cx.listener(Self::on_quick_down))
             .on_action(cx.listener(Self::on_agent_use_opencode))
-            .on_action(cx.listener(Self::on_agent_use_mira))
-            .on_action(cx.listener(Self::on_agent_use_mura))
+                        .on_action(cx.listener(Self::on_agent_use_mura))
             .on_action(cx.listener(Self::on_agent_mention_up))
             .on_action(cx.listener(Self::on_agent_mention_down))
             .on_action(cx.listener(Self::on_agent_mention_accept))
@@ -1820,26 +1845,75 @@ impl Workbench {
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Message (Enter to commit)"), window, cx));
         let name = crate::agent::agent_name();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => name), window, cx));
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
         cx.notify();
     }
 }
 
+/// What a smooth wheel scroll moves: a code editor, or a plain scroll area (the chat).
+#[derive(Clone)]
+pub(crate) enum ScrollTarget {
+    Editor(Entity<EditorState>),
+    Handle(u64, ScrollHandle),
+}
+
+impl ScrollTarget {
+    fn key(&self) -> u64 {
+        match self {
+            ScrollTarget::Editor(e) => e.entity_id().as_u64(),
+            ScrollTarget::Handle(k, _) => *k,
+        }
+    }
+
+    fn offset(&self, cx: &App) -> Point<Pixels> {
+        match self {
+            ScrollTarget::Editor(e) => e.read(cx).scroll_offset(),
+            ScrollTarget::Handle(_, h) => h.offset(),
+        }
+    }
+
+    fn line_height(&self, cx: &App) -> Pixels {
+        match self {
+            ScrollTarget::Editor(e) => e.read(cx).line_height().unwrap_or(px(20.)),
+            ScrollTarget::Handle(..) => px(22.),
+        }
+    }
+
+    /// Keep a target inside what can be scrolled (editors clamp on their own).
+    fn clamp(&self, p: Point<Pixels>) -> Point<Pixels> {
+        match self {
+            ScrollTarget::Editor(_) => point(p.x.min(px(0.)), p.y.min(px(0.))),
+            ScrollTarget::Handle(_, h) => {
+                let m = h.max_offset();
+                point(p.x.clamp(-m.x, px(0.)), p.y.clamp(-m.y, px(0.)))
+            }
+        }
+    }
+
+    fn set(&self, p: Point<Pixels>, cx: &mut App) {
+        match self {
+            ScrollTarget::Editor(e) => e.update(cx, |e, cx| e.set_scroll_offset(p, cx)),
+            ScrollTarget::Handle(_, h) => h.set_offset(p),
+        }
+    }
+}
+
 pub(crate) struct SmoothScroll {
-    editor: Entity<EditorState>,
-    target: Point<Pixels>,
+    target: ScrollTarget,
+    to: Point<Pixels>,
     prev: Option<Point<Pixels>>,
     stuck: u8,
+    last: std::time::Instant,
 }
 
 impl Workbench {
-    /// Smooth wheel scrolling for the code editor, like VS Code's: a wheel notch
-    /// (three lines) glides there in about 100 ms instead of jumping, which reads
-    /// as stutter. Touchpads send pixel deltas and keep the editor's own scrolling;
-    /// Ctrl+wheel is left alone. A transparent layer over the editor catches the
-    /// wheel in the capture phase, before the editor does.
-    fn smooth_scroll_layer(&self, editor: Entity<EditorState>, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Smooth wheel scrolling, like VS Code's: a wheel notch glides to its target
+    /// in about 100 ms instead of jumping, which reads as stutter. One step per
+    /// frame (paced by the display, nothing runs between glides). Touchpads send
+    /// pixel deltas and keep the native scrolling; Ctrl+wheel is left alone. A
+    /// transparent layer over the area catches the wheel before the area does.
+    pub(crate) fn smooth_scroll_layer(&self, target: ScrollTarget, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
@@ -1849,8 +1923,8 @@ impl Workbench {
                         return;
                     }
                     cx.stop_propagation();
-                    let (ed, delta) = (editor.clone(), ev.delta.clone());
-                    _ = weak.update(cx, |this, cx| this.smooth_scroll(ed, delta, cx));
+                    let (t, delta) = (target.clone(), ev.delta.clone());
+                    _ = weak.update(cx, |this, cx| this.smooth_scroll(t, delta, window, cx));
                 });
             },
         )
@@ -1860,68 +1934,67 @@ impl Workbench {
         .size_full()
     }
 
-    fn smooth_scroll(&mut self, editor: Entity<EditorState>, delta: ScrollDelta, cx: &mut Context<Self>) {
-        let (cur, lh) = {
-            let e = editor.read(cx);
-            (e.scroll_offset(), e.line_height().unwrap_or(px(20.)))
-        };
-        let d = delta.pixel_delta(lh);
-        let running = self.smooth.as_ref().is_some_and(|s| s.editor == editor);
+    fn smooth_scroll(&mut self, target: ScrollTarget, delta: ScrollDelta, window: &mut Window, cx: &mut Context<Self>) {
+        let d = delta.pixel_delta(target.line_height(cx));
+        let key = target.key();
+        let running = self.smooth.as_ref().is_some_and(|s| s.target.key() == key);
         // Notches while gliding add up from where the glide is heading.
-        let base = if running { self.smooth.as_ref().map(|s| s.target).unwrap_or(cur) } else { cur };
-        let target = point((base.x + d.x).min(px(0.)), (base.y + d.y).min(px(0.)));
-        match self.smooth.as_mut().filter(|s| s.editor == editor) {
+        let base = match self.smooth.as_ref().filter(|s| s.target.key() == key) {
+            Some(s) => s.to,
+            None => target.offset(cx),
+        };
+        let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        match self.smooth.as_mut().filter(|s| s.target.key() == key) {
             Some(s) => {
-                s.target = target;
+                s.to = to;
                 s.stuck = 0;
             }
-            None => self.smooth = Some(SmoothScroll { editor, target, prev: None, stuck: 0 }),
+            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now() }),
         }
-        if running {
+        if !running {
+            self.smooth_next_frame(window, cx);
+        }
+    }
+
+    fn smooth_next_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            _ = weak.update(cx, |this, cx| this.smooth_step(window, cx));
+        });
+        // on_next_frame schedules the frame itself (request_animation_frame is
+        // only allowed while drawing and would panic from an event handler).
+    }
+
+    fn smooth_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = self.smooth.as_mut() else { return };
+        let target = s.target.clone();
+        let cur = target.offset(cx);
+        let now = std::time::Instant::now();
+        let dt = (now - s.last).as_secs_f32().min(0.05);
+        s.last = now;
+        let diff = point(s.to.x - cur.x, s.to.y - cur.y);
+        if diff.x.abs() < px(0.5) && diff.y.abs() < px(0.5) {
+            let to = s.to;
+            self.smooth = None;
+            target.set(to, cx);
+            cx.notify();
             return;
         }
-        cx.spawn(async move |this, cx| {
-            let mut last = std::time::Instant::now();
-            loop {
-                cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
-                let done = this
-                    .update(cx, |this, cx| {
-                        let Some(s) = this.smooth.as_mut() else { return true };
-                        let ed = s.editor.clone();
-                        let cur = ed.read(cx).scroll_offset();
-                        let now = std::time::Instant::now();
-                        let dt = (now - last).as_secs_f32();
-                        last = now;
-                        let diff = point(s.target.x - cur.x, s.target.y - cur.y);
-                        if diff.x.abs() < px(0.5) && diff.y.abs() < px(0.5) {
-                            let t = s.target;
-                            this.smooth = None;
-                            ed.update(cx, |e, cx| e.set_scroll_offset(t, cx));
-                            return true;
-                        }
-                        // At the top or bottom the editor clamps and nothing moves: stop there.
-                        if s.prev == Some(cur) {
-                            s.stuck += 1;
-                            if s.stuck > 8 {
-                                this.smooth = None;
-                                return true;
-                            }
-                        } else {
-                            s.stuck = 0;
-                        }
-                        s.prev = Some(cur);
-                        // Exponential ease with a 45 ms time constant: fast start, soft landing.
-                        let k = 1.0 - (-dt / 0.045).exp();
-                        let next = point(cur.x + diff.x * k, cur.y + diff.y * k);
-                        ed.update(cx, |e, cx| e.set_scroll_offset(next, cx));
-                        false
-                    })
-                    .unwrap_or(true);
-                if done {
-                    break;
-                }
+        // At an edge the area clamps and nothing moves: stop there.
+        if s.prev == Some(cur) {
+            s.stuck += 1;
+            if s.stuck > 6 {
+                self.smooth = None;
+                return;
             }
-        })
-        .detach();
+        } else {
+            s.stuck = 0;
+        }
+        s.prev = Some(cur);
+        // Exponential ease, 45 ms time constant: quick start, soft landing.
+        let k = 1.0 - (-dt / 0.045).exp();
+        target.set(point(cur.x + diff.x * k, cur.y + diff.y * k), cx);
+        cx.notify();
+        self.smooth_next_frame(window, cx);
     }
 }

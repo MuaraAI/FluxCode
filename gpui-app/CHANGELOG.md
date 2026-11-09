@@ -3,6 +3,36 @@
 Edisi GPUI ada di folder `gpui-app/`. Ini yang berubah di tiap versi, ditulis apa adanya:
 apa yang bisa dilakukan sekarang, apa bedanya dengan sebelumnya, dan apa yang belum dites.
 
+## 0.9.1-dev (9 November 2026)
+
+### Sebelum dan sesudah
+
+| | Sebelum (0.9.0) | Sesudah (0.9.1) |
+| --- | --- | --- |
+| File yang diubah agent | tidak kelihatan, kecuali yang ditulis lewat FluxCode | kartu Perubahan: tiap file dengan +baris -baris, diff, dan undo |
+| Scroll roda mouse di chat agent | loncat | meluncur seperti di editor |
+| Langkah scroll halus | timer tiap 8 ms | satu langkah per frame layar |
+| Pesan error di status bar | path lengkap dan pesan sistem, tidak pernah hilang | kalimat pendek, hilang sendiri setelah 6 detik |
+| File yang sedang dipakai program lain (misalnya `LOCK` milik server) | "The process cannot access the file..." | "LOCK sedang dipakai program lain (misalnya server yang jalan)..." |
+| Placeholder kotak chat | terpotong di panel sempit | pendek: "Tanya OpenCode..." |
+| Harness | OpenCode, Mira, Mura | OpenCode, Mura |
+| Breadcrumb file di luar workspace | path lengkap dari C:\ | nama file saja |
+
+### Yang berubah
+
+- Kartu Perubahan di atas kotak pesan: daftar file yang diubah agent di giliran ini, dengan
+  jumlah baris yang ditambah dan dihapus. Klik nama untuk membuka file, tombol diff untuk
+  melihat perubahannya di tab baru, tombol undo untuk mengembalikan file itu. Batalkan semua
+  dan Simpan semua ada di kepala kartu. FluxCode membaca isi file tepat sebelum agent mengedit
+  (atau memakai teks lama dari diff yang dikirim agent), jadi edit yang dilakukan agent sendiri
+  juga tercatat. Dites langsung: OpenCode mengedit Main.kt, kartu menunjukkan +2 -1, diff dan
+  isi editor ikut berubah.
+- Scroll halus sekarang juga di chat agent, dan langkahnya mengikuti frame layar.
+- Status bar: pesan baru hilang sendiri setelah 6 detik, dan file yang dikunci program lain
+  dijelaskan dengan kalimat biasa.
+- Mira (`omm`) dihapus. Pengaturan lama yang memilih Mira sekarang memakai Mura.
+- Placeholder kotak chat dipendekkan supaya tidak terpotong.
+
 ## 0.9.0-dev (9 November 2026)
 
 ### Sebelum dan sesudah
