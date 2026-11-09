@@ -1,6 +1,6 @@
 [package]
 name = "fluxcode-gpui"
-version = "0.8.1-dev.2026-11-09-1351"
+version = "0.8.2-dev.2026-11-09-1413"
 description = "FluxCode - native GPUI edition (no WebView)"
 edition = "2021"
 license = "GPL-3.0-or-later"
@@ -33,6 +33,9 @@ image = { version = "0.25", default-features = false }
 # Agent memory (AoC Memory port): ids are SHA-1 prefixes, times ISO 8601, as in
 # ant_memory.py. Both crates are already compiled for gpui.
 sha1_smol = "1"
+# Attachments: images as base64, Word/Excel/PowerPoint text from their ZIP (already compiled for gpui).
+base64 = "0.22"
+miniz_oxide = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # In-window preview (WebView2). Off by default: on the GNU toolchain it links
 # WebView2Loader.dll at load time, which must then ship next to the exe.

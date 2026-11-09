@@ -9,6 +9,7 @@ mod agent;
 mod agent_ctx;
 mod complete;
 mod core;
+mod docs;
 mod explorer;
 mod files;
 mod github;

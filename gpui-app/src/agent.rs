@@ -11,11 +11,11 @@ use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     menu::DropdownMenu,
     switch::Switch,
     text::TextView,
-    v_flex, Disableable, Icon, IconName, Sizable,
+    v_flex, Icon, IconName, Sizable,
 };
 use serde::{Deserialize, Serialize};
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -50,6 +50,14 @@ pub enum Item {
     Note(String, bool),
     /// A fact the agent asked to keep (saved to memory).
     Saved(String),
+    /// The chat continues with another harness from here (a branch, not a new chat).
+    Branch(String),
+}
+
+/// A message typed while the agent was busy (or not running yet), with its attachments.
+pub struct Queued {
+    pub text: String,
+    pub files: Vec<PathBuf>,
 }
 
 pub struct Permission {
@@ -118,13 +126,22 @@ pub struct AgentState {
     next_id: u64,
     pending: HashMap<u64, Req>,
     session: Option<String>,
-    queued_prompt: Option<String>,
+    /// Messages waiting for the agent: sent together when the current answer ends.
+    pub queue: Vec<Queued>,
+    /// The user asked to interrupt the answer and send the queue now.
+    steer: bool,
+    /// Files attached to the message being typed.
+    pub attachments: Vec<PathBuf>,
+    /// Thinking blocks the user expanded.
+    open_thoughts: HashSet<usize>,
+    /// The agent accepts image blocks (ACP promptCapabilities.image).
+    can_image: bool,
     pub items: Vec<Item>,
     permission: Option<Permission>,
     pub changes: Vec<Change>,
     /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     scroll: ScrollHandle,
     /// Saved chats, newest first.
     pub history: Vec<Chat>,
@@ -305,7 +322,13 @@ fn opencode_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…  (@ adds a file, / for commands)", agent_name())));
+        // Grows with the text (1 to 8 lines); Enter sends, Shift+Enter starts a new line.
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, 8)
+                .submit_on_enter(true)
+                .placeholder(format!("Ask {}…  @ adds a file, / for commands", agent_name()))
+        });
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => this.agent_slash_accept(window, cx),
             InputEvent::PressEnter { shift: false, .. } if this.agent.mention.is_some() => this.agent_mention_accept(window, cx),
@@ -333,7 +356,11 @@ impl AgentState {
             next_id: 0,
             pending: HashMap::new(),
             session: None,
-            queued_prompt: None,
+            queue: Vec::new(),
+            steer: false,
+            attachments: Vec::new(),
+            open_thoughts: HashSet::new(),
+            can_image: false,
             items: Vec::new(),
             permission: None,
             changes: Vec::new(),
@@ -478,7 +505,7 @@ impl Workbench {
 
     fn agent_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.agent.input.read(cx).value().trim().to_string();
-        if text.is_empty() || self.agent.status == Status::Busy {
+        if text.is_empty() && self.agent.attachments.is_empty() {
             return;
         }
         self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
@@ -505,12 +532,14 @@ impl Workbench {
             "/stop" => return self.agent_set_on(false, cx),
             _ => {}
         }
-        self.agent.items.push(Item::User(text.clone()));
+        let files = std::mem::take(&mut self.agent.attachments);
+        self.agent.queue.push(Queued { text, files });
         self.agent.scroll.scroll_to_bottom();
         match (&self.agent.status, &self.agent.session) {
-            (Status::Ready, Some(_)) => self.agent_prompt(text, cx),
+            (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
+            // Still answering: the message waits in the queue (Send now interrupts).
+            (Status::Busy, _) | (Status::Starting, _) => {}
             _ => {
-                self.agent.queued_prompt = Some(text);
                 if let Some(id) = self.agent.resume_id.take() {
                     // Stopped while idle: continue the same session without replaying it.
                     self.agent.pending_load = Some(id);
@@ -522,13 +551,46 @@ impl Workbench {
         cx.notify();
     }
 
-    fn agent_prompt(&mut self, text: String, cx: &mut Context<Self>) {
+    /// Send everything queued as one message (the agent sees it in order, in the same
+    /// session, so it keeps the context of what came before).
+    fn agent_flush_queue(&mut self, cx: &mut Context<Self>) {
+        if self.agent.queue.is_empty() || self.agent.session.is_none() {
+            return;
+        }
+        let queued = std::mem::take(&mut self.agent.queue);
+        let mut text = queued.iter().map(|q| q.text.as_str()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
+        let files: Vec<PathBuf> = queued.into_iter().flat_map(|q| q.files).collect();
+        let shown = text.clone();
+        if std::mem::take(&mut self.agent.steer) {
+            text = format!("(I stopped your previous answer to send this. Take it into account and continue.)\n\n{text}");
+        }
+        self.agent.items.push(Item::User(if shown.is_empty() { "(attachments)".into() } else { shown }));
+        if !files.is_empty() {
+            let names: Vec<String> = files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+            self.agent.items.push(Item::Note(format!("Attached: {}", names.join(", ")), false));
+        }
+        self.agent_prompt(text, files, cx);
+    }
+
+    /// Interrupt the current answer and send the queue now (it keeps the context).
+    fn agent_steer(&mut self, cx: &mut Context<Self>) {
+        if self.agent.status == Status::Busy {
+            self.agent.steer = true;
+            self.agent_cancel(cx);
+        } else {
+            self.agent_flush_queue(cx);
+        }
+        cx.notify();
+    }
+
+    fn agent_prompt(&mut self, text: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(session) = self.agent.session.clone() else { return };
         let mut prompt = Vec::new();
         if let Some(earlier) = self.agent.carry.take() {
             prompt.push(json!({ "type": "text", "text": format!("Earlier messages of this conversation, for context:\n\n{earlier}\n\n---\n") }));
         }
         prompt.push(json!({ "type": "text", "text": text.clone() }));
+        prompt.extend(self.agent_attachment_blocks(&files));
         prompt.extend(self.agent_context_blocks(&text, cx));
         self.agent.status = Status::Busy;
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
@@ -611,6 +673,7 @@ impl Workbench {
         match kind {
             Req::Initialize => {
                 self.agent.can_load = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
+                self.agent.can_image = result.pointer("/agentCapabilities/promptCapabilities/image").and_then(Value::as_bool).unwrap_or(false);
                 let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
@@ -629,17 +692,13 @@ impl Workbench {
                 self.agent_schedule_idle(cx);
                 self.agent.hinted = false;
                 self.agent.save_chat();
-                if let Some(text) = self.agent.queued_prompt.take() {
-                    self.agent_prompt(text, cx);
-                }
+                self.agent_flush_queue(cx);
             }
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(cx);
-                if let Some(text) = self.agent.queued_prompt.take() {
-                    self.agent_prompt(text, cx);
-                }
+                self.agent_flush_queue(cx);
             }
             Req::Prompt => {
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
@@ -652,6 +711,7 @@ impl Workbench {
                 self.agent.save_chat();
                 self.agent_schedule_idle(cx);
                 self.refresh_tree(cx);
+                self.agent_flush_queue(cx);
             }
         }
     }
@@ -930,13 +990,23 @@ impl Workbench {
         if self.settings.agent_cli == cli {
             return;
         }
+        let old = agent_name();
         self.agent.save_chat();
         self.agent_stop(cx);
         self.settings.agent_cli = cli.into();
         self.settings.save();
         set_choice(cli);
         let name = agent_name();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…  (@ adds a file, / for commands)"), window, cx));
+        // Same chat, new harness: it gets the conversation so far with its first message.
+        if self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))) {
+            self.agent.carry = Some(transcript(&self.agent.items));
+            self.agent.items.push(Item::Branch(format!("Continued with {name}. It gets the conversation with {old} above as context.")));
+        }
+        self.agent.resume_id = None;
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…  @ adds a file, / for commands"), window, cx));
+        if !self.agent.queue.is_empty() {
+            self.agent_start(cx);
+        }
         cx.notify();
     }
 
@@ -1192,27 +1262,29 @@ impl Workbench {
             (s.value().to_string(), s.cursor().min(s.value().len()))
         };
         let new = format!("{}@{} {}", &text[..at], rel, &text[cursor..]);
-        let caret = (text[..at].chars().count() + rel.chars().count() + 2) as u32;
+        let caret = at + rel.len() + 2;
         self.agent.input.update(cx, |s, cx| {
             s.set_value(new, window, cx);
-            s.set_cursor_position(gpui_kit::component::input::Position::new(0, caret), window, cx);
+            s.set_selected_range(caret..caret, cx);
         });
         self.agent.mention = None;
         cx.notify();
     }
 
-    pub(crate) fn on_agent_mention_up(&mut self, _: &crate::workbench::AgentMentionUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_up(&mut self, _: &crate::workbench::AgentMentionUp, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, sel)) = self.agent.slash.as_mut() {
             *sel = sel.saturating_sub(1);
             return cx.notify();
         }
         if let Some((_, _, sel)) = self.agent.mention.as_mut() {
             *sel = sel.saturating_sub(1);
-            cx.notify();
+            return cx.notify();
         }
+        // No list open: Up moves the caret between lines as usual.
+        window.dispatch_action(Box::new(gpui_kit::component::input::MoveUp), cx);
     }
 
-    pub(crate) fn on_agent_mention_down(&mut self, _: &crate::workbench::AgentMentionDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_down(&mut self, _: &crate::workbench::AgentMentionDown, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((list, sel)) = self.agent.slash.as_mut() {
             if *sel + 1 < list.len() {
                 *sel += 1;
@@ -1223,8 +1295,9 @@ impl Workbench {
             if *sel + 1 < hits.len() {
                 *sel += 1;
             }
-            cx.notify();
+            return cx.notify();
         }
+        window.dispatch_action(Box::new(gpui_kit::component::input::MoveDown), cx);
     }
 
     pub(crate) fn on_agent_mention_accept(&mut self, _: &crate::workbench::AgentMentionAccept, w: &mut Window, cx: &mut Context<Self>) {
@@ -1232,7 +1305,9 @@ impl Workbench {
             // Tab only completes the name; Enter also runs a command that needs nothing more.
             return self.agent_slash_fill(w, cx).map_or((), |_| ());
         }
-        self.agent_mention_accept(w, cx);
+        if self.agent.mention.is_some() {
+            self.agent_mention_accept(w, cx);
+        }
     }
 
     pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _: &mut Window, cx: &mut Context<Self>) {
@@ -1246,10 +1321,10 @@ impl Workbench {
         let (list, sel) = self.agent.slash.take()?;
         let cmd = list.get(sel)?.clone();
         let text = format!("/{} ", cmd.name);
-        let caret = text.chars().count() as u32;
+        let caret = text.len();
         self.agent.input.update(cx, |s, cx| {
             s.set_value(text, window, cx);
-            s.set_cursor_position(gpui_kit::component::input::Position::new(0, caret), window, cx);
+            s.set_selected_range(caret..caret, cx);
         });
         self.agent.slash = None;
         cx.notify();
@@ -1724,36 +1799,41 @@ impl Workbench {
         v.into_any_element()
     }
 
-    fn render_context_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_context_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let chips = self.agent_chips(cx);
-        h_flex().px_3().pb_1().gap_1().flex_wrap().children(chips.into_iter().enumerate().map(|(i, (key, label, icon, on))| {
-            h_flex()
-                .id(("ag-chip", i))
-                .max_w(theme::u(200.))
-                .h(theme::u(20.))
-                .px_1p5()
-                .gap_1()
-                .rounded(px(4.))
-                .border_1()
-                .cursor_pointer()
-                .text_xs()
-                .border_color(c(if on { theme::BORDER_STRONG } else { theme::BORDER }))
-                .bg(if on { c(theme::BG_ELEVATED) } else { gpui_kit::transparent_black() })
-                .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
-                .hover(|s| s.border_color(c(theme::FG_DIM)))
-                .child(icon.size(theme::u(12.)))
-                .child(div().truncate().when(!on, |d| d.line_through()).child(label))
-                .tooltip(move |w, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(if on { "Sent with your message. Click to leave it out" } else { "Left out. Click to send it" })
-                        .build(w, cx)
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.agent.off_ctx.remove(&key) {
-                        this.agent.off_ctx.insert(key.clone());
-                    }
-                    cx.notify();
-                }))
-        }))
+        chips
+            .into_iter()
+            .enumerate()
+            .map(|(i, (key, label, icon, on))| {
+                h_flex()
+                    .id(("ag-chip", i))
+                    .max_w(theme::u(200.))
+                    .h(theme::u(20.))
+                    .px_1p5()
+                    .gap_1()
+                    .rounded(px(4.))
+                    .border_1()
+                    .cursor_pointer()
+                    .text_xs()
+                    .border_color(c(if on { theme::BORDER_STRONG } else { theme::BORDER }))
+                    .bg(if on { c(theme::BG_EDITOR) } else { gpui_kit::transparent_black() })
+                    .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
+                    .hover(|s| s.border_color(c(theme::FG_DIM)))
+                    .child(icon.size(theme::u(12.)))
+                    .child(div().min_w_0().truncate().when(!on, |d| d.line_through()).child(label))
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(if on { "Sent with your message. Click to leave it out" } else { "Left out. Click to send it" })
+                            .build(w, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.agent.off_ctx.remove(&key) {
+                            this.agent.off_ctx.insert(key.clone());
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     fn render_slash_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1938,7 +2018,10 @@ impl Workbench {
         };
         let mut after_user = true;
         for (i, item) in a.items.iter().enumerate() {
-            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_));
+            if matches!(item, Item::Branch(_)) {
+                after_user = true;
+            }
+            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::Branch(_));
             if starts_answer {
                 log = log.child(speaker(name, Icon::new(IconName::Bot)));
                 after_user = false;
@@ -2001,14 +2084,42 @@ impl Workbench {
                             )
                     })
                     .into_any_element(),
-                Item::Thought(t) => h_flex()
-                    .gap_1p5()
-                    .items_start()
+                Item::Thought(t) => {
+                    let open = a.open_thoughts.contains(&i);
+                    let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+                    v_flex()
+                        .id(("ag-thought", i))
+                        .gap_1()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(
+                            h_flex()
+                                .gap_1p5()
+                                .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
+                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child("Thinking"))
+                                .when(!open, |h| h.child(div().flex_1().min_w_0().truncate().italic().child(last)))
+                                .when(open, |h| h.child(div().flex_1()))
+                                .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).flex_none()),
+                        )
+                        .when(open, |v| v.child(div().pl(theme::u(18.)).italic().child(t.clone())))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.agent.open_thoughts.remove(&i) {
+                                this.agent.open_thoughts.insert(i);
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
+                Item::Branch(t) => h_flex()
+                    .py_1()
+                    .gap_2()
                     .text_xs()
-                    .italic()
                     .text_color(c(theme::FG_DIM))
-                    .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-                    .child(div().flex_1().min_w_0().line_clamp(2).child(t.chars().rev().take(240).collect::<Vec<_>>().into_iter().rev().collect::<String>()))
+                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
+                    .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
+                    .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
+                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
                     .into_any_element(),
                 Item::Tool { title, status, kind, .. } => {
                     let (state_icon, col): (Icon, theme::Tok) = match status.as_str() {
@@ -2147,33 +2258,278 @@ impl Workbench {
                 }))
         });
 
-        let busy = a.status == Status::Busy;
         v_flex()
+            .id("agent-panel")
             .size_full()
+            // Files dropped anywhere on the panel are attached to the next message.
+            .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(c(theme::BG_HOVER)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.agent_attach(paths.paths().to_vec(), cx);
+            }))
             .child(header)
             .child(log)
             .when_some(permission, |v, p| v.child(p))
             .when_some(changes, |v, ch| v.child(ch))
+            .children(self.render_queue(cx))
             .children(self.render_slash_popup(cx))
             .children(self.render_mention_popup(cx))
-            .child(self.render_context_row(cx))
+            .child(self.render_composer(cx))
+            .into_any_element()
+    }
+
+    /// Add files to the next message (button, drop or paste). Folders become @mentions.
+    pub(crate) fn agent_attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for p in paths {
+            if p.exists() && !self.agent.attachments.contains(&p) {
+                self.agent.attachments.push(p);
+            }
+        }
+        cx.notify();
+    }
+
+    fn agent_pick_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach files".into()) });
+        cx.spawn_in(window, async move |this, cx| {
+            let picked = paths.await.ok()?.ok()??;
+            this.update(cx, |this, cx| this.agent_attach(picked, cx)).ok()
+        })
+        .detach();
+    }
+
+    /// How attached files go to the agent (see docs.rs): images as images, text and
+    /// Office documents as text, anything else as a link the agent opens itself.
+    fn agent_attachment_blocks(&self, files: &[PathBuf]) -> Vec<Value> {
+        use base64::Engine;
+        let mut out = Vec::new();
+        for p in files {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            if p.is_dir() {
+                let names: Vec<String> = std::fs::read_dir(p)
+                    .map(|rd| rd.flatten().take(300).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                    .unwrap_or_default();
+                out.push(json!({ "type": "text", "text": format!("The user attached the folder {} ({}). It contains:\n{}", name, p.display(), names.join("\n")) }));
+                continue;
+            }
+            let link = json!({ "type": "resource_link", "uri": crate::docs::file_uri(p), "name": name, "mimeType": crate::docs::mime(p) });
+            match crate::docs::kind(p) {
+                crate::docs::Kind::Image if self.agent.can_image && size <= 5 * 1024 * 1024 => {
+                    if let Ok(bytes) = std::fs::read(p) {
+                        out.push(json!({ "type": "image", "mimeType": crate::docs::mime(p), "data": base64::engine::general_purpose::STANDARD.encode(bytes) }));
+                        continue;
+                    }
+                    out.push(link);
+                }
+                crate::docs::Kind::Text if size <= 400_000 => match std::fs::read(p).ok().and_then(|b| String::from_utf8(b).ok()) {
+                    Some(text) => out.push(json!({ "type": "resource", "resource": { "uri": crate::docs::file_uri(p), "text": text, "mimeType": crate::docs::mime(p) } })),
+                    None => out.push(link),
+                },
+                crate::docs::Kind::Office => {
+                    match crate::docs::office_text(p) {
+                        Ok(text) => out.push(json!({ "type": "text", "text": format!("Text of the attached file {name} (read by FluxCode; layout and images are not included):\n```\n{text}\n```") })),
+                        Err(e) => out.push(json!({ "type": "text", "text": format!("FluxCode couldn't read the text of {name}: {e}.") })),
+                    }
+                    out.push(link);
+                }
+                _ => {
+                    out.push(json!({ "type": "text", "text": format!("The user attached {name} ({}). It is at {}; open it with your tools if you need its content.", crate::docs::mime(p), p.display()) }));
+                    out.push(link);
+                }
+            }
+        }
+        out
+    }
+
+    fn render_queue(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let a = &self.agent;
+        if a.queue.is_empty() {
+            return None;
+        }
+        let name = agent_name();
+        let status = match &a.status {
+            Status::Busy => format!("Waiting for {name} to finish, then these are sent together"),
+            Status::Starting => format!("Sent as soon as {name} is ready"),
+            Status::Error(_) => format!("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it"),
+            _ => "Sent with your next message".to_string(),
+        };
+        let busy = a.status == Status::Busy;
+        Some(
+            v_flex()
+                .mx_3()
+                .mb_1()
+                .gap_1()
+                .child(div().text_xs().text_color(c(theme::FG_DIM)).child(status))
+                .children(a.queue.iter().enumerate().map(|(i, q)| {
+                    h_flex()
+                        .id(("ag-queued", i))
+                        .px_2()
+                        .h(theme::u(26.))
+                        .gap_2()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .bg(c(theme::BG_ELEVATED))
+                        .text_xs()
+                        .child(Icon::new(gpui_kit::assets::IconName::Clock).size(theme::u(12.)).text_color(c(theme::FG_DIM)).flex_none())
+                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(q.text.lines().next().unwrap_or("").to_string()))
+                        .when(!q.files.is_empty(), |h| h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(format!("+{} file{}", q.files.len(), if q.files.len() == 1 { "" } else { "s" }))))
+                        .when(busy && i == 0, |h| {
+                            h.child(
+                                Button::new(("ag-steer", i))
+                                    .label("Send now")
+                                    .xsmall()
+                                    .ghost()
+                                    .tooltip("Stop the current answer and send this now (the agent keeps the context)")
+                                    .on_click(cx.listener(|this, _, _, cx| this.agent_steer(cx))),
+                            )
+                        })
+                        .child(Button::new(("ag-unqueue", i)).icon(IconName::Close).xsmall().ghost().tooltip("Remove from the queue").on_click(cx.listener(move |this, _, _, cx| {
+                            if i < this.agent.queue.len() {
+                                this.agent.queue.remove(i);
+                            }
+                            cx.notify();
+                        })))
+                })),
+        )
+        .map(|v| v.into_any_element())
+    }
+
+    /// The message box: chips (what goes along), the text (grows with it), and a
+    /// bottom row with attach, @, the keys hint and Send / Stop.
+    fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let a = &self.agent;
+        let busy = a.status == Status::Busy;
+        let has_text = !a.input.read(cx).value().trim().is_empty() || !a.attachments.is_empty();
+        let weak = cx.entity().downgrade();
+        let attachments = a.attachments.iter().enumerate().map(|(i, p)| {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let (icon, tint) = crate::files::icon_for(&name);
+            h_flex()
+                .id(("ag-att", i))
+                .max_w(theme::u(200.))
+                .h(theme::u(20.))
+                .pl_1p5()
+                .gap_1()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG))
+                .bg(c(theme::BG_EDITOR))
+                .text_xs()
+                .text_color(c(theme::FG))
+                .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)))
+                .child(div().min_w_0().truncate().child(name))
+                .child(Button::new(("ag-att-x", i)).icon(IconName::Close).xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
+                    if i < this.agent.attachments.len() {
+                        this.agent.attachments.remove(i);
+                    }
+                    cx.notify();
+                })))
+                .into_any_element()
+        });
+        let mut chips: Vec<AnyElement> = attachments.collect();
+        chips.extend(self.render_context_chips(cx));
+        v_flex()
+            .id("ag-composer")
+            .mx_3()
+            .mb_3()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .bg(c(theme::BG_ELEVATED))
+            .cursor_text()
+            // A click anywhere in the box puts the caret in the text.
+            .on_click(cx.listener(|this, _, w, cx| {
+                let h = this.agent.input.focus_handle(cx);
+                if !h.is_focused(w) {
+                    h.focus(w, cx);
+                }
+            }))
+            .when(!chips.is_empty(), |v| v.child(h_flex().px_2().pt_2().gap_1().flex_wrap().children(chips)))
+            .child(
+                div().px_1().pt_1().key_context("AgentInput").child(
+                    Textarea::new(&a.input).appearance(false).on_paste(move |item, _, cx| {
+                        // Pasted screenshots and copied files become attachments.
+                        let mut files: Vec<PathBuf> = Vec::new();
+                        for entry in item.entries() {
+                            match entry {
+                                ClipboardEntry::Image(img) => {
+                                    let ext = match img.format {
+                                        ImageFormat::Jpeg => "jpg",
+                                        ImageFormat::Gif => "gif",
+                                        ImageFormat::Webp => "webp",
+                                        ImageFormat::Bmp => "bmp",
+                                        _ => "png",
+                                    };
+                                    let dir = std::env::temp_dir().join("fluxcode-paste");
+                                    let _ = std::fs::create_dir_all(&dir);
+                                    let p = dir.join(format!("pasted-{}.{ext}", now_ms()));
+                                    if std::fs::write(&p, &img.bytes).is_ok() {
+                                        files.push(p);
+                                    }
+                                }
+                                ClipboardEntry::ExternalPaths(paths) => files.extend(paths.paths().iter().cloned()),
+                                _ => {}
+                            }
+                        }
+                        if files.is_empty() {
+                            return false;
+                        }
+                        _ = weak.update(cx, |this, cx| this.agent_attach(files, cx));
+                        true
+                    }),
+                ),
+            )
             .child(
                 h_flex()
-                    .px_3()
-                    .pb_3()
-                    .gap_1()
-                    .child(div().flex_1().key_context("AgentInput").child(Input::new(&a.input).small()))
+                    .px_1p5()
+                    .pb_1p5()
+                    .gap_px()
                     .child(
+                        Button::new("ag-attach")
+                            .icon(Icon::new(gpui_kit::assets::IconName::Paperclip))
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)")
+                            .on_click(cx.listener(|this, _, w, cx| this.agent_pick_files(w, cx))),
+                    )
+                    .child(
+                        Button::new("ag-at")
+                            .icon(Icon::new(gpui_kit::assets::IconName::AtSign))
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Mention a file in the project")
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.agent.input.update(cx, |s, cx| {
+                                    let v = s.value().to_string();
+                                    let new = if v.is_empty() || v.ends_with(char::is_whitespace) { format!("{v}@") } else { format!("{v} @") };
+                                    let end = new.len();
+                                    s.set_value(new, w, cx);
+                                    s.set_selected_range(end..end, cx);
+                                });
+                                let h = this.agent.input.focus_handle(cx);
+                                h.focus(w, cx);
+                                this.agent_update_mention(cx);
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(div().px_1().text_xs().text_color(c(theme::FG_DIM)).child(if busy { "Enter queues · Shift+Enter new line" } else { "Enter sends · Shift+Enter new line" }))
+                    .child(if busy && !has_text {
+                        Button::new("ag-stop")
+                            .icon(IconName::Square)
+                            .xsmall()
+                            .tooltip("Stop the answer")
+                            .on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx)))
+                            .into_any_element()
+                    } else {
                         Button::new("ag-send")
                             .icon(IconName::ArrowUp)
-                            .small()
-                            .when(!busy, |b| b.primary())
-                            .disabled(busy)
-                            .tooltip("Send (Enter)")
-                            .on_click(cx.listener(|this, _, w, cx| this.agent_send(w, cx))),
-                    ),
+                            .xsmall()
+                            .when(has_text, |b| b.primary())
+                            .tooltip(if busy { "Queue (sent when the answer ends)" } else { "Send (Enter)" })
+                            .on_click(cx.listener(|this, _, w, cx| this.agent_send(w, cx)))
+                            .into_any_element()
+                    }),
             )
-            .into_any_element()
     }
 
     /// The memories used in this turn helped (the user kept the changes).

@@ -1793,9 +1793,10 @@ dependencies = [
 
 [[package]]
 name = "fluxcode-gpui"
-version = "0.8.1-dev.2026-11-09-1351"
+version = "0.8.2-dev.2026-11-09-1413"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "embed-resource",
  "futures",
@@ -1804,6 +1805,7 @@ dependencies = [
  "image",
  "lb-wry",
  "lsp-types",
+ "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
  "sha1_smol",

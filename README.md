@@ -300,7 +300,17 @@ The agent panel:
   Enter). Chips above the input show what goes along with the message: the open file, the
   selection, the last error (when the message is about an error), terminal output (when it
   mentions the output), and each `@file`. Click a chip to leave it out.
-- Answers render as Markdown; code blocks have Copy and Insert (at the cursor in the open
+- The input grows with the text (up to 8 lines, then scrolls). Enter sends, Shift+Enter adds a
+  line. Attach files with the paperclip, by dropping them on the panel, or by pasting (Ctrl+V
+  with files or a screenshot on the clipboard). Images go to the agent as images when it
+  accepts them; text and code go inline; Word, Excel, PowerPoint and OpenDocument files are
+  read natively and sent as text; PDFs and other files are sent as links the agent can open.
+- Messages sent while the agent is still answering wait in a queue above the input. They go
+  out together once the answer ends, or right away with Send now (which stops the current
+  answer and tells the agent why). The X removes a queued message.
+- Switching between OpenCode and Mira keeps the chat: a divider marks the switch, and the new
+  agent gets the conversation so far with its first message.
+- Answers render as Markdown, with the agent's reasoning folded under Thinking; code blocks have Copy and Insert (at the cursor in the open
   file). Tool calls show what kind they are (read, edit, search, run, web) and their state.
 - History lists FluxCode's own chats and the sessions OpenCode (or Mira) saved for the open
   folder. Opening one resumes it in place (ACP `session/load`), with its history replayed.
