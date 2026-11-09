@@ -5,12 +5,12 @@
 name: build
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
+  # Disabled automatic triggers to prevent burning GitHub Actions runner quota
+  # push:
+  #   branches: [main]
+  #   tags: ["v*"]
+  # pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
 
