@@ -73,7 +73,7 @@ jobs:
             } else {
               lines.push('- Similar issues: none found.');
             }
-            lines.push('');
+            if (top.length) lines.push('');
             if (!build) {
               lines.push('- Build: not given. Please add the build ID from Help > About FluxCode (it looks like `BuildDev-2026-11-09-17-30-12`).');
               labels.push('needs-info');
