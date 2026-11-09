@@ -39,7 +39,7 @@ impl Workbench {
             let id = item.id.to_string();
             let is_open = active_path.as_deref() == Some(id.as_str());
             let is_sel = selected.as_deref() == Some(id.as_str());
-            // Every row: a 12px chevron slot, then one 16px icon from the same outline set.
+            // Every row: a 12px chevron slot, then one 14px icon from the same outline set.
             let is_dir = entry.is_folder() || dirs.contains(&id);
             // Skipped folders (.git, node_modules, ...) are listed but never opened: dimmed, no chevron.
             let skipped = is_dir && !entry.is_folder();
@@ -52,19 +52,19 @@ impl Workbench {
             });
             let icon = if is_dir {
                 Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
-                    .size(theme::u(16.))
+                    .size(theme::u(14.))
                     .text_color(if skipped { c(theme::FG_DIM) } else { c(theme::FOLDER) })
             } else {
                 let (icon, tint) = files::icon_for(&item.label);
-                Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint))
+                Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint))
             };
             let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
             let label_color = if skipped { c(theme::FG_DIM) } else { c(theme::FG) };
             ListItem::new(ix)
                 .w_full()
-                .h(theme::u(22.))
+                .h(theme::u(20.))
                 .px_1()
-                .pl(theme::u(12.) * entry.depth() + theme::u(6.))
+                .pl(theme::u(10.) * entry.depth() + theme::u(6.))
                 .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
                 .child(h_flex().gap_1().text_color(label_color).child(lead).child(item.label.clone()))
                 .on_click({
@@ -93,7 +93,7 @@ impl Workbench {
                 .menu("Copy Path", Box::new(CopyPath))
                 .menu("Reveal in File Explorer", Box::new(RevealInExplorer))
         })
-        .text_sm()
+        .text_size(theme::u(12.5))
         .size_full();
 
         v_flex()

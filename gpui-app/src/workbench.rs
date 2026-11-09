@@ -32,7 +32,8 @@ actions!(
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
-        NextTheme
+        NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
+        GoToProblem
     ]
 );
 
@@ -61,6 +62,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
+        // In the code editor Tab accepts the highlighted suggestion; with no
+        // suggestion menu open it indents (on_tab_accept falls back to IndentInline).
+        KeyBinding::new("tab", TabAccept, Some("Input && mode == editor")),
+        // Terminal prompt: shell-like keys (bound after gpui-kit's, so they win over the input's own).
+        KeyBinding::new("up", TermHistoryPrev, Some("Terminal > Input")),
+        KeyBinding::new("down", TermHistoryNext, Some("Terminal > Input")),
+        KeyBinding::new("tab", TermComplete, Some("Terminal > Input")),
+        KeyBinding::new("ctrl-c", TermInterrupt, Some("Terminal > Input")),
+        KeyBinding::new("escape", TermEscape, Some("Terminal > Input")),
     ]);
 }
 
@@ -78,19 +88,27 @@ pub(crate) enum PanelTab {
     Output,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LineKind {
-    Normal,
-    Err,
-    Cmd,
-    Info,
-}
+pub(crate) use crate::term::LineKind;
 
 pub(crate) struct Line {
     pub text: SharedString,
     pub kind: LineKind,
     /// The process may still append to this line (no newline yet).
     pub open: bool,
+    /// Came from stderr (or, on a status line: the command failed).
+    pub err: bool,
+    /// Second piece of text: the prompt's folder, a status line's time, a card's file:line.
+    pub meta: SharedString,
+    /// Click target: (path as printed, 1-based line).
+    pub link: Option<(SharedString, u32)>,
+    /// Command a card's fix button runs.
+    pub run: Option<SharedString>,
+}
+
+impl Line {
+    pub fn new(text: &str, kind: LineKind) -> Self {
+        Self { text: text.to_string().into(), kind, open: false, err: false, meta: SharedString::default(), link: None, run: None }
+    }
 }
 
 pub(crate) struct Doc {
@@ -123,6 +141,8 @@ pub struct Workbench {
     pub(crate) active: Option<usize>,
     pub(crate) view: SideView,
     pub(crate) sidebar_open: bool,
+    /// The OpenCode chat docked on the right is showing (settings.agent_right).
+    pub(crate) agent_open: bool,
     pub(crate) focus: FocusHandle,
     pub(crate) status: SharedString,
     pub(crate) settings: crate::settings::Settings,
@@ -152,6 +172,14 @@ pub struct Workbench {
     pub(crate) out_lines: Vec<Line>,
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
+    pub(crate) term_run: Option<crate::panel::RunInfo>,
+    pub(crate) out_run: Option<crate::panel::RunInfo>,
+    /// Position while walking the history with Up/Down.
+    pub(crate) term_hist_ix: Option<usize>,
+    /// Python errors from the last runs, underlined in the editor.
+    pub(crate) problems: Vec<crate::panel::Problem>,
+    /// "Python 3.15.0" for the terminal header (detected in the background).
+    pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
@@ -171,7 +199,7 @@ impl Workbench {
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let term_input = cx.new(|cx| InputState::new(window, cx));
+        let term_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command (Tab completes, ↑ for history)"));
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("Personal access token"));
         let subs = vec![
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
@@ -220,6 +248,7 @@ impl Workbench {
             active: None,
             view: SideView::Explorer,
             sidebar_open: true,
+            agent_open: false,
             focus,
             status: SharedString::default(),
             settings,
@@ -246,6 +275,11 @@ impl Workbench {
             out_lines: Vec::new(),
             out_proc: None,
             out_scroll: UniformListScrollHandle::new(),
+            term_run: None,
+            out_run: None,
+            term_hist_ix: None,
+            problems: Vec::new(),
+            python_version: None,
             agent,
             preview_server: None,
             github: crate::github::load(),
@@ -273,7 +307,21 @@ impl Workbench {
         }
         self.refresh_tree(cx);
         self.save_session(cx);
+        self.detect_python(cx);
         cx.notify();
+    }
+
+    /// Find the workspace's Python version off the UI thread, for the terminal header.
+    pub(crate) fn detect_python(&mut self, cx: &mut Context<Self>) {
+        let root = self.root.clone();
+        cx.spawn(async move |this, cx| {
+            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref()) }).await;
+            _ = this.update(cx, |this, cx| {
+                this.python_version = v.map(Into::into);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
@@ -327,7 +375,8 @@ impl Workbench {
                 .soft_wrap(wrap)
                 .default_value(file.text)
         });
-        crate::complete::attach(&editor, lang, cx);
+        let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        crate::complete::attach(&editor, lang, &file_name, cx);
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
@@ -522,8 +571,16 @@ impl Workbench {
         self.show_view(SideView::Run, cx);
     }
 
-    fn on_show_agent(&mut self, _: &ShowAgent, _: &mut Window, cx: &mut Context<Self>) {
-        self.show_view(SideView::Agent, cx);
+    fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.agent_right {
+            self.agent_open = true;
+            self.settings_open = false;
+            let h = self.agent_input_focus(cx);
+            h.focus(window, cx);
+            cx.notify();
+        } else {
+            self.show_view(SideView::Agent, cx);
+        }
     }
 
     fn on_show_settings(&mut self, _: &ShowSettings, _: &mut Window, cx: &mut Context<Self>) {
@@ -536,6 +593,21 @@ impl Workbench {
         let ix = theme::PALETTES.iter().position(|p| p.id == theme::palette().id).unwrap_or(0);
         let next = theme::PALETTES[(ix + 1) % theme::PALETTES.len()].id;
         self.set_theme(next, window, cx);
+    }
+
+    /// Tab in the code editor: accept the highlighted suggestion, else indent.
+    fn on_tab_accept(&mut self, _: &TabAccept, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::input::{Enter, IndentInline};
+        let editor = self.active.and_then(|ix| self.docs.get(ix)).map(|d| d.editor.clone());
+        let accepted = editor.is_some_and(|editor| {
+            editor.update(cx, |state, cx| {
+                state.completion_menu_state().open
+                    && state.route_overlay_action(Box::new(Enter { secondary: false, shift: false }), window, cx)
+            })
+        });
+        if !accepted {
+            window.dispatch_action(Box::new(IndentInline), cx);
+        }
     }
 
     fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
@@ -558,12 +630,11 @@ impl Workbench {
     pub(crate) fn on_proc_event(&mut self, ev: ProcEvent, cx: &mut Context<Self>) {
         match ev {
             ProcEvent::Output { id, text, err } => {
-                let kind = if err { LineKind::Err } else { LineKind::Normal };
                 if Some(id) == self.term_proc {
-                    push_text(&mut self.term_lines, &text, kind);
+                    push_text(&mut self.term_lines, &text, err);
                     self.term_scroll.scroll_to_bottom();
                 } else if Some(id) == self.out_proc {
-                    push_text(&mut self.out_lines, &text, kind);
+                    push_text(&mut self.out_lines, &text, err);
                     self.out_scroll.scroll_to_bottom();
                 } else if self.agent.owns(id) {
                     self.agent_on_output(&text, err, cx);
@@ -571,23 +642,12 @@ impl Workbench {
             }
             ProcEvent::Exit { id, code } => {
                 self.procs.forget(id);
-                let msg = match code {
-                    Some(0) => None,
-                    Some(c) => Some(format!("exit code {c}")),
-                    None => Some("stopped".to_string()),
-                };
                 if Some(id) == self.term_proc {
                     self.term_proc = None;
-                    close_line(&mut self.term_lines);
-                    if let Some(m) = msg {
-                        push_line(&mut self.term_lines, &m, LineKind::Info);
-                    }
-                    self.term_scroll.scroll_to_bottom();
+                    self.finish_run(true, code, cx);
                 } else if Some(id) == self.out_proc {
                     self.out_proc = None;
-                    close_line(&mut self.out_lines);
-                    push_line(&mut self.out_lines, &format!("[Done] {}", msg.as_deref().unwrap_or("exit code 0")), LineKind::Info);
-                    self.out_scroll.scroll_to_bottom();
+                    self.finish_run(false, code, cx);
                 } else if self.agent.owns(id) {
                     self.agent_on_exit(cx);
                 }
@@ -699,7 +759,7 @@ impl Workbench {
             div()
                 .id(id)
                 .relative()
-                .size(theme::u(48.))
+                .size(theme::u(40.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -707,9 +767,18 @@ impl Workbench {
                 .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
                 .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .when(active, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).bg(c(theme::ACCENT))))
-                .child(Icon::new(icon).size(theme::u(22.)))
+                .child(Icon::new(icon).size(theme::u(17.)))
         };
         let view_item = |id: &'static str, icon: IconName, view: SideView, this: &Self, cx: &mut Context<Self>| {
+            // OpenCode docked right: its icon shows and hides that dock instead.
+            if view == SideView::Agent && this.settings.agent_right {
+                let active = this.agent_open && !this.settings_open;
+                return div().id((id, 0usize)).child(item(id, icon, active, this, cx)).on_click(cx.listener(move |this, _, _, cx| {
+                    this.agent_open = !(this.agent_open && !this.settings_open);
+                    this.settings_open = false;
+                    cx.notify();
+                }));
+            }
             let active = this.sidebar_open && this.view == view && !this.settings_open;
             div().id((id, 0usize)).child(item(id, icon, active, this, cx)).on_click(cx.listener(move |this, _, _, cx| {
                 if this.view == view && this.sidebar_open && !this.settings_open {
@@ -723,7 +792,7 @@ impl Workbench {
             }))
         };
         v_flex()
-            .w(theme::u(48.))
+            .w(theme::u(40.))
             .h_full()
             .items_center()
             .bg(c(theme::BG_TITLE))
@@ -970,6 +1039,21 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
                 )
             })
+            .when(!self.problems.is_empty(), |h| {
+                h.child(
+                    h_flex()
+                        .id("sb-problems")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .cursor_pointer()
+                        .text_color(c(theme::DANGER))
+                        .hover(|s| s.bg(c(theme::BG_HOVER)))
+                        .child(Icon::new(IconName::CircleX).size(theme::u(13.)))
+                        .child(self.problems.len().to_string())
+                        .on_click(cx.listener(|this, _, w, cx| this.on_go_to_problem(&GoToProblem, w, cx))),
+                )
+            })
             .child(div().px_2().flex_1().truncate().text_color(c(theme::FG)).child(self.status.clone()))
             .when(!pos.is_empty(), |h| {
                 h.child(seg(pos.into())).child(seg(crlf.into())).child(seg("UTF-8".into())).child(seg(lang.into()))
@@ -1012,7 +1096,7 @@ const MAX_LINES: usize = 10_000;
 
 pub(crate) fn push_line(lines: &mut Vec<Line>, text: &str, kind: LineKind) {
     close_line(lines);
-    lines.push(Line { text: text.to_string().into(), kind, open: false });
+    lines.push(Line::new(text, kind));
     trim(lines);
 }
 
@@ -1022,17 +1106,32 @@ pub(crate) fn close_line(lines: &mut [Line]) {
     }
 }
 
-/// Append streamed output, continuing an unfinished last line.
-pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, kind: LineKind) {
+/// Append streamed output, continuing an unfinished last line, and (re)classify
+/// each touched line so its color follows what it says, not which pipe it used.
+pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, err: bool) {
     let clean = crate::proc::strip_ansi(text);
     let mut parts = clean.split('\n').peekable();
     while let Some(part) = parts.next() {
         let last_piece = parts.peek().is_none();
         match lines.last_mut() {
-            Some(l) if l.open && l.kind == kind => l.text = format!("{}{}", l.text, part).into(),
+            Some(l) if l.open && l.err == err => l.text = format!("{}{}", l.text, part).into(),
             _ if part.is_empty() && last_piece => break,
-            _ => lines.push(Line { text: part.to_string().into(), kind, open: true }),
+            _ => {
+                let mut l = Line::new(part, LineKind::Normal);
+                l.open = true;
+                l.err = err;
+                lines.push(l);
+            }
         }
+        let n = lines.len();
+        let prev = (n >= 2).then(|| lines[n - 2].kind);
+        let l = &mut lines[n - 1];
+        l.kind = crate::term::classify(&l.text, l.err, prev);
+        l.link = match l.kind {
+            LineKind::Frame => crate::term::parse_frame(&l.text).map(|(p, n, _)| (p.into(), n)),
+            LineKind::Warn => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
+            _ => None,
+        };
         if !last_piece {
             close_line(lines);
         }
@@ -1074,14 +1173,23 @@ impl Render for Workbench {
         } else {
             editor_view
         };
-        let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(if self.sidebar_open {
+        let center: AnyElement = if self.sidebar_open {
             h_resizable("workbench-split")
                 .child(resizable_panel().size(px(260.)).size_range(px(160.)..px(600.)).child(self.render_side_bar(window, cx)))
                 .child(resizable_panel().child(editor_and_panel))
                 .into_any_element()
         } else {
             editor_and_panel
-        });
+        };
+        let center: AnyElement = if self.settings.agent_right && self.agent_open {
+            h_resizable("agent-split")
+                .child(resizable_panel().child(center))
+                .child(resizable_panel().size(px(380.)).size_range(px(260.)..px(900.)).child(self.render_agent_dock(window, cx)))
+                .into_any_element()
+        } else {
+            center
+        };
+        let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(center);
         // The user's picture, under every panel. Panels turn translucent while it is set
         // (theme::c), so it shows through each of them at the chosen visibility.
         let backdrop = self.settings.background().map(|p| {
@@ -1097,6 +1205,13 @@ impl Render for Workbench {
             .text_color(c(theme::FG))
             .children(backdrop)
             .on_action(cx.listener(Self::on_next_theme))
+            .on_action(cx.listener(Self::on_tab_accept))
+            .on_action(cx.listener(Self::on_term_history_prev))
+            .on_action(cx.listener(Self::on_term_history_next))
+            .on_action(cx.listener(Self::on_term_complete))
+            .on_action(cx.listener(Self::on_term_interrupt))
+            .on_action(cx.listener(Self::on_term_escape))
+            .on_action(cx.listener(Self::on_go_to_problem))
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))

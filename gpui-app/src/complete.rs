@@ -13,18 +13,21 @@ use lsp_types::{
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-pub fn attach(editor: &Entity<EditorState>, lang: &'static str, cx: &mut App) {
+pub fn attach(editor: &Entity<EditorState>, lang: &'static str, file_name: &str, cx: &mut App) {
     if lang == "text" {
         return;
     }
+    let file = file_name.to_ascii_lowercase();
     editor.update(cx, |state, cx| {
-        state.lsp_mut().completion_provider = Some(Rc::new(Words { lang }));
+        state.lsp_mut().completion_provider = Some(Rc::new(Words { lang, file }));
         cx.notify();
     });
 }
 
 struct Words {
     lang: &'static str,
+    /// Lower-cased file name: picks the JSON schema (manifest.json, package.json, ...).
+    file: String,
 }
 
 fn is_word(c: char) -> bool {
@@ -45,6 +48,7 @@ impl CompletionProvider for Words {
         cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let lang = self.lang;
+        let file = self.file.clone();
         let text = rope.to_string();
         let start_pos = rope.offset_to_position(offset);
         let rope = rope.clone();
@@ -52,6 +56,35 @@ impl CompletionProvider for Words {
             let before = &text[..offset.min(text.len())];
             let line = &before[before.rfind('\n').map_or(0, |i| i + 1)..];
             let mut items = Vec::new();
+
+            // JSON: keys and values that fit where the cursor is (manifest.json,
+            // package.json, tsconfig.json, composer.json). These come first.
+            if lang == "json" {
+                if let Some(pos) = json_position(before) {
+                    // A closing quote right after the cursor (auto-paired) is replaced too.
+                    let after_quote = text[offset..].starts_with('"');
+                    let end = if after_quote { rope.offset_to_position(offset + 1) } else { start_pos };
+                    let (prefix, list, is_key) = match &pos {
+                        JsonPos::Key { path, prefix } => (prefix.as_str(), json_keys(&file, path), true),
+                        JsonPos::Value { path, key, prefix } => (prefix.as_str(), json_values(&file, path, key), false),
+                    };
+                    let start = rope.offset_to_position(offset - prefix.len());
+                    let lower = prefix.to_lowercase();
+                    for k in list.iter().filter(|k| k.to_lowercase().starts_with(&lower) && **k != prefix) {
+                        let insert = if is_key { format!("{k}\": ") } else { format!("{k}\"") };
+                        let mut it = item(k, &insert, start, start_pos, CompletionItemKind::PROPERTY, if is_key { "key" } else { "value" }, "0");
+                        it.text_edit = Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
+                            new_text: insert,
+                            insert: lsp_types::Range::new(start, end),
+                            replace: lsp_types::Range::new(start, end),
+                        }));
+                        items.push(it);
+                    }
+                    if !items.is_empty() {
+                        return Ok(CompletionResponse::Array(items));
+                    }
+                }
+            }
 
             // Emmet: the abbreviation runs back to the last whitespace.
             if is_html(lang) || lang == "css" {
@@ -98,7 +131,197 @@ impl CompletionProvider for Words {
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         let Some(c) = new_text.chars().last() else { return false };
-        new_text.chars().count() == 1 && (is_word(c) || (is_html(self.lang) && matches!(c, '!' | '>' | '.' | '#' | '*' | '+' | '}')))
+        new_text.chars().count() == 1
+            && (is_word(c)
+                || (self.lang == "json" && matches!(c, '"' | '-'))
+                || (is_html(self.lang) && matches!(c, '!' | '>' | '.' | '#' | '*' | '+' | '}')))
+    }
+}
+
+// ------------------------------------------------------------------ JSON
+
+/// Where the cursor is in a JSON document: typing an object key, or a string value.
+#[derive(Debug, PartialEq)]
+enum JsonPos {
+    /// `path` is the chain of keys to the object being written ("content_scripts[]"
+    /// for an object inside the `content_scripts` array); empty at the top level.
+    Key { path: Vec<String>, prefix: String },
+    Value { path: Vec<String>, key: String, prefix: String },
+}
+
+/// Scan the text before the cursor once and work out the cursor's position.
+/// Only an open string counts: JSON keys and the values worth suggesting are strings.
+fn json_position(before: &str) -> Option<JsonPos> {
+    struct Frame {
+        obj: bool,
+        /// The key this container is the value of (None inside an array).
+        key: Option<String>,
+    }
+    let mut stack: Vec<Frame> = Vec::new();
+    let (mut in_str, mut esc) = (false, false);
+    let mut cur = String::new();
+    let mut expect_key = false; // in an object, after `{` or `,`
+    let mut last_key: Option<String> = None; // the key whose value follows `:`
+    let mut pending: Option<String> = None; // a string that may become a key at `:`
+    let mut str_is_key = false;
+    for ch in before.chars() {
+        if in_str {
+            if esc {
+                esc = false;
+                cur.push(ch);
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_str = false;
+                if str_is_key {
+                    pending = Some(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_str = true;
+                str_is_key = stack.last().is_some_and(|f| f.obj) && expect_key;
+                cur.clear();
+            }
+            '{' | '[' => {
+                let key = if stack.last().is_some_and(|f| f.obj) { last_key.take() } else { None };
+                stack.push(Frame { obj: ch == '{', key });
+                expect_key = ch == '{';
+                last_key = None;
+            }
+            '}' | ']' => {
+                stack.pop();
+                expect_key = false;
+                last_key = None;
+            }
+            ':' => {
+                last_key = pending.take();
+                expect_key = false;
+            }
+            ',' => {
+                expect_key = stack.last().is_some_and(|f| f.obj);
+                last_key = None;
+            }
+            _ => {}
+        }
+    }
+    if !in_str || stack.is_empty() {
+        return None;
+    }
+    // Path: object keys, with arrays marked "[]".
+    let mut path = Vec::new();
+    for (i, f) in stack.iter().enumerate() {
+        if i == 0 {
+            continue;
+        }
+        match (&f.key, f.obj) {
+            (Some(k), true) => path.push(k.clone()),
+            (Some(k), false) => path.push(format!("{k}[]")),
+            (None, _) => {}
+        }
+    }
+    let top = stack.last()?;
+    if top.obj && str_is_key {
+        Some(JsonPos::Key { path, prefix: cur })
+    } else if top.obj {
+        Some(JsonPos::Value { path, key: last_key?, prefix: cur })
+    } else {
+        // A string inside an array: its values are the array key's values.
+        let key = top.key.clone()?;
+        path.pop();
+        Some(JsonPos::Value { path, key, prefix: cur })
+    }
+}
+
+/// Does `path` match `pattern` (dot-separated, `*` matches any one key)?
+fn path_is(path: &[String], pattern: &str) -> bool {
+    let parts: Vec<&str> = if pattern.is_empty() { Vec::new() } else { pattern.split('.').collect() };
+    parts.len() == path.len() && parts.iter().zip(path).all(|(p, k)| *p == "*" || p == k)
+}
+
+const MANIFEST_KEYS: &[&str] = &[
+    "manifest_version", "name", "version", "description", "icons", "action", "background", "content_scripts",
+    "permissions", "host_permissions", "optional_permissions", "optional_host_permissions", "commands",
+    "options_page", "options_ui", "side_panel", "web_accessible_resources", "content_security_policy",
+    "default_locale", "homepage_url", "short_name", "author", "minimum_chrome_version", "devtools_page",
+    "chrome_url_overrides", "omnibox", "externally_connectable", "declarative_net_request",
+    "browser_specific_settings", "incognito", "offline_enabled", "storage",
+];
+const MANIFEST_PERMISSIONS: &[&str] = &[
+    "storage", "tabs", "activeTab", "scripting", "contextMenus", "alarms", "notifications", "cookies", "webRequest",
+    "declarativeNetRequest", "downloads", "history", "bookmarks", "identity", "sidePanel", "offscreen",
+    "clipboardRead", "clipboardWrite", "unlimitedStorage", "webNavigation", "tabGroups", "idle", "commands",
+];
+const PACKAGE_KEYS: &[&str] = &[
+    "name", "version", "description", "main", "module", "types", "type", "private", "license", "author", "scripts",
+    "dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines", "bin", "files",
+    "repository", "keywords", "homepage", "bugs", "browserslist", "workspaces", "exports", "imports", "sideEffects",
+    "packageManager", "publishConfig",
+];
+const TSCONFIG_OPTIONS: &[&str] = &[
+    "target", "module", "moduleResolution", "lib", "jsx", "strict", "outDir", "rootDir", "baseUrl", "paths", "types",
+    "esModuleInterop", "skipLibCheck", "declaration", "sourceMap", "noEmit", "allowJs", "checkJs", "resolveJsonModule",
+    "isolatedModules", "forceConsistentCasingInFileNames", "noUnusedLocals", "noUnusedParameters",
+    "noFallthroughCasesInSwitch", "allowImportingTsExtensions", "verbatimModuleSyntax", "incremental", "composite",
+];
+
+/// Keys that belong in the object at `path` of a known file.
+fn json_keys(file: &str, path: &[String]) -> &'static [&'static str] {
+    match file {
+        "manifest.json" => match () {
+            _ if path_is(path, "") => MANIFEST_KEYS,
+            _ if path_is(path, "action") => &["default_popup", "default_title", "default_icon"],
+            _ if path_is(path, "background") => &["service_worker", "type", "scripts"],
+            _ if path_is(path, "content_scripts[]") => &["matches", "exclude_matches", "js", "css", "run_at", "all_frames", "match_about_blank", "world", "include_globs", "exclude_globs"],
+            _ if path_is(path, "commands.*") => &["suggested_key", "description"],
+            _ if path_is(path, "commands.*.suggested_key") => &["default", "windows", "mac", "linux", "chromeos"],
+            _ if path_is(path, "web_accessible_resources[]") => &["resources", "matches", "extension_ids", "use_dynamic_url"],
+            _ if path_is(path, "options_ui") => &["page", "open_in_tab"],
+            _ if path_is(path, "side_panel") => &["default_path"],
+            _ if path_is(path, "content_security_policy") => &["extension_pages", "sandbox"],
+            _ => &[],
+        },
+        "package.json" => match () {
+            _ if path_is(path, "") => PACKAGE_KEYS,
+            _ if path_is(path, "scripts") => &["dev", "build", "start", "test", "lint", "format", "preview", "serve", "watch", "clean", "prepare", "postinstall"],
+            _ if path_is(path, "engines") => &["node", "npm", "pnpm", "yarn"],
+            _ if path_is(path, "repository") => &["type", "url", "directory"],
+            _ => &[],
+        },
+        "tsconfig.json" | "jsconfig.json" => match () {
+            _ if path_is(path, "") => &["compilerOptions", "include", "exclude", "files", "extends", "references"],
+            _ if path_is(path, "compilerOptions") => TSCONFIG_OPTIONS,
+            _ => &[],
+        },
+        "composer.json" => match () {
+            _ if path_is(path, "") => &["name", "description", "type", "license", "require", "require-dev", "autoload", "autoload-dev", "scripts", "config", "extra", "minimum-stability", "prefer-stable", "keywords", "authors", "repositories"],
+            _ if path_is(path, "autoload") || path_is(path, "autoload-dev") => &["psr-4", "classmap", "files"],
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
+
+/// Values worth suggesting for `key` in the object at `path` (or the items of array `key`).
+fn json_values(file: &str, path: &[String], key: &str) -> &'static [&'static str] {
+    match (file, key) {
+        ("manifest.json", "run_at") if path_is(path, "content_scripts[]") => &["document_idle", "document_start", "document_end"],
+        ("manifest.json", "world") if path_is(path, "content_scripts[]") => &["ISOLATED", "MAIN"],
+        ("manifest.json", "type") if path_is(path, "background") => &["module"],
+        ("manifest.json", "permissions" | "optional_permissions") if path_is(path, "") => MANIFEST_PERMISSIONS,
+        ("manifest.json", "host_permissions" | "matches") => &["<all_urls>", "https://*/*", "http://*/*", "*://*/*"],
+        ("package.json", "type") if path_is(path, "") => &["module", "commonjs"],
+        ("package.json", "license") if path_is(path, "") => &["MIT", "Apache-2.0", "GPL-3.0-or-later", "ISC", "BSD-3-Clause", "UNLICENSED"],
+        ("tsconfig.json" | "jsconfig.json", "target") => &["ES2022", "ES2023", "ESNext", "ES2020", "ES2017", "ES5"],
+        ("tsconfig.json" | "jsconfig.json", "module") => &["ESNext", "NodeNext", "CommonJS", "ES2022", "Preserve"],
+        ("tsconfig.json" | "jsconfig.json", "moduleResolution") => &["Bundler", "NodeNext", "Node16", "Node10"],
+        ("tsconfig.json" | "jsconfig.json", "jsx") => &["react-jsx", "preserve", "react", "react-jsxdev"],
+        _ => &[],
     }
 }
 
@@ -456,5 +679,29 @@ mod tests {
         assert_eq!(css_emmet("bgc#fff").unwrap(), "background-color: #fff;");
         assert_eq!(css_emmet("df").unwrap(), "display: flex;");
         assert_eq!(css_emmet("w50p").unwrap(), "width: 50%;");
+    }
+
+    fn key(path: &[&str], prefix: &str) -> Option<JsonPos> {
+        Some(JsonPos::Key { path: path.iter().map(|s| s.to_string()).collect(), prefix: prefix.into() })
+    }
+
+    #[test]
+    fn json_context() {
+        assert_eq!(json_position("{\n  \"name\": \"x\",\n  \"back"), key(&[], "back"));
+        assert_eq!(json_position("{ \"background\": { \"serv"), key(&["background"], "serv"));
+        assert_eq!(json_position("{ \"content_scripts\": [ { \"js\": [\"a.js\"], \"run"), key(&["content_scripts[]"], "run"));
+        assert_eq!(
+            json_position("{ \"content_scripts\": [ { \"run_at\": \"doc"),
+            Some(JsonPos::Value { path: vec!["content_scripts[]".into()], key: "run_at".into(), prefix: "doc".into() })
+        );
+        assert_eq!(
+            json_position("{ \"permissions\": [\"storage\", \"ta"),
+            Some(JsonPos::Value { path: vec![], key: "permissions".into(), prefix: "ta".into() })
+        );
+        // Outside a string, or a string with an escaped quote: no JSON suggestion / still the key.
+        assert_eq!(json_position("{ \"name\": 1"), None);
+        assert_eq!(json_position("{ \"a\\\"b"), key(&[], "a\"b"));
+        assert!(json_keys("manifest.json", &[]).contains(&"background"));
+        assert!(json_values("manifest.json", &["content_scripts[]".into()], "run_at").contains(&"document_idle"));
     }
 }

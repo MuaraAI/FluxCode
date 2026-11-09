@@ -22,7 +22,7 @@ pub(crate) fn config_dir() -> PathBuf {
     base.join("FluxCode-GPUI")
 }
 
-fn load_json<T: for<'a> Deserialize<'a> + Default>(name: &str) -> T {
+pub(crate) fn load_json<T: for<'a> Deserialize<'a> + Default>(name: &str) -> T {
     // A file saved by Notepad or PowerShell can start with a UTF-8 BOM, which serde_json rejects.
     std::fs::read_to_string(config_dir().join(name))
         .ok()
@@ -30,7 +30,7 @@ fn load_json<T: for<'a> Deserialize<'a> + Default>(name: &str) -> T {
         .unwrap_or_default()
 }
 
-fn save_json<T: Serialize>(name: &str, value: &T) {
+pub(crate) fn save_json<T: Serialize>(name: &str, value: &T) {
     let dir = config_dir();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(s) = serde_json::to_string_pretty(value) {
@@ -60,6 +60,9 @@ pub struct Settings {
     pub bg_visibility: Visibility,
     /// Size of the menus, bars, lists and icons (not the editor font).
     pub ui_size: UiSize,
+    /// OpenCode docks on the right of the editor (like a chat beside the code)
+    /// instead of in the left side bar.
+    pub agent_right: bool,
 }
 
 impl Default for Settings {
@@ -76,6 +79,7 @@ impl Default for Settings {
             bg_image: None,
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
+            agent_right: true,
         }
     }
 }
@@ -113,6 +117,10 @@ impl Session {
 impl Workbench {
     fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.save();
+        if self.settings.agent_right && self.view == crate::workbench::SideView::Agent {
+            self.view = crate::workbench::SideView::Explorer;
+            self.agent_open = true;
+        }
         let (wrap, dots) = (self.settings.word_wrap, self.settings.show_whitespace);
         for d in &self.docs {
             d.editor.update(cx, |s, cx| {
@@ -379,6 +387,11 @@ impl Workbench {
                 "OpenCode: auto-approve",
                 "Let the agent edit files and run commands without asking each time.".into(),
                 toggle("aa", s.agent_auto_approve, |w| w.settings.agent_auto_approve = !w.settings.agent_auto_approve),
+            ))
+            .child(row(
+                "OpenCode on the right",
+                "Dock the OpenCode chat beside the editor instead of in the side bar. The arrow button in its header does the same.".into(),
+                toggle("ar", s.agent_right, |w| w.settings.agent_right = !w.settings.agent_right),
             ))
             .child(row("GitHub", "Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).".into(), self.render_github(cx)))
             .child(

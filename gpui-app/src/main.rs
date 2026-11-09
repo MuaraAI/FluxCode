@@ -17,6 +17,7 @@ mod preview_ui;
 mod proc;
 mod search;
 mod settings;
+mod term;
 mod theme;
 mod ui;
 mod workbench;

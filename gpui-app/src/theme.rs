@@ -36,6 +36,8 @@ pub enum Tok {
     AccentText,
     Blue,
     Green,
+    /// Warnings in the terminal (amber; FluxRed uses a pale yellow, its errors are amber).
+    Warn,
     Danger,
     Folder,
     /// Selected row in a list or tree.
@@ -60,6 +62,7 @@ pub const ON_ACCENT: Tok = Tok::OnAccent;
 pub const ACCENT_TEXT: Tok = Tok::AccentText;
 pub const BLUE: Tok = Tok::Blue;
 pub const GREEN: Tok = Tok::Green;
+pub const WARN: Tok = Tok::Warn;
 pub const DANGER: Tok = Tok::Danger;
 pub const FOLDER: Tok = Tok::Folder;
 pub const SELECT: Tok = Tok::Select;
@@ -86,6 +89,7 @@ pub struct Palette {
     accent_text: u32,
     blue: u32,
     green: u32,
+    warn: u32,
     danger: u32,
     folder: u32,
     select: u32,
@@ -111,6 +115,7 @@ impl Palette {
             Tok::AccentText => self.accent_text,
             Tok::Blue => self.blue,
             Tok::Green => self.green,
+            Tok::Warn => self.warn,
             Tok::Danger => self.danger,
             Tok::Folder => self.folder,
             Tok::Select => self.select,
@@ -149,6 +154,7 @@ pub const PALETTES: [Palette; 4] = [
         accent_text: 0xf07d86,
         blue: 0x7fb2ff,
         green: 0x6fd39a,
+        warn: 0xf2c46d,
         danger: 0xff7a85,
         folder: 0xd9a86c,
         select: 0x35191e,
@@ -175,6 +181,7 @@ pub const PALETTES: [Palette; 4] = [
         accent_text: 0x9a2431,
         blue: 0x2457b8,
         green: 0x1a7444,
+        warn: 0x8a5300,
         danger: 0xb42332,
         folder: 0x9a6224,
         select: 0xf0d6d4,
@@ -201,6 +208,7 @@ pub const PALETTES: [Palette; 4] = [
         accent_text: 0xffffff,
         blue: 0xc4c4c4,
         green: 0xd4d4d4,
+        warn: 0xd9c38c,
         danger: 0xff5a64,
         folder: 0xbdbdbd,
         select: 0x2c2c2c,
@@ -227,6 +235,7 @@ pub const PALETTES: [Palette; 4] = [
         accent_text: 0xff8f99,
         blue: 0x9cc2ff,
         green: 0x86e3ad,
+        warn: 0xf5e6a3,
         danger: 0xffc46b,
         folder: 0xf2b48a,
         select: 0x531a24,

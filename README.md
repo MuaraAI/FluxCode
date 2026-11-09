@@ -266,6 +266,27 @@ Output, completion + Emmet, OpenCode panel with Keep/Undo, Live Preview, setting
 GitHub sign-in, session restore. Not yet: debugger, Quick Open, window position restore,
 `.flx` viewer. The parity table is in [docs/gpui-vs-tauri.md](docs/gpui-vs-tauri.md).
 
+The GPUI terminal is tuned for Python:
+
+- **Clear errors.** A Python error ends the run with a card: the error type, the file and
+  line (click to jump there), the code line, a plain-language hint and, when the fix is
+  obvious (a missing module), a **Fix** button that runs `py -m pip install <package>`.
+  The line is also underlined in the editor and counted in the status bar.
+- **Auto-correct** before a command runs, shown on a line of its own: `pip i` →
+  `pip install` (also `un`, `ls`, `up`, typos like `isntall`), command typos (`pyhton`),
+  and file names with one close match (`-r reqirmemts.txt` → `requirements.txt`,
+  `py ap` → `py app.py`).
+- **Consistent colors**: stderr is no longer red by default; only real errors are. pip's
+  `[notice]` lines are dimmed, warnings amber, `Successfully installed` green. Each
+  command shows its exit status and time.
+- Up/Down history, Tab completes file and folder names, Ctrl+C stops the program,
+  the prompt shows the folder, the venv and the Python version.
+- With no venv, Run (F5) uses the `py` launcher on Windows, the same Python that
+  `py -m pip install` installs into.
+
+OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
+its header, or Settings), has an ON/OFF switch, and keeps a history of chats.
+
 Build and install it for your user (Start Menu + Settings → Apps entry):
 
 ```powershell

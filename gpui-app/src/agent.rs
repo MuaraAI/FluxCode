@@ -5,14 +5,16 @@
 use crate::core;
 use crate::proc;
 use crate::theme::{self, c};
-use crate::workbench::Workbench;
+use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
+    switch::Switch,
     text::TextView,
-    v_flex, Sizable,
+    v_flex, IconName, Sizable,
 };
+use serde::{Deserialize, Serialize};
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -49,6 +51,37 @@ pub struct Permission {
     options: Vec<(String, String, String)>, // (id, name, kind)
 }
 
+/// One saved conversation (user and agent messages only), in `agent-history.json`.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Chat {
+    pub id: u64,
+    pub title: String,
+    /// Unix time in ms of the last message.
+    pub updated: u64,
+    /// (role, text) with role "user", "agent" or "note".
+    pub messages: Vec<(String, String)>,
+}
+
+const HISTORY_FILE: &str = "agent-history.json";
+const HISTORY_MAX: usize = 50;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// "just now", "12 min ago", "3 h ago", "yesterday", "5 days ago", "12 weeks ago".
+fn ago(ms: u64) -> String {
+    let s = now_ms().saturating_sub(ms) / 1000;
+    match s {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{} min ago", s / 60),
+        3600..=86_399 => format!("{} h ago", s / 3600),
+        86_400..=172_799 => "yesterday".into(),
+        172_800..=1_209_599 => format!("{} days ago", s / 86_400),
+        _ => format!("{} weeks ago", s / 604_800),
+    }
+}
+
 /// A file the agent wrote, with what was there before (None = new file).
 pub struct Change {
     pub path: PathBuf,
@@ -71,6 +104,14 @@ pub struct AgentState {
     pub reloads: Vec<PathBuf>,
     input: Entity<InputState>,
     scroll: ScrollHandle,
+    /// Saved chats, newest first.
+    pub history: Vec<Chat>,
+    /// The chat on screen, once it has been saved.
+    chat_id: Option<u64>,
+    pub show_history: bool,
+    /// An earlier chat reopened from history: sent with the next message so a
+    /// fresh OpenCode session knows what was said.
+    carry: Option<String>,
     _sub: Subscription,
 }
 
@@ -139,8 +180,39 @@ impl AgentState {
             reloads: Vec::new(),
             input,
             scroll: ScrollHandle::new(),
+            history: crate::settings::load_json(HISTORY_FILE),
+            chat_id: None,
+            show_history: false,
+            carry: None,
             _sub: sub,
         }
+    }
+
+    /// Save the chat on screen into the history (newest first).
+    fn save_chat(&mut self) {
+        let messages: Vec<(String, String)> = self
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::User(t) => Some(("user".to_string(), t.clone())),
+                Item::Text(t) if !t.trim().is_empty() => Some(("agent".to_string(), t.clone())),
+                Item::Note(t, _) => Some(("note".to_string(), t.clone())),
+                _ => None,
+            })
+            .collect();
+        if !messages.iter().any(|m| m.0 == "user") {
+            return;
+        }
+        let id = *self.chat_id.get_or_insert_with(now_ms);
+        let title = messages
+            .iter()
+            .find(|m| m.0 == "user")
+            .map(|m| m.1.lines().next().unwrap_or("").chars().take(70).collect::<String>())
+            .unwrap_or_default();
+        self.history.retain(|c| c.id != id);
+        self.history.insert(0, Chat { id, title, updated: now_ms(), messages });
+        self.history.truncate(HISTORY_MAX);
+        crate::settings::save_json(HISTORY_FILE, &self.history);
     }
 
     pub fn owns(&self, id: u32) -> bool {
@@ -232,7 +304,11 @@ impl Workbench {
 
     fn agent_prompt(&mut self, text: String, cx: &mut Context<Self>) {
         let Some(session) = self.agent.session.clone() else { return };
-        let mut prompt = vec![json!({ "type": "text", "text": text })];
+        let mut prompt = Vec::new();
+        if let Some(earlier) = self.agent.carry.take() {
+            prompt.push(json!({ "type": "text", "text": format!("Earlier messages of this conversation, for context:\n\n{earlier}\n\n---\n") }));
+        }
+        prompt.push(json!({ "type": "text", "text": text }));
         // Include the active file, like the Tauri panel's "include file" default.
         if let Some(ix) = self.active {
             let d = &self.docs[ix];
@@ -333,6 +409,7 @@ impl Workbench {
                 }
                 self.agent.permission = None;
                 self.agent.status = Status::Ready;
+                self.agent.save_chat();
                 self.refresh_tree(cx);
             }
         }
@@ -461,6 +538,180 @@ impl Workbench {
         }
     }
 
+    /// The ON/OFF switch: start OpenCode, or stop it (the chat stays on screen).
+    fn agent_set_on(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on {
+            self.agent_start(cx);
+        } else {
+            self.agent.save_chat();
+            self.agent_stop(cx);
+        }
+    }
+
+    /// Start a new chat; a running OpenCode gets a fresh session.
+    fn agent_new_chat(&mut self, cx: &mut Context<Self>) {
+        self.agent.save_chat();
+        self.agent.items.clear();
+        self.agent.chat_id = None;
+        self.agent.carry = None;
+        self.agent.show_history = false;
+        if self.agent.status == Status::Ready && self.agent.proc_id.is_some() {
+            self.agent.session = None;
+            self.agent.status = Status::Starting;
+            let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+            self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+        }
+        cx.notify();
+    }
+
+    /// Reopen a saved chat. OpenCode can't resume the old session, so the next
+    /// message carries the earlier ones as context.
+    fn agent_open_chat(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(chat) = self.agent.history.iter().find(|c| c.id == id).cloned() else { return };
+        if self.agent.chat_id != Some(id) {
+            self.agent.save_chat();
+        }
+        self.agent.items = chat
+            .messages
+            .iter()
+            .map(|(role, t)| match role.as_str() {
+                "user" => Item::User(t.clone()),
+                "note" => Item::Note(t.clone(), false),
+                _ => Item::Text(t.clone()),
+            })
+            .collect();
+        let mut earlier = String::new();
+        for (role, t) in chat.messages.iter().rev().take(20).rev() {
+            let who = if role == "user" { "User" } else { "Assistant" };
+            let t: String = t.chars().take(2000).collect();
+            earlier.push_str(&format!("{who}: {t}\n\n"));
+        }
+        self.agent.carry = Some(earlier);
+        self.agent.chat_id = Some(id);
+        self.agent.show_history = false;
+        self.agent.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    fn agent_delete_chat(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.agent.history.retain(|c| c.id != id);
+        crate::settings::save_json(HISTORY_FILE, &self.agent.history);
+        if self.agent.chat_id == Some(id) {
+            self.agent.chat_id = None;
+        }
+        cx.notify();
+    }
+
+    /// Move OpenCode between the left side bar and the right dock.
+    fn agent_move_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.agent_right = !self.settings.agent_right;
+        self.settings.save();
+        if self.settings.agent_right {
+            self.agent_open = true;
+            if self.view == SideView::Agent {
+                self.view = SideView::Explorer;
+            }
+        } else {
+            self.agent_open = false;
+            self.view = SideView::Agent;
+            self.sidebar_open = true;
+        }
+        let h = self.agent.input.focus_handle(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn agent_input_focus(&self, cx: &App) -> FocusHandle {
+        self.agent.input.focus_handle(cx)
+    }
+
+    /// OpenCode docked on the right: its own title row above the panel.
+    pub(crate) fn render_agent_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .size_full()
+            .bg(c(theme::BG_SIDE))
+            .border_l_1()
+            .border_color(c(theme::BORDER))
+            .child(
+                h_flex()
+                    .h(theme::u(35.))
+                    .pl_3()
+                    .pr_2()
+                    .gap_1()
+                    .flex_none()
+                    .child(div().flex_1().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child("OPENCODE"))
+                    .child(tool_button("ag-dock-close", IconName::Close, "Hide OpenCode (Ctrl+Shift+A shows it)", cx, |this, _, cx| {
+                        this.agent_open = false;
+                        cx.notify();
+                    })),
+            )
+            .child(div().flex_1().min_h_0().child(self.render_agent(window, cx)))
+            .into_any_element()
+    }
+
+    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let mut list = v_flex().id("ag-history").flex_1().min_h_0().px_2().gap_px().overflow_y_scroll();
+        if a.history.is_empty() {
+            list = list.child(div().px_1().py_2().text_sm().text_color(c(theme::FG_DIM)).child("No saved chats yet. Chats are saved after each answer."));
+        }
+        for (i, chat) in a.history.iter().enumerate() {
+            let id = chat.id;
+            let current = a.chat_id == Some(id);
+            let count = chat.messages.iter().filter(|m| m.0 == "user").count();
+            list = list.child(
+                h_flex()
+                    .id(("ag-chat", i))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .gap_2()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(current, |d| d.bg(c(theme::SELECT)))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().truncate().text_color(c(theme::FG_STRONG)).child(chat.title.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(format!("{} · {count} message{}", ago(chat.updated), if count == 1 { "" } else { "s" })),
+                            ),
+                    )
+                    .child(
+                        Button::new(("ag-chat-del", i))
+                            .icon(IconName::Delete)
+                            .ghost()
+                            .xsmall()
+                            .tooltip("Delete this chat")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.agent_delete_chat(id, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.agent_open_chat(id, cx))),
+            );
+        }
+        v_flex()
+            .size_full()
+            .child(
+                div().px_3().pb_2().child(
+                    Button::new("ag-new-chat")
+                        .icon(IconName::Plus)
+                        .label("New chat")
+                        .small()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| this.agent_new_chat(cx))),
+                ),
+            )
+            .child(list)
+            .into_any_element()
+    }
+
     fn agent_answer_permission(&mut self, option: Option<String>, cx: &mut Context<Self>) {
         if let Some(p) = self.agent.permission.take() {
             let outcome = match option {
@@ -512,22 +763,52 @@ impl Workbench {
             Status::Busy => (theme::BLUE, "Working…".into()),
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
-        // The dot marks the agent process's real state (off, starting, ready, working, error).
+        // The dot marks the agent process's real state (off, starting, ready, working, error);
+        // the switch turns the process on and off.
+        let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
+        let weak = cx.entity().downgrade();
         let header = h_flex()
             .px_3()
             .pb_2()
             .gap_2()
             .text_xs()
-            .child(div().size(px(8.)).rounded_full().bg(c(dot)))
+            .child(
+                Switch::new("ag-on")
+                    .checked(on)
+                    .small()
+                    .tooltip(if on { "Turn OpenCode off" } else { "Turn OpenCode on" })
+                    .on_click(move |checked, _, cx| {
+                        let checked = *checked;
+                        _ = weak.update(cx, |this, cx| this.agent_set_on(checked, cx));
+                    }),
+            )
+            .child(div().size(px(7.)).rounded_full().bg(c(dot)))
             .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
             .when(a.status == Status::Busy, |h| {
                 h.child(Button::new("ag-cancel").label("Stop").xsmall().on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))))
             })
-            .child(Button::new("ag-new").label("New").xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
-                this.agent_stop(cx);
-                this.agent.items.clear();
-                cx.notify();
-            })));
+            .child(
+                Button::new("ag-history-btn")
+                    .label(if a.show_history { "Chat" } else { "History" })
+                    .xsmall()
+                    .ghost()
+                    .tooltip("Saved chats, and New chat")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent.show_history = !this.agent.show_history;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("ag-dock")
+                    .icon(if self.settings.agent_right { IconName::PanelLeft } else { IconName::PanelRight })
+                    .xsmall()
+                    .ghost()
+                    .tooltip(if self.settings.agent_right { "Move to the left side bar" } else { "Move to the right side" })
+                    .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
+            );
+        if a.show_history {
+            return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
+        }
 
         let mut log = v_flex().id("ag-log").flex_1().min_h_0().px_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
         if a.items.is_empty() {
@@ -535,7 +816,11 @@ impl Workbench {
                 div()
                     .text_sm()
                     .text_color(c(theme::FG_DIM))
-                    .child("Ask OpenCode to explain, fix or write code. The active file is sent with your message."),
+                    .child(if on {
+                        "Ask OpenCode to explain, fix or write code. The active file is sent with your message."
+                    } else {
+                        "OpenCode is off. Switch it on, or just send a message: it starts by itself."
+                    }),
             );
         }
         if let Status::Error(e) = &a.status {

@@ -85,7 +85,7 @@ impl Workbench {
                             .map(|i| {
                                 let (f, h) = this.search_rows[i];
                                 let fh = &this.search.files[f];
-                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(22.)).px_2().gap_2().text_sm().hover(|s| s.bg(c(theme::BG_HOVER)));
+                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(20.)).px_2().gap_2().text_size(theme::u(12.5)).hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -96,7 +96,7 @@ impl Workbench {
                                             .map(|p| p.display().to_string())
                                             .unwrap_or_default();
                                         let (icon, tint) = files::icon_for(&name);
-                                        row.child(gpui_kit::component::Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint)))
+                                        row.child(gpui_kit::component::Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
                                             .child(div().text_color(c(theme::FG_STRONG)).child(name))
                                             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(rel))
                                             .child(div().flex_1())
