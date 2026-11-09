@@ -291,6 +291,11 @@ MuaraAI's `omm` (Mira) harness is installed, the panel uses it instead of OpenCo
 
 The agent panel:
 
+- `/` lists commands (Tab fills, Enter runs): FluxCode's own (`/remember`, `/new`, `/history`,
+  `/memory`, `/stop`) and the ones the agent announces over ACP (OpenCode's `/review`, `/compact`, ...).
+- Mira: when omm.exe isn't on PATH or in a usual folder, the panel offers to choose it (saved
+  in Settings). The agent turns off after 10 quiet minutes to free its memory (OpenCode runs
+  several hundred MB) and resumes the same session on the next message (Settings can turn this off).
 - `@file` (or `@folder`) adds files to a message, with a fuzzy file list (Up/Down, Tab or
   Enter). Chips above the input show what goes along with the message: the open file, the
   selection, the last error (when the message is about an error), terminal output (when it

@@ -89,6 +89,21 @@ fn ago(ms: u64) -> String {
     }
 }
 
+/// The last messages of a chat as plain text, for a fresh session to read.
+fn transcript(items: &[Item]) -> String {
+    let mut lines: Vec<String> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::User(t) => Some(format!("User: {}", t.chars().take(2000).collect::<String>())),
+            Item::Text(t) if !t.trim().is_empty() => Some(format!("Assistant: {}", t.chars().take(2000).collect::<String>())),
+            _ => None,
+        })
+        .collect();
+    let n = lines.len();
+    lines.drain(..n.saturating_sub(20));
+    lines.join("\n\n")
+}
+
 /// A file the agent wrote, with what was there before (None = new file).
 pub struct Change {
     pub path: PathBuf,
@@ -140,13 +155,40 @@ pub struct AgentState {
     /// The REMEMBER instruction went out in this session.
     hinted: bool,
     pub memories: Vec<memory::Trail>,
+    /// `/command` list while a `/` is being typed: (matches, selected row).
+    pub slash: Option<(Vec<SlashCmd>, usize)>,
+    /// Commands the agent announced for this session.
+    pub commands: Vec<SlashCmd>,
+    /// Stamp of the last finished turn; the idle timer only fires if it's unchanged.
+    last_active: Option<std::time::Instant>,
+    /// Resuming after an idle stop: the replayed history is already on screen.
+    silent_load: bool,
+    /// The session to resume on the next message after an idle stop.
+    resume_id: Option<String>,
     _sub: Subscription,
     _sub2: Subscription,
 }
 
 /// MuaraAI's native `omm` (oh-my-mira) harness, preferred over OpenCode when
 /// installed (same search as the Tauri app's `find_agent`, feat/omm-acp-integration).
+/// omm.exe chosen by hand (Settings / the panel's "Choose omm.exe" button).
+static MIRA_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+/// Cached answer of `mira_installed` (cleared when the path changes).
+static MIRA_FOUND: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+pub fn set_mira_path(p: Option<PathBuf>) {
+    if let Ok(mut m) = MIRA_PATH.lock() {
+        *m = p;
+    }
+    if let Ok(mut f) = MIRA_FOUND.lock() {
+        *f = None;
+    }
+}
+
 fn find_omm() -> Option<PathBuf> {
+    if let Some(p) = MIRA_PATH.lock().ok().and_then(|m| m.clone()).filter(|p| p.is_file()) {
+        return Some(p);
+    }
     let exe = if cfg!(windows) { "omm.exe" } else { "omm" };
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
@@ -180,8 +222,29 @@ pub fn set_choice(cli: &str) {
 
 /// Is MuaraAI's `omm` (Mira) on this PC? Looked up once.
 pub fn mira_installed() -> bool {
-    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FOUND.get_or_init(|| find_omm().is_some())
+    let Ok(mut f) = MIRA_FOUND.lock() else { return find_omm().is_some() };
+    *f.get_or_insert_with(|| find_omm().is_some())
+}
+
+/// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
+#[derive(Clone)]
+pub struct SlashCmd {
+    pub name: String,
+    pub desc: String,
+    pub builtin: bool,
+    /// Needs text after the name (`/remember <fact>`): Enter fills it in instead of sending.
+    pub takes_input: bool,
+}
+
+fn builtin_commands() -> Vec<SlashCmd> {
+    let c = |name: &str, desc: &str, takes_input: bool| SlashCmd { name: name.into(), desc: desc.into(), builtin: true, takes_input };
+    vec![
+        c("remember", "Save a fact about this project to memory", true),
+        c("new", "Start a new chat", false),
+        c("history", "Saved chats and agent sessions for this folder", false),
+        c("memory", "What the agent remembers", false),
+        c("stop", "Turn the agent off", false),
+    ]
 }
 
 /// Which harness the panel talks to. Both speak ACP over stdio (`<cli> acp`).
@@ -242,8 +305,9 @@ fn opencode_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…  (@ adds a file)", agent_name())));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(format!("Ask {}…  (@ adds a file, / for commands)", agent_name())));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
+            InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => this.agent_slash_accept(window, cx),
             InputEvent::PressEnter { shift: false, .. } if this.agent.mention.is_some() => this.agent_mention_accept(window, cx),
             InputEvent::PressEnter { shift: false, .. } => this.agent_send(window, cx),
             InputEvent::Change => this.agent_update_mention(cx),
@@ -293,6 +357,11 @@ impl AgentState {
             turn_memories: Vec::new(),
             hinted: false,
             memories: Vec::new(),
+            slash: None,
+            commands: Vec::new(),
+            last_active: None,
+            silent_load: false,
+            resume_id: None,
             _sub: sub,
             _sub2: sub2,
         }
@@ -414,9 +483,27 @@ impl Workbench {
         }
         self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
         self.agent.mention = None;
+        self.agent.slash = None;
         if let Some(fact) = text.strip_prefix("/remember ").or_else(|| text.strip_prefix("/ingat ")) {
             self.agent_remember(fact, cx);
             return;
+        }
+        match text.as_str() {
+            "/new" => return self.agent_new_chat(cx),
+            "/history" => {
+                self.agent.show_history = true;
+                self.agent.show_memory = false;
+                self.agent_load_remote_list(cx);
+                return cx.notify();
+            }
+            "/memory" => {
+                self.agent.show_memory = true;
+                self.agent.show_history = false;
+                self.agent_refresh_memories();
+                return cx.notify();
+            }
+            "/stop" => return self.agent_set_on(false, cx),
+            _ => {}
         }
         self.agent.items.push(Item::User(text.clone()));
         self.agent.scroll.scroll_to_bottom();
@@ -424,6 +511,11 @@ impl Workbench {
             (Status::Ready, Some(_)) => self.agent_prompt(text, cx),
             _ => {
                 self.agent.queued_prompt = Some(text);
+                if let Some(id) = self.agent.resume_id.take() {
+                    // Stopped while idle: continue the same session without replaying it.
+                    self.agent.pending_load = Some(id);
+                    self.agent.silent_load = true;
+                }
                 self.agent_start(cx);
             }
         }
@@ -504,6 +596,13 @@ impl Workbench {
                     self.agent.items.push(Item::Note(m, true));
                     self.agent.status = Status::Ready;
                 }
+                Req::LoadSession if self.agent.silent_load => {
+                    self.agent.silent_load = false;
+                    self.agent.loading_id = None;
+                    self.agent.carry = Some(transcript(&self.agent.items));
+                    let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                    self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+                }
                 _ => self.agent.status = Status::Error(m),
             }
             return;
@@ -515,12 +614,19 @@ impl Workbench {
                 let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
-                    _ => self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] })),
+                    _ => {
+                        if std::mem::take(&mut self.agent.silent_load) {
+                            self.agent.carry = Some(transcript(&self.agent.items));
+                        }
+                        self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }))
+                    }
                 }
             }
             Req::LoadSession => {
                 self.agent.session = self.agent.loading_id.take();
                 self.agent.status = Status::Ready;
+                self.agent.silent_load = false;
+                self.agent_schedule_idle(cx);
                 self.agent.hinted = false;
                 self.agent.save_chat();
                 if let Some(text) = self.agent.queued_prompt.take() {
@@ -530,6 +636,7 @@ impl Workbench {
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
                 self.agent.status = Status::Ready;
+                self.agent_schedule_idle(cx);
                 if let Some(text) = self.agent.queued_prompt.take() {
                     self.agent_prompt(text, cx);
                 }
@@ -543,6 +650,7 @@ impl Workbench {
                 self.agent.status = Status::Ready;
                 self.agent_take_remembers();
                 self.agent.save_chat();
+                self.agent_schedule_idle(cx);
                 self.refresh_tree(cx);
             }
         }
@@ -553,6 +661,28 @@ impl Workbench {
             return;
         }
         let Some(u) = params.get("update") else { return };
+        if u.get("sessionUpdate").and_then(Value::as_str) == Some("available_commands_update") {
+            self.agent.commands = u
+                .get("availableCommands")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| {
+                            Some(SlashCmd {
+                                name: c.get("name")?.as_str()?.to_string(),
+                                desc: c.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                                builtin: false,
+                                takes_input: c.get("input").is_some_and(|i| !i.is_null()),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return;
+        }
+        if self.agent.silent_load {
+            return;
+        }
         let text = |u: &Value| u.pointer("/content/text").and_then(Value::as_str).unwrap_or("").to_string();
         let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
@@ -806,7 +936,7 @@ impl Workbench {
         self.settings.save();
         set_choice(cli);
         let name = agent_name();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…"), window, cx));
+        self.agent.input.update(cx, |s, cx| s.set_placeholder(format!("Ask {name}…  (@ adds a file, / for commands)"), window, cx));
         cx.notify();
     }
 
@@ -1011,6 +1141,25 @@ impl Workbench {
             let s = self.agent.input.read(cx);
             (s.value().to_string(), s.cursor())
         };
+        // `/` at the start: the command list (FluxCode's and the agent's).
+        let head = &text[..cursor.min(text.len())];
+        if head.starts_with('/') && !head.contains(char::is_whitespace) {
+            let q = head[1..].to_lowercase();
+            let mut list: Vec<SlashCmd> = builtin_commands()
+                .into_iter()
+                .chain(self.agent.commands.iter().cloned())
+                .filter(|c| c.name.to_lowercase().contains(&q))
+                .collect();
+            list.sort_by_key(|c| (!c.name.to_lowercase().starts_with(&q), !c.builtin, c.name.len()));
+            list.truncate(12);
+            self.agent.slash = Some((list, 0));
+            self.agent.mention = None;
+            cx.notify();
+            return;
+        }
+        if self.agent.slash.take().is_some() {
+            cx.notify();
+        }
         let Some((at, q)) = agent_ctx::mention_query(&text, cursor) else {
             if self.agent.mention.take().is_some() {
                 cx.notify();
@@ -1053,6 +1202,10 @@ impl Workbench {
     }
 
     pub(crate) fn on_agent_mention_up(&mut self, _: &crate::workbench::AgentMentionUp, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, sel)) = self.agent.slash.as_mut() {
+            *sel = sel.saturating_sub(1);
+            return cx.notify();
+        }
         if let Some((_, _, sel)) = self.agent.mention.as_mut() {
             *sel = sel.saturating_sub(1);
             cx.notify();
@@ -1060,6 +1213,12 @@ impl Workbench {
     }
 
     pub(crate) fn on_agent_mention_down(&mut self, _: &crate::workbench::AgentMentionDown, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((list, sel)) = self.agent.slash.as_mut() {
+            if *sel + 1 < list.len() {
+                *sel += 1;
+            }
+            return cx.notify();
+        }
         if let Some((_, hits, sel)) = self.agent.mention.as_mut() {
             if *sel + 1 < hits.len() {
                 *sel += 1;
@@ -1069,13 +1228,99 @@ impl Workbench {
     }
 
     pub(crate) fn on_agent_mention_accept(&mut self, _: &crate::workbench::AgentMentionAccept, w: &mut Window, cx: &mut Context<Self>) {
+        if self.agent.slash.is_some() {
+            // Tab only completes the name; Enter also runs a command that needs nothing more.
+            return self.agent_slash_fill(w, cx).map_or((), |_| ());
+        }
         self.agent_mention_accept(w, cx);
     }
 
     pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _: &mut Window, cx: &mut Context<Self>) {
-        if self.agent.mention.take().is_some() {
+        if self.agent.mention.take().is_some() || self.agent.slash.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// Put the highlighted command into the input as `/name `; returns it.
+    fn agent_slash_fill(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<SlashCmd> {
+        let (list, sel) = self.agent.slash.take()?;
+        let cmd = list.get(sel)?.clone();
+        let text = format!("/{} ", cmd.name);
+        let caret = text.chars().count() as u32;
+        self.agent.input.update(cx, |s, cx| {
+            s.set_value(text, window, cx);
+            s.set_cursor_position(gpui_kit::component::input::Position::new(0, caret), window, cx);
+        });
+        self.agent.slash = None;
+        cx.notify();
+        Some(cmd)
+    }
+
+    /// Enter on the command list: fill it in, and run it right away when it needs no text.
+    fn agent_slash_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(cmd) = self.agent_slash_fill(window, cx) {
+            if !cmd.takes_input {
+                self.agent_send(window, cx);
+            }
+        }
+    }
+
+    /// Stop the agent after `agent_idle_min` quiet minutes; the next message resumes the session.
+    fn agent_schedule_idle(&mut self, cx: &mut Context<Self>) {
+        let mins = self.settings.agent_idle_min;
+        if mins == 0 {
+            return;
+        }
+        let stamp = std::time::Instant::now();
+        self.agent.last_active = Some(stamp);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(mins as u64 * 60)).await;
+            _ = this.update(cx, |this, cx| {
+                if this.agent.last_active == Some(stamp) && this.agent.status == Status::Ready && this.agent.permission.is_none() {
+                    this.agent_idle_stop(mins, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn agent_idle_stop(&mut self, mins: u32, cx: &mut Context<Self>) {
+        let session = self.agent.session.clone();
+        let can_load = self.agent.can_load;
+        self.agent.save_chat();
+        self.agent_stop(cx);
+        if can_load {
+            self.agent.resume_id = session;
+        } else {
+            self.agent.carry = Some(transcript(&self.agent.items));
+        }
+        let name = agent_name();
+        self.agent.items.push(Item::Note(
+            format!("{name} turned off after {mins} quiet minutes to free memory. Your next message continues this chat."),
+            false,
+        ));
+        cx.notify();
+    }
+
+    /// Pick omm.exe by hand (when it isn't on PATH or in a usual folder).
+    fn agent_choose_mira(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Choose omm.exe (Mira)".into()) });
+        cx.spawn_in(window, async move |this, cx| {
+            let path = paths.await.ok()?.ok()??.into_iter().next()?;
+            this.update_in(cx, |this, window, cx| {
+                this.agent_stop(cx);
+                this.settings.mira_path = Some(path.clone());
+                this.settings.agent_cli = "mira".into();
+                this.settings.save();
+                set_mira_path(Some(path.clone()));
+                set_choice("mira");
+                this.agent.input.update(cx, |s, cx| s.set_placeholder("Ask Mira…  (@ adds a file, / for commands)", window, cx));
+                this.status = format!("Mira: using {}", path.display()).into();
+                cx.notify();
+            })
+            .ok()
+        })
+        .detach();
     }
 
     fn rel_path(&self, full: &str) -> String {
@@ -1322,6 +1567,11 @@ impl Workbench {
         };
         let harness = agent_name();
         cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
+        if harness == "OpenCode" {
+            // A private server that exits with the command, instead of starting OpenCode's
+            // background service (which would stay resident after FluxCode closes).
+            cmd.arg("--standalone");
+        }
         self.agent.remote_state = 1;
         self.agent.remote_err = None;
         cx.spawn(async move |this, cx| {
@@ -1506,6 +1756,61 @@ impl Workbench {
         }))
     }
 
+    fn render_slash_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (list, sel) = self.agent.slash.as_ref()?;
+        let name = agent_name();
+        let mut v = v_flex()
+            .mx_3()
+            .mb_1()
+            .py_1()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
+            .shadow_md();
+        if list.is_empty() {
+            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child("No command matches"));
+        }
+        for (row, cmd) in list.iter().enumerate() {
+            v = v.child(
+                h_flex()
+                    .id(("ag-slash", row))
+                    .mx_1()
+                    .px_2()
+                    .h(theme::u(24.))
+                    .gap_2()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(row == *sel, |d| d.bg(c(theme::SELECT)))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(div().flex_shrink_0().max_w(relative(0.6)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("/{}", cmd.name)))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(cmd.desc.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .rounded(px(3.))
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .bg(c(theme::BG_ELEVATED))
+                            .child(if cmd.builtin { "FluxCode".to_string() } else { name.to_string() }),
+                    )
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        if let Some(s) = this.agent.slash.as_mut() {
+                            s.1 = row;
+                        }
+                        this.agent_slash_accept(w, cx);
+                    })),
+            );
+        }
+        let more = if self.agent.commands.is_empty() && !matches!(self.agent.status, Status::Ready | Status::Busy) {
+            format!(" · {name}'s own commands appear once it is on")
+        } else {
+            String::new()
+        };
+        Some(v.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("↑↓ choose · Tab fills · Enter runs · Esc closes{more}"))).into_any_element())
+    }
+
     fn render_mention_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, hits, sel) = self.agent.mention.as_ref()?;
         let mut list = v_flex()
@@ -1587,7 +1892,7 @@ impl Workbench {
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
             let missing = name == "Mira" && !mira_installed();
             let hint = if missing {
-                "Mira (omm) isn't installed on this PC yet. Pick OpenCode in the title menu for now.".to_string()
+                "FluxCode can't find omm.exe (Mira) on this PC: not on PATH, in ~/.cargo/bin, ~/.local/bin or Programs\\omm. If you have it, point FluxCode to it.".to_string()
             } else if on {
                 "Type @ to add a file. Your open file, selection and last error go along when they help.".to_string()
             } else {
@@ -1603,7 +1908,18 @@ impl Workbench {
                     .px_4()
                     .child(Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
                     .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("Ask {name}")))
-                    .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint)),
+                    .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint))
+                    .when(missing, |v| {
+                        v.child(
+                            h_flex()
+                                .pt_2()
+                                .gap_2()
+                                .child(Button::new("ag-pick-omm").label("Choose omm.exe…").small().primary().on_click(cx.listener(|this, _, w, cx| this.agent_choose_mira(w, cx))))
+                                .child(Button::new("ag-use-oc").label("Use OpenCode").small().on_click(cx.listener(|this, _, w, cx| {
+                                    this.on_agent_use_opencode(&crate::workbench::AgentUseOpenCode, w, cx)
+                                }))),
+                        )
+                    }),
             );
         }
         if let Status::Error(e) = &a.status {
@@ -1838,6 +2154,7 @@ impl Workbench {
             .child(log)
             .when_some(permission, |v, p| v.child(p))
             .when_some(changes, |v, ch| v.child(ch))
+            .children(self.render_slash_popup(cx))
             .children(self.render_mention_popup(cx))
             .child(self.render_context_row(cx))
             .child(

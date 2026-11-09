@@ -65,6 +65,11 @@ pub struct Settings {
     pub agent_right: bool,
     /// Which agent harness the panel runs: "auto" (Mira when installed), "opencode" or "mira".
     pub agent_cli: String,
+    /// Where omm.exe (Mira) is, when it isn't on PATH or in a usual folder.
+    pub mira_path: Option<PathBuf>,
+    /// Turn the agent process off after this many idle minutes (0 = never). It
+    /// resumes the same session on the next message.
+    pub agent_idle_min: u32,
 }
 
 impl Default for Settings {
@@ -83,6 +88,8 @@ impl Default for Settings {
             ui_size: UiSize::default(),
             agent_right: true,
             agent_cli: "auto".into(),
+            mira_path: None,
+            agent_idle_min: 10,
         }
     }
 }
@@ -390,6 +397,11 @@ impl Workbench {
                 "OpenCode: auto-approve",
                 "Let the agent edit files and run commands without asking each time.".into(),
                 toggle("aa", s.agent_auto_approve, |w| w.settings.agent_auto_approve = !w.settings.agent_auto_approve),
+            ))
+            .child(row(
+                "AI agent: turn off when idle",
+                "After 10 idle minutes the agent process stops and frees its memory (OpenCode uses several hundred MB). Your next message starts it again and continues the same chat.".into(),
+                toggle("idle", s.agent_idle_min > 0, |w| w.settings.agent_idle_min = if w.settings.agent_idle_min == 0 { 10 } else { 0 }),
             ))
             .child(row(
                 "OpenCode on the right",

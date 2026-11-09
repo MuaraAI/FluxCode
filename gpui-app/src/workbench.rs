@@ -280,6 +280,7 @@ impl Workbench {
 
         let settings = crate::settings::Settings::load();
         crate::agent::set_choice(&settings.agent_cli);
+        crate::agent::set_mira_path(settings.mira_path.clone());
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
         let agent = crate::agent::AgentState::new(window, cx);
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
