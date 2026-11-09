@@ -347,7 +347,7 @@ The agent panel:
 - While the agent works, its state shows in the input's bottom row, not above the chat.
 - Memory is native (Rust), with no background process: the store is parsed once and kept in RAM
   until the file changes, and it is read only when a message goes out or the Memory view opens.
-  The agent is told not to run its own memory skill (\), so no Python starts.
+  The agent is told not to run its own memory skill (`ant_memory.py`), so no Python starts.
   The Memory view has an on/off switch; off means nothing is read, saved or sent.
 - Memory stays out of the way: one dim line under the message ("Saved to memory",
   "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
