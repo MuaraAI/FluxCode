@@ -5,21 +5,35 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
+mod i18n_id;
 mod agent;
+mod agent_ctx;
 mod complete;
 mod core;
+mod diff;
+mod docs;
 mod explorer;
 mod files;
 mod github;
 mod panel;
+mod memory;
 mod preview;
 mod preview_ui;
 mod proc;
+mod quick;
+mod scm;
 mod search;
 mod settings;
+mod term;
 mod theme;
 mod ui;
+mod viewer;
+mod wintitle;
 mod workbench;
+mod workspace;
+mod ws_context;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;

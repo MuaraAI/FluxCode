@@ -1,5 +1,6 @@
 //! Find in files side bar (Ctrl+Shift+F).
 
+use crate::i18n::tr;
 use crate::core;
 use crate::files;
 use crate::theme::{self, c};
@@ -14,13 +15,27 @@ use gpui_kit::{prelude::FluentBuilder, *};
 
 impl Workbench {
     pub(crate) fn run_search(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else { return };
+        if self.root.is_none() {
+            return;
+        }
+        let roots = self.roots();
         let query = self.search_input.read(cx).value().to_string();
         let (case, word) = (self.match_case, self.whole_word);
         self.searching = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { core::search(&root, &query, case, word) }).await;
+            let result = cx
+                .background_spawn(async move {
+                    let mut all = core::SearchResult::default();
+                    for r in &roots {
+                        let one = core::search(r, &query, case, word);
+                        all.total += one.total;
+                        all.truncated |= one.truncated;
+                        all.files.extend(one.files);
+                    }
+                    all
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.search_rows = result
                     .files
@@ -38,16 +53,11 @@ impl Workbench {
 
     pub(crate) fn render_search(&self, cx: &mut Context<Self>) -> AnyElement {
         let summary = if self.searching {
-            "Searching…".to_string()
+            tr("Searching…").to_string()
         } else if self.search.total == 0 {
             String::new()
         } else {
-            format!(
-                "{}{} results in {} files",
-                self.search.total,
-                if self.search.truncated { "+" } else { "" },
-                self.search.files.len()
-            )
+            crate::trf!("{0}{1} results in {2} files"; 0 => self.search.total, 1 => if self.search.truncated { "+" } else { "" }, 2 => self.search.files.len())
         };
         let toggle = |id: &'static str, label: &'static str, on: bool, tip: &'static str| {
             Button::new(id).label(label).xsmall().ghost().selected(on).tooltip(tip)
@@ -64,11 +74,11 @@ impl Workbench {
                     .child(
                         h_flex()
                             .gap_1()
-                            .child(toggle("s-case", "Aa", self.match_case, "Match Case").on_click(cx.listener(|this, _, _, cx| {
+                            .child(toggle("s-case", "Aa", self.match_case, tr("Match Case")).on_click(cx.listener(|this, _, _, cx| {
                                 this.match_case = !this.match_case;
                                 this.run_search(cx);
                             })))
-                            .child(toggle("s-word", "ab", self.whole_word, "Match Whole Word").on_click(cx.listener(|this, _, _, cx| {
+                            .child(toggle("s-word", "ab", self.whole_word, tr("Match Whole Word")).on_click(cx.listener(|this, _, _, cx| {
                                 this.whole_word = !this.whole_word;
                                 this.run_search(cx);
                             })))
@@ -85,18 +95,13 @@ impl Workbench {
                             .map(|i| {
                                 let (f, h) = this.search_rows[i];
                                 let fh = &this.search.files[f];
-                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(22.)).px_2().gap_2().text_sm().hover(|s| s.bg(c(theme::BG_HOVER)));
+                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(20.)).px_2().gap_2().text_size(theme::u(11.5)).hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                                        let rel = this
-                                            .root
-                                            .as_deref()
-                                            .and_then(|r| fh.path.parent()?.strip_prefix(r).ok())
-                                            .map(|p| p.display().to_string())
-                                            .unwrap_or_default();
+                                        let rel = fh.path.parent().map(|p| this.rel_display(&p.to_string_lossy())).unwrap_or_default();
                                         let (icon, tint) = files::icon_for(&name);
-                                        row.child(gpui_kit::component::Icon::new(icon).size(theme::u(16.)).text_color(theme::tint(tint)))
+                                        row.child(gpui_kit::component::Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
                                             .child(div().text_color(c(theme::FG_STRONG)).child(name))
                                             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(rel))
                                             .child(div().flex_1())

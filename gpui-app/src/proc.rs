@@ -48,7 +48,9 @@ pub fn shell_command(line: &str) -> Command {
     }
 }
 
-/// Python of the workspace venv if there is one, else `python` on PATH.
+/// Python of the workspace venv if there is one; else on Windows the `py`
+/// launcher when installed (what python.org installs and what people type, so
+/// Run uses the same Python their `py -m pip install` went to), else `python`.
 pub fn python(workspace: Option<&Path>) -> String {
     if let Some(ws) = workspace {
         for venv in [".venv", "venv", "env"] {
@@ -62,7 +64,15 @@ pub fn python(workspace: Option<&Path>) -> String {
             }
         }
     }
-    if cfg!(windows) { "python".into() } else { "python3".into() }
+    if cfg!(windows) {
+        static PY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *PY.get_or_init(|| crate::term::on_path("py")) {
+            return "py".into();
+        }
+        "python".into()
+    } else {
+        "python3".into()
+    }
 }
 
 impl Procs {

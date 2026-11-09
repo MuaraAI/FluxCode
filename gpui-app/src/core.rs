@@ -33,6 +33,16 @@ pub fn read_text(path: &Path) -> Result<FileText, String> {
     Ok(FileText { text: if crlf { text.replace("\r\n", "\n") } else { text.into_owned() }, crlf })
 }
 
+/// Text from bytes already read: UTF-8 (BOM dropped) or UTF-16 with a BOM.
+pub fn decode_text(bytes: &[u8]) -> FileText {
+    let text = match crate::viewer::decode_utf16(bytes) {
+        Some(t) => t,
+        None => String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)).into_owned(),
+    };
+    let crlf = text.contains("\r\n");
+    FileText { text: if crlf { text.replace("\r\n", "\n") } else { text }, crlf }
+}
+
 /// Atomic save: write a sibling temp file, then rename over the original,
 /// so a crash mid-save never leaves a half-written file.
 pub fn write_text(path: &Path, text: &str, crlf: bool) -> Result<(), String> {

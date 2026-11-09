@@ -205,6 +205,8 @@ share stays as above.
 
 ## GPUI edition (native, no WebView)
 
+What changed in each version, with before/after numbers: [gpui-app/CHANGELOG.md](gpui-app/CHANGELOG.md) (in Indonesian).
+
 [`gpui-app/`](gpui-app/) is a second FluxCode front end built on
 [GPUI](https://gpui.rs) (Zed's GPU-accelerated Rust UI framework) and
 [gpui-component](https://github.com/longbridge/gpui-kit). The UI is drawn by the GPU
@@ -244,6 +246,33 @@ median of 5 runs, this repository open; Tauri numbers include every WebView2 pro
 - One outline icon set in the explorer, tabs and search, tinted by file type; folders the
   explorer does not open (`.git`, `node_modules`, `dist`, …) are listed dimmed.
 
+**Files** (Explorer, tabs, Go to File):
+
+- Syntax colors for about 200 languages (bat's grammar set through syntect, which replaced
+  the 19 tree-sitter grammars and is lighter), picked by file name (`Dockerfile`,
+  `Gemfile`, `.env.local`, `requirements-dev.txt`, ...), extension, or the `#!` line of
+  scripts without one. The status bar names the language.
+- Files a text editor can't show open as a read-only view instead of an error:
+  Word / Excel / PowerPoint / OpenDocument as their text (sheets as tab-separated rows),
+  PDFs as their text, ZIP-based archives (zip, jar, whl, apk, ...) as a file list with
+  sizes, SQLite databases as their tables with SQL and row counts, and anything else
+  binary as a hex dump (first 64 KB). A line above the view says what it is. Empty files
+  say so. UTF-16 text (with a BOM) opens as text.
+- Drop folders or files on the window: files open in tabs; a folder opens when none is
+  open, otherwise FluxCode asks whether to **add it to the workspace** (next to the open
+  folder, as its own root in the explorer) or **switch** to it. Go to File, Find in Files,
+  `@` and the agent cover every folder of the workspace; right-click an added folder to
+  remove it. The workspace is restored on the next start.
+
+**Scrolling**: a mouse-wheel notch in the code editor and in the agent chat glides three
+lines in about 100 ms (like VS Code's smooth scrolling) instead of jumping; quick notches add
+up. It moves one step per screen frame and does nothing between glides. Touchpads keep
+the editor's own pixel scrolling. Whitespace dots are off by default (Settings turns them on).
+
+**Language**: English or Bahasa Indonesia (Settings → Language; *Automatic* follows
+Windows' display language or regional format). Menus, panels, the agent panel and
+messages switch at once.
+
 **GPUI Fast**: the GPUI edition builds on [GPUI Fast](https://github.com/longbridge/gpui-fast)
 (retained mode) by default. Measured against standard GPUI, same source and profile, same
 machine (median of 5 runs, large-file scroll 3 runs; `--no-default-features` builds the
@@ -265,6 +294,119 @@ tree-sitter editor for 20 languages, auto save, find in files, terminal, Run (F5
 Output, completion + Emmet, OpenCode panel with Keep/Undo, Live Preview, settings,
 GitHub sign-in, session restore. Not yet: debugger, Quick Open, window position restore,
 `.flx` viewer. The parity table is in [docs/gpui-vs-tauri.md](docs/gpui-vs-tauri.md).
+
+The GPUI terminal is tuned for Python:
+
+- **Clear errors.** A Python error ends the run with a card: the error type, the file and
+  line (click to jump there), the code line, a plain-language hint and, when the fix is
+  obvious (a missing module), a **Fix** button that runs `py -m pip install <package>`.
+  The line is also underlined in the editor and counted in the status bar.
+- **Auto-correct** before a command runs, shown on a line of its own: `pip i` →
+  `pip install` (also `un`, `ls`, `up`, typos like `isntall`), command typos (`pyhton`),
+  and file names with one close match (`-r reqirmemts.txt` → `requirements.txt`,
+  `py ap` → `py app.py`).
+- **Consistent colors**: stderr is no longer red by default; only real errors are. pip's
+  `[notice]` lines are dimmed, warnings amber, `Successfully installed` green. Each
+  command shows its exit status and time.
+- Up/Down history, Tab completes file and folder names, Ctrl+C stops the program,
+  the prompt shows the folder, the venv and the Python version.
+- With no venv, Run (F5) uses the `py` launcher on Windows, the same Python that
+  `py -m pip install` installs into.
+
+OpenCode can sit in the left side bar or on the right of the editor (the arrow button in
+its header, or Settings), has an ON/OFF switch, and keeps a history of chats. When
+MuaraAI's Mura harness is installed, the panel uses it instead of OpenCode
+(both speak ACP); the title menu switches between them. (Mira / `omm` was removed in 0.9.1.)
+
+The agent panel:
+
+- `/` lists commands (Tab fills, Enter runs): FluxCode's own (`/remember`, `/new`, `/history`,
+  `/memory`, `/stop`) and the ones the agent announces over ACP (OpenCode's `/review`, `/compact`, ...).
+- The agent turns off after 10 quiet minutes to free its memory (OpenCode runs
+  several hundred MB) and resumes the same session on the next message (Settings can turn this off).
+- `@file` (or `@folder`) adds files to a message, with a fuzzy file list (Up/Down, Tab or
+  Enter). Chips above the input show what goes along with the message: the open file, the
+  selection, the last error (when the message is about an error), terminal output (when it
+  mentions the output), and each `@file`. Click a chip to leave it out.
+- The input grows with the text (up to 8 lines, then scrolls). Enter sends, Shift+Enter adds a
+  line. Attach files with the paperclip, by dropping them on the panel, or by pasting (Ctrl+V
+  with files or a screenshot on the clipboard). Images go to the agent as images when it
+  accepts them; text and code go inline; Word, Excel, PowerPoint and OpenDocument files are
+  read natively and sent as text; PDFs and other files are sent as links the agent can open.
+- Messages sent while the agent is still answering wait in a queue above the input. They go
+  out together once the answer ends, or right away with Send now (which stops the current
+  answer and tells the agent why). The X removes a queued message.
+- **Mura** ([MuaraAI/Mura-Harness](https://github.com/MuaraAI/Mura-Harness), one Rust binary,
+  `mura acp`) is in the title menu next to OpenCode, and the
+  first choice when it is installed. It stays a separate program: build it with
+  `cargo build --release -p mura-cli` and put `mura.exe` on PATH or in `~/.local/bin`;
+  set its provider once with `mura setup`. Its personas (Core, Scout, Planner, Reviewer,
+  Security), models and effort show in the agent settings.
+- **Access** (eye / pencil / shield button under the input, or Settings): *Read only* (it reads
+  and explains; edits and commands it asks for are refused, and it is told so), *Read & write*
+  (file edits go through, with Undo in the Changes card; commands ask), *Full access* (nothing
+  asks). It applies to what the agent asks permission for or writes through FluxCode.
+- While the agent works, its state shows in the input's bottom row, not above the chat.
+- Memory is native (Rust), with no background process: the store is parsed once and kept in RAM
+  until the file changes, and it is read only when a message goes out or the Memory view opens.
+  The agent is told not to run its own memory skill (`ant_memory.py`), so no Python starts.
+  The Memory view has an on/off switch; off means nothing is read, saved or sent.
+- Memory stays out of the way: one dim line under the message ("Saved to memory",
+  "Used 2 notes from memory"); hover shows the note, click opens the Memory view.
+- **Settings for the agent** (title menu → *settings*, or the model button under the input):
+  everything the harness offers over ACP (`configOptions`), as native controls on one screen
+  with no scrolling (label left, control right, wrapping when the panel is narrow): its agent
+  modes as buttons with the chosen mode's description, the **model** as one dropdown (OpenCode
+  Zen's free models grouped first, then one group per provider) and the **effort** (the levels the model offers, such as Default / Low / High / Max). Choices
+  apply to the running session and are reused for new ones. The same view has FluxCode's
+  auto-approve and idle-stop switches and opens OpenCode's config file. When a prompt
+  fails because of the model (no credentials, quota), the panel says to pick another one.
+- The chips above the input (open file, selection, error, terminal output, `@file`,
+  attachments, Workspace) have an × on the left that leaves them out (+ adds them back);
+  clicking the name goes to what it stands for (the file, the error line, the terminal).
+- **Edit a message** (pencil next to it): the chat goes back to that message, and Enter
+  sends the new text to a fresh session that gets everything before it as context, so the
+  answer starts over from there.
+- **Workspace context**: the first message of a session (and the next one after the
+  workspace changes) carries an overview: the folders, what each project is (from
+  package.json, Cargo.toml, pyproject/requirements, go.mod, composer.json, Makefile,
+  workflows, Docker, ...), the README's first lines, top-level layout, files per language,
+  git branch and uncommitted changes, and the open tabs. A *Workspace* chip shows when it
+  goes along (click to leave it out).
+- **Changes**: every file the agent edits this turn is listed above the input with the
+  lines it added and removed (+12 -3), like a worktree. Click the name to open the file, the
+  diff button for a unified diff in a tab, the undo button to put that file back; Undo all and
+  Keep all are in the card's header. FluxCode reads a file just before an edit runs (or takes
+  the old text from the agent's diff), so this works for edits the agent makes itself too.
+- Switching between OpenCode and Mura keeps the chat: a divider marks the switch, and the new
+  agent gets the conversation so far with its first message.
+- Answers render as Markdown, with the agent's reasoning folded under Thinking; code blocks have Copy and Insert (at the cursor in the open
+  file). Tool calls show what kind they are (read, edit, search, run, web) and their state.
+- History lists FluxCode's own chats and the sessions OpenCode (or Mura) saved for the open
+  folder. Opening one resumes it in place (ACP `session/load`), with its history replayed.
+- Memory is a native port of [AoC Memory](https://github.com/MyKineID/aoc-memory-for-ai-agent):
+  notes strengthen when they help and fade when unused, recalled by `P = tau * eta^2`. The
+  agent saves facts with a final `REMEMBER: ...` line; you can add them with `/remember ...`
+  or in the Memory view. Keeping the agent's changes reinforces the notes it used; Undo
+  weakens them. The store is `~/.ant-memory/trails.json` (or `ANT_MEMORY_DIR`), shared with
+  `ant_memory.py`.
+
+**Source Control** (`Ctrl+Shift+G`), modeled on VS Code's git extension but lighter: one
+`git status --porcelain=v2 --branch -z` call per refresh gives the files, branch and
+ahead/behind (VS Code makes three calls), and it refreshes on save, after git commands and
+when the window regains focus.
+
+- Staged / Changes / Merge Changes with VS Code's letters and colors, stage, unstage,
+  discard (two clicks; untracked files go to the Recycle Bin), and a colored diff in Output.
+- Commit box (Enter commits), **Commit All** when nothing is staged (VS Code's smart commit),
+  Commit & Push, Commit & Sync, Amend. Pull (`--autostash`), Push, Sync, Fetch, Publish Branch.
+- Graph of the last 60 commits with branch pills; click a commit for its summary.
+- **Pull requests**: `gh pr create --fill` (pushes first) and a link to the PR.
+- **Deploy**: lists the repository's GitHub Actions workflows with a Run button
+  (`gh workflow run` on the current branch, for workflows with `workflow_dispatch`) and the
+  latest runs with their status.
+- Badge with the change count on the activity bar, branch and sync state in the status bar,
+  M/U/D letters and colors in the explorer.
 
 Build and install it for your user (Start Menu + Settings → Apps entry):
 
@@ -291,11 +433,13 @@ for MinGW, the optional in-window preview).
 | Toggle Side Bar / Panel | `Ctrl+B` / `Ctrl+J` |
 | Settings / Color Theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 | Run and Debug / OpenCode view | `Ctrl+Shift+D` / `Ctrl+Shift+A` |
+| Open / close the agent panel (GPUI edition) | `Ctrl+L` |
 | Accept suggestion / expand Emmet / next snippet field | `Tab` |
 | Toggle Terminal / New Terminal | ``Ctrl+` `` / ``Ctrl+Shift+` `` |
 | Run or Preview / Stop | `F5` / `Shift+F5` |
 | Find / Replace / Go to Line | `Ctrl+F` / `Ctrl+H` / `Ctrl+G` |
 | Find in Files / Explorer | `Ctrl+Shift+F` / `Ctrl+Shift+E` |
+| Source Control (GPUI edition) | `Ctrl+Shift+G` |
 | Word Wrap / Zoom | `Alt+Z` / `Ctrl+=`, `Ctrl+-`, `Ctrl+0` |
 | Next occurrence / Comment / Delete line | `Ctrl+D` / `Ctrl+/` / `Ctrl+Shift+K` |
 | Move line / Copy line | `Alt+↑↓` / `Shift+Alt+↑↓` |
