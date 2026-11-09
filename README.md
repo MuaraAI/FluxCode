@@ -262,6 +262,10 @@ median of 5 runs, this repository open; Tauri numbers include every WebView2 pro
   `@` and the agent cover every folder of the workspace; right-click an added folder to
   remove it. The workspace is restored on the next start.
 
+**Scrolling**: a mouse-wheel notch in the code editor glides three lines in about 100 ms
+(like VS Code's smooth scrolling) instead of jumping; quick notches add up. Touchpads keep
+the editor's own pixel scrolling. Whitespace dots are off by default (Settings turns them on).
+
 **Language**: English or Bahasa Indonesia (Settings → Language; *Automatic* follows
 Windows' display language or regional format). Menus, panels, the agent panel and
 messages switch at once.

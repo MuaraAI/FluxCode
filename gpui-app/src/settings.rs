@@ -42,6 +42,8 @@ pub(crate) fn save_json<T: Serialize>(name: &str, value: &T) {
 /// Image formats GPUI can decode for the background.
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
+const SETTINGS_REV: u32 = 1;
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -80,6 +82,10 @@ pub struct Settings {
     /// What the agent may do without asking: "read" (read only), "write" (read and
     /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
     pub agent_access: String,
+    /// Settings revision, for one-time changes of defaults on existing installs.
+    /// Missing in an older file means 0 (not the struct default, which is current).
+    #[serde(default)]
+    pub rev: u32,
 }
 
 impl Default for Settings {
@@ -89,7 +95,7 @@ impl Default for Settings {
             font_family: "Cascadia Code".into(),
             tab_size: 4,
             word_wrap: false,
-            show_whitespace: true,
+            show_whitespace: false,
             auto_save: true,
             agent_auto_approve: false,
             theme: PALETTES[0].id.into(),
@@ -103,13 +109,24 @@ impl Default for Settings {
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
+            rev: SETTINGS_REV,
         }
     }
 }
 
 impl Settings {
     pub fn load() -> Self {
-        load_json("settings.json")
+        let mut s: Self = load_json("settings.json");
+        if s.rev < 1 {
+            // 0.9: whitespace dots are off by default (they cluttered long lines);
+            // Settings → Whitespace dots turns them back on.
+            s.show_whitespace = false;
+        }
+        if s.rev < SETTINGS_REV {
+            s.rev = SETTINGS_REV;
+            s.save();
+        }
+        s
     }
     pub fn save(&self) {
         save_json("settings.json", self);

@@ -172,6 +172,8 @@ pub struct Workbench {
     pub(crate) workspace: crate::workspace::Workspace,
     /// Focus of the "add or switch" question after a folder drop.
     pub(crate) drop_focus: FocusHandle,
+    /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
+    pub(crate) smooth: Option<SmoothScroll>,
     pub(crate) tree: Entity<TreeState>,
     /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
@@ -314,6 +316,7 @@ impl Workbench {
             root: None,
             workspace: Default::default(),
             drop_focus: cx.focus_handle(),
+            smooth: None,
             tree,
             dirs: Rc::default(),
             docs: Vec::new(),
@@ -1361,14 +1364,19 @@ impl Workbench {
                     )
                 })
                 .when(self.docs[ix].image.is_none(), |v| v.child(
-                    div().flex_1().min_h_0().child(
-                        Editor::new(&self.docs[ix].editor)
-                            .bordered(false)
-                            .p_0()
-                            .h_full()
-                            .font_family(self.settings.font_family.clone())
-                            .text_size(px(self.settings.font_size)),
-                    ),
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .relative()
+                        .child(
+                            Editor::new(&self.docs[ix].editor)
+                                .bordered(false)
+                                .p_0()
+                                .h_full()
+                                .font_family(self.settings.font_family.clone())
+                                .text_size(px(self.settings.font_size)),
+                        )
+                        .child(self.smooth_scroll_layer(self.docs[ix].editor.clone(), cx)),
                 ))
                 .into_any_element(),
             None => v_flex()
@@ -1815,5 +1823,105 @@ impl Workbench {
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…  @ adds a file, / for commands"; name => name), window, cx));
         self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
         cx.notify();
+    }
+}
+
+pub(crate) struct SmoothScroll {
+    editor: Entity<EditorState>,
+    target: Point<Pixels>,
+    prev: Option<Point<Pixels>>,
+    stuck: u8,
+}
+
+impl Workbench {
+    /// Smooth wheel scrolling for the code editor, like VS Code's: a wheel notch
+    /// (three lines) glides there in about 100 ms instead of jumping, which reads
+    /// as stutter. Touchpads send pixel deltas and keep the editor's own scrolling;
+    /// Ctrl+wheel is left alone. A transparent layer over the editor catches the
+    /// wheel in the capture phase, before the editor does.
+    fn smooth_scroll_layer(&self, editor: Entity<EditorState>, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture || ev.delta.precise() || ev.modifiers.control || !hitbox.is_hovered(window) {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let (ed, delta) = (editor.clone(), ev.delta.clone());
+                    _ = weak.update(cx, |this, cx| this.smooth_scroll(ed, delta, cx));
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    fn smooth_scroll(&mut self, editor: Entity<EditorState>, delta: ScrollDelta, cx: &mut Context<Self>) {
+        let (cur, lh) = {
+            let e = editor.read(cx);
+            (e.scroll_offset(), e.line_height().unwrap_or(px(20.)))
+        };
+        let d = delta.pixel_delta(lh);
+        let running = self.smooth.as_ref().is_some_and(|s| s.editor == editor);
+        // Notches while gliding add up from where the glide is heading.
+        let base = if running { self.smooth.as_ref().map(|s| s.target).unwrap_or(cur) } else { cur };
+        let target = point((base.x + d.x).min(px(0.)), (base.y + d.y).min(px(0.)));
+        match self.smooth.as_mut().filter(|s| s.editor == editor) {
+            Some(s) => {
+                s.target = target;
+                s.stuck = 0;
+            }
+            None => self.smooth = Some(SmoothScroll { editor, target, prev: None, stuck: 0 }),
+        }
+        if running {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let mut last = std::time::Instant::now();
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
+                let done = this
+                    .update(cx, |this, cx| {
+                        let Some(s) = this.smooth.as_mut() else { return true };
+                        let ed = s.editor.clone();
+                        let cur = ed.read(cx).scroll_offset();
+                        let now = std::time::Instant::now();
+                        let dt = (now - last).as_secs_f32();
+                        last = now;
+                        let diff = point(s.target.x - cur.x, s.target.y - cur.y);
+                        if diff.x.abs() < px(0.5) && diff.y.abs() < px(0.5) {
+                            let t = s.target;
+                            this.smooth = None;
+                            ed.update(cx, |e, cx| e.set_scroll_offset(t, cx));
+                            return true;
+                        }
+                        // At the top or bottom the editor clamps and nothing moves: stop there.
+                        if s.prev == Some(cur) {
+                            s.stuck += 1;
+                            if s.stuck > 8 {
+                                this.smooth = None;
+                                return true;
+                            }
+                        } else {
+                            s.stuck = 0;
+                        }
+                        s.prev = Some(cur);
+                        // Exponential ease with a 45 ms time constant: fast start, soft landing.
+                        let k = 1.0 - (-dt / 0.045).exp();
+                        let next = point(cur.x + diff.x * k, cur.y + diff.y * k);
+                        ed.update(cx, |e, cx| e.set_scroll_offset(next, cx));
+                        false
+                    })
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 }
