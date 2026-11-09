@@ -41,6 +41,46 @@ pub struct Info {
     running: bool,
 }
 
+/// Where the ACP AI Agent CLI lives: prioritize native MuaraAI `omm` (oh-my-mira),
+/// then fallback to `opencode`.
+fn find_agent() -> Option<PathBuf> {
+    // 1. Priority: native `omm` (oh-my-mira)
+    let mut omm_candidates: Vec<PathBuf> = Vec::new();
+    if !cfg!(windows) {
+        if let Ok(home) = std::env::var("HOME") {
+            omm_candidates.push(Path::new(&home).join(".local").join("bin").join("omm"));
+            omm_candidates.push(Path::new(&home).join(".cargo").join("bin").join("omm"));
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                omm_candidates.push(dir.join("omm"));
+            }
+        }
+        omm_candidates.push(PathBuf::from("/usr/local/bin/omm"));
+    }
+    if cfg!(windows) {
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                omm_candidates.push(dir.join("omm.exe"));
+            }
+        }
+        for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA"] {
+            if let Ok(base) = std::env::var(var) {
+                let b = Path::new(&base);
+                omm_candidates.push(b.join(".cargo").join("bin").join("omm.exe"));
+                omm_candidates.push(b.join(".local").join("bin").join("omm.exe"));
+                omm_candidates.push(b.join("Programs").join("omm").join("omm.exe"));
+            }
+        }
+    }
+    if let Some(p) = omm_candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+
+    // 2. Fallback: opencode
+    find_opencode()
+}
+
 /// Where the OpenCode CLI lives: PATH (exe, or the npm .cmd shim resolved to
 /// its exe), the official installer folder, or the npm global folder.
 fn find_opencode() -> Option<PathBuf> {
@@ -78,8 +118,8 @@ fn find_opencode() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-fn opencode_cmd() -> Option<Command> {
-    if let Some(exe) = find_opencode() {
+fn agent_cmd() -> Option<Command> {
+    if let Some(exe) = find_agent() {
         return Some(command(exe.to_string_lossy().as_ref()));
     }
     // Last resort on Windows: whatever `opencode` resolves to through cmd.exe.
@@ -97,13 +137,18 @@ fn opencode_cmd() -> Option<Command> {
 
 #[tauri::command]
 pub fn acp_info(acp: State<'_, Acp>) -> Info {
-    let path = find_opencode().map(|p| p.to_string_lossy().into_owned());
+    let path = find_agent().map(|p| p.to_string_lossy().into_owned());
     let running = acp.proc.lock().unwrap().is_some();
     let mut version = acp.version.lock().unwrap().clone();
     if version.is_none() && path.is_some() {
-        if let Some(mut c) = opencode_cmd() {
+        if let Some(mut c) = agent_cmd() {
             version = c.arg("--version").output().ok().filter(|o| o.status.success()).map(|o| {
-                String::from_utf8_lossy(&o.stdout).trim().trim_start_matches("opencode").trim().to_string()
+                let raw = String::from_utf8_lossy(&o.stdout);
+                raw.trim()
+                    .trim_start_matches("opencode")
+                    .trim_start_matches("omm")
+                    .trim()
+                    .to_string()
             });
             *acp.version.lock().unwrap() = version.clone();
         }
@@ -111,12 +156,12 @@ pub fn acp_info(acp: State<'_, Acp>) -> Info {
     Info { path, version, running }
 }
 
-/// Start `opencode acp` in `cwd` (stopping a previous one first). Each stdout
-/// line arrives as an `acp-line` event; stderr as `acp-log`; the end as `acp-exit`.
+/// Start ACP agent (`omm acp` or `opencode acp`) in `cwd` (stopping a previous one first).
+/// Each stdout line arrives as an `acp-line` event; stderr as `acp-log`; the end as `acp-exit`.
 #[tauri::command]
 pub fn acp_start(app: AppHandle, acp: State<'_, Acp>, cwd: Option<String>) -> Result<String, String> {
     stop_inner(&acp);
-    let mut cmd = opencode_cmd().ok_or("OpenCode was not found. Install it with `npm i -g @opencode/cli` or from opencode.ai.")?;
+    let mut cmd = agent_cmd().ok_or("No ACP agent found. Install `omm` (oh-my-mira) from MuaraAI or `opencode`.")?;
     cmd.arg("acp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -170,14 +215,14 @@ pub fn acp_start(app: AppHandle, acp: State<'_, Acp>, cwd: Option<String>) -> Re
             break;
         }
     });
-    Ok(find_opencode().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "opencode".into()))
+    Ok(find_agent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "agent".into()))
 }
 
 /// Send one JSON-RPC message (one line) to the agent.
 #[tauri::command]
 pub fn acp_send(acp: State<'_, Acp>, line: String) -> Result<(), String> {
     let mut guard = acp.proc.lock().unwrap();
-    let r = guard.as_mut().ok_or("OpenCode is not running.")?;
+    let r = guard.as_mut().ok_or("Agent is not running.")?;
     r.stdin
         .write_all(line.as_bytes())
         .and_then(|_| r.stdin.write_all(b"\n"))
