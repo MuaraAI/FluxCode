@@ -1,25 +1,20 @@
 # Third-party notices
 
-FluxCode includes or builds on the following components. Each is used under
-its own license, which the FluxCode license (GPL-3.0-or-later) does not change.
-All of them are compatible with the GPL v3.
+FluxCode builds on the following components. Each is used under its own license,
+which the FluxCode license (GPL-3.0-or-later) does not change. All of them are
+compatible with the GPL v3.
 
 | Component | License | Used for |
 | --- | --- | --- |
-| [CodeMirror 6](https://codemirror.net/) (`@codemirror/*`, `@lezer/*`) | MIT | Code editor and language parsers |
-| [Tauri](https://tauri.app/) (`tauri`, `@tauri-apps/*`, `tauri-plugin-dialog`) | MIT or Apache-2.0 | Desktop shell, IPC, dialogs |
-| [Serde](https://serde.rs/) (`serde`, `serde_json`) | MIT or Apache-2.0 | Rust (de)serialization |
-| Other Rust crates resolved in `src-tauri/Cargo.lock` | mostly MIT or Apache-2.0 | Tauri's dependencies |
-| [Vite](https://vite.dev/) | MIT | Build tool (development only) |
-| [GPUI](https://gpui.rs) (`gpui-pre`, from the Zed repository) | Apache-2.0 | GPUI edition: UI framework |
-| [GPUI Kit](https://github.com/longbridge/gpui-kit) (`gpui-kit`, `gpui-component`, `gpui-base`, `gpui-webview`) | Apache-2.0 | GPUI edition: widgets, code editor, optional WebView |
-| [Lucide](https://lucide.dev) icons (`gpui-kit-assets`) | ISC | GPUI edition: icons |
-| [Tree-sitter](https://tree-sitter.github.io) and its language grammars | MIT | GPUI edition: syntax highlighting |
-| `lsp-types`, `futures`, `anyhow`, `embed-resource` and other crates in `gpui-app/Cargo.lock` | MIT or Apache-2.0 | GPUI edition |
-| Microsoft Edge WebView2 Loader (`WebView2Loader.dll`) | Microsoft WebView2 SDK license (redistributable) | Loads the system WebView2 runtime |
+| [GPUI](https://gpui.rs) (from the Zed repository) and [GPUI Fast](https://github.com/longbridge/gpui-fast) | Apache-2.0 | UI framework, GPU rendering |
+| [GPUI Kit](https://github.com/longbridge/gpui-kit) (`gpui-kit`, `gpui-component`, `gpui-base`) | Apache-2.0 | Widgets and the code editor |
+| [Lucide](https://lucide.dev) icons (through `gpui-kit-assets`) | ISC | Icons |
+| [syntect](https://github.com/trishume/syntect) and [two-face](https://github.com/CosmicHorrorDev/two-face) | MIT | Syntax highlighting |
+| Language grammars from [bat](https://github.com/sharkdp/bat) (through two-face) | each under its own license, listed in two-face | Syntax highlighting for about 200 languages |
+| `serde`, `serde_json`, `lsp-types`, `futures`, `anyhow`, `chrono`, `image`, `base64`, `miniz_oxide`, `sha1_smol`, `embed-resource` and the other crates in `Cargo.lock` | MIT or Apache-2.0 | Data formats, archives, build |
+| Microsoft Edge WebView2 Loader (only with the optional `embedded-preview` feature, off by default) | Microsoft WebView2 SDK license | In-window web preview |
 
-FluxCode talks to [OpenCode](https://opencode.ai) (MIT) over the
-[Agent Client Protocol](https://agentclientprotocol.com) when it is
-installed on the machine; it is not bundled. The GitHub sign-in uses the
-system `curl.exe` and, optionally, the GitHub CLI (`gh`), neither of which is
-bundled either.
+Not bundled, used when installed on the machine:
+[OpenCode](https://opencode.ai) (MIT) and Mura, over the
+[Agent Client Protocol](https://agentclientprotocol.com); `git`; `curl` (update
+check, GitHub sign-in); the GitHub CLI `gh` (pull requests, Actions).

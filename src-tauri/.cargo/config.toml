@@ -1,2 +1,0 @@
-# Cross-platform cargo configuration.
-# Default target directory is standard `./target` (overridable via CARGO_TARGET_DIR).

@@ -1,13 +1,7 @@
-node_modules/
-dist/
-src-tauri/target/
-src-tauri/gen/
+/target/
+/dist/
 *.log
 .DS_Store
 .claude/
-h.md
-docs/superpowers/
 .worktree*
 .worktrees/
-graphify-out/
-.superpowers/

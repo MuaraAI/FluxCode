@@ -1,0 +1,89 @@
+# Checks every new issue: lists earlier issues that look like the same problem
+# (open, or closed as fixed), and checks the build ID against the newest build.
+# The result is one comment and labels; nothing is closed automatically.
+
+name: Issue check
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const STOP = new Set(('the and for with from that this when not does doesnt dont cant cannot into have has '
+              + 'are was were but its you your fluxcode issue bug problem error after before while then than '
+              + 'yang dan di ke dari ini itu tidak ga gak bisa ada saat jadi kalo kalau dengan untuk tolong').split(' '));
+            const words = (s) => new Set((s || '').toLowerCase().match(/[a-z0-9]+/g)?.filter((w) => w.length > 2 && !STOP.has(w)) ?? []);
+
+            // Similar earlier issues, by the words their titles share.
+            const mine = words(issue.title);
+            const all = await github.paginate(github.rest.issues.listForRepo, { owner, repo, state: 'all', per_page: 100 }, (r, done) => {
+              if (r.data.length < 100) done();
+              return r.data;
+            });
+            const similar = [];
+            for (const other of all) {
+              if (other.pull_request || other.number === issue.number || mine.size === 0) continue;
+              const theirs = words(other.title);
+              const shared = [...mine].filter((w) => theirs.has(w)).length;
+              if (shared < 2) continue;
+              const jaccard = shared / (mine.size + theirs.size - shared);
+              const cover = shared / Math.min(mine.size, theirs.size);
+              const score = Math.max(jaccard, cover * 0.8);
+              if (score >= 0.45) similar.push({ other, score });
+            }
+            similar.sort((a, b) => b.score - a.score);
+            const top = similar.slice(0, 3);
+
+            // Build ID, and whether a newer build exists.
+            const build = (issue.body || '').match(/BuildDev-\d{4}(-\d{2}){5}/)?.[0];
+            let newest = null;
+            try {
+              const { data } = await github.rest.repos.listReleases({ owner, repo, per_page: 20 });
+              newest = data.map((r) => r.tag_name).filter((t) => t.startsWith('BuildDev-')).sort().pop() ?? null;
+            } catch (e) {
+              core.info(`releases: ${e.message}`);
+            }
+
+            const lines = ['**Automatic check**', ''];
+            const labels = [];
+            if (top.length) {
+              lines.push('These earlier issues look similar:');
+              for (const { other } of top) {
+                const state = other.state === 'open' ? 'open' : other.state_reason === 'completed' ? 'closed as fixed' : 'closed';
+                lines.push(`- #${other.number} ${other.title} (${state})`);
+              }
+              lines.push('', 'If one of them is the same problem, add what is different there and close this one.');
+              labels.push('possible-duplicate');
+              if (top.some(({ other }) => other.state_reason === 'completed')) {
+                lines.push('One of them is marked fixed: update FluxCode first (Help > Check for Updates) and check whether it still happens.');
+                labels.push('maybe-fixed');
+              }
+            } else {
+              lines.push('- Similar issues: none found.');
+            }
+            lines.push('');
+            if (!build) {
+              lines.push('- Build: not given. Please add the build ID from Help > About FluxCode (it looks like `BuildDev-2026-11-09-17-30-12`).');
+              labels.push('needs-info');
+            } else if (newest && build < newest) {
+              lines.push(`- Build: ${build}. A newer build, ${newest}, is out. Please check whether it still happens there.`);
+              labels.push('needs-info');
+            } else {
+              lines.push(`- Build: ${build}${newest === build ? ' (the newest)' : ''}.`);
+            }
+            if (!labels.length) labels.push('triage');
+
+            await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: lines.join('\n') });
+            await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels });
