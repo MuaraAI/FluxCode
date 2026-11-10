@@ -811,6 +811,25 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("Code together", "Ngoding bareng"),
     ("Edits merge live. An edit an AI agent made says which agent and model.", "Edit digabung langsung. Edit dari agent AI menyebut agent dan modelnya."),
+    ("Contents", "Daftar isi"),
+    ("Couldn't save {name}: {e}", "Tidak bisa menyimpan {name}: {e}"),
+    ("Danger", "Bahaya"),
+    ("Details", "Detail"),
+    ("{n} blocks · read in {ms} ms · text in {size}", "{n} blok · dibaca dalam {ms} ms · teks {size}"),
+    ("Flux document · reading the rest…", "Dokumen Flux · membaca sisanya…"),
+    ("Still reading the document; Source opens in a moment.", "Dokumen masih dibaca; Sumber terbuka sebentar lagi."),
+    ("Note", "Catatan"),
+    ("Preview", "Pratinjau"),
+    ("Save as Markdown", "Simpan sebagai Markdown"),
+    ("Saved {name}", "Tersimpan: {name}"),
+    ("Source", "Sumber"),
+    ("Tip", "Tips"),
+    ("Warning", "Peringatan"),
+    (
+        "Write {name} next to it, as GitHub Markdown (flowcharts become Mermaid)",
+        "Tulis {name} di sebelahnya, sebagai Markdown GitHub (flowchart menjadi Mermaid)",
+    ),
+    ("and {n} more headings", "dan {n} judul lagi"),
 ];
 
 #[cfg(test)]

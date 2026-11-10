@@ -185,6 +185,22 @@ pub(crate) struct Doc {
     pub _sub: Subscription,
     /// Set for an image tab (the editor stays empty and is never shown).
     pub image: Option<ImageDoc>,
+    /// A Flux document (`.flux`): drawn, unless its source is showing.
+    pub flux: Option<crate::fluxdoc::view::FluxView>,
+    pub flux_source: bool,
+    /// A large Flux document opens drawn with its editor still empty (the text lives in
+    /// `flux`); the editor fills the first time Source is shown.
+    pub flux_lazy: bool,
+}
+
+impl Doc {
+    /// The document's text: the editor's, or a large Flux document's not yet in it.
+    pub fn text(&self, cx: &App) -> String {
+        match (&self.flux, self.flux_lazy) {
+            (Some(v), true) => v.source(),
+            _ => self.editor.read(cx).value().to_string(),
+        }
+    }
 }
 
 pub(crate) struct ImageDoc {
@@ -570,6 +586,14 @@ impl Workbench {
             label = "Plain Text";
             self.status = crate::i18n::tr("Large file: syntax colors are off").into();
         }
+        let is_flux = !read_only && crate::fluxdoc::view::is_flux(&path);
+        // A large Flux document: the drawing needs only the text, not an editor full of it.
+        let flux_lazy = is_flux && text.len() > LARGE_FILE_BYTES;
+        let (mut file_text_for_flux, text) = match (is_flux, flux_lazy) {
+            (true, true) => (text, String::new()),
+            (true, false) => (text.clone(), text),
+            _ => (String::new(), text),
+        };
         let file = core::FileText { text, crlf };
         let s = &self.settings;
         let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
@@ -621,7 +645,35 @@ impl Workbench {
         });
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
         let banner = banner.map(SharedString::from);
-        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None });
+        // A large Flux document shows its first part at once; the rest is read (and its
+        // text packed) on another thread, then takes its place.
+        let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let lang_ui = crate::fluxdoc::view::ui_lang();
+        let mut rest: Option<String> = None;
+        let flux = is_flux.then(|| {
+            if file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
+                let v = crate::fluxdoc::view::FluxView::first_part(&file_text_for_flux, base.clone(), lang_ui);
+                rest = Some(std::mem::take(&mut file_text_for_flux));
+                v
+            } else {
+                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut file_text_for_flux), base.clone(), lang_ui)
+            }
+        });
+        if let Some(full) = rest {
+            let at = path.clone();
+            let task = cx.background_spawn(async move { crate::fluxdoc::view::prepare(full) });
+            cx.spawn(async move |this, cx| {
+                let p = task.await;
+                _ = this.update(cx, |this, cx| {
+                    if let Some(v) = this.docs.iter_mut().find(|d| d.path == at).and_then(|d| d.flux.as_mut()).filter(|v| v.pending) {
+                        v.install(p, crate::fluxdoc::view::ui_lang());
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }
@@ -646,6 +698,9 @@ impl Workbench {
             gen: 0,
             _sub: sub,
             image: Some(ImageDoc { size, bytes, actual: false }),
+            flux: None,
+            flux_source: false,
+            flux_lazy: false,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -793,7 +848,8 @@ impl Workbench {
 
     pub(crate) fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
         // Image tabs and read-only views have no text to write (writing it would wipe the file).
-        if self.docs[ix].image.is_some() || self.docs[ix].read_only {
+        // ... nor does a large Flux document whose editor was never filled (it is unchanged).
+        if self.docs[ix].image.is_some() || self.docs[ix].read_only || self.docs[ix].flux_lazy {
             return true;
         }
         let doc = &mut self.docs[ix];
@@ -1552,7 +1608,15 @@ impl Workbench {
                             .child(div().min_w_0().truncate().child(b)),
                     )
                 })
-                .when(self.docs[ix].image.is_none(), |v| v.child(
+                .when(self.docs[ix].flux.is_some(), |v| v.child(self.render_flux_bar(ix, cx)))
+                .when(self.docs[ix].flux.is_some() && !self.docs[ix].flux_source, |v| {
+                    let weak = cx.entity().downgrade();
+                    let view = self.docs[ix].flux.as_ref().unwrap().render(move |cx| {
+                        _ = weak.update(cx, |_, cx| cx.notify());
+                    });
+                    v.child(div().flex_1().min_h_0().child(view))
+                })
+                .when(self.docs[ix].image.is_none() && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
                     div()
                         .flex_1()
                         .min_h_0()

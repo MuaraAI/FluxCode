@@ -30,7 +30,8 @@ image = { version = "0.25", default-features = false }
 # Agent memory (AoC Memory port): ids are SHA-1 prefixes, times ISO 8601, as in
 # ant_memory.py. Both crates are already compiled for gpui.
 sha1_smol = "1"
-# Attachments: images as base64, Word/Excel/PowerPoint text from their ZIP (already compiled for gpui).
+# Attachments: images as base64, Word/Excel/PowerPoint text from their ZIP (already compiled for gpui);
+# miniz_oxide also packs a large Flux document's text.
 base64 = "0.22"
 miniz_oxide = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

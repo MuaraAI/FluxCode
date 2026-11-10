@@ -1220,7 +1220,7 @@ impl Workbench {
             ("fs/read_text_file", Some(p)) => {
                 // Unsaved editor text wins over the file on disk.
                 let text = match self.docs.iter().find(|d| d.path == p) {
-                    Some(d) => Ok(d.editor.read(cx).value().to_string()),
+                    Some(d) => Ok(d.text(cx)),
                     None => core::read_text(&p).map(|f| f.text),
                 };
                 let result = text.map(|t| {
@@ -2102,7 +2102,7 @@ impl Workbench {
                 }
                 "file" => {
                     if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
-                        let body = d.editor.read(cx).value().to_string();
+                        let body = d.text(cx);
                         if body.len() < 200_000 {
                             blocks.push(resource(&d.path, body));
                         }

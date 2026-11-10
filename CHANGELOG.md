@@ -5,6 +5,33 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Flux documents: `.flux` opens drawn, and the README is written in it (10 November 2026)
+
+- A `.flux` file opens drawn, with Preview and Source above it. Flux is Markdown's text
+  plus one-line blocks: `@image` with `width=`, `align=`, `dark=` and `link=`,
+  `@gallery`, `@video` (a poster; a click plays it in the system's player), `@flow`
+  flowcharts laid out and drawn by FluxCode, `@note` / `@tip` / `@warn` / `@danger`,
+  `@details`, `@columns`, `@table` with alignment and widths, `@toc`, `@en` / `@id`
+  sections and `@style`. Inline it adds `{kbd ...}`, `{badge ...}`, `{color=... ...}` and
+  `==highlight==`. The syntax is in `docs/flux.flux` (and `docs/flux.md`).
+- It stays light at any size: one pass over the text with nothing copied (16 bytes a
+  block), every table row and list item its own block, and only what is on screen drawn,
+  in small groups. A document over 256 KB shows its first 32 KB at once (0.08 ms of
+  reading) while the rest is read on another thread; over 1 MB its text is kept
+  DEFLATE-packed in 64 KB frames, unpacked only for what is on screen; over 2 MB the
+  source editor fills only when Source is shown. 1,300,003 lines (31.8 MB, a 200,000-row
+  table) read in 49 ms and keep their text in 2.3 MB; opened in FluxCode the window is up
+  in 0.28 s, Task Manager shows 16 MB and the process reserves 81.5 MB (this page: 5 MB
+  and 47.6 MB).
+- `README.md` is made from `README.flux`: `fluxcode --flux-to-md README.flux README.md`
+  (`--check` only compares), or **Save as Markdown** above any Flux document. Flowcharts
+  become Mermaid, callouts GitHub's alerts, `@details` `<details>`, images HTML where they
+  need it. The tests fail when a generated file is out of date.
+- `.gitattributes` marks `.flux` as Markdown for GitHub: Linguist already gives `.flux`
+  to an unrelated query language called FLUX, and adds new formats only once they are in
+  wide use.
+- `changelog.flux` keeps working as before and opens drawn too.
+
 ## Live share gets its own page (10 November 2026)
 
 - The people icon in the activity bar now opens Live share as a page in the editor area,
