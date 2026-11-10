@@ -403,7 +403,9 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Agent panel
     TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert, PencilLine, MessageSquareCode, MessagesSquare,
     // Agent picker: download an agent, and the spinner while it installs
-    Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus
+    Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus,
+    // Live share
+    Users
 ]);
 
 #[cfg(test)]

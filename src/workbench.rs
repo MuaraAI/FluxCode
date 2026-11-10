@@ -124,6 +124,7 @@ pub(crate) enum SideView {
     Run,
     Scm,
     Agent,
+    Collab,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -231,6 +232,8 @@ pub struct Workbench {
     pub(crate) whats_new: Option<crate::whatsnew::Page>,
     /// Paths of closed tabs, newest last, for Ctrl+Shift+T.
     pub(crate) closed_tabs: Vec<PathBuf>,
+    /// Live share (collab/).
+    pub(crate) collab: crate::collab::Collab,
     // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
@@ -383,6 +386,7 @@ impl Workbench {
             settings_open: false,
             whats_new: None,
             closed_tabs: Vec::new(),
+            collab: crate::collab::Collab::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
             pending: None,
@@ -581,6 +585,8 @@ impl Workbench {
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
+                // Live share: a shared file's edit goes to the others now.
+                this.collab_on_change(&editor, cx);
                 if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor && !d.read_only) {
                     d.dirty = true;
                     // The "empty file" note goes once there is text.
@@ -1327,6 +1333,12 @@ impl Workbench {
             })
             .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
+            .child({
+                let live = self.collab.active();
+                div().relative().child(view_item("ab-collab", Icon::new(gpui_kit::assets::IconName::Users), SideView::Collab, self, cx)).when(live, |d| {
+                    d.child(div().absolute().right(theme::u(9.)).bottom(theme::u(9.)).size(theme::u(7.)).rounded_full().bg(c(theme::GREEN)))
+                })
+            })
             .child(div().flex_1())
             .child(
                 div()
@@ -1345,6 +1357,7 @@ impl Workbench {
             SideView::Run => tr("RUN"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
+            SideView::Collab => tr("LIVE SHARE"),
         };
         // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
@@ -1375,6 +1388,7 @@ impl Workbench {
             SideView::Run => self.render_run_view(cx),
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
+            SideView::Collab => self.render_collab(cx),
         };
         v_flex()
             .size_full()
@@ -1803,6 +1817,7 @@ impl Render for Workbench {
         if !self.agent.ask_clear.is_empty() {
             self.apply_ask_clear(window, cx);
         }
+        self.collab_cursor(cx);
         if self.scm.clear_message {
             self.scm.clear_message = false;
             self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));

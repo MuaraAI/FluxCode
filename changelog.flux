@@ -11,6 +11,33 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Live share: code together, with your PC as the server
+@title id: Live share: ngoding bareng, PC kamu jadi servernya
+@en
+Open **Live share** (the people icon in the activity bar), click **Start hosting**, and
+send the invite code. Whoever pastes it joins your folder and you type in the same files
+at the same time; edits merge so everyone ends with the same text.
+
+- The panel shows who is in the session and the file and line each person is on.
+- **Activity** lists every person's edits with a diff. An edit made by an AI agent says
+  so, with the agent, model, effort and mode, so you can tell which model wrote what.
+- Edits go straight between your PC and theirs, encrypted with the code's secret. Over the
+  internet, forward TCP port 47615 on your router to your PC.
+@id
+Buka **Live share** (ikon orang di activity bar), klik **Mulai jadi host**, lalu kirim
+kode undangannya. Siapa pun yang menempelkan kode itu masuk ke folder kamu dan kalian
+mengetik di file yang sama secara bersamaan; edit digabung sehingga teksnya sama di semua
+PC.
+
+- Panelnya menampilkan siapa saja di sesi dan file serta baris yang sedang dibuka
+  masing-masing.
+- **Aktivitas** memuat edit tiap orang beserta diff-nya. Edit dari agent AI ditandai,
+  lengkap dengan agent, model, effort dan mode-nya, jadi kelihatan model mana yang menulis
+  apa.
+- Edit dikirim langsung antara PC kamu dan PC mereka, terenkripsi dengan rahasia di
+  kodenya. Lewat internet, teruskan port TCP 47615 di router ke PC kamu.
+
+@release 2026-11-10
 @title en: Less memory: 72 MB reserved, about 1 MB in Task Manager when idle
 @title id: Memori lebih kecil: 72 MB dipesan, sekitar 1 MB di Task Manager saat idle
 @en
