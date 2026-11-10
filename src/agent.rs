@@ -39,9 +39,14 @@ enum Req {
     LoadSession,
     Prompt,
     SetOption,
+    /// A command run quietly for the usage panel (`/usage`, `/context`): its reply
+    /// goes there, not into the chat.
+    Probe,
 }
 
 mod menu;
+mod usage;
+mod web;
 pub(crate) use menu::Menu;
 
 /// Stands for the older ACP session modes (`modes`, `session/set_mode`) among the config options.
@@ -109,6 +114,8 @@ pub enum Item {
     MemoryUsed(usize),
     /// The chat continues with another harness from here (a branch, not a new chat).
     Branch(String),
+    /// A web search or a page read, with its sources.
+    Web(web::Web),
 }
 
 /// A message typed while the agent was busy (or not running yet), with its attachments.
@@ -272,6 +279,15 @@ pub struct AgentState {
     pub menu: menu::MenuState,
     /// A command-line setting changed while the agent answered: restart it after the turn.
     relaunch: bool,
+    /// Usage and limits: live numbers and the usage panel.
+    pub usage: usage::UsageState,
+    /// Web searches whose every source is shown.
+    pub web_open: HashSet<String>,
+    /// Where the effort slider's handle was before the last change (it slides from there).
+    pub effort_from: std::cell::Cell<Option<f32>>,
+    /// The panel's top and the message box's top, in window pixels, as last drawn:
+    /// the menus above the box get exactly the room between them.
+    pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     _sub: Subscription,
     _sub2: Subscription,
     /// Redraws the removal page as its two name boxes change.
@@ -480,6 +496,10 @@ impl AgentState {
             install_err: None,
             menu: menu::MenuState::new(window, cx),
             relaunch: false,
+            usage: Default::default(),
+            web_open: HashSet::new(),
+            effort_from: std::cell::Cell::new(None),
+            geom: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
             ask: None,
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
             ask_clear: Vec::new(),
@@ -880,6 +900,7 @@ impl Workbench {
                 return cx.notify();
             }
             "/stop" => return self.agent_set_on(false, cx),
+            "/usage" | "/context" if self.agent_has_usage() => return self.agent_usage_open(cx),
             _ => {}
         }
         if let Some(ix) = self.agent.editing.take() {
@@ -947,6 +968,13 @@ impl Workbench {
         prompt.extend(self.agent_context_blocks(&text, cx));
         self.agent.status = Status::Busy;
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
+    }
+
+    /// Run one of the agent's own commands without showing it in the chat.
+    fn agent_send_probe(&mut self, command: &str) {
+        let Some(session) = self.agent.session.clone() else { return };
+        self.agent.status = Status::Busy;
+        self.agent_request(Req::Probe, "session/prompt", json!({ "sessionId": session, "prompt": [{ "type": "text", "text": command }] }));
     }
 
     fn agent_cancel(&mut self, cx: &mut Context<Self>) {
@@ -1023,6 +1051,12 @@ impl Workbench {
                     self.agent.status = Status::Ready;
                 }
                 Req::SetOption => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
+                Req::Probe => {
+                    self.agent.status = Status::Ready;
+                    self.agent_probe_done(Some(m), cx);
+                    self.agent_flush_queue(cx);
+                    self.agent_probe_next(cx);
+                }
                 Req::LoadSession if self.agent.silent_load => {
                     self.agent.silent_load = false;
                     self.agent.loading_id = None;
@@ -1078,11 +1112,30 @@ impl Workbench {
                 for (id, v) in wanted {
                     self.agent_set_option(&id, v, false, cx);
                 }
+                // Effort starts at medium: good results with fewer tokens. A level the
+                // user picked once is kept instead (above).
+                let effort = self
+                    .agent
+                    .config
+                    .iter()
+                    .find(|o| o.category == "thought_level")
+                    .filter(|o| !self.settings.agent_options.contains_key(&format!("{harness}:{}", o.id)) && o.current != "medium" && o.choices.iter().any(|c| c.0 == "medium"))
+                    .map(|o| o.id.clone());
+                if let Some(id) = effort {
+                    self.agent_set_option(&id, "medium".into(), false, cx);
+                }
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(cx);
                 self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
             }
             Req::SetOption => self.agent_take_config(&result),
+            Req::Probe => {
+                self.agent.status = Status::Ready;
+                self.agent_probe_done(None, cx);
+                self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
+            }
             Req::Prompt => {
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
@@ -1099,6 +1152,7 @@ impl Workbench {
                     return self.agent_relaunch(cx);
                 }
                 self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
             }
         }
     }
@@ -1131,6 +1185,17 @@ impl Workbench {
                 .unwrap_or_default();
             return;
         }
+        if u.get("sessionUpdate").and_then(Value::as_str) == Some("usage_update") {
+            self.agent.usage.live.get_or_insert_with(Default::default).take(u);
+            return;
+        }
+        // A quiet command's reply goes to the usage panel.
+        if let Some((_, buf)) = self.agent.usage.probe.as_mut() {
+            if u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk") {
+                buf.push_str(u.pointer("/content/text").and_then(Value::as_str).unwrap_or(""));
+            }
+            return;
+        }
         if self.agent.silent_load {
             return;
         }
@@ -1141,6 +1206,14 @@ impl Workbench {
             // Only while an old session replays; live prompts are shown when sent.
             "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
             "agent_thought_chunk" => self.agent.append(true, &text(u)),
+            "tool_call" if web::hidden_tool(u) => {}
+            "tool_call" if web::is_web(u) => self.agent.items.push(Item::Web(web::Web::new(u))),
+            "tool_call_update" if self.agent.items.iter().any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
+                let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                if let Some(Item::Web(w)) = self.agent.items.iter_mut().rev().find(|i| matches!(i, Item::Web(w) if w.id == id)) {
+                    w.take(u);
+                }
+            }
             "tool_call" => {
                 let kind = s(u, "kind").unwrap_or_else(|| "other".into());
                 let status = s(u, "status").unwrap_or_else(|| "pending".into());
@@ -1614,6 +1687,24 @@ impl Workbench {
         let right = self.settings.agent_right;
         h_flex()
             .gap_px()
+            .when(self.agent_has_usage(), |h| {
+                h.child(
+                    Button::new("ag-usage-btn")
+                        .icon(Icon::new(gpui_kit::assets::IconName::Gauge))
+                        .xsmall()
+                        .ghost()
+                        .selected(self.agent.usage.open)
+                        .tooltip(crate::i18n::tr("Usage: limits, context and cost"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.agent.usage.open {
+                                this.agent.usage.open = false;
+                                cx.notify();
+                            } else {
+                                this.agent_usage_open(cx);
+                            }
+                        })),
+                )
+            })
             .child(
                 Button::new("ag-memory-btn")
                     .icon(Icon::new(gpui_kit::assets::IconName::Brain))
@@ -2798,11 +2889,33 @@ impl Workbench {
 
     pub(crate) fn render_agent(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let body = self.render_agent_body(window, cx);
-        // The agent menu opens under the panel title, inside the panel.
-        match self.render_agent_menu(true, window, cx) {
-            Some(m) => div().relative().size_full().child(body).child(div().absolute().top_1().left_2().right_2().child(m)).into_any_element(),
-            None => body,
-        }
+        let geom = self.agent.geom.clone();
+        let id = cx.entity_id();
+        // The panel's top, for the room the menus get (see `geom`).
+        let probe = canvas(
+            move |b, _, cx| {
+                let y = f32::from(b.origin.y);
+                let (top, box_top) = geom.get();
+                if (top - y).abs() > 0.5 {
+                    geom.set((y, box_top));
+                    cx.defer(move |cx| cx.notify(id));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size(px(0.));
+        div()
+            .relative()
+            .size_full()
+            .child(body)
+            .child(probe)
+            // The agent menu opens under the panel title, inside the panel.
+            .children(self.render_agent_menu(true, window, cx).map(|m| div().absolute().top_1().left_2().right_2().child(m)))
+            .children(self.render_usage_modal(cx))
+            .into_any_element()
     }
 
     fn render_agent_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2984,6 +3097,7 @@ impl Workbench {
                     .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
                     .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
                     .into_any_element(),
+                Item::Web(w) => self.render_web_item(i, w, cx),
                 Item::Tool { title, status, kind, .. } => {
                     let (state_icon, col): (Icon, theme::Tok) = match status.as_str() {
                         "completed" => (Icon::new(IconName::CircleCheck), theme::GREEN),
@@ -3400,8 +3514,26 @@ impl Workbench {
         let mut chips: Vec<AnyElement> = attachments.collect();
         chips.extend(self.render_context_chips(cx));
         let menu = self.render_agent_menu(false, window, cx);
+        let geom = self.agent.geom.clone();
+        let eid = cx.entity_id();
+        let box_probe = canvas(
+            move |b, _, cx| {
+                let y = f32::from(b.origin.y);
+                let (top, box_top) = geom.get();
+                if (box_top - y).abs() > 0.5 {
+                    geom.set((top, y));
+                    cx.defer(move |cx| cx.notify(eid));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size(px(0.));
         let boxed = v_flex()
             .id("ag-composer")
+            .relative()
             .rounded(px(8.))
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
@@ -3478,9 +3610,18 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
-                    .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
-                    .child(self.render_access_menu(cx))
+                    // Model, mode and permissions give way in a narrow panel (cut, never
+                    // pushing the send button out of the box).
+                    .child(
+                        h_flex()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .overflow_hidden()
+                            .gap_0p5()
+                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
+                            .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
+                            .child(self.render_access_menu(cx)),
+                    )
                     .child(
                         h_flex()
                             .flex_1()
@@ -3495,6 +3636,7 @@ impl Workbench {
                                 h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot))).child(div().min_w_0().truncate().child(label))
                             }),
                     )
+                    .children(self.render_context_meter(cx))
                     .child(if busy && !has_text {
                         // A solid square in the accent: the one action while the agent works.
                         send_btn("ag-stop", true, tr("Stop the answer"))
@@ -3519,7 +3661,7 @@ impl Workbench {
             .relative()
             .mx_3()
             .mb_3()
-            .child(boxed)
+            .child(boxed.child(box_probe))
             .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(m)))
     }
 
@@ -3844,11 +3986,15 @@ impl Workbench {
         if m.current == crate::acp::FLAG_DEFAULT && m.id.starts_with(FLAG_PREFIX) {
             short = tr("Model").to_string();
         }
+        // "Default (recommended)": the menu says why; the button only needs the name.
+        if let Some(s) = short.strip_suffix(" (recommended)") {
+            short = s.to_string();
+        }
         if let Some(e) = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
             short = format!("{short} · {}", e.current_name());
         }
-        if short.chars().count() > 22 {
-            short = format!("{}…", short.chars().take(21).collect::<String>());
+        if short.chars().count() > 20 {
+            short = format!("{}…", short.chars().take(19).collect::<String>());
         }
         menu_button("ag-model-btn", short, self.agent.menu.open == Some(Menu::Model), tr("Model"))
             .on_click(cx.listener(|this, _, w, cx| {
@@ -3860,8 +4006,8 @@ impl Workbench {
     /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
     fn render_mode_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
         let mut label = m.current_name().to_string();
-        if label.chars().count() > 12 {
-            label = format!("{}…", label.chars().take(11).collect::<String>());
+        if label.chars().count() > 11 {
+            label = format!("{}…", label.chars().take(10).collect::<String>());
         }
         menu_button("ag-mode-btn", label, self.agent.menu.open == Some(Menu::Mode), tr("Mode"))
             .on_click(cx.listener(|this, _, w, cx| {
