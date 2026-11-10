@@ -5,6 +5,23 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Live share: code together, with the host's PC as the server (10 November 2026)
+
+- The people icon in the activity bar opens Live share. The host clicks Start hosting
+  and sends the invite code; guests paste it and join, into their own clone of the
+  repository or into a new folder.
+- Every open shared file syncs keystroke by keystroke. The host orders edits with
+  operational transformation (the ot.js algorithm, `src/collab/ot.rs`), so concurrent
+  typing ends in the same text everywhere; tested with two windows typing into one line
+  at once.
+- The panel shows who is in the session, by GitHub name when signed in, and each
+  person's file and line. The activity list shows each edit with lines added and removed
+  and a diff; edits made by an AI agent are labelled with agent, model, effort and mode.
+- Traffic goes directly between the host's PC and each guest over TCP, encrypted and
+  authenticated with ChaCha20-Poly1305 under the invite code's secret, one derived key
+  per connection. No relay: over the internet the host forwards TCP port 47615.
+- Not yet: carets drawn in the editor, per-person undo, syncing files that aren't open.
+
 ## Less memory: 72 MB reserved, about 1 MB in Task Manager when idle (10 November 2026)
 
 | | Before | After |

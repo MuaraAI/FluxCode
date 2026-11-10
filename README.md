@@ -80,6 +80,35 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
   word wrap, whitespace, line numbers, folding, bracket closing, smart indent, cursor
   padding, scrolling past the end, interface size, themes and a background image.
 
+## Live share
+
+Code together in real time, with your PC as the server (the people icon in the activity
+bar).
+
+1. The host opens a folder, clicks **Start hosting** and sends the invite code
+   (`FLUX1-...`) to the others, in a chat or by mail.
+2. Each guest pastes it and clicks **Join**, either into their own clone of the same
+   repository or into a new folder that fills as they open files.
+3. Everyone types in the same files at once. The host's PC orders the edits
+   (operational transformation), so everyone ends with the same text.
+
+The panel lists who is in the session (by GitHub name when signed in) and which file and
+line each person is on. Its activity list shows each person's edits with lines added and
+removed and a diff; an edit made by an AI agent carries an **AI** label with the agent,
+model, effort and mode it ran with, so you can see which model wrote what.
+
+Edits go straight between the host's PC and each guest, encrypted with ChaCha20-Poly1305
+under the secret in the invite code; no server of ours is involved. That also means:
+
+- On the same network it works as is (Windows asks the host once to let FluxCode through
+  its firewall). Over the internet, the host forwards TCP port 47615 on their router to
+  their PC; speed then depends on both connections.
+- Only files someone has open travel, so a large project (a game, a Laravel or Android
+  project) costs no more than the files being worked on. Files over 16 MB are not shared.
+- Not yet: other people's carets drawn inside the editor (the panel shows their line),
+  separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
+  and syncing files an agent edits without them being open.
+
 ## What else it does
 
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.

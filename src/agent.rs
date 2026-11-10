@@ -1476,6 +1476,12 @@ impl Workbench {
         .detach();
     }
 
+    /// Which agent, model, effort and mode the panel runs now (for live share's AI labels).
+    pub(crate) fn agent_attribution(&self) -> crate::collab::proto::AiInfo {
+        let pick = |cat: &str| self.agent.config.iter().find(|o| o.category == cat).map(|o| o.current_name().to_string()).unwrap_or_default();
+        crate::collab::proto::AiInfo { agent: agent_name().to_string(), model: pick("model"), effort: pick("thought_level"), mode: pick("mode") }
+    }
+
     /// Ask before removing an agent: its name, typed twice.
     pub(crate) fn agent_ask_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.uninstall = Some(id.to_string());
@@ -1684,11 +1690,15 @@ impl Workbench {
     /// Reload open editors the agent changed on disk (render has the Window).
     pub(crate) fn apply_agent_reloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for p in std::mem::take(&mut self.agent.reloads) {
+            // Live share: this rewrite is the agent's, and is labelled so.
+            self.collab_mark_ai(&p);
             if let (Some(d), Ok(f)) = (self.docs.iter_mut().find(|d| d.path == p), core::read_text(&p)) {
                 d.crlf = f.crlf;
                 d.editor.update(cx, |s, cx| s.set_value(f.text, window, cx));
                 d.dirty = false;
             }
+            // set_value fires no change event: send the agent's rewrite to the session now.
+            self.collab_on_path(&p, cx);
         }
     }
 
