@@ -67,7 +67,8 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
   no debugger yet (see the table below).
 - **Light like Zed.** The whole editor is one Rust program drawn by the GPU with GPUI,
   the framework Zed is built on. On the PC this was measured on it opens its window in
-  about 0.2 s and holds about 95 MB, in one process.
+  about 0.2 s, reserves about 72 MB (Zed: 153 MB), and once idle shows about 1 MB in
+  Task Manager, because it hands the memory it isn't using back to Windows.
 - **Built for AI agents.** The agent panel speaks the Agent Client Protocol and lists
   every agent in the ACP registry, each with its own icon. Missing ones install with one
   click into FluxCode's own folder. You choose the model, mode and permissions under the
@@ -109,7 +110,8 @@ All three are good editors made for different people. This is where each stands 
 | What you download | one program, about 16 MB | an installer | an installer |
 | Layout and keys | VS Code's layout and VS Code's keys for the commands it has | its own layout; a VS Code key map is available | the original |
 | Window on screen after launch* | about 0.21 s | about 0.37 s | about 0.27 s (the workbench fills in after) |
-| Memory 5 s after launch* | about 95 MB, 1 process | about 168 MB, 2 processes | about 1.6 GB summed over 9 processes (shared memory counted more than once) |
+| Memory reserved (commit)* | about 72 MB, 1 process | about 153 MB, 2 processes | about 1.3 GB over 9 processes |
+| Task Manager "Memory" when idle* | about 1 MB (5 MB after a click, 30 MB during an install animation) | about 69 MB | about 921 MB |
 | Telemetry | none | on by default, can be turned off | on by default in Microsoft's build, can be turned off |
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
@@ -123,9 +125,13 @@ All three are good editors made for different people. This is where each stands 
 | License | GPL-3.0-or-later | GPL-3.0 (the editor) | MIT for Code - OSS; Microsoft's build has its own license |
 
 \* Measured on one Windows 11 PC on 10 November 2026: FluxCode (this build), Zed 1.27.0 and
-VS Code 1.145.2, each started 5 times with a fresh empty profile, telemetry and update
-checks off, no folder open; the time is to the first visible window, averaged over runs
-2 to 5. Other PCs give other numbers; the order is what to read from it.
+VS Code 1.145.2, each started with a fresh empty profile, telemetry and update checks off,
+no folder open. The window time is to the first visible window, averaged over runs 2 to 5
+of 5. Memory is 9 s after launch, averaged over 3 runs, summed over all of an app's
+processes; "Task Manager" is the private working set. FluxCode returns unused pages to
+Windows 6 s after start and after 15 s in the background, and gets them back as it needs
+them; Zed and VS Code keep theirs. Other PCs give other numbers; the order is what to read
+from it.
 
 Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agent you can
 keep on a short leash, and you open logs, databases and documents next to your code.

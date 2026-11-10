@@ -201,8 +201,8 @@ mod tests {
             assert!(!r.body_en.is_empty() && !r.body_id.is_empty(), "{}", r.date);
             assert!(!r.body_en.contains("@id") && !r.body_en.contains('\u{2014}'), "{}", r.date);
         }
-        // Newest first.
-        assert!(all.windows(2).all(|w| w[0].date > w[1].date));
+        // Newest first (several releases can share a day).
+        assert!(all.windows(2).all(|w| w[0].date >= w[1].date));
     }
 
     #[test]

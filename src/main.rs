@@ -25,6 +25,7 @@ mod flux_anim;
 mod github;
 mod panel;
 mod memory;
+mod memtrim;
 mod preview;
 mod preview_ui;
 mod proc;
