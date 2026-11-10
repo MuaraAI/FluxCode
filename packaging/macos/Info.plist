@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>FluxCode</string>
+	<key>CFBundleName</key>
+	<string>FluxCode</string>
+	<key>CFBundleExecutable</key>
+	<string>fluxcode</string>
+	<key>CFBundleIconFile</key>
+	<string>FluxCode</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.muaraai.fluxcode</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@SHORT@</string>
+	<key>CFBundleVersion</key>
+	<string>@LONG@</string>
+	<key>FluxCodeBuild</key>
+	<string>@BUILD@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (C) 2026 MuaraAI and contributors. GPL-3.0-or-later</string>
+</dict>
+</plist>

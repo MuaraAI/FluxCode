@@ -34,7 +34,9 @@ const FIRST: Duration = Duration::from_secs(4);
 
 #[cfg(windows)]
 const ASSET_SUFFIX: &str = "windows-x64.zip";
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+const ASSET_SUFFIX: &str = "macos-universal.tar.gz";
+#[cfg(not(any(windows, target_os = "macos")))]
 const ASSET_SUFFIX: &str = "linux-x64.tar.gz";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -231,12 +233,13 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    // The archive holds one folder with the `fluxcode` binary in it.
+    // The archive holds one folder with the `fluxcode` binary in it (on macOS, inside
+    // FluxCode.app).
     let found = std::fs::read_dir(&dir)
         .map_err(|e| e.to_string())?
         .flatten()
         .map(|e| e.path())
-        .flat_map(|p| [p.join("fluxcode"), p])
+        .flat_map(|p| [p.join("FluxCode.app/Contents/MacOS/fluxcode"), p.join("fluxcode"), p])
         .find(|p| p.is_file() && p.file_name().is_some_and(|n| n == "fluxcode"))
         .ok_or("fluxcode is missing from the download")?;
     let bytes = std::fs::read(found).map_err(|e| e.to_string());
@@ -271,6 +274,14 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
         return Err(e.to_string());
     }
     let _ = std::fs::remove_file(archive);
+    // macOS: the app's signature covers its executable; sign the bundle again (ad hoc,
+    // as it was made) so it still verifies with the new one.
+    #[cfg(target_os = "macos")]
+    if let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) {
+        // The old binary would be sealed in with it (a running one can be unlinked here).
+        let _ = std::fs::remove_file(&old);
+        let _ = std::process::Command::new("/usr/bin/codesign").args(["--force", "--deep", "--sign", "-"]).arg(app).output();
+    }
     refresh_icon(&exe);
     // Settings > Apps shows the build that is installed.
     #[cfg(windows)]

@@ -1,4 +1,4 @@
-# Builds FluxCode for Windows and Linux. On main, every push becomes a release
+# Builds FluxCode for Windows, Linux and macOS. On main, every push becomes a release
 # tagged BuildDev-YYYY-MM-DD-HH-MM-SS (Asia/Jakarta time); installed copies of
 # FluxCode find it on their own. Pull requests only build and test.
 
@@ -52,10 +52,45 @@ jobs:
           Copy-Item target/release/fluxcode.exe "dist/$name/FluxCode.exe"
           Copy-Item packaging/windows/install.ps1, packaging/windows/Install.cmd, packaging/windows/README.txt "dist/$name"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+      # One .exe that installs for the user (packaging/windows/installer.nsi). The ZIP
+      # stays: installed copies update themselves from it.
+      - name: Installer
+        shell: pwsh
+        run: |
+          $mk = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $mk)) { choco install nsis -y --no-progress | Out-Null }
+          $exe = (Resolve-Path target/release/fluxcode.exe).Path
+          $out = Join-Path (Resolve-Path dist).Path "FluxCode-$env:FLUXCODE_BUILD-windows-x64-setup.exe"
+          & $mk /V2 "/DBUILD=$env:FLUXCODE_BUILD" "/DEXE=$exe" "/DOUT=$out" packaging/windows/installer.nsi
+          if ($LASTEXITCODE) { throw "makensis failed" }
+      # Install, start, uninstall on the runner: the installer is only published if it works.
+      - name: Test the installer
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/*-setup.exe).FullName
+          Start-Process $setup -ArgumentList "/S" -Wait
+          $app = "$env:USERPROFILE\.fluxcode\app"
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\FluxCode.lnk"
+          foreach ($f in "$app\FluxCode.exe", "$app\Uninstall.exe", $lnk) { if (-not (Test-Path $f)) { throw "missing after install: $f" } }
+          $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FluxCode"
+          $ver = (Get-ItemProperty $key).DisplayVersion
+          if ($ver -ne $env:FLUXCODE_BUILD) { throw "Settings > Apps would show $ver" }
+          # The installed exe runs: a command-line mode that writes a file and exits.
+          $md = Join-Path $env:RUNNER_TEMP "readme.md"
+          Start-Process "$app\FluxCode.exe" -ArgumentList "--flux-to-md", "README.flux", "`"$md`"" -Wait
+          if (-not (Test-Path $md)) { throw "the installed FluxCode.exe did not run" }
+          Start-Process "$app\Uninstall.exe" -ArgumentList "/S" -Wait
+          for ($i = 0; $i -lt 30 -and (Test-Path "$app\FluxCode.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$app\FluxCode.exe") { throw "uninstall left FluxCode.exe" }
+          if (Test-Path $lnk) { throw "uninstall left the Start Menu shortcut" }
+          if (Test-Path $key) { throw "uninstall left the Settings > Apps entry" }
+          "installer: install, run and uninstall all worked"
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   linux:
@@ -99,9 +134,68 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  macos:
+    needs: stamp
+    # Apple silicon runner; the Intel half is cross-compiled and the two are joined into
+    # one universal binary.
+    runs-on: macos-latest
+    env:
+      FLUXCODE_BUILD: ${{ needs.stamp.outputs.build }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      # Full history and tags: build.rs names the build each release came in.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-macos
+      - name: Test
+        run: cargo test --bin fluxcode
+      - name: Build
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output target/fluxcode-universal \
+            target/aarch64-apple-darwin/release/fluxcode target/x86_64-apple-darwin/release/fluxcode
+          lipo -info target/fluxcode-universal
+      - name: Pack
+        run: sh packaging/macos/bundle.sh "$FLUXCODE_BUILD" target/fluxcode-universal dist
+      # Open the packed app like a user would, and keep a screenshot of its window.
+      - name: Test the app
+        run: |
+          mkdir -p "$RUNNER_TEMP/app" shots
+          tar -xzf dist/*-macos-universal.tar.gz -C "$RUNNER_TEMP/app"
+          app=$(ls -d "$RUNNER_TEMP"/app/*/FluxCode.app)
+          codesign --verify --verbose=2 "$app"
+          "$app/Contents/MacOS/fluxcode" --flux-to-md README.flux "$RUNNER_TEMP/readme.md"
+          test -s "$RUNNER_TEMP/readme.md"
+          open -n "$app"
+          sleep 15
+          pgrep -x fluxcode >/dev/null || { echo "FluxCode quit right after it opened"; exit 1; }
+          screencapture -x shots/macos.png || true
+          pkill -x fluxcode || true
+          echo "app: opened and still running after 15 s"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-screenshot
+          path: shots/
+          if-no-files-found: ignore
+
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [stamp, windows, linux]
+    needs: [stamp, windows, linux, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -119,8 +213,12 @@ jobs:
       - name: Release notes
         run: |
           prev=$(git tag -l 'BuildDev-*' | sort | tail -n 1)
+          # The macOS screenshot is a CI artifact, not a release file.
+          rm -f dist/*.png
+          setup=$(cd dist && ls *windows-x64-setup.exe)
           win=$(cd dist && ls *windows-x64.zip)
           lin=$(cd dist && ls *linux-x64.tar.gz)
+          mac=$(cd dist && ls *macos-universal.dmg)
           {
             echo "Development build of FluxCode, made from \`${GITHUB_SHA::7}\`."
             echo
@@ -138,8 +236,10 @@ jobs:
             echo
             echo "| System | File | Install |"
             echo "| --- | --- | --- |"
-            echo "| Windows 10/11, x64 | \`$win\` | Extract, double-click \`Install.cmd\` |"
+            echo "| Windows 10/11, x64 | \`$setup\` | Run it (no admin needed) |"
+            echo "| macOS 11+, Apple silicon and Intel | \`$mac\` | Open it, drag FluxCode to Applications; the first open asks once (Privacy & Security > Open Anyway) |"
             echo "| Linux, x64 (glibc 2.35+) | \`$lin\` | Extract, run \`./install.sh\` |"
+            echo "| Windows, portable | \`$win\` | Extract; \`FluxCode.exe\` runs from the folder, \`Install.cmd\` installs it |"
             echo
             echo "Already installed? FluxCode offers this build in the bottom-right corner and updates itself."
           } > notes.md

@@ -75,8 +75,15 @@ Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/release
 
 | System | File | Install |
 | --- | --- | --- |
-| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64.zip` | Extract, double-click `Install.cmd`. No admin rights. |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run it. No admin rights: it installs for your account, with a Start Menu and a Desktop shortcut. |
+| macOS 11+, Apple silicon and Intel | `FluxCode-BuildDev-...-macos-universal.dmg` | Open it and drag FluxCode to Applications. |
 | Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract, run `./install.sh`. No root. |
+| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract; `FluxCode.exe` runs from the folder (`Install.cmd` installs it). |
+
+The macOS build isn't notarized by Apple yet (that takes an Apple Developer ID), so the
+first open asks once: on macOS 15 and newer, open it, then System Settings > Privacy &
+Security > Open Anyway; on older ones, right-click FluxCode > Open. Uninstall: Settings >
+Apps on Windows, the Trash on macOS, `./install.sh --uninstall` on Linux.
 
 There are no version numbers yet: every change merged into `main` becomes a build named
 after the moment it was made, like `BuildDev-2026-11-09-18-19-54`. Installed copies offer
@@ -297,7 +304,7 @@ All three are good editors made for different people. This is where each stands 
 | | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Built with | Rust, GPUI (GPU-drawn) | Rust, GPUI (GPU-drawn) | TypeScript on Electron (Chromium + Node.js) |
-| Systems | Windows, Linux | macOS, Linux, Windows | Windows, macOS, Linux, web |
+| Systems | Windows, macOS, Linux | macOS, Linux, Windows | Windows, macOS, Linux, web |
 | What you download | one program, about 16 MB | an installer | an installer |
 | Layout and keys | VS Code's layout and VS Code's keys for the commands it has | its own layout; a VS Code key map is available | the original |
 | Start, memory, CPU, size | 0.22 s, 1.4 MB idle, 1 process, 16 MB ([benchmark](#benchmark)) | 0.82 s, 66 MB, 2 processes, 261 MB | 0.29 s, 929 MB, 9 processes, 1 GB |
@@ -382,6 +389,8 @@ cargo test --bin fluxcode
 - Linux: `pkg-config clang libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
   libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype6-dev libvulkan-dev` (Debian
   and Ubuntu names).
+- macOS: Xcode (for the Metal shaders). `packaging/macos/bundle.sh BUILD BINARY OUT` packs
+  a binary as `FluxCode.app`, a `.dmg` and the update archive, like a release.
 - Builds name themselves from `FLUXCODE_BUILD` (`BuildDev-YYYY-MM-DD-HH-MM-SS`); without
   it, from the current UTC time.
 
