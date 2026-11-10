@@ -11,6 +11,24 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Watch the agent work, step by step
+@title id: Lihat agent bekerja, langkah demi langkah
+@en
+What the agent does now reads as one line of steps: **thinking**, **reading** a file,
+**editing**, **running** a command, **searching**. The step in progress moves; when it ends it
+says what it did and how long it took.
+
+The **Run** view, the **Output** panel and **Live share** are redesigned: one main button per
+project, clearer build results, and two simple choices to host or join a session.
+@id
+Apa yang dikerjakan agent sekarang terbaca sebagai satu garis langkah: **berpikir**,
+**membaca** file, **mengedit**, **menjalankan** perintah, **mencari**. Langkah yang sedang
+berjalan bergerak; begitu selesai, ia menyebut apa yang dikerjakan dan berapa lama.
+
+View **Run**, panel **Output** dan **Live share** didesain ulang: satu tombol utama per proyek,
+hasil build yang lebih jelas, dan dua pilihan sederhana untuk host atau gabung ke sesi.
+
+@release 2026-11-10
 @title en: See your usage, and pick effort with a slider
 @title id: Lihat pemakaianmu, dan atur effort dengan slider
 @en

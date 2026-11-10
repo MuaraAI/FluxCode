@@ -5,6 +5,31 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
+
+- The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
+  steps on one rail, joined to the steps around them. A running step has its icon in the
+  accent and a thin sweep under it; when it ends, the label cross-fades from "Reading" to
+  "Read" and the time it took appears; new steps slide in once (160 ms). Only running steps
+  animate, so an idle chat draws nothing.
+- Run view: each project has a compact header and one full-width main action (Build),
+  with the other tasks as quiet rows and rarely used ones under More; a running task shows
+  a spinner and Stop. Extensions not installed yet are one line under Suggested extensions.
+  "This file" shows only when F5 can run the file (no more "Run warps.yml").
+- An extension's page: the title shares its line with Install or Uninstall and a close
+  button (they wrap under it when narrow), one meta line, and each project as one row with
+  its main task and a menu for the rest.
+- Output and Terminal: log text in the editor font at a readable size and normal weight
+  with a 1.6 line height; each command is one header band (what ran, where, status, time);
+  the end says "Finished in 1.8s" or "Failed (exit code 1)" with a result line (what was
+  built) or the reason (the first compiler error, clickable); Gradle's housekeeping lines
+  are dimmed; wrapped lines indent by two characters; the top row is never cut in half at
+  the bottom; the Python version shows only for Python runs.
+- Live share: a short header, two choices side by side (Host this folder, Join with a
+  code) that stack when narrow, the invite code first with one Copy button while hosting,
+  people as a compact list with their file and line, the ways in as one line each with
+  details behind a toggle, and errors as a banner that says what to do.
+
 ## The agent panel: effort slider, priced models, usage panel, web searches (10 November 2026)
 
 - The model menu (and the other menus above the message box) gets exactly the room between

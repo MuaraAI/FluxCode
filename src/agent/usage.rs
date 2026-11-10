@@ -122,7 +122,7 @@ pub fn parse_usage(md: &str) -> Report {
         }
         match section {
             "limits" if t.starts_with("**") => {
-                // **5-hour limit** — **16%** · Resets Nov 10, 10:40 PM GMT+7
+                // **5-hour limit**, a dash, **16%** · Resets Nov 10, 10:40 PM GMT+7
                 let parts: Vec<&str> = t.split("**").collect();
                 let name = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
                 let pct = parts.get(3).and_then(|p| p.trim().trim_end_matches('%').parse().ok()).unwrap_or(0);

@@ -257,6 +257,9 @@ FluxCode opens it drawn, with Preview and Source above it.
   Request usage credits asks first, then asks the plan for more and shows the answer.
 - **Web searches you can follow.** When the agent searches the web or reads a page, the
   chat shows the query and its sources, each one click away.
+- **What the agent is doing, as it does it.** Thinking, reading, editing, running a command
+  and searching are steps on one line: a running step has a thin moving line under it, and
+  when it ends its label turns from "Reading" to "Read" and shows how long it took.
 - **A browser for every agent.** FluxCode hands each agent session a browser it can
   drive: the Chrome, Brave or Edge already on your PC (Chrome when it is there), through
   Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
