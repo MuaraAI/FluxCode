@@ -235,6 +235,8 @@ pub struct Workbench {
     pub(crate) drop_focus: FocusHandle,
     /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
     pub(crate) smooth: Option<SmoothScroll>,
+    /// The welcome page's width as last drawn: too narrow for its text, it shows the logo alone.
+    welcome_w: std::rc::Rc<std::cell::Cell<f32>>,
     /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
@@ -416,6 +418,7 @@ impl Workbench {
             workspace: Default::default(),
             drop_focus: cx.focus_handle(),
             smooth: None,
+            welcome_w: std::rc::Rc::new(std::cell::Cell::new(f32::MAX)),
             status_seen: SharedString::default(),
             tree,
             dirs: Rc::default(),
@@ -1777,11 +1780,26 @@ impl Workbench {
                 .into_any_element(),
             // The welcome page: one column, at most 320 wide, that narrows with the editor
             // area and scrolls when the window is short (nothing is cut off at the sides).
+            // A strip too narrow for a line of text (a wide agent panel beside it): the logo
+            // alone, rather than words broken letter by letter.
+            None if self.welcome_w.get() < 230. => div()
+                .relative()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
+                .when(self.welcome_w.get() >= 84., |d| d.child(ui::meander(48., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))))
+                .into_any_element(),
             None => v_flex()
                 .id("welcome")
+                .relative()
                 .size_full()
                 .overflow_y_scroll()
                 .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
                 .child(
                     // flex_none: taller than the window it grows (and scrolls) instead of
                     // shrinking and spilling over the top.
@@ -1830,6 +1848,28 @@ impl Workbench {
                 )
                 .into_any_element(),
         }
+    }
+
+    /// Measures the welcome page as it is drawn, and redraws it when its width crosses
+    /// what the text needs.
+    fn welcome_probe(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let cell = self.welcome_w.clone();
+        let eid = cx.entity_id();
+        canvas(
+            move |b, _, cx| {
+                let w = f32::from(b.size.width);
+                let was = cell.replace(w);
+                let side = |v: f32| (v < 84., v < 230.);
+                if side(was) != side(w) {
+                    cx.defer(move |cx| cx.notify(eid));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2300,7 +2340,6 @@ impl Workbench {
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
         let name = crate::agent::agent_name();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
-        self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
         cx.notify();
     }
 }
@@ -2359,6 +2398,9 @@ pub(crate) struct SmoothScroll {
     prev: Option<Point<Pixels>>,
     stuck: u8,
     last: std::time::Instant,
+    /// Heading for the bottom of a scroll area: the target moves down with content
+    /// that arrives during the glide (a streaming answer), so the glide lands on it.
+    bottom: bool,
 }
 
 impl Workbench {
@@ -2398,12 +2440,20 @@ impl Workbench {
             None => target.offset(cx),
         };
         let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        let bottom = match &target {
+            ScrollTarget::Handle(_, h) => d.y < px(0.) && to.y <= -h.max_offset().y + px(1.),
+            ScrollTarget::Editor(_) => false,
+        };
         match self.smooth.as_mut().filter(|s| s.target.key() == key) {
             Some(s) => {
                 s.to = to;
                 s.stuck = 0;
+                s.bottom = bottom;
             }
-            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now() }),
+            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now(), bottom }),
+        }
+        if key == crate::agent::CHAT_SCROLL_KEY {
+            self.agent.follow = bottom;
         }
         if !running {
             self.smooth_next_frame(window, cx);
@@ -2419,9 +2469,17 @@ impl Workbench {
         // only allowed while drawing and would panic from an event handler).
     }
 
+    /// A wheel glide is moving this scroll area right now.
+    pub(crate) fn smooth_running(&self, key: u64) -> bool {
+        self.smooth.as_ref().is_some_and(|s| s.target.key() == key)
+    }
+
     fn smooth_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(s) = self.smooth.as_mut() else { return };
         let target = s.target.clone();
+        if let (true, ScrollTarget::Handle(_, h)) = (s.bottom, &target) {
+            s.to.y = -h.max_offset().y;
+        }
         let cur = target.offset(cx);
         let now = std::time::Instant::now();
         let dt = (now - s.last).as_secs_f32().min(0.05);

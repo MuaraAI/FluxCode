@@ -246,12 +246,13 @@ FluxCode opens it drawn, with Preview and Source above it.
   box; each opens a list right above it with a search box, and the agent menu says which
   agent is on. GitHub Copilot, which offers no models over ACP, gets its model list from
   Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message
-  and the answer restarts from it; the agent gets an overview of the workspace and a local
-  memory you can read, edit or switch off.
+  and the answer restarts from it; the agent gets an overview of the workspace. Memory is
+  the agent's own (FluxCode adds none of its own).
 - **Effort and models, with what they cost.** Effort is a slider (low to max) that starts at
-  medium: good results with fewer tokens. Claude Agent's models are grouped by generation,
-  newest first, each with its price per million tokens, since the newer ones do the same
-  work with fewer tokens.
+  medium: drag it, or click a level. Each model shows how many tokens it reads at once and
+  writes in one answer, and free models are marked Free (from the model list OpenCode keeps
+  on your PC). Claude Agent's models are grouped by generation, newest first, each with its
+  price per million tokens, since the newer ones do the same work with fewer tokens.
 - **Usage without typing `/usage`.** A meter under the message box shows how full the
   context is; it, the gauge button or typing `/usage` opens a panel with the plan's limits
   (the 5-hour and weekly ones), when each resets, the context window, the session's cost and
@@ -304,7 +305,7 @@ All three are good editors made for different people. This is where each stands 
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
 | Extensions | 11 built in (build, run, deploy and pack tasks, as manifests), more from a file | yes | the largest catalog |
-| AI agent | any ACP agent, three access levels, per-turn changes with undo, local memory | its own agent and ACP agents | GitHub Copilot and extensions |
+| AI agent | any ACP agent, three access levels, per-turn changes with undo | its own agent and ACP agents | GitHub Copilot and extensions |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
 | Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
 | Remote development | no | SSH | SSH, containers, WSL |
