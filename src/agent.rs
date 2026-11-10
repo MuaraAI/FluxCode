@@ -44,6 +44,7 @@ enum Req {
     Probe,
 }
 
+mod activity;
 mod menu;
 mod usage;
 mod web;
@@ -283,6 +284,10 @@ pub struct AgentState {
     pub usage: usage::UsageState,
     /// Web searches whose every source is shown.
     pub web_open: HashSet<String>,
+    /// When each step (tool call, thought) started and how long it took.
+    pub times: activity::Times,
+    /// The thought being written now (its key in `times`).
+    open_thought: Option<String>,
     /// Where the effort slider's handle was before the last change (it slides from there).
     pub effort_from: std::cell::Cell<Option<f32>>,
     /// The panel's top and the message box's top, in window pixels, as last drawn:
@@ -498,6 +503,8 @@ impl AgentState {
             relaunch: false,
             usage: Default::default(),
             web_open: HashSet::new(),
+            times: Default::default(),
+            open_thought: None,
             effort_from: std::cell::Cell::new(None),
             geom: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
             ask: None,
@@ -970,6 +977,15 @@ impl Workbench {
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
     }
 
+    /// The thought being written ended (something else came, or the turn did).
+    fn agent_close_thought(&mut self) {
+        if let Some(k) = self.agent.open_thought.take() {
+            if let Some((start, end @ None)) = self.agent.times.get_mut(&k) {
+                *end = Some(start.elapsed());
+            }
+        }
+    }
+
     /// Run one of the agent's own commands without showing it in the chat.
     fn agent_send_probe(&mut self, command: &str) {
         let Some(session) = self.agent.session.clone() else { return };
@@ -1137,6 +1153,7 @@ impl Workbench {
                 self.agent_probe_next(cx);
             }
             Req::Prompt => {
+                self.agent_close_thought();
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
                 if stop != "end_turn" && !quiet {
@@ -1201,11 +1218,33 @@ impl Workbench {
         }
         let text = |u: &Value| u.pointer("/content/text").and_then(Value::as_str).unwrap_or("").to_string();
         let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+        let kind_now = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
+        if kind_now != "agent_thought_chunk" {
+            self.agent_close_thought();
+        }
+        match kind_now {
+            "tool_call" => {
+                if let Some(id) = s(u, "toolCallId") {
+                    self.agent.times.entry(id).or_insert((std::time::Instant::now(), None));
+                }
+            }
+            "tool_call_update" if matches!(s(u, "status").as_deref(), Some("completed" | "failed")) => {
+                if let Some((start, end @ None)) = s(u, "toolCallId").and_then(|id| self.agent.times.get_mut(&id)) {
+                    *end = Some(start.elapsed());
+                }
+            }
+            _ => {}
+        }
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
             "agent_message_chunk" => self.agent.append(false, &text(u)),
             // Only while an old session replays; live prompts are shown when sent.
             "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
-            "agent_thought_chunk" => self.agent.append(true, &text(u)),
+            "agent_thought_chunk" => {
+                self.agent.append(true, &text(u));
+                let key = format!("think-{}", self.agent.items.len().saturating_sub(1));
+                self.agent.times.entry(key.clone()).or_insert((std::time::Instant::now(), None));
+                self.agent.open_thought = Some(key);
+            }
             "tool_call" if web::hidden_tool(u) => {}
             "tool_call" if web::is_web(u) => self.agent.items.push(Item::Web(web::Web::new(u))),
             "tool_call_update" if self.agent.items.iter().any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
@@ -3063,28 +3102,26 @@ impl Workbench {
                 Item::Thought(t) => {
                     let open = a.open_thoughts.contains(&i);
                     let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+                    let step = activity::Step {
+                        key: format!("think-{i}"),
+                        kind: "think",
+                        title: "",
+                        status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
+                        joined_up: is_step(i.checked_sub(1).and_then(|j| a.items.get(j))),
+                        joined_down: is_step(a.items.get(i + 1)),
+                        live: a.status == Status::Busy,
+                        note: (!open).then_some(last),
+                        open,
+                    };
+                    let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
+                        if !this.agent.open_thoughts.remove(&i) {
+                            this.agent.open_thoughts.insert(i);
+                        }
+                        cx.notify();
+                    });
                     v_flex()
-                        .id(("ag-thought", i))
-                        .gap_1()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(c(theme::FG_DIM))
-                        .child(
-                            h_flex()
-                                .gap_1p5()
-                                .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(tr("Thinking")))
-                                .when(!open, |h| h.child(div().flex_1().min_w_0().truncate().italic().child(last)))
-                                .when(open, |h| h.child(div().flex_1()))
-                                .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).flex_none()),
-                        )
-                        .when(open, |v| v.child(div().pl(theme::u(18.)).italic().child(t.clone())))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.agent.open_thoughts.remove(&i) {
-                                this.agent.open_thoughts.insert(i);
-                            }
-                            cx.notify();
-                        }))
+                        .child(self.render_step(step, Some(toggle), cx))
+                        .when(open, |v| v.child(div().pl(theme::u(26.)).pb_1().text_xs().italic().text_color(c(theme::FG_DIM)).child(t.clone())))
                         .into_any_element()
                 }
                 Item::Branch(t) => h_flex()
@@ -3098,38 +3135,21 @@ impl Workbench {
                     .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
                     .into_any_element(),
                 Item::Web(w) => self.render_web_item(i, w, cx),
-                Item::Tool { title, status, kind, .. } => {
-                    let (state_icon, col): (Icon, theme::Tok) = match status.as_str() {
-                        "completed" => (Icon::new(IconName::CircleCheck), theme::GREEN),
-                        "failed" => (Icon::new(IconName::CircleX), theme::DANGER),
-                        "in_progress" => (Icon::new(IconName::LoaderCircle), theme::BLUE),
-                        _ => (Icon::new(IconName::Dash), theme::FG_DIM),
-                    };
-                    let kind_icon: Icon = match kind.as_str() {
-                        "read" => Icon::new(IconName::FileText),
-                        "edit" => Icon::new(gpui_kit::assets::IconName::Pencil),
-                        "delete" => Icon::new(IconName::Delete),
-                        "move" => Icon::new(IconName::ArrowRight),
-                        "search" => Icon::new(IconName::Search),
-                        "execute" => Icon::new(IconName::SquareTerminal),
-                        "fetch" => Icon::new(IconName::Globe),
-                        "think" => Icon::new(gpui_kit::assets::IconName::Brain),
-                        _ => Icon::new(IconName::Settings2),
-                    };
-                    h_flex()
-                        .gap_2()
-                        .px_2()
-                        .h(theme::u(24.))
-                        .rounded(px(4.))
-                        .bg(c(theme::BG_ELEVATED))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .text_xs()
-                        .child(kind_icon.size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(title.clone()))
-                        .child(state_icon.size(theme::u(13.)).text_color(c(col)))
-                        .into_any_element()
-                }
+                Item::Tool { id, title, status, kind } => self.render_step(
+                    activity::Step {
+                        key: id.clone(),
+                        kind,
+                        title,
+                        status,
+                        joined_up: is_step(i.checked_sub(1).and_then(|j| a.items.get(j))),
+                        joined_down: is_step(a.items.get(i + 1)),
+                        live: a.status == Status::Busy,
+                        note: None,
+                        open: false,
+                    },
+                    None,
+                    cx,
+                ),
                 Item::Plan(entries) => v_flex()
                     .gap_1()
                     .p_2()
@@ -4198,6 +4218,11 @@ fn agent_glyph(id: &str, size: f32) -> AnyElement {
 
 /// A title over one dim line, for menu rows and agent cards.
 /// A composer button that opens one of the menus: its label and a caret.
+/// A thought or a tool call: the rows that share the activity rail.
+fn is_step(item: Option<&Item>) -> bool {
+    matches!(item, Some(Item::Thought(_) | Item::Tool { .. }))
+}
+
 fn menu_button(id: &'static str, label: String, open: bool, tip: &'static str) -> Button {
     Button::new(id).label(label).ghost().xsmall().flex_none().dropdown_caret(true).selected(open).tooltip(tip)
 }
