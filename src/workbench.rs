@@ -2288,7 +2288,6 @@ impl Workbench {
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
         let name = crate::agent::agent_name();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
-        self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
         cx.notify();
     }
 }
@@ -2347,6 +2346,9 @@ pub(crate) struct SmoothScroll {
     prev: Option<Point<Pixels>>,
     stuck: u8,
     last: std::time::Instant,
+    /// Heading for the bottom of a scroll area: the target moves down with content
+    /// that arrives during the glide (a streaming answer), so the glide lands on it.
+    bottom: bool,
 }
 
 impl Workbench {
@@ -2386,12 +2388,20 @@ impl Workbench {
             None => target.offset(cx),
         };
         let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        let bottom = match &target {
+            ScrollTarget::Handle(_, h) => d.y < px(0.) && to.y <= -h.max_offset().y + px(1.),
+            ScrollTarget::Editor(_) => false,
+        };
         match self.smooth.as_mut().filter(|s| s.target.key() == key) {
             Some(s) => {
                 s.to = to;
                 s.stuck = 0;
+                s.bottom = bottom;
             }
-            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now() }),
+            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now(), bottom }),
+        }
+        if key == crate::agent::CHAT_SCROLL_KEY {
+            self.agent.follow = bottom;
         }
         if !running {
             self.smooth_next_frame(window, cx);
@@ -2407,9 +2417,17 @@ impl Workbench {
         // only allowed while drawing and would panic from an event handler).
     }
 
+    /// A wheel glide is moving this scroll area right now.
+    pub(crate) fn smooth_running(&self, key: u64) -> bool {
+        self.smooth.as_ref().is_some_and(|s| s.target.key() == key)
+    }
+
     fn smooth_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(s) = self.smooth.as_mut() else { return };
         let target = s.target.clone();
+        if let (true, ScrollTarget::Handle(_, h)) = (s.bottom, &target) {
+            s.to.y = -h.max_offset().y;
+        }
         let cur = target.offset(cx);
         let now = std::time::Instant::now();
         let dt = (now - s.last).as_secs_f32().min(0.05);

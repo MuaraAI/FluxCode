@@ -5,7 +5,6 @@
 use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
-use crate::memory;
 use crate::theme::{self, c};
 use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
@@ -109,10 +108,6 @@ pub enum Item {
     Tool { id: String, title: String, status: String, kind: String },
     Plan(Vec<(String, String)>),
     Note(String, bool),
-    /// A fact the agent asked to keep (saved to memory).
-    Saved(String),
-    /// This many memory notes went with the message.
-    MemoryUsed(usize),
     /// The chat continues with another harness from here (a branch, not a new chat).
     Branch(String),
     /// A web search or a page read, with its sources.
@@ -212,6 +207,9 @@ pub struct AgentState {
     pub reloads: Vec<PathBuf>,
     pub(crate) input: Entity<TextareaState>,
     scroll: ScrollHandle,
+    /// The chat keeps the newest text in view: off once the reader scrolls up, on again
+    /// when they scroll back to the bottom or send a message.
+    pub(crate) follow: bool,
     /// Saved chats, newest first.
     pub history: Vec<Chat>,
     /// The chat on screen, once it has been saved.
@@ -234,15 +232,10 @@ pub struct AgentState {
     pending_load: Option<String>,
     /// Replaying this session's history right now.
     loading_id: Option<String>,
-    pub show_memory: bool,
-    pub(crate) memory_input: Entity<InputState>,
-    /// Memory trails sent with the current turn (reinforced on Keep, weakened on Undo).
-    turn_memories: Vec<String>,
-    /// The REMEMBER instruction went out in this session.
+    /// The language note went out in this session.
     hinted: bool,
     /// Signature of the workspace overview the agent has (0: none yet this session).
     ws_sig: u64,
-    pub memories: Vec<memory::Trail>,
     /// `/command` list while a `/` is being typed: (matches, selected row).
     pub slash: Option<(Vec<SlashCmd>, usize)>,
     /// Commands the agent announced for this session.
@@ -294,7 +287,6 @@ pub struct AgentState {
     /// the menus above the box get exactly the room between them.
     pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     _sub: Subscription,
-    _sub2: Subscription,
     /// Redraws the removal page as its two name boxes change.
     _sub_un: Vec<Subscription>,
 }
@@ -343,17 +335,15 @@ pub struct SlashCmd {
     pub name: String,
     pub desc: String,
     pub builtin: bool,
-    /// Needs text after the name (`/remember <fact>`): Enter fills it in instead of sending.
+    /// Needs text after the name: Enter fills it in instead of sending.
     pub takes_input: bool,
 }
 
 fn builtin_commands() -> Vec<SlashCmd> {
     let c = |name: &str, desc: &str, takes_input: bool| SlashCmd { name: name.into(), desc: desc.into(), builtin: true, takes_input };
     vec![
-        c("remember", crate::i18n::tr("Save a fact about this project to memory"), true),
         c("new", crate::i18n::tr("Start a new chat"), false),
         c("history", crate::i18n::tr("Saved chats and agent sessions for this folder"), false),
-        c("memory", crate::i18n::tr("What the agent remembers"), false),
         c("stop", crate::i18n::tr("Turn the agent off"), false),
     ]
 }
@@ -433,24 +423,10 @@ impl AgentState {
             InputEvent::Change => this.agent_update_mention(cx),
             _ => {}
         });
-        let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Remember something about this project…")));
         let uninstall_inputs = [
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type the name"))),
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type it again"))),
         ];
-        let sub2 = cx.subscribe_in(&memory_input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = ev {
-                let text = this.agent.memory_input.read(cx).value().to_string();
-                this.agent.memory_input.update(cx, |s, cx| s.set_value("", window, cx));
-                this.agent_remember(&text, cx);
-            }
-        });
-        // Memory evaporates once per start, off the UI thread (same rule as `ant_memory.py decay`).
-        if !crate::settings::Settings::load().memory_off {
-            std::thread::spawn(|| {
-                let _ = memory::Store::default().decay();
-            });
-        }
         Self {
             status: Status::Off,
             proc_id: None,
@@ -470,6 +446,7 @@ impl AgentState {
             reloads: Vec::new(),
             input,
             scroll: ScrollHandle::new(),
+            follow: true,
             history: crate::settings::load_json(HISTORY_FILE),
             chat_id: None,
             show_history: false,
@@ -482,12 +459,8 @@ impl AgentState {
             can_load: false,
             pending_load: None,
             loading_id: None,
-            show_memory: false,
-            memory_input,
-            turn_memories: Vec::new(),
             hinted: false,
             ws_sig: 0,
-            memories: Vec::new(),
             slash: None,
             commands: Vec::new(),
             config: Vec::new(),
@@ -515,7 +488,6 @@ impl AgentState {
             _sub_un: uninstall_inputs.iter().map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify())).collect(),
             uninstall_inputs,
             _sub: sub,
-            _sub2: sub2,
         }
     }
 
@@ -726,7 +698,6 @@ impl Workbench {
 
     fn agent_open_options(&mut self, cx: &mut Context<Self>) {
         self.agent.show_options = true;
-        self.agent.show_memory = false;
         self.agent.show_history = false;
         if self.settings.agent_right {
             self.agent_open = true;
@@ -788,6 +759,7 @@ impl Workbench {
             Status::Starting => {}
             _ => self.agent_start(cx),
         }
+        self.agent.follow = true;
         self.agent.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -888,22 +860,11 @@ impl Workbench {
         self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
         self.agent.mention = None;
         self.agent.slash = None;
-        if let Some(fact) = text.strip_prefix("/remember ").or_else(|| text.strip_prefix("/ingat ")) {
-            self.agent_remember(fact, cx);
-            return;
-        }
         match text.as_str() {
             "/new" => return self.agent_new_chat(cx),
             "/history" => {
                 self.agent.show_history = true;
-                self.agent.show_memory = false;
-                self.agent_load_remote_list(cx);
-                return cx.notify();
-            }
-            "/memory" => {
-                self.agent.show_memory = true;
-                self.agent.show_history = false;
-                self.agent_refresh_memories();
+                        self.agent_load_remote_list(cx);
                 return cx.notify();
             }
             "/stop" => return self.agent_set_on(false, cx),
@@ -915,6 +876,7 @@ impl Workbench {
         }
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.queue.push(Queued { text, files });
+        self.agent.follow = true;
         self.agent.scroll.scroll_to_bottom();
         match (&self.agent.status, &self.agent.session) {
             (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
@@ -972,7 +934,7 @@ impl Workbench {
         }
         prompt.push(json!({ "type": "text", "text": text.clone() }));
         prompt.extend(self.agent_attachment_blocks(&files));
-        prompt.extend(self.agent_context_blocks(&text, cx));
+        prompt.extend(self.agent_context_blocks(cx));
         self.agent.status = Status::Busy;
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
     }
@@ -1025,7 +987,7 @@ impl Workbench {
                 self.agent_on_message(msg, cx);
             }
         }
-        self.agent.scroll.scroll_to_bottom();
+        self.agent_follow();
     }
 
     pub(crate) fn agent_on_exit(&mut self, cx: &mut Context<Self>) {
@@ -1161,7 +1123,6 @@ impl Workbench {
                 }
                 self.agent.permission = None;
                 self.agent.status = Status::Ready;
-                self.agent_take_remembers();
                 self.agent.save_chat();
                 self.agent_schedule_idle(cx);
                 self.refresh_tree(cx);
@@ -1457,6 +1418,7 @@ impl Workbench {
         self.agent.carry = Some(earlier);
         self.agent.chat_id = Some(id);
         self.agent.show_history = false;
+        self.agent.follow = true;
         self.agent.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -1745,21 +1707,6 @@ impl Workbench {
                 )
             })
             .child(
-                Button::new("ag-memory-btn")
-                    .icon(Icon::new(gpui_kit::assets::IconName::Brain))
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if self.agent.show_memory { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Memory: what the agent remembers") })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.agent.show_memory = !this.agent.show_memory;
-                        this.agent.show_history = false;
-                        if this.agent.show_memory {
-                            this.agent_refresh_memories();
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
                 Button::new("ag-history-btn")
                     .icon(if self.agent.show_history { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::MessageSquareCode) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
                     .xsmall()
@@ -1767,7 +1714,6 @@ impl Workbench {
                     .tooltip(if self.agent.show_history { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Saved chats") })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_history = !this.agent.show_history;
-                        this.agent.show_memory = false;
                         if this.agent.show_history {
                             this.agent_load_remote_list(cx);
                         }
@@ -1949,10 +1895,6 @@ impl Workbench {
             return;
         }
         let ch = self.agent.changes.remove(ix);
-        let store = memory::Store::default();
-        for id in std::mem::take(&mut self.agent.turn_memories) {
-            let _ = store.fail(&id);
-        }
         let r = match &ch.before {
             Some(b) => std::fs::write(&ch.path, b).map_err(|e| e.to_string()),
             None => core::delete_path(&ch.path),
@@ -2233,9 +2175,9 @@ impl Workbench {
         None
     }
 
-    /// Context blocks for a prompt: the chips that are on, memory, and the
-    /// one-time note that lets the agent save facts with `REMEMBER:`.
-    fn agent_context_blocks(&mut self, text: &str, cx: &mut Context<Self>) -> Vec<Value> {
+    /// Context blocks for a prompt: the chips that are on, read-only mode, and a
+    /// one-time note on the language to answer in.
+    fn agent_context_blocks(&mut self, cx: &mut Context<Self>) -> Vec<Value> {
         let chips = self.agent_chips(cx);
         let mut blocks = Vec::new();
         let resource = |path: &Path, body: String| {
@@ -2319,22 +2261,6 @@ impl Workbench {
                 _ => {}
             }
         }
-        // Memory: the few trails that match this question (P = tau * eta^2).
-        let file = self.active.map(|ix| self.docs[ix].name.to_string()).unwrap_or_default();
-        let trails = if self.settings.memory_off {
-            Vec::new()
-        } else {
-            memory::Store::default().recall(&format!("{text} {file}"), 4, Some(&self.memory_scope()))
-        };
-        self.agent.turn_memories = trails.iter().map(|t| t.id.clone()).collect();
-        if !trails.is_empty() {
-            let list: Vec<String> = trails.iter().map(|t| format!("- {}", t.content)).collect();
-            blocks.push(json!({ "type": "text", "text": format!(
-                "Notes from earlier sessions (FluxCode memory, may be outdated; ignore them if they don't fit):\n{}",
-                list.join("\n")
-            ) }));
-            self.agent.items.push(Item::MemoryUsed(trails.len()));
-        }
         if self.settings.access() == "read" {
             blocks.push(json!({ "type": "text", "text":
                 "FluxCode is in read-only mode for this message: read files and explain, but do not edit files or run commands \
@@ -2342,73 +2268,15 @@ impl Workbench {
         }
         if !self.agent.hinted {
             self.agent.hinted = true;
-            // FluxCode keeps the memory natively; the agent's own memory skill would start
-            // a Python process for the same store, so it is asked not to.
             let lang = if crate::i18n::is_id() {
                 "FluxCode's interface is in Indonesian: when the user's language is unclear, answer in Indonesian. "
             } else {
                 "FluxCode's interface is in English. "
             };
-            let text = if self.settings.memory_off {
-                "FluxCode note: answer in the language the user writes in. Memory is switched off for now: don't run a \
-                 memory skill or ant_memory.py."
-            } else {
-                "FluxCode note: answer in the language the user writes in. FluxCode keeps the project memory itself (relevant \
-                 notes come with the message), so don't run a memory skill or ant_memory.py. When you learn a lasting fact about \
-                 this project (how to run, test or deploy it, a convention, a decision), end your reply with one line \
-                 `REMEMBER: <fact>`; FluxCode saves it and hides the line."
-            };
+            let text = "FluxCode note: answer in the language the user writes in.";
             blocks.push(json!({ "type": "text", "text": format!("{lang}{text}") }));
         }
         blocks
-    }
-
-    pub(crate) fn memory_scope(&self) -> String {
-        let name = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-        format!("project:{name}")
-    }
-
-    /// `REMEMBER:` lines at the end of the last answer go to memory and out of the text.
-    fn agent_take_remembers(&mut self) {
-        if self.settings.memory_off {
-            return;
-        }
-        let Some(ix) = self.agent.items.iter().rposition(|i| matches!(i, Item::Text(_))) else { return };
-        let Item::Text(t) = &self.agent.items[ix] else { return };
-        let (kept, facts) = memory::take_remember_lines(t);
-        if facts.is_empty() {
-            return;
-        }
-        self.agent.items[ix] = Item::Text(kept);
-        let store = memory::Store::default();
-        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
-        for f in facts {
-            if store.add(&f, &tags).is_ok() {
-                self.agent.items.push(Item::Saved(f));
-            }
-        }
-    }
-
-    /// Save a fact the user typed (`/remember ...` or the Memory view).
-    pub(crate) fn agent_remember(&mut self, text: &str, cx: &mut Context<Self>) {
-        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
-        match memory::Store::default().add(text, &tags) {
-            Ok(_) => {
-                self.agent.items.push(Item::Saved(text.trim().to_string()));
-                self.agent_refresh_memories();
-            }
-            Err(e) => self.agent.items.push(Item::Note(e, true)),
-        }
-        cx.notify();
-    }
-
-    fn agent_refresh_memories(&mut self) {
-        let scope = self.memory_scope();
-        self.agent.memories = memory::Store::default()
-            .list()
-            .into_iter()
-            .filter(|t| t.tags.iter().any(|x| *x == scope) || !t.tags.iter().any(|x| x.starts_with("project:")))
-            .collect();
     }
 
     // ------------------------------------------------------------ OpenCode / Mura sessions
@@ -2513,139 +2381,6 @@ impl Workbench {
     }
 
     // ------------------------------------------------------------ render
-
-    /// The memory view: what the agent remembers for this project and for all
-    /// projects, each note with how strong it is and how often it helped.
-    fn render_memory(&self, cx: &mut Context<Self>) -> AnyElement {
-        let a = &self.agent;
-        let off = self.settings.memory_off;
-        let weak = cx.entity().downgrade();
-        let header = h_flex()
-            .px_3()
-            .pb_2()
-            .gap_2()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Memory")))
-            .when(!off && !a.memories.is_empty(), |h| h.child(div().text_xs().text_color(c(theme::FG_DIM)).child(a.memories.len().to_string())))
-            .child(div().flex_1())
-            .child(
-                Switch::new("ag-mem-on")
-                    .checked(!off)
-                    .small()
-                    .tooltip(if off { crate::i18n::tr("Memory is off. Click to turn it on") } else { crate::i18n::tr("Memory is on. Click to turn it off") })
-                    .on_click(move |on, _, cx| {
-                        let on = *on;
-                        _ = weak.update(cx, |this, cx| {
-                            this.settings.memory_off = !on;
-                            this.settings.save();
-                            this.agent_refresh_memories();
-                            cx.notify();
-                        });
-                    }),
-            );
-        let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().overflow_y_scroll();
-        if off {
-            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr(
-                "Memory is off: nothing is read or saved, and the agent gets no notes. Your notes stay in the file.",
-            )));
-        } else if a.memories.is_empty() {
-            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(
-                crate::i18n::tr("Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help."),
-            ));
-        }
-        if !off {
-            let (here, everywhere): (Vec<(usize, &memory::Trail)>, Vec<(usize, &memory::Trail)>) =
-                a.memories.iter().enumerate().partition(|(_, t)| t.tags.iter().any(|x| x.starts_with("project:")));
-            for (title, group) in [(crate::i18n::tr("This project"), here), (crate::i18n::tr("All projects"), everywhere)] {
-                if group.is_empty() {
-                    continue;
-                }
-                list = list.child(div().px_1().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title));
-                for (i, t) in group {
-                    let id = t.id.clone();
-                    // A word instead of the raw strength (tau): fades below 0.4, strong from 1.
-                    let (strength, tone) = match t.tau {
-                        x if x >= 1.0 => (crate::i18n::tr("Strong"), theme::GREEN),
-                        x if x >= 0.4 => (crate::i18n::tr("Normal"), theme::FG_DIM),
-                        _ => (crate::i18n::tr("Fading"), theme::WARN),
-                    };
-                    let used = if t.success == 0 { crate::i18n::tr("not used yet").to_string() } else { crate::trf!("used {n}×"; n => t.success) };
-                    list = list.child(
-                        h_flex()
-                            .id(("ag-mem", i))
-                            .items_start()
-                            .gap_2()
-                            .px_2()
-                            .py_1p5()
-                            .rounded(px(4.))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_0p5()
-                                    .child(div().text_sm().text_color(c(theme::FG)).child(t.content.clone()))
-                                    .child(
-                                        h_flex()
-                                            .gap_1p5()
-                                            .text_xs()
-                                            .text_color(c(theme::FG_DIM))
-                                            .child(div().flex_none().size(px(6.)).rounded_full().bg(c(tone)))
-                                            .child(strength)
-                                            .child("·")
-                                            .child(used),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("ag-mem-del", i))
-                                    .flex_none()
-                                    .size(theme::u(22.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.))
-                                    .cursor_pointer()
-                                    .text_color(c(theme::FG_DIM))
-                                    .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Forget (moves it to the archive)")).build(w, cx))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let _ = memory::Store::default().forget(&id);
-                                        this.agent_refresh_memories();
-                                        cx.notify();
-                                    }))
-                                    .child(Icon::new(IconName::Close).size(theme::u(12.))),
-                            ),
-                    );
-                }
-            }
-        }
-        // The file, short: the home folder as ~, the full path in the tooltip.
-        let full = memory::dir().join("trails.json");
-        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
-        let shown = full.display().to_string();
-        let shown = if !home.is_empty() && shown.starts_with(&home) { format!("~{}", &shown[home.len()..]) } else { shown };
-        let full_s: SharedString = full.display().to_string().into();
-        v_flex()
-            .size_full()
-            .child(header)
-            .when(!off, |v| v.child(div().px_3().pb_1().child(Input::new(&a.memory_input).small())))
-            .child(list)
-            .child(
-                h_flex()
-                    .id("ag-mem-file")
-                    .px_3()
-                    .py_2()
-                    .gap_1()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .border_t_1()
-                    .border_color(c(theme::BORDER))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full_s.clone()).build(w, cx))
-                    .child(div().flex_none().child(crate::i18n::tr("File:")))
-                    .child(div().min_w_0().truncate().child(shown)),
-            )
-            .into_any_element()
-    }
 
     fn render_remote_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
@@ -2971,9 +2706,6 @@ impl Workbench {
         // The working / starting state is shown in the input box's bottom row.
         let _ = (dot, label);
         let header = div();
-        if a.show_memory {
-            return v_flex().size_full().child(self.render_memory(cx)).into_any_element();
-        }
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
         }
@@ -2985,7 +2717,20 @@ impl Workbench {
         }
 
         let name = agent_name();
-        let mut log = v_flex().id("ag-log").size_full().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
+        let mut log = v_flex()
+            .id("ag-log")
+            .size_full()
+            .px_3()
+            .pb_3()
+            .gap_2()
+            .overflow_y_scroll()
+            .track_scroll(&a.scroll)
+            .on_scroll(cx.listener(|this, ev: &ScrollEvent, _, _| {
+                let dy = ev.delta.pixel_delta(px(22.)).y;
+                if dy != px(0.) {
+                    this.agent_scrolled(dy > px(0.));
+                }
+            }));
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
             log = log.child(self.render_agent_welcome(on, cx));
         }
@@ -3008,7 +2753,7 @@ impl Workbench {
             if matches!(item, Item::Branch(_)) {
                 after_user = true;
             }
-            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::MemoryUsed(_) | Item::Branch(_));
+            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
             if starts_answer {
                 log = log.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
                 after_user = false;
@@ -3066,6 +2811,7 @@ impl Workbench {
                 }
                 Item::Text(t) => TextView::markdown(("ag-md", i), t.clone())
                     .text_sm()
+                    .style(chat_text_style())
                     .code_block_actions(|block, _, _| {
                         let (copy, insert) = (block.code().to_string(), block.code().to_string());
                         // A solid strip so the buttons never sit on top of the code.
@@ -3112,6 +2858,7 @@ impl Workbench {
                         live: a.status == Status::Busy,
                         note: (!open).then_some(last),
                         open,
+                        detail: open.then(|| t.trim().to_string()),
                     };
                     let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
                         if !this.agent.open_thoughts.remove(&i) {
@@ -3119,10 +2866,7 @@ impl Workbench {
                         }
                         cx.notify();
                     });
-                    v_flex()
-                        .child(self.render_step(step, Some(toggle), cx))
-                        .when(open, |v| v.child(div().pl(theme::u(26.)).pb_1().text_xs().italic().text_color(c(theme::FG_DIM)).child(t.clone())))
-                        .into_any_element()
+                    self.render_step(step, Some(toggle), cx)
                 }
                 Item::Branch(t) => h_flex()
                     .py_1()
@@ -3146,6 +2890,7 @@ impl Workbench {
                         live: a.status == Status::Busy,
                         note: None,
                         open: false,
+                        detail: None,
                     },
                     None,
                     cx,
@@ -3179,29 +2924,6 @@ impl Workbench {
                     .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
                     .child(div().flex_1().min_w_0().child(t.clone()))
                     .into_any_element(),
-                // Memory stays out of the way: one dim line, the full note in its tooltip and in the Memory view.
-                Item::Saved(t) => {
-                    let full: SharedString = t.clone().into();
-                    memory_line(("ag-mem-saved", i), crate::i18n::tr("Saved to memory"), t.clone())
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.agent.show_memory = true;
-                            this.agent_refresh_memories();
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }
-                Item::MemoryUsed(n) => memory_line(
-                    ("ag-mem-used", i),
-                    if *n == 1 { crate::i18n::tr("Used 1 note from memory") } else { "" },
-                    if *n == 1 { String::new() } else { crate::trf!("Used {n} notes from memory"; n => n) },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.agent.show_memory = true;
-                    this.agent_refresh_memories();
-                    cx.notify();
-                }))
-                .into_any_element(),
             });
         }
 
@@ -3336,7 +3058,6 @@ impl Workbench {
                         })))
                         .child(change_btn("ag-keep-all", IconName::Check, tr("Keep all")).on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
-                            this.agent_reinforce_turn();
                             cx.notify();
                         }))),
                 )
@@ -3983,13 +3704,6 @@ impl Workbench {
         )
     }
 
-    /// The memories used in this turn helped (the user kept the changes).
-    fn agent_reinforce_turn(&mut self) {
-        let store = memory::Store::default();
-        for id in std::mem::take(&mut self.agent.turn_memories) {
-            let _ = store.reinforce(&id);
-        }
-    }
 }
 
 /// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
@@ -4240,22 +3954,6 @@ fn line_icon(icon: Icon) -> Div {
     div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
 }
 
-/// One dim, single-line row about memory: brain icon, a label, then the note cut to fit.
-fn memory_line(id: impl Into<ElementId>, label: &'static str, rest: String) -> Stateful<Div> {
-    h_flex()
-        .id(id)
-        .h(theme::u(20.))
-        .gap_1p5()
-        .min_w_0()
-        .cursor_pointer()
-        .text_xs()
-        .text_color(c(theme::FG_DIM))
-        .hover(|s| s.text_color(c(theme::FG_MUTED)))
-        .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-        .when(!label.is_empty(), |h| h.child(div().flex_none().child(label)))
-        .when(!rest.is_empty(), |h| h.child(div().flex_1().min_w_0().truncate().child(rest)))
-}
-
 /// The composer's icon buttons: one 24 px square each, icon centered.
 fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
     div()
@@ -4342,7 +4040,40 @@ fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Sta
 }
 
 /// Smooth-scroll key of the chat log (editors use their entity id).
-const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
+pub(crate) const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
+
+/// Answers read like a chat, not a document: headings a step or two above the 14 px
+/// body (the default makes a `#` twice the body size), and paragraphs a little closer.
+fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
+    gpui_kit::component::text::TextViewStyle::default().paragraph_gap(rems(0.6)).heading_font_size(|level, _| match level {
+        1 => px(17.),
+        2 => px(16.),
+        3 => px(15.),
+        _ => px(14.),
+    })
+}
+
+impl Workbench {
+    /// Keep the newest text in view only while the reader follows it. Once they scroll
+    /// up the view stays where they put it, however much the answer grows. A wheel glide
+    /// decides for itself: one heading for the bottom tracks it as the answer grows.
+    fn agent_follow(&self) {
+        if self.agent.follow && !self.smooth_running(CHAT_SCROLL_KEY) {
+            self.agent.scroll.scroll_to_bottom();
+        }
+    }
+
+    /// A touchpad scroll of the chat (wheel notches go through the glide): up leaves the
+    /// bottom, down to within a line of it follows again.
+    pub(crate) fn agent_scrolled(&mut self, up: bool) {
+        if up {
+            self.agent.follow = false;
+        } else {
+            let h = &self.agent.scroll;
+            self.agent.follow = h.max_offset().y + h.offset().y <= px(24.);
+        }
+    }
+}
 
 /// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
 fn opencode_config_file() -> Option<PathBuf> {
