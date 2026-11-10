@@ -1,9 +1,15 @@
-//! Drawing a Flux document in FluxCode. The document is a GPUI `list`: only the blocks
-//! in view are laid out and painted (each table row and list item is a block), so a
-//! document of a million lines costs about what one screen of it costs. Inline marks
-//! are worked out per block as it comes into view.
+//! Drawing a Flux document in FluxCode, light at any size:
+//!
+//! - The document is a GPUI `list` of small groups of blocks (a heading starts one, a
+//!   big block such as a flowchart or an image is one on its own): only the groups in
+//!   view are laid out and painted, and the list keeps one entry per group, not per
+//!   block. Inline marks are worked out as a block comes into view.
+//! - A large document's text is kept DEFLATE-packed in 64 KiB frames; drawing unpacks
+//!   just the frames on screen (a few stay unpacked). The blocks hold byte offsets.
+//! - A large document opens with its first part read at once and drawn; the rest is
+//!   read and packed on another thread, then takes its place.
 
-use super::{arg, args, cells, flow, inline, joined, text, Align, Block, Doc, Kind, Marks};
+use super::{arg, args, cells, flow, inline, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
 use crate::theme::{self, c};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Icon};
@@ -17,14 +23,150 @@ use std::rc::Rc;
 const WIDTH: f32 = 860.;
 /// Entries a `@toc` lists at most.
 const TOC_MAX: usize = 300;
+/// Blocks a list entry holds at most.
+const GROUP: u32 = 24;
+/// From this size the text is kept packed.
+pub const PACK_FROM: usize = 1 << 20;
+/// From this size a document opens with its first part, the rest read on another thread.
+pub const PROGRESSIVE_FROM: usize = 256 << 10;
+/// How much of it is read at once: about two screens.
+const FIRST_PART: usize = 32 << 10;
+const FRAME: usize = 64 << 10;
+/// Unpacked frames kept for drawing.
+const FRAMES_KEPT: usize = 6;
+
+/// A document's text: as it is, or packed in frames.
+enum Text {
+    Plain(Rc<str>),
+    Packed { frames: Vec<Box<[u8]>>, len: usize, cache: RefCell<Vec<(usize, Rc<[u8]>)>> },
+}
+
+impl Text {
+    fn frame(&self, f: usize) -> Rc<[u8]> {
+        let Text::Packed { frames, cache, .. } = self else { return Rc::from(&[][..]) };
+        // Looked up first: the borrow must end before the cache is reordered.
+        let hit = cache.borrow().iter().position(|(k, _)| *k == f);
+        if let Some(i) = hit {
+            let mut c = cache.borrow_mut();
+            let hit = c.remove(i);
+            let data = hit.1.clone();
+            c.insert(0, hit);
+            return data;
+        }
+        let data: Rc<[u8]> = miniz_oxide::inflate::decompress_to_vec(&frames[f]).unwrap_or_default().into();
+        let mut c = cache.borrow_mut();
+        c.insert(0, (f, data.clone()));
+        c.truncate(FRAMES_KEPT);
+        data
+    }
+
+    /// The text of a span.
+    fn get(&self, (a, b): Span) -> String {
+        let (a, b) = (a as usize, b as usize);
+        match self {
+            Text::Plain(s) => s.get(a..b).unwrap_or("").to_string(),
+            Text::Packed { len, .. } => {
+                let b = b.min(*len);
+                if b <= a {
+                    return String::new();
+                }
+                let mut out = Vec::with_capacity(b - a);
+                for f in a / FRAME..=(b - 1) / FRAME {
+                    let data = self.frame(f);
+                    let start = f * FRAME;
+                    let (lo, hi) = (a.max(start) - start, b.min(start + data.len()) - start);
+                    if lo < hi {
+                        out.extend_from_slice(&data[lo..hi]);
+                    }
+                }
+                String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Text::Plain(s) => s.len(),
+            Text::Packed { len, .. } => *len,
+        }
+    }
+
+    fn full(&self) -> String {
+        self.get((0, self.len() as u32))
+    }
+
+    fn packed_bytes(&self) -> usize {
+        match self {
+            Text::Plain(s) => s.len(),
+            Text::Packed { frames, .. } => frames.iter().map(|f| f.len()).sum(),
+        }
+    }
+}
+
+/// A document read on another thread (`prepare`), ready to show.
+pub struct Prepared {
+    doc: Doc,
+    text: Result<String, (Vec<Box<[u8]>>, usize)>,
+    ms: f32,
+}
+
+/// Read a document and pack its text when it is large. Runs anywhere (no UI).
+pub fn prepare(src: String) -> Prepared {
+    let t = std::time::Instant::now();
+    let doc = super::parse(&src);
+    let ms = t.elapsed().as_secs_f32() * 1e3;
+    let text = if src.len() >= PACK_FROM {
+        let frames = src.as_bytes().chunks(FRAME).map(|c| miniz_oxide::deflate::compress_to_vec(c, 1).into_boxed_slice()).collect();
+        Err((frames, src.len()))
+    } else {
+        Ok(src)
+    };
+    Prepared { doc, text, ms }
+}
 
 struct Shared {
-    src: Rc<str>,
+    text: Text,
     doc: Doc,
-    order: Vec<u32>,
+    /// List entries: (first block, number of blocks), all shown in this language.
+    groups: Vec<(u32, u32)>,
+    /// The interface language's tag (1 en, 2 id): blocks tagged 0 or this show.
+    want: u8,
     base: PathBuf,
     /// `@details` boxes the reader opened (by inner index).
     open: Rc<RefCell<HashSet<u32>>>,
+}
+
+impl Shared {
+    fn shown(&self, i: usize) -> bool {
+        matches!(self.doc.lang.get(i), Some(&l) if l == 0 || l == self.want)
+    }
+}
+
+/// Group the blocks shown in a language into list entries.
+fn groups(doc: &Doc, want: u8) -> Vec<(u32, u32)> {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    let mut open = false;
+    for (i, b) in doc.blocks.iter().enumerate() {
+        let l = doc.lang[i];
+        if l != 0 && l != want {
+            open = false;
+            continue;
+        }
+        let alone = matches!(b, Block::Flow(_) | Block::Image(_) | Block::Video(_) | Block::Boxed { .. } | Block::Code(_) | Block::Toc | Block::Title(_));
+        // A heading starts an entry, so the contents can jump straight to it.
+        let starts = alone || matches!(b, Block::Heading(..) | Block::Release(_));
+        match out.last_mut() {
+            Some(g) if open && !starts && g.1 < GROUP => g.1 += 1,
+            _ => {
+                out.push((i as u32, 1));
+                open = !alone;
+            }
+        }
+        if alone {
+            open = false;
+        }
+    }
+    out
 }
 
 /// A parsed document and its scroll position.
@@ -32,37 +174,70 @@ pub struct FluxView {
     shared: Rc<Shared>,
     pub list: ListState,
     pub parsed_ms: f32,
+    /// Only the first part is read; the rest is being read on another thread.
+    pub pending: bool,
 }
 
 impl FluxView {
+    fn build(doc: Doc, text: Text, base: PathBuf, lang: &str, parsed_ms: f32, open: Rc<RefCell<HashSet<u32>>>) -> Self {
+        let want = if lang == "id" { 2 } else { 1 };
+        let mut groups = groups(&doc, want);
+        groups.shrink_to_fit();
+        let list = ListState::new(groups.len(), ListAlignment::Top, px(600.));
+        Self { shared: Rc::new(Shared { text, doc, groups, want, base, open }), list, parsed_ms, pending: false }
+    }
+
     pub fn new(src: String, base: PathBuf, lang: &str) -> Self {
-        let t = std::time::Instant::now();
-        let doc = super::parse(&src);
-        let parsed_ms = t.elapsed().as_secs_f32() * 1e3;
-        let order = doc.visible(lang);
-        let list = ListState::new(order.len(), ListAlignment::Top, px(600.));
-        Self { shared: Rc::new(Shared { src: src.into(), doc, order, base, open: Rc::default() }), list, parsed_ms }
+        Self::from_prepared(prepare(src), base, lang, Rc::default())
+    }
+
+    fn from_prepared(p: Prepared, base: PathBuf, lang: &str, open: Rc<RefCell<HashSet<u32>>>) -> Self {
+        let text = match p.text {
+            Ok(s) => Text::Plain(s.into()),
+            Err((frames, len)) => Text::Packed { frames, len, cache: RefCell::new(Vec::new()) },
+        };
+        Self::build(p.doc, text, base, lang, p.ms, open)
+    }
+
+    /// The first part of a large document, drawn at once (`install` brings the rest).
+    pub fn first_part(src: &str, base: PathBuf, lang: &str) -> Self {
+        let mut cut = src.len().min(FIRST_PART);
+        while !src.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        // End at a blank line, so no block is cut in half.
+        if let Some(i) = src[..cut].rfind("\n\n") {
+            cut = i + 1;
+        }
+        let mut v = Self::new(src[..cut].to_string(), base, lang);
+        v.pending = true;
+        v
+    }
+
+    /// The whole document, read on another thread, in place of its first part.
+    pub fn install(&mut self, p: Prepared, lang: &str) {
+        let top = self.list.logical_scroll_top();
+        let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone());
+        v.list.scroll_to(ListOffset { item_ix: top.item_ix.min(v.shared.groups.len().saturating_sub(1)), offset_in_item: top.offset_in_item });
+        *self = v;
     }
 
     /// Show `src` instead, keeping the place in the document as far as it goes.
     pub fn reload(&mut self, src: String, lang: &str) {
-        let top = self.list.logical_scroll_top();
-        let base = self.shared.base.clone();
-        let open = self.shared.open.clone();
-        let mut v = FluxView::new(src, base, lang);
-        if let Some(sh) = Rc::get_mut(&mut v.shared) {
-            sh.open = open;
-        }
-        v.list.scroll_to(ListOffset { item_ix: top.item_ix.min(v.shared.order.len().saturating_sub(1)), offset_in_item: top.offset_in_item });
-        *self = v;
+        self.install(prepare(src), lang);
     }
 
     pub fn blocks(&self) -> usize {
         self.shared.doc.blocks.len()
     }
 
-    pub fn source(&self) -> &str {
-        &self.shared.src
+    /// The text kept for drawing (packed size for a packed one).
+    pub fn kept_bytes(&self) -> usize {
+        self.shared.text.packed_bytes()
+    }
+
+    pub fn source(&self) -> String {
+        self.shared.text.full()
     }
 
     /// The document: a list drawing only what is in view.
@@ -74,13 +249,17 @@ impl FluxView {
         let size = sh.doc.style.size.unwrap_or(15.);
         let font = sh.doc.style.font.clone();
         list(self.list.clone(), move |ix, _window, cx| {
-            let Some(&bi) = sh.order.get(ix) else { return div().into_any_element() };
+            let Some(&(first, count)) = sh.groups.get(ix) else { return div().into_any_element() };
             let ctx = Ctx { sh: &sh, list: &state, notify: notify.clone() };
-            let el = ctx.block(&sh.doc.blocks[bi as usize], bi as usize, ix, cx);
+            let mut col = v_flex().w_full();
+            for bi in first as usize..(first + count) as usize {
+                let next = (bi + 1 < sh.doc.blocks.len() && sh.shown(bi + 1)).then(|| &sh.doc.blocks[bi + 1]);
+                col = col.child(ctx.block(&sh.doc.blocks[bi], bi, bi, next, cx));
+            }
             h_flex()
                 .w_full()
                 .justify_center()
-                .child(div().w_full().max_w(theme::u(width)).px_8().when(ix == 0, |d| d.pt_8()).when(ix + 1 == sh.order.len(), |d| d.pb_16()).child(el))
+                .child(div().w_full().max_w(theme::u(width)).px_8().when(ix == 0, |d| d.pt_8()).when(ix + 1 == sh.groups.len(), |d| d.pb_16()).child(col))
                 .into_any_element()
         })
         .size_full()
@@ -104,8 +283,9 @@ fn accent(sh: &Shared) -> Hsla {
 }
 
 impl Ctx<'_> {
-    fn src(&self) -> &str {
-        &self.sh.src
+    /// The text of a span (unpacked when the document is packed).
+    fn t(&self, s: Span) -> String {
+        self.sh.text.get(s)
     }
 
     /// Inline text with its marks, links clickable.
@@ -162,14 +342,14 @@ impl Ctx<'_> {
         .into_any_element()
     }
 
-    fn block(&self, b: &Block, bi: usize, ix: usize, cx: &mut App) -> AnyElement {
-        let src = self.src();
+    /// One block. `pos`: its index among the blocks around it; `next`: the block after it.
+    fn block(&self, b: &Block, bi: usize, pos: usize, next: Option<&Block>, cx: &mut App) -> AnyElement {
         let id = |k: &str| ElementId::Name(format!("fx-{k}-{bi}").into());
         match *b {
             Block::Title(s) => v_flex()
                 .pb_4()
                 .gap_2()
-                .child(div().text_size(theme::u(32.)).font_weight(FontWeight::BOLD).text_color(c(theme::FG_STRONG)).child(self.rich(id("t"), text(src, s), c(theme::FG_STRONG))))
+                .child(div().text_size(theme::u(32.)).font_weight(FontWeight::BOLD).text_color(c(theme::FG_STRONG)).child(self.rich(id("t"), &self.t(s), c(theme::FG_STRONG))))
                 .child(div().w(px(56.)).h(px(3.)).rounded_full().bg(accent(self.sh)))
                 .into_any_element(),
             Block::Heading(l, s) => {
@@ -185,10 +365,10 @@ impl Ctx<'_> {
                     .when(l <= 2, |d| d.border_b_1().border_color(c(theme::BORDER)).mb_3())
                     .text_size(theme::u(size))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.rich(id("h"), text(src, s), c(theme::FG_STRONG)))
+                    .child(self.rich(id("h"), &self.t(s), c(theme::FG_STRONG)))
                     .into_any_element()
             }
-            Block::Para(s) => div().pb_3().line_height(relative(1.6)).child(self.rich(id("p"), &joined(src, s, false), c(theme::FG))).into_any_element(),
+            Block::Para(s) => div().pb_3().line_height(relative(1.6)).child(self.rich(id("p"), &join_lines(&self.t(s), false), c(theme::FG))).into_any_element(),
             Block::Quote(s) => div()
                 .mb_3()
                 .pl_4()
@@ -196,7 +376,7 @@ impl Ctx<'_> {
                 .border_l_2()
                 .border_color(accent(self.sh).opacity(0.6))
                 .line_height(relative(1.6))
-                .child(self.rich(id("q"), &joined(src, s, true), c(theme::FG_MUTED)))
+                .child(self.rich(id("q"), &join_lines(&self.t(s), true), c(theme::FG_MUTED)))
                 .into_any_element(),
             Block::Item { num, depth, check, text: s } => {
                 let mark: AnyElement = match check {
@@ -215,7 +395,7 @@ impl Ctx<'_> {
                     _ if num > 0 => div().flex_none().min_w(theme::u(20.)).text_color(c(theme::FG_MUTED)).child(format!("{num}.")).into_any_element(),
                     _ => div().flex_none().w(theme::u(20.)).pt(theme::u(9.)).child(div().size(px(5.)).rounded_full().bg(if depth == 0 { accent(self.sh) } else { c(theme::FG_DIM) })).into_any_element(),
                 };
-                let last_in_run = !matches!(self.next(ix), Some(Block::Item { .. }));
+                let last_in_run = !matches!(next, Some(Block::Item { .. }));
                 h_flex()
                     .items_start()
                     .gap_2()
@@ -223,19 +403,20 @@ impl Ctx<'_> {
                     .pb(theme::u(if last_in_run { 12. } else { 4. }))
                     .line_height(relative(1.6))
                     .child(mark)
-                    .child(div().flex_1().min_w_0().child(self.rich(id("li"), &joined(src, s, false), c(if check == 2 { theme::FG_MUTED } else { theme::FG }))))
+                    .child(div().flex_1().min_w_0().child(self.rich(id("li"), &join_lines(&self.t(s), false), c(if check == 2 { theme::FG_MUTED } else { theme::FG }))))
                     .into_any_element()
             }
-            Block::Code { lang, body } => v_flex()
+            Block::Code(k) => {
+                let (lang, body) = self.sh.doc.codes[k as usize];
+                let lang = self.t(lang).trim().to_string();
+                v_flex()
                 .mb_4()
                 .rounded(px(8.))
                 .border_1()
                 .border_color(c(theme::BORDER))
                 .bg(c(theme::BG_EDITOR))
                 .overflow_hidden()
-                .when(!text(src, lang).trim().is_empty(), |v| {
-                    v.child(div().px_3().pt_2().text_xs().text_color(c(theme::FG_DIM)).child(text(src, lang).trim().to_string()))
-                })
+                .when(!lang.is_empty(), |v| v.child(div().px_3().pt_2().text_xs().text_color(c(theme::FG_DIM)).child(lang)))
                 // Long lines wrap: a sideways scroller here would also catch the wheel
                 // while the page is being scrolled past it.
                 .child(
@@ -246,11 +427,12 @@ impl Ctx<'_> {
                         .text_size(theme::u(13.))
                         .line_height(relative(1.5))
                         .text_color(c(theme::FG))
-                        .child(text(src, body).to_string()),
+                        .child(self.t(body)),
                 )
-                .into_any_element(),
+                .into_any_element()
+            }
             Block::Rule => div().my_5().h(px(1.)).bg(c(theme::BORDER)).into_any_element(),
-            Block::Row { table, line, header, n } => self.row(table, line, header, n, ix),
+            Block::Row { table, line } => self.row(table, line, pos, next),
             Block::Image(a) => self.image(a, bi),
             Block::Video(a) => self.video(a, bi),
             Block::Flow(f) => self.flow(&self.sh.doc.flows[f as usize], bi),
@@ -262,22 +444,21 @@ impl Ctx<'_> {
                 .pb_2()
                 .gap_2()
                 .child(Icon::new(IconName::Calendar).size(theme::u(15.)).text_color(accent(self.sh)))
-                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(text(src, s).to_string()))
+                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(self.t(s)))
                 .into_any_element(),
-            Block::Unknown(s) => div().pb_2().font_family("Cascadia Code").text_xs().text_color(c(theme::FG_DIM)).child(text(src, s).to_string()).into_any_element(),
+            Block::Unknown(s) => div().pb_2().font_family("Cascadia Code").text_xs().text_color(c(theme::FG_DIM)).child(self.t(s)).into_any_element(),
         }
     }
 
-    fn next(&self, ix: usize) -> Option<&Block> {
-        self.sh.order.get(ix + 1).map(|&b| &self.sh.doc.blocks[b as usize])
-    }
-
-    fn row(&self, table: u32, line: super::Span, header: bool, n: u32, ix: usize) -> AnyElement {
-        let src = self.src();
+    fn row(&self, table: u32, line: Span, pos: usize, next: Option<&Block>) -> AnyElement {
         let t = &self.sh.doc.tables[table as usize];
+        let (n, header) = t.row(pos);
         let total: f32 = t.widths.iter().map(|w| w.max(4.)).sum::<f32>().max(1.);
-        let cs = cells(src, line, t.pipes);
-        let last = !matches!(self.next(ix), Some(Block::Row { table: tt, .. }) if *tt == table);
+        // The row's own text, and its cells as spans of it.
+        let line_text = self.t(line);
+        let src: &str = &line_text;
+        let cs = cells(src, (0, src.len() as u32), t.pipes);
+        let last = !matches!(next, Some(Block::Row { table: tt, .. }) if *tt == table);
         let first = n == 0;
         h_flex()
             .w_full()
@@ -315,8 +496,10 @@ impl Ctx<'_> {
     /// One picture: `width=` in px or %, `dark=` another file for dark themes, `link=`
     /// what a click opens.
     fn picture(&self, a: super::Span, id: usize) -> AnyElement {
-        let src = self.src();
-        let a = args(src, a);
+        // The directive's own text, and its arguments as spans of it.
+        let arg_text = self.t(a);
+        let src: &str = &arg_text;
+        let a = args(src, (0, src.len() as u32));
         let light = arg(src, &a, "").unwrap_or("");
         let p = match arg(src, &a, "dark") {
             Some(d) if theme::palette().dark => d,
@@ -371,8 +554,10 @@ impl Ctx<'_> {
     }
 
     fn image(&self, a: super::Span, bi: usize) -> AnyElement {
-        let src = self.src();
-        let args_ = args(src, a);
+        // The directive's own text, and its arguments as spans of it.
+        let arg_text = self.t(a);
+        let src: &str = &arg_text;
+        let args_ = args(src, (0, src.len() as u32));
         let caption = arg(src, &args_, "caption");
         let right = arg(src, &args_, "align") == Some("right");
         v_flex()
@@ -387,8 +572,10 @@ impl Ctx<'_> {
 
     /// A video: its poster with a play button; a click plays it in the system's player.
     fn video(&self, a: super::Span, bi: usize) -> AnyElement {
-        let src = self.src();
-        let a = args(src, a);
+        // The directive's own text, and its arguments as spans of it.
+        let arg_text = self.t(a);
+        let src: &str = &arg_text;
+        let a = args(src, (0, src.len() as u32));
         let p = arg(src, &a, "").unwrap_or("").to_string();
         let alt = arg(src, &a, "alt").unwrap_or("").to_string();
         let poster = arg(src, &a, "poster").map(|x| self.path(x));
@@ -591,11 +778,11 @@ impl Ctx<'_> {
             .into_any_element()
     }
 
-    fn boxed(&self, kind: Kind, title: super::Span, inner: u32, bi: usize, cx: &mut App) -> AnyElement {
-        let src = self.src();
+    fn boxed(&self, kind: Kind, title: Span, inner: u32, bi: usize, cx: &mut App) -> AnyElement {
         let blocks = &self.sh.doc.inner[inner as usize];
-        let title = text(src, title).trim();
-        let render_inner = |blocks: &[Block], cx: &mut App| -> Vec<AnyElement> { blocks.iter().enumerate().map(|(k, b)| self.block(b, bi * 1000 + k + 1, usize::MAX - 1, cx)).collect() };
+        let title_text = self.t(title);
+        let title = title_text.trim();
+        let render_inner = |blocks: &[Block], cx: &mut App| -> Vec<AnyElement> { blocks.iter().enumerate().map(|(k, b)| self.block(b, bi * 1000 + k + 1, k, blocks.get(k + 1), cx)).collect() };
         match kind {
             Kind::Columns => {
                 let mut cols: Vec<Vec<Block>> = vec![Vec::new()];
@@ -689,15 +876,14 @@ impl Ctx<'_> {
     }
 
     fn toc(&self, bi: usize) -> AnyElement {
-        let src = self.src();
         let mut v = v_flex().mb_4().px_4().py_3().gap_1().rounded(px(8.)).border_1().border_color(c(theme::BORDER)).child(div().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(crate::i18n::tr("Contents")));
         // A contents list is for finding your way: past TOC_MAX entries it says how many more.
         let wanted: Vec<u32> = self.sh.doc.headings.iter().copied().filter(|&h| matches!(self.sh.doc.blocks[h as usize], Block::Heading(l, _) if l <= 3)).collect();
         let more = wanted.len().saturating_sub(TOC_MAX);
         for (k, &h) in wanted.iter().take(TOC_MAX).enumerate() {
             let Block::Heading(l, s) = self.sh.doc.blocks[h as usize] else { continue };
-            // `order` is sorted: find the heading's row by halving.
-            let Ok(pos) = self.sh.order.binary_search(&h) else { continue };
+            // Headings start list entries, which are in order: find its entry by halving.
+            let pos = self.sh.groups.partition_point(|g| g.0 <= h).saturating_sub(1);
             let list = self.list.clone();
             v = v.child(
                 div()
@@ -706,7 +892,7 @@ impl Ctx<'_> {
                     .cursor_pointer()
                     .text_color(c(if l == 1 { theme::FG_STRONG } else { theme::FG }))
                     .hover(|s| s.text_color(accent(self.sh)))
-                    .child(inline(text(src, s)).text)
+                    .child(inline(&self.t(s)).text)
                     .on_click(move |_, _, _| list.scroll_to_reveal_item(pos)),
             );
         }
@@ -794,7 +980,11 @@ impl crate::workbench::Workbench {
                     .child(tab("fx-tab-view", IconName::Eye, tr("Preview"), !source, false, cx))
                     .child(tab("fx-tab-src", IconName::FileCode, tr("Source"), source, true, cx)),
             )
-            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("Flux document · {n} blocks · read in {ms} ms"; n => thousands(v.blocks()), ms => format!("{:.1}", v.parsed_ms))))
+            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(if v.pending {
+                crate::i18n::tr("Flux document · reading the rest…").to_string()
+            } else {
+                crate::trf!("{n} blocks · read in {ms} ms · text in {size}"; n => thousands(v.blocks()), ms => format!("{:.1}", v.parsed_ms), size => crate::viewer::human_size(v.kept_bytes() as u64))
+            }))
             .child(
                 h_flex()
                     .id("fx-to-md")
@@ -820,6 +1010,11 @@ impl crate::workbench::Workbench {
         if ix >= self.docs.len() {
             return;
         }
+        // Only its first part is read yet: its editor would hold a cut copy.
+        if source && self.docs[ix].flux.as_ref().is_some_and(|v| v.pending) {
+            self.status = crate::i18n::tr("Still reading the document; Source opens in a moment.").into();
+            return cx.notify();
+        }
         if source {
             self.flux_load_source(ix, window, cx);
         }
@@ -842,7 +1037,7 @@ impl crate::workbench::Workbench {
             return;
         }
         d.flux_lazy = false;
-        let text = d.flux.as_ref().map(|v| v.source().to_string()).unwrap_or_default();
+        let text = d.flux.as_ref().map(|v| v.source()).unwrap_or_default();
         d.editor.update(cx, |e, cx| e.set_value(text, window, cx));
     }
 
@@ -872,4 +1067,63 @@ fn thousands(n: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{groups, prepare, Text, GROUP, PACK_FROM};
+    use std::cell::RefCell;
+
+    #[test]
+    fn packed_text_reads_back_across_frames() {
+        // Multi-byte characters everywhere, so frame edges fall inside some of them.
+        let mut src = String::new();
+        let mut i = 0;
+        while src.len() < PACK_FROM + 1000 {
+            src.push_str(&format!("Baris {i} dengan teks é ü 日本 dan seterusnya.\n"));
+            i += 1;
+        }
+        let p = prepare(src.clone());
+        let Err((frames, len)) = p.text else { panic!("large enough to pack") };
+        let packed: usize = frames.iter().map(|f| f.len()).sum();
+        assert!(packed < src.len() / 3, "packed to {packed} of {}", src.len());
+        let t = Text::Packed { frames, len, cache: RefCell::new(Vec::new()) };
+        // Spans on character boundaries, some crossing frame edges.
+        let starts: Vec<usize> = src.char_indices().map(|(b, _)| b).filter(|b| b % 49_999 < 30).collect();
+        for &a in &starts {
+            let mut b = (a + 20_000).min(src.len());
+            while !src.is_char_boundary(b) {
+                b -= 1;
+            }
+            assert_eq!(t.get((a as u32, b as u32)), &src[a..b]);
+        }
+        assert_eq!(t.full(), src);
+    }
+
+    #[test]
+    fn list_entries_start_at_headings_and_stay_small() {
+        let mut src = String::from("# One\n");
+        for i in 0..60 {
+            src.push_str(&format!("- item {i}\n"));
+        }
+        src.push_str("## Two\n@image a.png\nText.\n");
+        let d = super::super::parse(&src);
+        let g = groups(&d, 1);
+        assert_eq!(g[0], (0, GROUP), "a heading opens the first entry, cut at the size limit");
+        assert!(g.iter().all(|e| e.1 <= GROUP));
+        let two = d.blocks.iter().position(|b| matches!(b, super::Block::Heading(2, _))).unwrap() as u32;
+        assert!(g.iter().any(|e| e.0 == two), "the second heading starts an entry");
+        let img = two + 1;
+        assert!(g.contains(&(img, 1)), "an image is an entry of its own");
+        assert_eq!(g.iter().map(|e| e.1).sum::<u32>() as usize, d.blocks.len());
+    }
+}
+
+/// Bytes kept for a document's text after `prepare` (for the benchmark).
+#[cfg(test)]
+pub fn prepare_size(src: String) -> usize {
+    match prepare(src).text {
+        Ok(s) => s.len(),
+        Err((frames, _)) => frames.iter().map(|f| f.len()).sum(),
+    }
 }

@@ -43,34 +43,43 @@ for people and for AI models alike. Flux gives each of those a one-line directiv
 
 ## How it stays light
 
-FluxCode reads a document in one pass and copies nothing: each block keeps the position
-of its text in the file (20 bytes a block). Every table row and every list item is a
-block of its own, and the window draws only the blocks in view, so a long document costs
-about what one screen of it costs. Bold, links and keys are worked out only for the
-blocks being drawn.
+- **One pass, nothing copied.** Each block keeps where its text is in the file (16 bytes a
+  block); bold, links and keys are worked out only for the blocks being drawn.
+- **Only what is on screen is drawn.** Every table row and list item is a block of its
+  own, and the window holds the blocks in small groups (a heading starts one), laying out
+  only the groups in view.
+- **First screen at once.** A document over 256 KB shows its first 32 KB straight away;
+  the rest is read on another thread and takes its place.
+- **Large text kept packed.** Over 1 MB, the text is kept DEFLATE-packed in 64 KB frames,
+  and drawing unpacks only the frames on screen (six stay unpacked).
+- **No second copy.** The editor behind **Source** is filled the first time Source is
+  shown, so a document over 2 MB opens without an editor holding its text too.
 
 Measured with `cargo test --release --bin fluxcode million_lines -- --ignored --nocapture`
-on an AMD Ryzen 5 7535HS:
+on an AMD Ryzen 5 7535HS, for a document of 1,300,003 lines (31.8 MB: headings, lists, a
+200,000-row table, paragraphs):
 
-| Document | Read in | Blocks | Memory for the blocks |
-| ---: | ---: | ---: | ---: |
-| 1,300,003 lines, 31.8 MB (headings, lists, a 200,000-row table, paragraphs) | 57 ms | 900,001 | 18.9 MB |
+| Step | Time | Memory |
+| --- | ---: | ---: |
+| First part (31 KB, 1,264 blocks), drawn at once | 0.083 ms | |
+| The whole document read | 49 ms (647 MB/s) | 900,001 blocks, 14.4 MB |
+| ... and its text packed | 102 ms in all, off screen | 31.8 MB of text kept in 2.3 MB |
+| Bold, links and keys for one screen (40 blocks) | 0.04 ms | |
 
-Opened in FluxCode (a release build, fresh profile, three runs), the same document with a
-`@title` and a `@toc` on top:
+Opened in FluxCode (release build, fresh profile, three runs each):
 
-| Window on screen | Read in | Task Manager, 9 s after launch | Memory reserved |
-| ---: | ---: | ---: | ---: |
-| 0.22 to 0.31 s | 73 ms | 18.6 MB | 190 MB (the text itself is 31.8 MB) |
-
-The editor behind **Source** is filled only when Source is first shown: a document over
-2 MB opens drawn without an editor holding a second copy of its text.
+| Document | Window on screen | Task Manager, 9 s after launch | Memory reserved |
+| --- | ---: | ---: | ---: |
+| This page | 0.28 to 0.30 s | 5.0 MB | 47.6 MB |
+| The 1,300,003-line document, with a `@toc` | 0.28 to 0.29 s | 16 MB | 81.5 MB |
+| No document (for comparison) | 0.26 to 0.30 s | 6.3 to 6.9 MB | 51.3 to 51.9 MB |
 
 > [!NOTE]
 > **What this does not promise**
-> The text itself still takes its own size in memory (31.8 MB here), and the source view
-> is an ordinary editor. What stays small is everything on top of the text: the blocks,
-> and the work of drawing, which only covers what is on screen.
+> The packed text above is a repetitive test document; ordinary text packs about three to
+> four times. The source view is an ordinary editor, so opening Source on a very large
+> document holds the whole text again. "Memory reserved" is what the process has claimed
+> (Windows' private bytes); Task Manager shows the part of it in RAM.
 
 ## Text
 

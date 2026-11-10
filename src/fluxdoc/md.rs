@@ -118,12 +118,14 @@ fn line(out: &mut String, prefix: &str, s: &str) {
 }
 
 fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str) {
+    // Rows of one table come one after another: their number counts up from 0.
+    let mut row_n = 0u32;
     for (bi, b) in blocks.iter().enumerate() {
         // List items run on after list items, and rows after rows of the same table;
         // everything else is a paragraph of its own.
         let runs_on = match (bi.checked_sub(1).map(|p| &blocks[p]), b) {
             (Some(Block::Item { .. }), Block::Item { .. }) => true,
-            (Some(Block::Row { table: a, .. }), Block::Row { table: z, header: false, .. }) => a == z,
+            (Some(Block::Row { table: a, .. }), Block::Row { table: z, .. }) => a == z,
             _ => false,
         };
         if bi > 0 && !runs_on {
@@ -143,14 +145,17 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str) 
                 };
                 line(out, prefix, &format!("{}{mark} {bx}{}", "  ".repeat(depth as usize), inline_md(text(src, s))));
             }
-            Block::Code { lang, body } => {
+            Block::Code(k) => {
+                let (lang, body) = doc.codes[k as usize];
                 line(out, prefix, &format!("```{}", text(src, lang).trim()));
                 line(out, prefix, text(src, body));
                 line(out, prefix, "```");
             }
             Block::Rule => line(out, prefix, "---"),
-            Block::Row { table, line: l, header, n } => {
+            Block::Row { table, line: l } => {
                 let t = &doc.tables[table as usize];
+                row_n = if matches!(bi.checked_sub(1).map(|p| &blocks[p]), Some(Block::Row { table: pt, .. }) if *pt == table) { row_n + 1 } else { 0 };
+                let (n, header) = (row_n, t.header && row_n == 0);
                 let cs: Vec<String> = cells(src, l, t.pipes).iter().map(|c| inline_md(text(src, *c))).collect();
                 if n == 0 && !header {
                     // GitHub tables need a header row: an empty one.

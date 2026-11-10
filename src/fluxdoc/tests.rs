@@ -60,7 +60,7 @@ fn blocks_in_order() {
             Block::Boxed { .. } => "box",
             Block::Flow(_) => "flow",
             Block::Image(_) => "image",
-            Block::Code { .. } => "code",
+            Block::Code(_) => "code",
             _ => "other",
         })
         .collect();
@@ -73,7 +73,10 @@ fn blocks_in_order() {
     assert!(matches!(d.blocks[6], Block::Item { num: 3, .. }));
     assert_eq!(d.tables[0].align, [Align::Left, Align::Right]);
     assert_eq!(d.tables[1].align, [Align::Left, Align::Center]);
-    assert!(matches!(d.blocks[7], Block::Row { header: true, n: 0, .. }));
+    assert!(matches!(d.blocks[7], Block::Row { table: 0, .. }));
+    assert_eq!(d.tables[0].row(7), (0, true));
+    assert_eq!(d.tables[0].row(9), (2, false));
+    assert_eq!(std::mem::size_of::<Block>(), 16, "blocks stay small");
     assert!(matches!(d.blocks[12], Block::Boxed { kind: Kind::Note, .. }));
     // Languages: the last three paragraphs are en, id, all.
     assert_eq!(&d.lang[16..], [1, 2, 0]);
@@ -177,6 +180,15 @@ fn million_lines() {
         block_bytes as f64 / 1e6
     );
     assert!(lines >= 1_000_000);
+    // What FluxCode draws first: the document's first 32 KB, read at once.
+    let first = &src[..src[..32 << 10].rfind("\n\n").unwrap() + 1];
+    let t = std::time::Instant::now();
+    let fd = parse(first);
+    println!("first part ({} KB, {} blocks) read in {:.3} ms", first.len() / 1024, fd.blocks.len(), t.elapsed().as_secs_f64() * 1e3);
+    // The rest, read and packed on another thread.
+    let t = std::time::Instant::now();
+    let kept = super::view::prepare_size(src.clone());
+    println!("read and packed in {:.0} ms: text kept in {:.1} MB", t.elapsed().as_secs_f64() * 1e3, kept as f64 / 1e6);
     // Drawing one screen works out inline marks for about 40 blocks.
     let t = std::time::Instant::now();
     let mut n = 0;

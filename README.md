@@ -185,9 +185,10 @@ HTML: image width and dark-theme versions, images side by side, video, flowchart
 callouts, collapsible sections, columns, a table of contents and sections per language.
 FluxCode opens it drawn, with Preview and Source above it.
 
-- **Light at any size**: one pass over the text, nothing copied, and only the rows on
-  screen drawn. A 1.3-million-line document (31.8 MB, a 200,000-row table in it) opens
-  drawn in 0.3 s and shows 18.6 MB in Task Manager.
+- **Light at any size**: one pass over the text, nothing copied, only the rows on screen
+  drawn, and a large document's text kept packed. A 1.3-million-line document (31.8 MB, a
+  200,000-row table in it) shows its first screen after 0.08 ms of reading, opens in
+  0.3 s, and shows 16 MB in Task Manager (its text kept in 2.3 MB).
 - **Readable on GitHub**: `fluxcode --flux-to-md README.flux README.md` (or **Save as
   Markdown** in FluxCode) writes GitHub Markdown; flowcharts become Mermaid and callouts
   GitHub's alerts. The tests fail when the two files disagree.

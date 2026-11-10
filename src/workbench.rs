@@ -197,7 +197,7 @@ impl Doc {
     /// The document's text: the editor's, or a large Flux document's not yet in it.
     pub fn text(&self, cx: &App) -> String {
         match (&self.flux, self.flux_lazy) {
-            (Some(v), true) => v.source().to_string(),
+            (Some(v), true) => v.source(),
             _ => self.editor.read(cx).value().to_string(),
         }
     }
@@ -589,7 +589,7 @@ impl Workbench {
         let is_flux = !read_only && crate::fluxdoc::view::is_flux(&path);
         // A large Flux document: the drawing needs only the text, not an editor full of it.
         let flux_lazy = is_flux && text.len() > LARGE_FILE_BYTES;
-        let (file_text_for_flux, text) = match (is_flux, flux_lazy) {
+        let (mut file_text_for_flux, text) = match (is_flux, flux_lazy) {
             (true, true) => (text, String::new()),
             (true, false) => (text.clone(), text),
             _ => (String::new(), text),
@@ -645,7 +645,34 @@ impl Workbench {
         });
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
         let banner = banner.map(SharedString::from);
-        let flux = is_flux.then(|| crate::fluxdoc::view::FluxView::new(file_text_for_flux, path.parent().map(|p| p.to_path_buf()).unwrap_or_default(), crate::fluxdoc::view::ui_lang()));
+        // A large Flux document shows its first part at once; the rest is read (and its
+        // text packed) on another thread, then takes its place.
+        let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let lang_ui = crate::fluxdoc::view::ui_lang();
+        let mut rest: Option<String> = None;
+        let flux = is_flux.then(|| {
+            if file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
+                let v = crate::fluxdoc::view::FluxView::first_part(&file_text_for_flux, base.clone(), lang_ui);
+                rest = Some(std::mem::take(&mut file_text_for_flux));
+                v
+            } else {
+                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut file_text_for_flux), base.clone(), lang_ui)
+            }
+        });
+        if let Some(full) = rest {
+            let at = path.clone();
+            let task = cx.background_spawn(async move { crate::fluxdoc::view::prepare(full) });
+            cx.spawn(async move |this, cx| {
+                let p = task.await;
+                _ = this.update(cx, |this, cx| {
+                    if let Some(v) = this.docs.iter_mut().find(|d| d.path == at).and_then(|d| d.flux.as_mut()).filter(|v| v.pending) {
+                        v.install(p, crate::fluxdoc::view::ui_lang());
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);

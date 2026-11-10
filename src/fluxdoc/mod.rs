@@ -43,11 +43,13 @@ pub enum Block {
     Item { num: u32, depth: u8, check: u8, text: Span },
     /// One or more `>` lines.
     Quote(Span),
-    /// A code block: its language and its lines.
-    Code { lang: Span, body: Span },
+    /// A code block, by index in `Doc::codes` (its language and lines: rare enough to
+    /// keep out of every other block's size).
+    Code(u32),
     Rule,
-    /// A table row: which table, its line, header or not, and its index among the rows.
-    Row { table: u32, line: Span, header: bool, n: u32 },
+    /// A table row: which table, and its line. Its place among the rows is its distance
+    /// from `Table::first`.
+    Row { table: u32, line: Span },
     /// `@image`: its arguments (path, alt, width, caption), read when drawn.
     Image(Span),
     /// `@video`: its arguments (path, poster, alt).
@@ -82,6 +84,17 @@ pub struct Table {
     /// Rows are `| a | b |` (GitHub style) rather than `a | b`.
     pub pipes: bool,
     pub rows: u32,
+    /// The first row's index among the blocks around it, and whether it is a header.
+    pub first: u32,
+    pub header: bool,
+}
+
+impl Table {
+    /// Row `pos` (an index among the blocks around the table): its number, and header or not.
+    pub fn row(&self, pos: usize) -> (u32, bool) {
+        let n = (pos as u32).saturating_sub(self.first);
+        (n, self.header && n == 0)
+    }
 }
 
 /// The per-document look (`@style key=value ...`).
@@ -101,6 +114,8 @@ pub struct Doc {
     pub tables: Vec<Table>,
     pub flows: Vec<flow::Flow>,
     pub inner: Vec<Vec<Block>>,
+    /// Code blocks: (language, lines).
+    pub codes: Vec<(Span, Span)>,
     pub style: Style,
     /// Indices of the headings in `blocks` (for `@toc` and the outline).
     pub headings: Vec<u32>,
@@ -317,6 +332,10 @@ pub fn parse(src: &str) -> Doc {
         }
     }
     doc.blocks = out;
+    // Grown by doubling: give back what is left over (up to half of each).
+    doc.blocks.shrink_to_fit();
+    doc.lang.shrink_to_fit();
+    doc.headings.shrink_to_fit();
     doc
 }
 
@@ -341,7 +360,8 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
                 }
                 body_end = ce;
             }
-            out.push(Block::Code { lang: lang_s, body: sp(body_start, body_end.max(body_start)) });
+            doc.codes.push((lang_s, sp(body_start, body_end.max(body_start))));
+            out.push(Block::Code(doc.codes.len() as u32 - 1));
             continue;
         }
         if let Some(d) = t.strip_prefix('@') {
@@ -387,7 +407,8 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
                         }
                         body_end = ce;
                     }
-                    out.push(Block::Code { lang: rest, body: sp(body_start, body_end.max(body_start)) });
+                    doc.codes.push((rest, sp(body_start, body_end.max(body_start))));
+                    out.push(Block::Code(doc.codes.len() as u32 - 1));
                 }
                 "table" => parse_table(src, lines, doc, out, rest),
                 "flow" => {
@@ -541,11 +562,13 @@ fn parse_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>
         if n == 0 {
             t.pipes = l.trim_start().starts_with('|');
             t.cols = cells(src, sp(s, e), t.pipes).len();
+            t.first = out.len() as u32;
+            t.header = !no_header;
         }
         if n < 200 {
             measure(src, &mut t, sp(s, e));
         }
-        out.push(Block::Row { table: ti, line: sp(s, e), header: n == 0 && !no_header, n });
+        out.push(Block::Row { table: ti, line: sp(s, e) });
         n += 1;
     }
     t.rows = n;
@@ -586,7 +609,9 @@ fn parse_pipe_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<B
         }
     }
     measure(src, &mut t, sp(first.0, first.1));
-    out.push(Block::Row { table: ti, line: sp(first.0, first.1), header, n: 0 });
+    t.first = out.len() as u32;
+    t.header = header;
+    out.push(Block::Row { table: ti, line: sp(first.0, first.1) });
     let mut n = 1u32;
     while let Some((s, e)) = lines.peek() {
         if !src[s..e].trim_start().starts_with('|') {
@@ -596,7 +621,7 @@ fn parse_pipe_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<B
         if n < 200 {
             measure(src, &mut t, sp(s, e));
         }
-        out.push(Block::Row { table: ti, line: sp(s, e), header: false, n });
+        out.push(Block::Row { table: ti, line: sp(s, e) });
         n += 1;
     }
     t.rows = n;
@@ -766,10 +791,10 @@ fn closes_italic(s: &str, i: usize) -> bool {
     i > 0 && !s.as_bytes()[i - 1].is_ascii_whitespace()
 }
 
-/// A paragraph or quote's text with its `>` marks and line breaks folded.
-pub fn joined(src: &str, s: Span, quote: bool) -> String {
+/// A paragraph or quote's lines folded into one, `>` marks dropped.
+pub fn join_lines(s: &str, quote: bool) -> String {
     let mut out = String::new();
-    for l in text(src, s).lines() {
+    for l in s.lines() {
         let l = if quote { l.trim_start().trim_start_matches('>').trim_start() } else { l.trim() };
         if !out.is_empty() {
             out.push(' ');
