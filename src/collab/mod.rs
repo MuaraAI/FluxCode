@@ -20,6 +20,7 @@ pub mod ot;
 pub mod page;
 pub mod proto;
 pub mod reach;
+pub mod share;
 
 use crate::i18n::tr;
 use crate::workbench::Workbench;
@@ -484,7 +485,7 @@ impl Workbench {
                 }
                 self.collab.peers.push(peer);
                 let root = self.collab.root.clone();
-                let files: Vec<String> = self.all_files.iter().filter_map(|f| root.as_ref().and_then(|r| Path::new(f).strip_prefix(r).ok()).map(|p| p.to_string_lossy().replace('\\', "/"))).take(MAX_LISTED).collect();
+                let files: Vec<String> = self.all_files.iter().filter_map(|f| root.as_ref().and_then(|r| Path::new(f).strip_prefix(r).ok()).map(|p| p.to_string_lossy().replace('\\', "/"))).filter(|p| share::is_shareable(p)).take(MAX_LISTED).collect();
                 reply(self, Msg::Welcome { you: conn, host: self.collab.host_name.clone(), folder: self.collab.folder.clone(), files, peers: self.collab.peers.clone() });
                 let peers = self.collab.peers.clone();
                 self.collab.send_all(&Msg::Peers { peers }, Some(conn));
@@ -534,6 +535,7 @@ impl Workbench {
     /// A guest opens `rel`: the host opens it too (in a tab, without moving away from
     /// what they are on) and serves its text.
     fn collab_host_open(&mut self, rel: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(u64, String), String> {
+        share::ensure_shareable(rel)?;
         let abs = self.collab.abs_of(rel).ok_or_else(|| tr("That file is outside the shared folder.").to_string())?;
         if !abs.is_file() {
             return Err(tr("That file is not there any more.").into());
