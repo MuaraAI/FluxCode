@@ -5,6 +5,16 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The taskbar shows the new icon; lighter debug builds (10 November 2026)
+
+- After an update or a reinstall, Windows kept showing the old blue icon on the taskbar
+  and in Start, because the shell caches a shortcut's icon by the exe's path. The updater
+  now tells the shell the exe changed (and again on the first start after an update), and
+  the installer refreshes the icon cache.
+- Debug builds keep line numbers for FluxCode's own code and no debug info for the
+  dependencies: the local build cache went from 48 GB to 2.5 GB. Release builds are
+  unchanged.
+
 ## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
 
 - The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
