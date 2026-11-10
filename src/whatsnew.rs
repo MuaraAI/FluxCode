@@ -83,20 +83,70 @@ pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
 pub struct Page {
     pub releases: Vec<Release>,
     pub from: Option<String>,
+    /// A newer build on offer (the update card's "What's new"): its tag, release page,
+    /// and every build between this one and it.
+    pub update: Option<crate::update::Release>,
+    /// Fetching the new build's changelog.flux.
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+/// The new build's notes, from its changelog.flux at its tag on GitHub (one small text
+/// file, fetched when asked). Blocking.
+pub fn fetch(tag: &str) -> Result<String, String> {
+    let url = format!("https://raw.githubusercontent.com/MuaraAI/FluxCode/{tag}/changelog.flux");
+    let out = crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
+        .args(["-s", "-S", "-f", "-L", "--max-time", "15", "-H", "User-Agent: FluxCode", &url])
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() {
+        return Err(crate::acp::curl_error(&String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Releases in `newer` that this build doesn't carry (by date and title), newest first.
+pub fn not_in(newer: Vec<Release>, mine: &[Release]) -> Vec<Release> {
+    newer.into_iter().filter(|r| !mine.iter().any(|m| m.date == r.date && m.title_en == r.title_en)).collect()
 }
 
 impl Page {
     pub fn after_update(from: &str) -> Self {
         let all = parse(SOURCE);
         let pick = since(&all, Some(from));
-        Self { releases: pick.into_iter().map(|i| all[i].clone()).collect(), from: Some(from.to_string()) }
+        Self { releases: pick.into_iter().map(|i| all[i].clone()).collect(), from: Some(from.to_string()), update: None, loading: false, error: None }
     }
     pub fn all() -> Self {
-        Self { releases: parse(SOURCE), from: None }
+        Self { releases: parse(SOURCE), from: None, update: None, loading: false, error: None }
     }
 }
 
 impl Workbench {
+    /// The update card's "What's new": the new build's notes, compared with this one's.
+    pub(crate) fn show_update_notes(&mut self, rel: crate::update::Release, cx: &mut Context<Self>) {
+        let tag = rel.tag.clone();
+        self.settings_open = false;
+        // The page says the same and more: the card steps aside for this build.
+        self.update.hidden = Some(tag.clone());
+        self.whats_new = Some(Page { releases: Vec::new(), from: Some(crate::update::BUILD.to_string()), update: Some(rel), loading: true, error: None });
+        cx.notify();
+        let task = cx.background_spawn(async move { fetch(&tag) });
+        cx.spawn(async move |this, cx| {
+            let res = task.await;
+            _ = this.update(cx, |this, cx| {
+                if let Some(p) = this.whats_new.as_mut().filter(|p| p.update.is_some()) {
+                    p.loading = false;
+                    match res {
+                        Ok(text) => p.releases = not_in(parse(&text), &parse(SOURCE)),
+                        Err(e) => p.error = Some(e),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn render_whats_new(&self, page: &Page, cx: &mut Context<Self>) -> AnyElement {
         let id = crate::i18n::is_id();
         let close = Button::new("wn-close").label(tr("Close")).small().on_click(cx.listener(|this, _, _, cx| {
@@ -104,9 +154,15 @@ impl Workbench {
             cx.notify();
         }));
         let now = crate::update::BUILD;
-        let sub = match &page.from {
-            Some(f) => crate::trf!("You are on {now}. Before this you ran {from}."; now => now, from => f),
-            None => crate::trf!("You are on {now}."; now => now),
+        let sub = match (&page.update, &page.from) {
+            (Some(u), _) if u.between.len() > 1 => crate::trf!("You are on {now}. {new} is ready, with {n} builds since yours."; now => now, new => u.tag, n => u.between.len()),
+            (Some(u), _) => crate::trf!("You are on {now}. {new} is ready."; now => now, new => u.tag),
+            (None, Some(f)) => crate::trf!("You are on {now}. Before this you ran {from}."; now => now, from => f),
+            (None, None) => crate::trf!("You are on {now}."; now => now),
+        };
+        let title = match &page.update {
+            Some(_) => tr("What the new build changes"),
+            None => tr("What's new in FluxCode"),
         };
         let header = h_flex()
             .flex_none()
@@ -120,7 +176,7 @@ impl Workbench {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("What's new in FluxCode")))
+                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
                     .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(sub)),
             )
             .child(close);
@@ -172,6 +228,7 @@ impl Workbench {
                 }
             }))
             .child(header)
+            .when_some(page.update.as_ref(), |v, u| v.child(self.render_update_builds(u, page, cx)))
             .children(cards)
             .child(
                 h_flex().w_full().max_w(theme::u(760.)).pt_6().gap_2().child(
@@ -182,14 +239,72 @@ impl Workbench {
                         .on_click(|_, _, cx| cx.open_url(crate::settings::CHANGELOG_URL)),
                 ),
             )
-            .when(page.releases.is_empty(), |v| v.child(div().pt_6().text_sm().text_color(c(theme::FG_DIM)).child(tr("No notes for this build."))))
+            .when(page.releases.is_empty() && !page.loading && page.error.is_none(), |v| {
+                v.child(div().pt_6().text_sm().text_color(c(theme::FG_DIM)).child(if page.update.is_some() { tr("The new build has no notes beyond the list above.") } else { tr("No notes for this build.") }))
+            })
+            .into_any_element()
+    }
+}
+
+impl Workbench {
+    /// The builds between this one and the new one, and the update button.
+    fn render_update_builds(&self, u: &crate::update::Release, page: &Page, cx: &mut Context<Self>) -> AnyElement {
+        let builds: Vec<(String, String)> = if u.between.is_empty() { vec![(u.tag.clone(), String::new())] } else { u.between.clone() };
+        let page_url = u.page.clone();
+        v_flex()
+            .flex_none()
+            .w_full()
+            .max_w(theme::u(760.))
+            .mt_6()
+            .gap_3()
+            .child(
+                v_flex()
+                    .w_full()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .overflow_hidden()
+                    .child(div().px_5().py_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).border_b_1().border_color(c(theme::BORDER)).child(tr("Builds since yours")))
+                    .children(builds.into_iter().enumerate().map(|(i, (tag, first))| {
+                        h_flex()
+                            .px_5()
+                            .py_2()
+                            .gap_3()
+                            .items_start()
+                            .when(i > 0, |h| h.border_t_1().border_color(c(theme::BORDER)))
+                            .child(div().flex_none().w(theme::u(230.)).font_family("Cascadia Code").text_xs().text_color(c(if i == 0 { theme::ACCENT_TEXT } else { theme::FG })).child(tag))
+                            .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG_MUTED)).child(first))
+                    }))
+                    .child(
+                        h_flex()
+                            .px_5()
+                            .py_2()
+                            .gap_3()
+                            .border_t_1()
+                            .border_color(c(theme::BORDER))
+                            .bg(c(theme::BG_SIDE))
+                            .child(div().flex_none().w(theme::u(230.)).font_family("Cascadia Code").text_xs().text_color(c(theme::FG_DIM)).child(crate::update::BUILD))
+                            .child(div().flex_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("Yours, installed now"))),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Button::new("wn-update").label(tr("Update and restart")).small().primary().on_click(cx.listener(|this, _, _, cx| {
+                        this.whats_new = None;
+                        this.update_start(cx);
+                    })))
+                    .child(Button::new("wn-release").label(tr("Release page")).small().ghost().on_click(move |_, _, cx| cx.open_url(&page_url))),
+            )
+            .when(page.loading, |v| v.child(div().text_sm().text_color(c(theme::FG_DIM)).child(tr("Reading the new build's notes…"))))
+            .when_some(page.error.clone(), |v, e| v.child(div().text_xs().text_color(c(theme::DANGER)).child(crate::trf!("Could not read the new build's notes. {why}"; why => e))))
             .into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_date, parse, since, SOURCE};
+    use super::{build_date, not_in, parse, since, SOURCE};
 
     #[test]
     fn the_shipped_changelog_parses_in_both_languages() {
@@ -203,6 +318,15 @@ mod tests {
         }
         // Newest first (several releases can share a day).
         assert!(all.windows(2).all(|w| w[0].date >= w[1].date));
+    }
+
+    #[test]
+    fn the_new_builds_notes_minus_ours() {
+        let mine = parse("@release 2026-11-10\n@title en: A\n@en\na\n");
+        let theirs = parse("@release 2026-11-10\n@title en: B\n@en\nb\n@release 2026-11-10\n@title en: A\n@en\na\n");
+        let new = not_in(theirs, &mine);
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].title_en, "B");
     }
 
     #[test]

@@ -11,6 +11,16 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: What's new before you update
+@title id: Lihat yang baru sebelum update
+@en
+**What's new** on the update card now opens here: every build between yours and the new
+one, what each changed, and *Update and restart* on the same page.
+@id
+**Yang baru** di kartu update sekarang terbuka di sini: semua build antara punyamu dan yang
+baru, apa yang berubah di tiap build, dan *Perbarui dan buka ulang* di halaman yang sama.
+
+@release 2026-11-10
 @title en: Live share: code together, with your PC as the server
 @title id: Live share: ngoding bareng, PC kamu jadi servernya
 @en

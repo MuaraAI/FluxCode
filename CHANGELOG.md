@@ -5,6 +5,17 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## What's new in an update, and the benchmark in the README (10 November 2026)
+
+- The update card's "What's new" opens a page in FluxCode instead of the browser: every
+  build between yours and the new one with its first note, then the new build's
+  `changelog.flux` entries that yours doesn't have, and Update and restart. It reads one
+  small text file from GitHub when clicked.
+- README: a Benchmark section with FluxCode, Zed 1.27 and VS Code 1.145 measured on the
+  same PC (window time, memory in Task Manager, memory reserved, idle CPU, processes,
+  size on disk), drawn for GitHub's light and dark themes, with the exact numbers, the
+  method and what it does not measure. `tools/bench/bench.ps1` and `chart.py` reproduce it.
+
 ## Live share: code together, with the host's PC as the server (10 November 2026)
 
 - The people icon in the activity bar opens Live share. The host clicks Start hosting

@@ -1,0 +1,138 @@
+﻿{
+    "date":  "2026-11-10",
+    "machine":  {
+                    "cpu":  "AMD Ryzen 5 7535HS with Radeon Graphics",
+                    "cores":  12,
+                    "ram_gb":  15,
+                    "os":  "Microsoft Windows 11 Home Single Language 26100"
+                },
+    "method":  "Fresh empty profile per run, telemetry and update checks off, no extensions, no folder open. window_ms: launch to first visible window. memory_mb / commit_mb: 9 s after launch, summed over all processes. cpu_pct: idle CPU from 9 s to 39 s, % of one core. disk_mb: install folder (FluxCode: its one program file).",
+    "apps":  [
+                 {
+                     "name":  "FluxCode",
+                     "version":  "BuildDev-2026-11-10-04-41-34",
+                     "disk_mb":  15.7,
+                     "runs":  [
+                                  {
+                                      "window_ms":  221,
+                                      "memory_mb":  1,
+                                      "commit_mb":  71.9,
+                                      "cpu_pct":  0.05,
+                                      "processes":  1
+                                  },
+                                  {
+                                      "window_ms":  222,
+                                      "memory_mb":  1,
+                                      "commit_mb":  72.2,
+                                      "cpu_pct":  0.05,
+                                      "processes":  1
+                                  },
+                                  {
+                                      "window_ms":  232,
+                                      "memory_mb":  4.8,
+                                      "commit_mb":  72.3,
+                                      "cpu_pct":  0.68,
+                                      "processes":  1
+                                  },
+                                  {
+                                      "window_ms":  216,
+                                      "memory_mb":  1.4,
+                                      "commit_mb":  71.8,
+                                      "cpu_pct":  0,
+                                      "processes":  1
+                                  },
+                                  {
+                                      "window_ms":  220,
+                                      "memory_mb":  1.9,
+                                      "commit_mb":  71.9,
+                                      "cpu_pct":  0.52,
+                                      "processes":  1
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "Zed",
+                     "version":  "1.27.0+stable.386.c84af5b99cbc366d675064e52b23664a015b6e35",
+                     "disk_mb":  260.6,
+                     "runs":  [
+                                  {
+                                      "window_ms":  688,
+                                      "memory_mb":  71.9,
+                                      "commit_mb":  156.1,
+                                      "cpu_pct":  2.19,
+                                      "processes":  2
+                                  },
+                                  {
+                                      "window_ms":  387,
+                                      "memory_mb":  67.1,
+                                      "commit_mb":  154.8,
+                                      "cpu_pct":  1.35,
+                                      "processes":  2
+                                  },
+                                  {
+                                      "window_ms":  1322,
+                                      "memory_mb":  66.2,
+                                      "commit_mb":  154.2,
+                                      "cpu_pct":  1.46,
+                                      "processes":  2
+                                  },
+                                  {
+                                      "window_ms":  1214,
+                                      "memory_mb":  65.7,
+                                      "commit_mb":  152.9,
+                                      "cpu_pct":  1.15,
+                                      "processes":  2
+                                  },
+                                  {
+                                      "window_ms":  423,
+                                      "memory_mb":  65.2,
+                                      "commit_mb":  153.2,
+                                      "cpu_pct":  2.6,
+                                      "processes":  2
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "VS Code",
+                     "version":  "1.145.2",
+                     "disk_mb":  1043.8,
+                     "runs":  [
+                                  {
+                                      "window_ms":  773,
+                                      "memory_mb":  985.4,
+                                      "commit_mb":  1399.3,
+                                      "cpu_pct":  8.12,
+                                      "processes":  9
+                                  },
+                                  {
+                                      "window_ms":  297,
+                                      "memory_mb":  901.5,
+                                      "commit_mb":  1315.3,
+                                      "cpu_pct":  5.73,
+                                      "processes":  9
+                                  },
+                                  {
+                                      "window_ms":  328,
+                                      "memory_mb":  867.7,
+                                      "commit_mb":  1249,
+                                      "cpu_pct":  5.89,
+                                      "processes":  9
+                                  },
+                                  {
+                                      "window_ms":  268,
+                                      "memory_mb":  929.2,
+                                      "commit_mb":  1307.1,
+                                      "cpu_pct":  5.57,
+                                      "processes":  9
+                                  },
+                                  {
+                                      "window_ms":  284,
+                                      "memory_mb":  936.3,
+                                      "commit_mb":  1342.2,
+                                      "cpu_pct":  6.56,
+                                      "processes":  9
+                                  }
+                              ]
+                 }
+             ]
+}
