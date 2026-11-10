@@ -85,6 +85,113 @@ pub fn known(id: &str) -> Option<&'static Known> {
     KNOWN.iter().find(|k| k.id == id)
 }
 
+/// A setting an agent takes on its command line because it doesn't offer it over ACP.
+/// FluxCode shows it like the agent's own settings and restarts the agent to change it.
+pub struct FlagOpt {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub flag: &'static str,
+}
+
+/// GitHub Copilot CLI (1.0.108) sends no models over ACP; `--model` picks one.
+/// (`--reasoning-effort` is left out: Copilot refuses to start when the model can't take it.)
+const COPILOT_FLAGS: &[FlagOpt] = &[FlagOpt { id: "model", name: "Model", category: "model", flag: "--model" }];
+
+pub fn flag_opts(agent: &str) -> &'static [FlagOpt] {
+    match agent {
+        "github-copilot-cli" => COPILOT_FLAGS,
+        _ => &[],
+    }
+}
+
+/// The value that passes no flag: the agent's own setting.
+pub const FLAG_DEFAULT: &str = "default";
+
+/// The choices of a command-line setting: (value, "Provider/Name", description).
+/// Copilot's models come from `copilot help config`, read once in the background; until
+/// then (or if that fails) only the default is offered.
+pub fn flag_choices(agent: &str, opt: &str) -> Vec<(String, String, String)> {
+    static COPILOT: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let mut out = vec![(FLAG_DEFAULT.to_string(), "Default/Your Copilot setting".to_string(), String::new())];
+    if agent != "github-copilot-cli" || opt != "model" {
+        return out;
+    }
+    if !ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if let Some(l) = locate(agent) {
+            std::thread::spawn(move || {
+                let mut c = crate::proc::command(&l.cmd.to_string_lossy());
+                c.args(["help", "config"]);
+                if let Ok(o) = c.output() {
+                    let list = copilot_models(&String::from_utf8_lossy(&o.stdout));
+                    if !list.is_empty() {
+                        *COPILOT.lock().unwrap() = Some(list);
+                    }
+                }
+            });
+        }
+    }
+    if let Some(list) = COPILOT.lock().unwrap().as_ref() {
+        out.extend(list.iter().map(|m| (m.clone(), model_label(m), String::new())));
+    }
+    out
+}
+
+/// The model ids under `model` in `copilot help config`.
+pub fn copilot_models(help: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in help.lines() {
+        let t = line.trim();
+        if t.starts_with("`model`:") {
+            inside = true;
+            continue;
+        }
+        if inside {
+            match t.strip_prefix("- \"").and_then(|r| r.strip_suffix('"')) {
+                Some(m) => out.push(m.to_string()),
+                None => break,
+            }
+        }
+    }
+    out
+}
+
+/// "claude-sonnet-5.5" -> "Anthropic/Claude Sonnet 5.5", "gpt-6.1-sol" -> "OpenAI/GPT-6.1 Sol".
+pub fn model_label(id: &str) -> String {
+    let mut parts = id.split('-').peekable();
+    let first = parts.peek().copied().unwrap_or("");
+    let provider = match first {
+        "claude" => "Anthropic",
+        "gpt" | "o1" | "o3" | "o4" => "OpenAI",
+        "gemini" => "Google",
+        "grok" => "xAI",
+        "mai" => "Microsoft",
+        "kimi" => "Moonshot",
+        "qwen" => "Alibaba",
+        "deepseek" => "DeepSeek",
+        _ => "Other",
+    };
+    let mut words: Vec<String> = Vec::new();
+    while let Some(p) = parts.next() {
+        let w = match p {
+            "gpt" => match parts.next() {
+                Some(v) => format!("GPT-{v}"),
+                None => "GPT".into(),
+            },
+            "mai" => "MAI".into(),
+            p if p.chars().next().is_some_and(|c| c.is_ascii_digit()) => p.to_string(),
+            p => {
+                let mut c = p.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+            }
+        };
+        words.push(w);
+    }
+    format!("{provider}/{}", words.join(" "))
+}
+
 /// How to start an installed agent.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Launch {
@@ -893,6 +1000,16 @@ fn sha256_of(file: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copilot_models_from_its_help() {
+        let help = "  `mouse`: whatever\n\n  `model`: AI model to use for Copilot CLI; can be changed with /model.\n    - \"claude-sonnet-5.5\"\n    - \"gpt-6.1-sol\"\n\n  `contextTier`: tiers\n    - \"x\"\n";
+        assert_eq!(copilot_models(help), ["claude-sonnet-5.5", "gpt-6.1-sol"]);
+        assert_eq!(model_label("claude-sonnet-5.5"), "Anthropic/Claude Sonnet 5.5");
+        assert_eq!(model_label("gpt-6.1-sol"), "OpenAI/GPT-6.1 Sol");
+        assert_eq!(model_label("mai-code-1.1-flash"), "Microsoft/MAI Code 1.1 Flash");
+        assert_eq!(model_label("kimi-k3"), "Moonshot/Kimi K3");
+    }
 
     #[test]
     fn package_names_drop_the_version() {

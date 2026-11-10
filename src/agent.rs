@@ -15,7 +15,7 @@ use gpui_kit::component::{
     menu::DropdownMenu,
     switch::Switch,
     text::TextView,
-    v_flex, Icon, IconName, Sizable,
+    v_flex, Icon, IconName, Selectable, Sizable,
 };
 use serde::{Deserialize, Serialize};
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -41,8 +41,14 @@ enum Req {
     SetOption,
 }
 
+mod menu;
+pub(crate) use menu::Menu;
+
 /// Stands for the older ACP session modes (`modes`, `session/set_mode`) among the config options.
 const MODE_ID: &str = "__mode";
+/// Settings FluxCode passes on the agent's command line (`acp::flag_opts`) have ids
+/// starting with this; changing one restarts the agent.
+const FLAG_PREFIX: &str = "__flag:";
 
 /// One setting the harness offers for the session (ACP `configOptions`):
 /// model, effort (thought_level), mode, or anything else it adds.
@@ -68,7 +74,7 @@ pub fn model_groups(choices: &[(String, String, String)]) -> Vec<(String, Vec<(S
     let mut free = Vec::new();
     let mut by: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for (value, name, _) in choices {
-        let provider = value.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
+        let provider = value.split_once('/').or_else(|| name.split_once('/')).map(|(p, _)| p).unwrap_or("").to_string();
         let short = name.split_once('/').map(|(_, n)| n).unwrap_or(name).trim().to_string();
         let is_free = value.ends_with("-free") || short.to_lowercase().ends_with(" free");
         if is_free {
@@ -262,6 +268,10 @@ pub struct AgentState {
     pub uninstall_inputs: [Entity<InputState>; 2],
     /// The last install that failed: the agent's id, why, and its stopped animation.
     pub install_err: Option<(String, String, Option<Entity<crate::flux_anim::InstallAnim>>)>,
+    /// The agent, model, mode or permission menu that is open.
+    pub menu: menu::MenuState,
+    /// A command-line setting changed while the agent answered: restart it after the turn.
+    relaunch: bool,
     _sub: Subscription,
     _sub2: Subscription,
     /// Redraws the removal page as its two name boxes change.
@@ -468,6 +478,8 @@ impl AgentState {
             resume_id: None,
             installing: None,
             install_err: None,
+            menu: menu::MenuState::new(window, cx),
+            relaunch: false,
             ask: None,
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
             ask_clear: Vec::new(),
@@ -592,6 +604,14 @@ impl Workbench {
                 self.settings.save();
             }
         }
+        if let Some(flag) = id.strip_prefix(FLAG_PREFIX) {
+            // Always kept: the agent reads it from its command line at the next start.
+            let key = format!("{}:{FLAG_PREFIX}{flag}", self.settings.agent_cli);
+            self.settings.agent_options.insert(key, value);
+            self.settings.save();
+            self.agent_relaunch(cx);
+            return cx.notify();
+        }
         if let Some(o) = self.agent.config.iter_mut().find(|o| o.id == id) {
             o.current = value.clone();
         }
@@ -603,6 +623,68 @@ impl Workbench {
             }
         }
         cx.notify();
+    }
+
+    /// The session's settings as the panel shows them: the agent's own, plus those
+    /// FluxCode passes on its command line when the agent doesn't offer them over ACP.
+    pub(crate) fn agent_config_view(&self) -> Vec<ConfigOpt> {
+        let cli = self.settings.agent_cli.clone();
+        let agent = agent_id();
+        let mut v = self.agent.config.clone();
+        for f in crate::acp::flag_opts(&agent) {
+            if v.iter().any(|o| o.category == f.category) {
+                continue;
+            }
+            let current = self.settings.agent_options.get(&format!("{cli}:{FLAG_PREFIX}{}", f.id)).cloned().unwrap_or_else(|| crate::acp::FLAG_DEFAULT.into());
+            let mut choices = crate::acp::flag_choices(&agent, f.id);
+            if !choices.iter().any(|c| c.0 == current) {
+                choices.push((current.clone(), crate::acp::model_label(&current), String::new()));
+            }
+            v.push(ConfigOpt { id: format!("{FLAG_PREFIX}{}", f.id), name: f.name.into(), category: f.category.into(), current, choices });
+        }
+        v
+    }
+
+    /// The command-line flags for the saved command-line settings.
+    fn agent_flag_args(&self) -> Vec<String> {
+        let cli = &self.settings.agent_cli;
+        crate::acp::flag_opts(&agent_id())
+            .iter()
+            .filter_map(|f| {
+                let v = self.settings.agent_options.get(&format!("{cli}:{FLAG_PREFIX}{}", f.id))?;
+                (v != crate::acp::FLAG_DEFAULT).then(|| [f.flag.to_string(), v.clone()])
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Restart the agent so a command-line setting takes effect, in the same chat:
+    /// the session is resumed when the agent can, else it gets the chat as context.
+    fn agent_relaunch(&mut self, cx: &mut Context<Self>) {
+        match self.agent.status {
+            Status::Busy => {
+                self.agent.relaunch = true;
+                return;
+            }
+            Status::Ready | Status::Starting => {}
+            _ => return,
+        }
+        self.agent.relaunch = false;
+        let session = self.agent.session.clone();
+        let chatted = self.agent.items.iter().any(|i| matches!(i, Item::User(_)));
+        let can_load = self.agent.can_load;
+        self.agent.save_chat();
+        self.agent_stop(cx);
+        if chatted {
+            match session {
+                Some(id) if can_load => {
+                    self.agent.pending_load = Some(id);
+                    self.agent.silent_load = true;
+                }
+                _ => self.agent.carry = Some(transcript(&self.agent.items)),
+            }
+        }
+        self.agent_start(cx);
     }
 
     pub(crate) fn agent_set_access(&mut self, level: &str, cx: &mut Context<Self>) {
@@ -703,6 +785,7 @@ impl Workbench {
             cx.notify();
             return;
         };
+        cmd.args(self.agent_flag_args());
         cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
         crate::github::apply_env(&mut cmd);
         self.agent.status = Status::Starting;
@@ -984,6 +1067,9 @@ impl Workbench {
                 self.agent.save_chat();
                 self.agent_schedule_idle(cx);
                 self.refresh_tree(cx);
+                if std::mem::take(&mut self.agent.relaunch) {
+                    return self.agent_relaunch(cx);
+                }
                 self.agent_flush_queue(cx);
             }
         }
@@ -1315,6 +1401,7 @@ impl Workbench {
             self.agent.items.push(Item::Branch(crate::trf!("Continued with {name}. It gets the conversation with {old} above as context."; name => name, old => old)));
         }
         self.agent.resume_id = None;
+        self.agent.relaunch = false;
         self.agent.config.clear();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
@@ -1331,94 +1418,19 @@ impl Workbench {
         self.agent_use("mura", w, cx);
     }
 
-    /// The panel title: the agent's icon and name, opening the agent menu. Agents on
-    /// this PC come first (a check marks the running one), then the well-known ones
-    /// with a download button, then the rest of the ACP registry. Icons are the
-    /// registry's own, tinted to the theme.
+    /// The panel title: the agent's icon and name, opening the agent menu (`menu.rs`):
+    /// agents on this PC with whether each is on, then the ones to download.
     pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::menu::PopupMenuItem;
-        let name = agent_name();
         let current = agent_id();
-        let weak = cx.entity().downgrade();
-        let busy = self.agent.installing.as_ref().map(|(id, _, _)| id.clone());
-        let mut button = Button::new("ag-pick").label(name).ghost().xsmall().dropdown_caret(true).tooltip(tr("Choose the agent"));
+        let open = self.agent.menu.open == Some(Menu::Agent);
+        let mut button = Button::new("ag-pick").label(agent_name()).ghost().xsmall().dropdown_caret(true).selected(open).tooltip(tr("Choose the agent"));
         if let Some(path) = crate::acp::icon_asset(&current) {
             button = button.icon(Icon::new(IconName::Bot).path(path));
         }
-        button.dropdown_menu(move |mut m: gpui_kit::component::menu::PopupMenu, _, _| {
+        button.on_click(cx.listener(|this, _, w, cx| {
             crate::acp::refresh_registry_soon();
-            let installed = crate::acp::installed();
-            let reg = crate::acp::registry();
-            m = m.min_w(px(288.)).max_h(px(480.)).scrollable(true);
-            // One row: icon, name over a dim line, and what a click does on the right.
-            let row = |id: String, name: String, by: String, right: Option<gpui_kit::assets::IconName>, note: Option<SharedString>| {
-                PopupMenuItem::element(move |_, _| {
-                    h_flex()
-                        .w_full()
-                        .gap_2p5()
-                        .py_0p5()
-                        .child(agent_glyph(&id, 18.))
-                        .child(two_line(name.clone(), by.clone()))
-                        .when_some(note.clone(), |h, n| h.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(n)))
-                        .when_some(right, |h, i| h.child(Icon::new(i).size(theme::u(14.)).text_color(c(theme::FG_MUTED))))
-                })
-            };
-            let by_of = |id: &str| -> String {
-                crate::acp::known(id).map(|k| k.by.to_string()).or_else(|| reg.iter().find(|e| e.id == id).map(|e| short_line(&e.description))).unwrap_or_default()
-            };
-            if !installed.is_empty() {
-                m = m.item(PopupMenuItem::label(tr("On this PC")));
-                for id in &installed {
-                    let (weak, id2) = (weak.clone(), id.clone());
-                    let on = *id == current;
-                    m = m.item(
-                        row(id.clone(), crate::acp::display_name(id), by_of(id), on.then_some(gpui_kit::assets::IconName::Check), None).on_click(move |_, w, cx| {
-                            _ = weak.update(cx, |this, cx| this.agent_use(&id2, w, cx));
-                        }),
-                    );
-                }
-            }
-            let get = |m: gpui_kit::component::menu::PopupMenu, id: String, name: String, by: String| {
-                let (weak, id2) = (weak.clone(), id.clone());
-                let now = busy.as_deref() == Some(id.as_str());
-                let item = if now {
-                    row(id, name, by, None, Some(tr("Installing…").into()))
-                } else {
-                    row(id, name, by, Some(gpui_kit::assets::IconName::Download), None)
-                };
-                m.item(item.on_click(move |_, w, cx| {
-                    _ = weak.update(cx, |this, cx| this.agent_install(id2.clone(), w, cx));
-                }))
-            };
-            let missing: Vec<&crate::acp::Known> = crate::acp::KNOWN.iter().filter(|k| !installed.iter().any(|i| i == k.id)).collect();
-            if !missing.is_empty() {
-                if !installed.is_empty() {
-                    m = m.separator();
-                }
-                m = m.item(PopupMenuItem::label(tr("Available")));
-                for k in missing {
-                    m = get(m, k.id.to_string(), k.name.to_string(), k.by.to_string());
-                }
-            }
-            let more: Vec<&crate::acp::Entry> = reg
-                .iter()
-                .filter(|e| crate::acp::known(&e.id).is_none() && !installed.iter().any(|i| *i == e.id) && e.method().is_some())
-                .collect();
-            if !more.is_empty() {
-                m = m.separator().item(PopupMenuItem::label(tr("More in the ACP registry")));
-                for e in more {
-                    m = get(m, e.id.clone(), e.name.clone(), short_line(&e.description));
-                }
-            }
-            m = m.separator().menu(tr("Agent settings"), Box::new(crate::workbench::AgentShowOptions));
-            if crate::acp::managed(&current) {
-                let (weak, id) = (weak.clone(), current.clone());
-                m = m.item(PopupMenuItem::new(crate::trf!("Remove {name}…"; name => name)).on_click(move |_, w, cx| {
-                    _ = weak.update(cx, |this, cx| this.agent_ask_uninstall(&id, w, cx));
-                }));
-            }
-            m
-        })
+            this.agent_menu_toggle(Menu::Agent, w, cx)
+        }))
     }
 
     /// Install an agent from the ACP registry, off the UI thread, then switch to it.
@@ -1478,7 +1490,8 @@ impl Workbench {
 
     /// Which agent, model, effort and mode the panel runs now (for live share's AI labels).
     pub(crate) fn agent_attribution(&self) -> crate::collab::proto::AiInfo {
-        let pick = |cat: &str| self.agent.config.iter().find(|o| o.category == cat).map(|o| o.current_name().to_string()).unwrap_or_default();
+        let view = self.agent_config_view();
+        let pick = |cat: &str| view.iter().find(|o| o.category == cat).map(|o| o.current_name().rsplit('/').next().unwrap_or("").to_string()).unwrap_or_default();
         crate::collab::proto::AiInfo { agent: agent_name().to_string(), model: pick("model"), effort: pick("thought_level"), mode: pick("mode") }
     }
 
@@ -2719,7 +2732,16 @@ impl Workbench {
         Some(list.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("↑↓ choose · Tab or Enter adds · Esc closes"))).into_any_element())
     }
 
-    pub(crate) fn render_agent(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_agent(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let body = self.render_agent_body(window, cx);
+        // The agent menu opens under the panel title, inside the panel.
+        match self.render_agent_menu(true, window, cx) {
+            Some(m) => div().relative().size_full().child(body).child(div().absolute().top_1().left_2().right_2().child(m)).into_any_element(),
+            None => body,
+        }
+    }
+
+    fn render_agent_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let (dot, label) = match &a.status {
             Status::Off => (theme::FG_DIM, crate::i18n::tr("Off").to_string()),
@@ -3149,7 +3171,7 @@ impl Workbench {
             .children(self.render_slash_popup(cx))
             .children(self.render_edit_strip(cx))
             .children(self.render_mention_popup(cx))
-            .child(self.render_composer(cx))
+            .child(self.render_composer(window, cx))
             .into_any_element()
     }
 
@@ -3272,8 +3294,9 @@ impl Workbench {
 
     /// The message box: chips (what goes along), the text (grows with it), and a
     /// bottom row with attach, @, the keys hint and Send / Stop.
-    fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a = &self.agent;
+        let view = self.agent_config_view();
         let busy = a.status == Status::Busy;
         let has_text = !a.input.read(cx).value().trim().is_empty() || !a.attachments.is_empty();
         let weak = cx.entity().downgrade();
@@ -3311,10 +3334,9 @@ impl Workbench {
         });
         let mut chips: Vec<AnyElement> = attachments.collect();
         chips.extend(self.render_context_chips(cx));
-        v_flex()
+        let menu = self.render_agent_menu(false, window, cx);
+        let boxed = v_flex()
             .id("ag-composer")
-            .mx_3()
-            .mb_3()
             .rounded(px(8.))
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
@@ -3391,9 +3413,9 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    .when_some(a.config.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
-                    .when_some(a.config.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
-                    .child(self.render_access_menu())
+                    .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
+                    .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
+                    .child(self.render_access_menu(cx))
                     .child(
                         h_flex()
                             .flex_1()
@@ -3426,7 +3448,14 @@ impl Workbench {
                             }))
                             .into_any_element()
                     }),
-            )
+            );
+        // The menus open right above the box, as wide as it, over the chat.
+        div()
+            .relative()
+            .mx_3()
+            .mb_3()
+            .child(boxed)
+            .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(m)))
     }
 
     /// The harness's own settings for this session, compact enough to see at once:
@@ -3513,7 +3542,7 @@ impl Workbench {
                 .into_any_element()
         };
         let mut body = v_flex().id("ag-options").flex_1().min_h_0().pt_1().pb_2().overflow_y_scroll();
-        if a.config.is_empty() {
+        if self.agent_config_view().is_empty() {
             let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
             body = body.child(
                 v_flex()
@@ -3539,7 +3568,8 @@ impl Workbench {
             "thought_level" => 2,
             _ => 3,
         };
-        let mut opts: Vec<&ConfigOpt> = a.config.iter().collect();
+        let view = self.agent_config_view();
+        let mut opts: Vec<&ConfigOpt> = view.iter().collect();
         opts.sort_by_key(|o| order(o));
         for o in opts {
             let label: SharedString = match o.category.as_str() {
@@ -3675,147 +3705,59 @@ impl Workbench {
 
 /// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
 impl Workbench {
-    /// The composer's model button: the model's short name, opening every model the
-    /// agent offers (free ones first, grouped by provider) and, when the agent has
-    /// it, the effort levels below. A choice applies at once; nothing opens Settings.
+    /// The composer's model button: the model's short name (and effort, when set),
+    /// opening the model menu above the message box.
     fn render_model_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::menu::PopupMenuItem;
-        let a = &self.agent;
         let current = m.current_name();
         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
         // "Free" is said by the group in the menu; here it only takes room.
         if let Some(s) = short.strip_suffix(" Free") {
             short = s.to_string();
         }
-        let effort = a.config.iter().find(|o| o.category == "thought_level").cloned();
-        if let Some(e) = effort.as_ref().filter(|e| e.current != "default") {
+        if m.current == crate::acp::FLAG_DEFAULT && m.id.starts_with(FLAG_PREFIX) {
+            short = tr("Model").to_string();
+        }
+        if let Some(e) = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
             short = format!("{short} · {}", e.current_name());
         }
         if short.chars().count() > 22 {
             short = format!("{}…", short.chars().take(21).collect::<String>());
         }
-        let groups = model_groups(&m.choices);
-        let (id, cur) = (m.id.clone(), m.current.clone());
-        let weak = cx.entity().downgrade();
-        Button::new("ag-model-btn")
-            .label(short)
-            .ghost()
-            .xsmall()
-            .flex_none()
-            .dropdown_caret(true)
-            .tooltip(tr("Model"))
-            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
-                menu = menu.min_w(px(248.)).max_h(px(420.)).scrollable(true);
-                for (gi, (group, models)) in groups.iter().enumerate() {
-                    if gi > 0 {
-                        menu = menu.separator();
-                    }
-                    let title = match group.as_str() {
-                        "free" => tr("Free (OpenCode Zen)").to_string(),
-                        g => g.to_string(),
-                    };
-                    if !title.is_empty() {
-                        menu = menu.item(PopupMenuItem::label(title));
-                    }
-                    for (v, n) in models {
-                        let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
-                        let on = v == cur;
-                        menu = menu.item(PopupMenuItem::new(n.clone()).checked(on).on_click(move |_, _, cx| {
-                            _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
-                        }));
-                    }
-                }
-                if let Some(e) = &effort {
-                    menu = menu.separator().item(PopupMenuItem::label(tr("Effort")));
-                    let mut choices = e.choices.clone();
-                    choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
-                    for (v, n, _) in choices {
-                        let (eid, weak, on) = (e.id.clone(), weak.clone(), e.current == v);
-                        menu = menu.item(PopupMenuItem::new(n).checked(on).on_click(move |_, _, cx| {
-                            _ = weak.update(cx, |this, cx| this.agent_set_option(&eid, v.clone(), true, cx));
-                        }));
-                    }
-                }
-                menu
-            })
+        menu_button("ag-model-btn", short, self.agent.menu.open == Some(Menu::Model), tr("Model"))
+            .on_click(cx.listener(|this, _, w, cx| {
+                cx.stop_propagation();
+                this.agent_menu_toggle(Menu::Model, w, cx)
+            }))
     }
 
-    /// The agent's modes (build, plan, ...), each with its description under it.
+    /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
     fn render_mode_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::menu::PopupMenuItem;
         let mut label = m.current_name().to_string();
         if label.chars().count() > 12 {
             label = format!("{}…", label.chars().take(11).collect::<String>());
         }
-        let (id, cur, choices) = (m.id.clone(), m.current.clone(), m.choices.clone());
-        let weak = cx.entity().downgrade();
-        Button::new("ag-mode-btn")
-            .label(label)
-            .ghost()
-            .xsmall()
-            .flex_none()
-            .dropdown_caret(true)
-            .tooltip(tr("Mode"))
-            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
-                menu = menu.min_w(px(240.)).max_w(px(320.));
-                for (v, n, desc) in &choices {
-                    let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
-                    let on = v == cur;
-                    let (n, desc) = (n.clone(), short_line(desc));
-                    menu = menu.item(
-                        PopupMenuItem::element(move |_, _| two_line(&n, &desc).w(px(236.)))
-                            .checked(on)
-                            .on_click(move |_, _, cx| {
-                                _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
-                            }),
-                    );
-                }
-                menu
-            })
+        menu_button("ag-mode-btn", label, self.agent.menu.open == Some(Menu::Mode), tr("Mode"))
+            .on_click(cx.listener(|this, _, w, cx| {
+                cx.stop_propagation();
+                this.agent_menu_toggle(Menu::Mode, w, cx)
+            }))
     }
 
-    /// What the agent may do without asking: an icon in the composer, and a menu
-    /// that says in plain words what each level allows.
-    fn render_access_menu(&self) -> impl IntoElement {
-        use gpui_kit::component::menu::PopupMenuItem;
-        use gpui_kit::assets::IconName as I;
+    /// What the agent may do without asking: its icon, opening the permission menu.
+    fn render_access_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.settings.access().to_string();
-        let levels: [(&'static str, I, &'static str, &'static str); 3] = [
-            ("read", I::Eye, "Read only", "Reads files and answers. Changes nothing."),
-            ("write", I::PencilLine, "Edit files", "Edits files. Asks before running commands."),
-            ("full", I::ShieldAlert, "Full access", "Edits files and runs commands without asking."),
-        ];
-        let (icon, label) = levels.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((I::PencilLine, "Edit files"));
+        let (icon, label) = menu::ACCESS.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
         Button::new("ag-access")
             .icon(Icon::new(icon))
             .ghost()
             .xsmall()
             .flex_none()
+            .selected(self.agent.menu.open == Some(Menu::Access))
             .tooltip(crate::trf!("Permissions: {level}"; level => tr(label)))
-            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
-                menu = menu.min_w(px(276.)).item(PopupMenuItem::label(tr("What the agent may do without asking")));
-                for (id, icon, title, desc) in levels {
-                    let action: Box<dyn Action> = match id {
-                        "read" => Box::new(crate::workbench::AgentAccessRead),
-                        "full" => Box::new(crate::workbench::AgentAccessFull),
-                        _ => Box::new(crate::workbench::AgentAccessWrite),
-                    };
-                    let warn = id == "full";
-                    menu = menu.item(
-                        PopupMenuItem::element(move |_, _| {
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .items_start()
-                                .child(div().pt(px(2.)).child(Icon::new(icon).size(theme::u(14.)).text_color(c(if warn { theme::WARN } else { theme::FG_MUTED }))))
-                                .child(two_line(tr(title), tr(desc)))
-                        })
-                        .checked(level == id)
-                        .action(action),
-                    );
-                }
-                menu
-            })
+            .on_click(cx.listener(|this, _, w, cx| {
+                cx.stop_propagation();
+                this.agent_menu_toggle(Menu::Access, w, cx)
+            }))
     }
 
     /// The chat before the first message: the agent and what to type, or, when the
@@ -3982,6 +3924,11 @@ fn agent_glyph(id: &str, size: f32) -> AnyElement {
 }
 
 /// A title over one dim line, for menu rows and agent cards.
+/// A composer button that opens one of the menus: its label and a caret.
+fn menu_button(id: &'static str, label: String, open: bool, tip: &'static str) -> Button {
+    Button::new(id).label(label).ghost().xsmall().flex_none().dropdown_caret(true).selected(open).tooltip(tip)
+}
+
 fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
     let sub: SharedString = sub.into();
     v_flex()
@@ -3989,16 +3936,6 @@ fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div
         .min_w_0()
         .child(div().truncate().child(title.into()))
         .when(!sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(sub)))
-}
-
-/// The first sentence of a description, cut to fit a menu row.
-fn short_line(s: &str) -> String {
-    let first = s.split(". ").next().unwrap_or(s).trim().trim_end_matches('.');
-    if first.chars().count() > 64 {
-        format!("{}…", first.chars().take(63).collect::<String>().trim_end())
-    } else {
-        first.to_string()
-    }
 }
 
 fn line_icon(icon: Icon) -> Div {

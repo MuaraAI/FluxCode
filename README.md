@@ -184,8 +184,10 @@ when the session ends.
   agent that isn't on your PC has a download button in the agent menu (with the agent's own
   icon from the registry); FluxCode puts it in
   `~/.fluxcode/agents` (npm packages too, not in your global npm) and starts it only while
-  you use the panel. Model, effort, mode and permissions are dropdowns under the message
-  box. Edit a sent message and the answer restarts from it; the agent gets an overview of
+  you use the panel. Model, effort, mode and permissions are buttons under the message
+  box; each opens a list right above it with a search box, and the agent menu says which
+  agent is on. GitHub Copilot, which offers no models over ACP, gets its model list from
+  Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message and the answer restarts from it; the agent gets an overview of
   the workspace and a local memory you can read, edit or switch off.
 - Source Control commits, pushes, pulls and syncs, shows a commit graph, opens pull
   requests and GitHub Actions runs through `gh`, and Remove Git undoes a `git init`.

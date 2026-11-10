@@ -37,6 +37,7 @@ actions!(
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
         InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
@@ -69,6 +70,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", AgentMentionDown, Some("AgentInput > Input")),
         KeyBinding::new("tab", AgentMentionAccept, Some("AgentInput > Input")),
         KeyBinding::new("escape", AgentMentionClose, Some("AgentInput > Input")),
+        // The agent panel's menus (agent, model, mode, permissions), with or without their search box.
+        KeyBinding::new("up", AgentMenuUp, Some("AgentMenu")),
+        KeyBinding::new("down", AgentMenuDown, Some("AgentMenu")),
+        KeyBinding::new("enter", AgentMenuPick, Some("AgentMenu")),
+        KeyBinding::new("escape", AgentMenuClose, Some("AgentMenu")),
+        KeyBinding::new("up", AgentMenuUp, Some("AgentMenu > Input")),
+        KeyBinding::new("down", AgentMenuDown, Some("AgentMenu > Input")),
+        KeyBinding::new("enter", AgentMenuPick, Some("AgentMenu > Input")),
+        KeyBinding::new("escape", AgentMenuClose, Some("AgentMenu > Input")),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
@@ -1932,6 +1942,10 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_mention_down))
             .on_action(cx.listener(Self::on_agent_mention_accept))
             .on_action(cx.listener(Self::on_agent_mention_close))
+            .on_action(cx.listener(Self::on_agent_menu_up))
+            .on_action(cx.listener(Self::on_agent_menu_down))
+            .on_action(cx.listener(Self::on_agent_menu_pick))
+            .on_action(cx.listener(Self::on_agent_menu_close))
             .on_action(cx.listener(Self::on_agent_insert_code))
             .on_action(cx.listener(Self::on_agent_show_options))
             .on_action(cx.listener(Self::on_toggle_agent))
