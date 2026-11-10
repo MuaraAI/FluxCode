@@ -5,6 +5,29 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The agent panel: effort slider, priced models, usage panel, web searches (10 November 2026)
+
+- The model menu (and the other menus above the message box) gets exactly the room between
+  the panel's top and the box, measured as it is drawn: it no longer runs over the panel's
+  header in a short window.
+- Effort is a slider of the agent's levels with a line on what each costs. New sessions
+  start at medium (good results with fewer tokens) unless a level was picked before.
+- Claude Agent's models are grouped by generation, newest first (Claude 5.5, Claude 5,
+  Claude 4), each with its price per million tokens from Anthropic's model table: Opus 5.5
+  $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50, Opus 5 and
+  4.x $5 / $25, Sonnet 4.6 $3 / $15, Haiku 4.5 $1 / $5.
+- A usage panel (the gauge button, the context meter under the message box, or typing
+  `/usage`): the plan's limits from the agent's own `/usage` (run quietly, no tokens), when
+  each resets (live from the agent's `usage_update`), the context window from `/context`,
+  the session's cost and tokens, and what uses the limits most. Request usage credits asks
+  for confirmation, runs `/usage-credits` and shows its answer; limits themselves reset on
+  their own.
+- Web searches and page reads are cards: the query, then the sources with their site, each
+  opening in the browser; a thin line sweeps while it searches and the rows ease in once
+  when results arrive. The agent's own tool-list lookups (ToolSearch) no longer show as rows.
+- The message box's model, mode and permission buttons give way in a narrow panel instead
+  of pushing Send out of the box; "Default (recommended)" shows as "Default".
+
 ## Extensions, FluxCompile, OpenCode 2 and a theme picker (10 November 2026)
 
 - An Extensions view (`Ctrl+Shift+X`, a new activity bar icon): 11 built-in extensions as

@@ -11,6 +11,25 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: See your usage, and pick effort with a slider
+@title id: Lihat pemakaianmu, dan atur effort dengan slider
+@en
+The agent panel shows how full the chat's context is under the message box. Click it (or
+the gauge button) to see your plan's limits, when they reset, and what this session cost,
+without typing `/usage`.
+
+Effort is now a **slider** that starts at **medium**, and Claude's models are grouped by
+generation with their price, newest first. When the agent searches the web, you see what it
+searched and the sources it found.
+@id
+Panel agent menampilkan seberapa penuh konteks chat di bawah kotak pesan. Klik (atau tombol
+gauge) untuk melihat limit paketmu, kapan reset, dan biaya sesi ini, tanpa mengetik `/usage`.
+
+Effort sekarang berupa **slider** yang mulai dari **medium**, dan model Claude dikelompokkan
+per generasi beserta harganya, dari yang terbaru. Saat agent mencari di web, kamu bisa melihat
+apa yang dicari dan sumber yang ditemukan.
+
+@release 2026-11-10
 @title en: Extensions, and Minecraft plugins built in one click
 @title id: Ekstensi, dan plugin Minecraft di-build sekali klik
 @en
