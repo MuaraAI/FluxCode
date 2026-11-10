@@ -57,16 +57,45 @@ that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its nam
 Four color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 
+## What makes it different
+
+- **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status
+  bar sit where VS Code puts them, and the keys are VS Code's: `Ctrl+Shift+P` opens the
+  Command Palette with every command and its shortcut, `Ctrl+P` finds a file, `Ctrl+G`
+  goes to a line, `Ctrl+/` comments, `Alt+Up` moves a line. If you know VS Code, you
+  already know where things are. It is not a VS Code clone: there are no extensions and
+  no debugger yet (see the table below).
+- **Light like Zed.** The whole editor is one Rust program drawn by the GPU with GPUI,
+  the framework Zed is built on. On the PC this was measured on it opens its window in
+  about 0.2 s and holds about 95 MB, in one process.
+- **Built for AI agents.** The agent panel speaks the Agent Client Protocol and lists
+  every agent in the ACP registry, each with its own icon. Missing ones install with one
+  click into FluxCode's own folder. You choose the model, mode and permissions under the
+  message box; the agent can ask you multiple-choice questions; each turn's file changes
+  can be undone; the agent's instruction files are one click away in Settings.
+- **For beginners and experts.** A beginner can pick an agent from a list, answer its
+  questions by clicking, and keep it read-only. An expert gets the palette, the shortcuts,
+  per-agent instruction files and every editor option in Settings: font, size, tab size,
+  word wrap, whitespace, line numbers, folding, bracket closing, smart indent, cursor
+  padding, scrolling past the end, interface size, themes and a background image.
+
 ## What else it does
 
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.
 - Multi-root workspaces: drag a folder onto the window to add it or switch to it.
-- The agent panel (`Ctrl+L`) runs any [ACP](https://agentclientprotocol.com) agent, such
-  as [OpenCode](https://opencode.ai) or MuaraAI's Mura. Pick the model, effort and mode
-  there; edit a sent message and the answer restarts from it; the agent gets an overview
-  of the workspace and a local memory you can read, edit or switch off.
+- The agent panel (`Ctrl+L`) runs any agent in the [ACP registry](https://agentclientprotocol.com),
+  such as OpenCode, Claude Agent, Codex, Gemini CLI, GitHub Copilot or MuaraAI's Mura. An
+  agent that isn't on your PC has a download button in the agent menu (with the agent's own
+  icon from the registry); FluxCode puts it in
+  `~/.fluxcode/agents` (npm packages too, not in your global npm) and starts it only while
+  you use the panel. Model, effort, mode and permissions are dropdowns under the message
+  box. Edit a sent message and the answer restarts from it; the agent gets an overview of
+  the workspace and a local memory you can read, edit or switch off.
 - Source Control commits, pushes, pulls and syncs, shows a commit graph, opens pull
   requests and GitHub Actions runs through `gh`, and Remove Git undoes a `git init`.
+- After an update, a "What's new" page opens once with the notes since your last build
+  (from [`changelog.flux`](changelog.flux), in the interface language). Help > What's New
+  opens it again.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 
 ## FluxCode, Zed and VS Code
@@ -78,6 +107,9 @@ All three are good editors made for different people. This is where each stands 
 | Built with | Rust, GPUI (GPU-drawn) | Rust, GPUI (GPU-drawn) | TypeScript on Electron (Chromium + Node.js) |
 | Systems | Windows, Linux | macOS, Linux, Windows | Windows, macOS, Linux, web |
 | What you download | one program, about 16 MB | an installer | an installer |
+| Layout and keys | VS Code's layout and VS Code's keys for the commands it has | its own layout; a VS Code key map is available | the original |
+| Window on screen after launch* | about 0.21 s | about 0.37 s | about 0.27 s (the workbench fills in after) |
+| Memory 5 s after launch* | about 95 MB, 1 process | about 168 MB, 2 processes | about 1.6 GB summed over 9 processes (shared memory counted more than once) |
 | Telemetry | none | on by default, can be turned off | on by default in Microsoft's build, can be turned off |
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
@@ -90,6 +122,11 @@ All three are good editors made for different people. This is where each stands 
 | Maturity | development builds | stable releases | stable, widely used |
 | License | GPL-3.0-or-later | GPL-3.0 (the editor) | MIT for Code - OSS; Microsoft's build has its own license |
 
+\* Measured on one Windows 11 PC on 10 November 2026: FluxCode (this build), Zed 1.27.0 and
+VS Code 1.145.2, each started 5 times with a fresh empty profile, telemetry and update
+checks off, no folder open; the time is to the first visible window, averaged over runs
+2 to 5. Other PCs give other numbers; the order is what to read from it.
+
 Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agent you can
 keep on a short leash, and you open logs, databases and documents next to your code.
 Pick Zed for macOS, language servers out of the box and pair programming.
@@ -100,20 +137,40 @@ Pick VS Code when you need a specific extension, a debugger or remote developmen
 FluxCode sends nothing about you. The only request it makes by itself is the update
 check: a plain `GET` of the release list from github.com, with no build ID, machine ID or
 cookie, at start and every 6 hours (Settings > Updates turns it off). Everything else goes
-out only when you start it: the agent you run, `git`, and GitHub when you sign in.
+out only when you start it: the agent you run, `git`, and GitHub when you sign in. The
+agent menu reads the public ACP agent list from cdn.agentclientprotocol.com, at most once
+a day and only when you open the menu.
 
 ## Shortcuts
 
+VS Code's keys on Windows and Linux. `Ctrl+Shift+P` (or `F1`) lists every command with its
+keys, and Settings > Keyboard shortcuts shows the same list.
+
 | Action | Keys |
 | --- | --- |
-| Go to File / Find in Files | `Ctrl+P` / `Ctrl+Shift+F` |
+| Command Palette | `Ctrl+Shift+P` / `F1` |
+| Go to File / Go to Line | `Ctrl+P` / `Ctrl+G` |
+| Find / Replace / Find in Files | `Ctrl+F` / `Ctrl+H` / `Ctrl+Shift+F` |
 | Open File / Open Folder | `Ctrl+O` / `Ctrl+K Ctrl+O` |
-| Save / Save All / Close tab | `Ctrl+S` / `Ctrl+Alt+S` / `Ctrl+W` |
-| Agent panel | `Ctrl+L` |
-| Explorer / Source Control / Run | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` |
+| Save / Save All | `Ctrl+S` / `Ctrl+K S` |
+| Close tab / Close all / Reopen closed | `Ctrl+W` / `Ctrl+K Ctrl+W` / `Ctrl+Shift+T` |
+| Next / previous tab | `Ctrl+Tab` or `Ctrl+PageDown` / `Ctrl+Shift+Tab` or `Ctrl+PageUp` |
+| Toggle line comment | `Ctrl+/` |
+| Move line up / down | `Alt+Up` / `Alt+Down` |
+| Copy line up / down | `Shift+Alt+Up` / `Shift+Alt+Down` |
+| Add cursor above / below | `Ctrl+Alt+Up` / `Ctrl+Alt+Down` |
+| Delete line | `Ctrl+Shift+K` |
+| New line below / above | `Ctrl+Enter` / `Ctrl+Shift+Enter` |
+| Indent / outdent | `Ctrl+]` / `Ctrl+[` |
+| Word wrap | `Alt+Z` |
+| Editor font bigger / smaller / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 | Side bar / Panel / Terminal | `Ctrl+B` / `Ctrl+J` / ``Ctrl+` `` |
+| Explorer / Source Control / Run | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` |
 | Run file / Stop | `F5` / `Shift+F5` |
+| Agent panel | `Ctrl+L` |
 | Settings / Next theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
+
+`Ctrl+L` opens the agent (as in Cursor) where VS Code would select a line.
 
 ## Build from source
 
@@ -143,6 +200,25 @@ new issue for earlier reports of the same problem and for an outdated build.
 Pull requests are accepted only from members of the MuaraAI organization; others are
 closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each
 build: [CHANGELOG.md](CHANGELOG.md).
+
+## The icon
+
+<img src="assets/icon.png" width="96" align="right" alt="The FluxCode icon: a square meander, one ivory hook and one ochre hook locked together, on a near-black tile.">
+
+The mark is a meander: one unbroken line that turns only at right angles and never
+crosses itself. The pattern is named after the river Maeander in western Anatolia (the
+Büyük Menderes today). The Greek geographer Strabo wrote that it winds so much that
+every winding course came to be called after it. One of the oldest known meanders is
+carved into mammoth-ivory bracelets found at Mezin, in Ukraine, more than 15,000 years
+ago; Greek potters of the Geometric period later painted it around whole vases.
+
+FluxCode takes three things from it. The name: a flux is a flow, and the meander is a
+river drawn as a rule. The structure: code also runs as one path that turns into a
+block and comes back out, the way a call returns to where it started. The colors: ivory
+for the Mezin carvings and ochre for fired clay, on ink. The line is split at its center
+into two hooks of the same shape, turned 180 degrees and holding each other, so the mark
+looks the same upside down. The app's FluxDark and FluxCream themes use the same three
+colors.
 
 ## License
 

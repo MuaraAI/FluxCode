@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 const REPO_URL: &str = "https://github.com/MuaraAI/FluxCode";
 const ISSUES_URL: &str = "https://github.com/MuaraAI/FluxCode/issues/new/choose";
-const CHANGELOG_URL: &str = "https://github.com/MuaraAI/FluxCode/blob/main/CHANGELOG.md";
+pub(crate) const CHANGELOG_URL: &str = "https://github.com/MuaraAI/FluxCode/blob/main/CHANGELOG.md";
 
 pub(crate) fn config_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
@@ -90,6 +90,21 @@ pub struct Settings {
     pub agent_hint: u8,
     /// Look for new development builds on GitHub at start and every 6 hours.
     pub update_check: bool,
+    /// The editor's line numbers in the gutter.
+    pub line_numbers: bool,
+    /// Fold arrows in the gutter for blocks.
+    pub folding: bool,
+    /// Typing an opening bracket or quote adds the closing one.
+    pub auto_close: bool,
+    /// A new line keeps (and after `{` / `:` adds) indentation.
+    pub smart_indent: bool,
+    /// Lines kept visible above and below the cursor when it moves (VS Code's
+    /// cursorSurroundingLines). 0: the editor's default.
+    pub cursor_padding: u32,
+    /// The editor scrolls past its last line.
+    pub scroll_past_end: bool,
+    /// The build that ran last, so a new one can open its release notes once.
+    pub last_build: String,
     /// Settings revision, for one-time changes of defaults on existing installs.
     /// Missing in an older file means 0 (not the struct default, which is current).
     #[serde(default)]
@@ -119,6 +134,13 @@ impl Default for Settings {
             memory_off: false,
             agent_hint: 0,
             update_check: true,
+            line_numbers: true,
+            folding: true,
+            auto_close: true,
+            smart_indent: true,
+            cursor_padding: 0,
+            scroll_past_end: true,
+            last_build: String::new(),
             rev: SETTINGS_REV,
         }
     }
@@ -126,6 +148,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load() -> Self {
+        EXISTED.get_or_init(|| config_dir().join("settings.json").is_file());
         let mut s: Self = load_json("settings.json");
         if s.rev < 1 {
             // 0.9: whitespace dots are off by default (they cluttered long lines);
@@ -156,6 +179,46 @@ impl Settings {
     }
 }
 
+static EXISTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// settings.json was there when FluxCode started (so this is not a first run).
+pub fn existed_before_start() -> bool {
+    EXISTED.get().copied().unwrap_or(false)
+}
+
+/// The editor options from Settings, applied to each open editor and every new one.
+#[derive(Clone, Copy)]
+pub struct EditorOpts {
+    pub line_numbers: bool,
+    folding: bool,
+    auto_close: bool,
+    smart_indent: bool,
+    cursor_padding: u32,
+    scroll_past_end: bool,
+}
+
+impl EditorOpts {
+    pub fn of(s: &Settings) -> Self {
+        Self {
+            line_numbers: s.line_numbers,
+            folding: s.folding,
+            auto_close: s.auto_close,
+            smart_indent: s.smart_indent,
+            cursor_padding: s.cursor_padding,
+            scroll_past_end: s.scroll_past_end,
+        }
+    }
+
+    pub fn apply(self, e: &mut gpui_kit::component::input::EditorState, window: &mut Window, cx: &mut Context<gpui_kit::component::input::EditorState>) {
+        e.set_line_number(self.line_numbers, window, cx);
+        e.set_folding(self.folding, window, cx);
+        e.set_auto_close(self.auto_close, window, cx);
+        e.set_smart_indent(self.smart_indent, window, cx);
+        e.set_cursor_surrounding_lines((self.cursor_padding > 0).then_some(self.cursor_padding as usize), window, cx);
+        e.set_scroll_beyond_last_line(if self.scroll_past_end { None } else { Some(0) }, window, cx);
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Session {
@@ -176,17 +239,19 @@ impl Session {
 }
 
 impl Workbench {
-    fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.save();
         if self.settings.agent_right && self.view == crate::workbench::SideView::Agent {
             self.view = crate::workbench::SideView::Explorer;
             self.agent_open = true;
         }
         let (wrap, dots) = (self.settings.word_wrap, self.settings.show_whitespace);
+        let opts = EditorOpts::of(&self.settings);
         for d in &self.docs {
             d.editor.update(cx, |s, cx| {
                 s.set_soft_wrap(wrap, window, cx);
                 s.set_show_whitespaces(dots, window, cx);
+                opts.apply(s, window, cx);
             });
         }
         cx.notify();
@@ -427,6 +492,39 @@ impl Workbench {
             .child(Button::new("upd-now").label(tr("Check now")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| this.check_updates_now(cx))))
             .child(toggle("upd", s.update_check, |w| w.settings.update_check = !w.settings.update_check))
             .into_any_element();
+        let fonts: &[&'static str] = if cfg!(windows) {
+            &["Cascadia Code", "Cascadia Mono", "Consolas", "Courier New"]
+        } else {
+            &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"]
+        };
+        let current_font = s.font_family.to_string();
+        let font_controls = h_flex()
+            .gap_1()
+            .flex_wrap()
+            .justify_end()
+            .max_w(theme::u(360.))
+            .children(fonts.iter().map(|f| {
+                let f = *f;
+                Button::new(SharedString::from(format!("font-{f}")))
+                    .label(f)
+                    .xsmall()
+                    .when(current_font == f, |b| b.primary())
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        this.settings.font_family = f.into();
+                        this.apply_settings(w, cx);
+                    }))
+            }))
+            .into_any_element();
+        let shortcuts = v_flex().w_full().max_w(theme::u(760.)).children(crate::commands::commands().into_iter().filter(|k| !k.keys.is_empty()).map(|k| {
+            h_flex()
+                .w_full()
+                .py_1()
+                .gap_3()
+                .border_b_1()
+                .border_color(c(theme::BORDER))
+                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG)).child(tr(k.label)))
+                .child(crate::quick::keys_chips(k.keys))
+        }));
         let vis_desc: SharedString = match vis {
             Visibility::Strong => tr("Strong: the picture shows clearly. Over very bright pictures, dim text (line numbers, hints) can drop below comfortable contrast.").into(),
             _ => tr("How much of the picture shows through the panels. The code side of the editor always gets less of it than the right edge.").into(),
@@ -482,7 +580,16 @@ impl Workbench {
                 toggle("wsd", s.show_whitespace, |w| w.settings.show_whitespace = !w.settings.show_whitespace),
             ))
             .child(row(tr("Auto save"), tr("Save a file shortly after you stop typing.").into(), toggle("as", s.auto_save, |w| w.settings.auto_save = !w.settings.auto_save)))
-            .child(section(tr("OpenCode and GitHub")))
+            .child(row(tr("Font"), tr("The editor and terminal font. Fonts that are not installed fall back to the system's monospace font.").into(), font_controls))
+            .child(row(tr("Line numbers"), tr("Numbers in the gutter left of the code.").into(), toggle("ln", s.line_numbers, |w| w.settings.line_numbers = !w.settings.line_numbers)))
+            .child(row(tr("Code folding"), tr("Arrows in the gutter that fold a block away.").into(), toggle("fold", s.folding, |w| w.settings.folding = !w.settings.folding)))
+            .child(row(tr("Close brackets and quotes"), tr("Typing ( [ { or a quote adds its closing pair.").into(), toggle("acl", s.auto_close, |w| w.settings.auto_close = !w.settings.auto_close)))
+            .child(row(tr("Smart indent"), tr("A new line keeps the indentation, and indents one more level after { or :.").into(), toggle("si", s.smart_indent, |w| w.settings.smart_indent = !w.settings.smart_indent)))
+            .child(row(tr("Cursor padding"), tr("Lines kept visible above and below the cursor as it moves (0: the editor's default).").into(), stepper("cp", s.cursor_padding.to_string(), |w, d| {
+                w.settings.cursor_padding = (w.settings.cursor_padding as i32 + d).clamp(0, 12) as u32
+            })))
+            .child(row(tr("Scroll past the last line"), tr("Leave room below the end of a file, so its last lines can sit mid-screen.").into(), toggle("spe", s.scroll_past_end, |w| w.settings.scroll_past_end = !w.settings.scroll_past_end)))
+            .child(section(tr("AI agents and GitHub")))
             .child(row(
                 tr("AI agent: access"),
                 tr("Read only: it reads and explains, edits and commands are refused. Read & write: it edits files (Undo is under the chat), commands ask first. Full access: nothing asks.").into(),
@@ -494,11 +601,33 @@ impl Workbench {
                 toggle("idle", s.agent_idle_min > 0, |w| w.settings.agent_idle_min = if w.settings.agent_idle_min == 0 { 10 } else { 0 }),
             ))
             .child(row(
-                tr("OpenCode on the right"),
-                tr("Dock the OpenCode chat beside the editor instead of in the side bar. The arrow button in its header does the same.").into(),
+                tr("Agent panel on the right"),
+                tr("Dock the agent chat beside the editor instead of in the side bar. The arrow button in its header does the same.").into(),
                 toggle("ar", s.agent_right, |w| w.settings.agent_right = !w.settings.agent_right),
             ))
             .child(row(tr("GitHub"), tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), self.render_github(cx)))
+            .child(section(tr("Agent instructions (soul files)")))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(theme::u(760.))
+                    .pb_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(tr("The files each installed agent reads for its standing instructions and character. Open one to read or edit it; a missing one can be created empty.")),
+            )
+            .child(self.render_soul_files(cx))
+            .child(section(tr("Keyboard shortcuts")))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(theme::u(760.))
+                    .pb_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(tr("VS Code's keys. Ctrl+Shift+P (or F1) opens every command with its keys; type to filter.")),
+            )
+            .child(shortcuts)
             .child(section(tr("Updates")))
             .child(row(
                 tr("Check for new builds"),
@@ -522,7 +651,7 @@ impl Workbench {
                             .flex_wrap()
                             .child(Button::new("about-repo").label(tr("Open the repository")).xsmall().on_click(|_, _, cx| cx.open_url(REPO_URL)))
                             .child(Button::new("about-issue").label(tr("Report a problem")).xsmall().ghost().on_click(|_, _, cx| cx.open_url(ISSUES_URL)))
-                            .child(Button::new("about-changes").label(tr("What changed")).xsmall().ghost().on_click(|_, _, cx| cx.open_url(CHANGELOG_URL))),
+                            .child(Button::new("about-changes").label(tr("What changed")).xsmall().ghost().on_click(|_, w, cx| w.dispatch_action(Box::new(crate::workbench::ShowWhatsNew), cx))),
                     )
                     .child(div().text_color(c(theme::FG_DIM)).child(format!("github.com/MuaraAI/FluxCode · {}", crate::update::BUILD))),
             )
@@ -540,6 +669,67 @@ impl Workbench {
 }
 
 impl Workbench {
+    /// Every installed agent with its instruction files: where each one is, and Open
+    /// (or Create, when it isn't there yet).
+    fn render_soul_files(&self, cx: &mut Context<Self>) -> AnyElement {
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+        let installed = crate::acp::installed();
+        if installed.is_empty() {
+            return div().w_full().max_w(theme::u(760.)).py_2().text_xs().text_color(c(theme::FG_DIM)).child(tr("No agent installed yet. The agent panel (Ctrl+L) lists agents to download.")).into_any_element();
+        }
+        let mut list = v_flex().w_full().max_w(theme::u(760.));
+        for id in installed {
+            let mut files = v_flex().gap_1();
+            if id == "mura" {
+                files = files.child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Mura's character is built into the program. It follows these project files:")));
+            }
+            for (k, place) in crate::acp::instruction_files(&id).iter().enumerate() {
+                let (label, path) = match *place {
+                    crate::acp::Place::Home(rel) => (format!("~/{rel}"), home.as_ref().map(|h| rel.split('/').fold(h.clone(), |p, s| p.join(s)))),
+                    crate::acp::Place::Project(rel) => (format!("{}/{rel}", tr("project")), self.root.as_ref().map(|r| rel.split('/').fold(r.clone(), |p, s| p.join(s)))),
+                };
+                let exists = path.as_ref().is_some_and(|p| p.is_file());
+                let key = SharedString::from(format!("soul-{id}-{k}"));
+                files = files.child(
+                    h_flex()
+                        .gap_2()
+                        .child(gpui_kit::component::Icon::new(gpui_kit::assets::IconName::ScrollText).size(theme::u(13.)).text_color(c(if exists { theme::FG_MUTED } else { theme::FG_DIM })))
+                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(if exists { theme::FG } else { theme::FG_DIM })).child(label))
+                        .when_some(path, |h, p| {
+                            h.child(
+                                Button::new(key)
+                                    .label(if exists { tr("Open") } else { tr("Create") })
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, w, cx| {
+                                        if !p.is_file() {
+                                            if let Some(d) = p.parent() {
+                                                let _ = std::fs::create_dir_all(d);
+                                            }
+                                            let _ = std::fs::write(&p, "");
+                                        }
+                                        this.settings_open = false;
+                                        this.open_file(p.clone(), w, cx);
+                                    })),
+                            )
+                        }),
+                );
+            }
+            list = list.child(
+                h_flex()
+                    .w_full()
+                    .py_2()
+                    .gap_4()
+                    .items_start()
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .child(div().w(theme::u(150.)).flex_none().text_sm().text_color(c(theme::FG_STRONG)).child(crate::acp::display_name(&id)))
+                    .child(div().flex_1().min_w_0().child(files)),
+            );
+        }
+        list.into_any_element()
+    }
+
     fn github_result(&mut self, r: Result<crate::github::Account, String>, cx: &mut Context<Self>) {
         match r {
             Ok(a) => {

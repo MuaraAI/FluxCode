@@ -1,14 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3fa9ff"/>
-      <stop offset="1" stop-color="#0058c4"/>
-    </linearGradient>
-  </defs>
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#g)"/>
-  <!-- angle brackets -->
-  <path d="M370 330 L210 512 L370 694" fill="none" stroke="#fff" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M654 330 L814 512 L654 694" fill="none" stroke="#fff" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- flux bolt -->
-  <path d="M560 250 L430 540 L530 540 L465 774 L640 470 L535 470 L600 250 Z" fill="#fff"/>
+  <!-- FluxCode. A meander: one line that turns at right angles and never crosses itself,
+       split at its centre into two hooks that hold each other (see README, The icon). -->
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="#17181b"/>
+  <path d="M394.2 747.5 L747.5 747.5 L747.5 394.2 L394.2 394.2 L394.2 512.0 L512.0 512.0" fill="none" stroke="#ebe4d6" stroke-width="58.9" stroke-linejoin="miter"/>
+  <path d="M512.0 512.0 L629.8 512.0 L629.8 629.8 L276.5 629.8 L276.5 276.5 L629.8 276.5" fill="none" stroke="#b98a5e" stroke-width="58.9" stroke-linejoin="miter"/>
 </svg>
