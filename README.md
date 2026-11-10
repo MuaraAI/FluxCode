@@ -134,8 +134,9 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
 
 ## Live share
 
-Code together in real time, with your PC as the server (the people icon in the activity
-bar).
+Code together in real time, with your PC as the server. The people icon in the activity
+bar opens the Live share page in the editor area: its cards sit two to a row on a wide
+window and one under the other on a narrow one.
 
 1. The host opens a folder, clicks **Start hosting** and sends the invite code
    (`FLUX1-...`) to the others, in a chat or by mail.
