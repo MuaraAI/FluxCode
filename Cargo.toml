@@ -56,6 +56,15 @@ embedded-preview = ["dep:gpui-webview", "dep:wry"]
 fast = ["gpui-kit/gpui-fast"]
 
 # Small and fast.
+# Debug builds: line numbers for FluxCode's own panics and backtraces, and no debug
+# info for the dependencies (GPUI and the rest). Full debug info made the local build
+# cache tens of gigabytes; nobody steps through GPUI's internals.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = "s"
 lto = "fat"
