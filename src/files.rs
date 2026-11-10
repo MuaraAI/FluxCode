@@ -412,7 +412,9 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     Lightbulb, Image,
     // Extensions: the view, their icons and their tasks
     Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
-    Sparkles, FolderPlus
+    Sparkles, FolderPlus,
+    // Agent panel: usage
+    Gauge
 ]);
 
 #[cfg(test)]

@@ -294,12 +294,12 @@ impl Workbench {
                 _ => a.clone(),
             }))
             .collect();
+        let cwd = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut head = Line::new(&shown.join(" "), LineKind::Cmd);
-        head.meta = "Run".into();
+        head.meta = term::short_cwd(&cwd, self.root.as_deref()).into();
         self.out_lines.push(head);
         let mut cmd = proc::command(&program);
         cmd.args(&args);
-        let cwd = path.parent().map(Path::to_path_buf).unwrap_or_default();
         match self.procs.spawn(cmd, Some(&cwd)) {
             Ok(id) => {
                 self.out_proc = Some(id);
@@ -325,26 +325,50 @@ impl Workbench {
         let (lines, run) = if terminal { (&mut self.term_lines, self.term_run.take()) } else { (&mut self.out_lines, self.out_run.take()) };
         close_line(lines);
         let mut error: Option<PyError> = None;
+        let mut reason: Option<String> = None;
+        let from = run.as_ref().map_or(lines.len(), |r| r.block.min(lines.len()));
         if let Some(run) = &run {
-            let from = run.block.min(lines.len());
             if code != Some(0) || lines[from..].iter().any(|l| l.kind == LineKind::Err) {
                 let view: Vec<(&str, LineKind)> = lines[from..].iter().map(|l| (l.text.as_ref(), l.kind)).collect();
                 error = term::parse_problem(&view, &run.command, &run.python, &run.cwd);
+                if error.is_none() && code.is_some_and(|c| c != 0) {
+                    reason = term::failure_reason(&view);
+                }
             }
-            if let Some(e) = &error {
-                push_card(lines, e, &run.cwd);
-            }
+        }
+        let output = lines[from..].iter().filter(|l| !l.text.trim().is_empty()).count();
+        match (&error, &run) {
+            (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
+            // A little air between a long output and its outcome.
+            _ if output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
+            _ => {}
         }
         let took = run.as_ref().map(|r| term::elapsed(r.started.elapsed())).unwrap_or_default();
         let (text, ok) = match code {
-            Some(0) => ("Finished".to_string(), true),
+            Some(0) => (tr("Finished").to_string(), true),
             Some(c) => (crate::trf!("Failed (exit code {c})"; c => c), false),
-            None => ("Stopped".to_string(), false),
+            None => (tr("Stopped").to_string(), false),
         };
         let mut status = Line::new(&text, LineKind::Status);
         status.err = !ok;
         status.meta = took.into();
         lines.push(status);
+        if let Some(r) = reason {
+            // "C:\long\path\Main.java:12: error: ..." reads as "Main.java:12: error: ...";
+            // the link keeps the full path.
+            let link = term::parse_path_line(&r);
+            let shown = match &link {
+                Some((p, _)) => match (r.find(p.as_str()), Path::new(p).file_name()) {
+                    (Some(at), Some(name)) => format!("{}{}", name.to_string_lossy(), &r[at + p.len()..]),
+                    _ => r.clone(),
+                },
+                None => r.clone(),
+            };
+            let mut l = Line::new(&shown, LineKind::Result);
+            l.err = true;
+            l.link = link.map(|(p, n)| (p.into(), n));
+            lines.push(l);
+        }
 
         if let Some(e) = error {
             if let (Some(path), Some(line)) = (e.file.clone(), e.line) {
@@ -452,22 +476,20 @@ impl Workbench {
 
     // ------------------------------------------------------------ render
 
-    /// One visual row. `shown` is the row's text (a wrapped piece of the line, already
-    /// made readable by `term::display_text`); `first` is false on continuation rows.
-    fn render_line(&self, i: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, cx: &mut Context<Self>) -> AnyElement {
-        let base = h_flex()
-            .id(("pl", i))
-            .h(theme::u(20.))
-            .w_full()
-            .px_3()
-            .gap_2()
-            .whitespace_nowrap()
-            .overflow_hidden()
-            .when(!first, |b| b.pl(theme::u(12.) + theme::u(16.)));
+    /// One visual row. `ix` is the line's index, `shown` the row's text (a wrapped piece
+    /// of the line, already made readable by `term::display_text`); `first` is false
+    /// on continuation rows.
+    #[allow(clippy::too_many_arguments)]
+    fn render_line(&self, i: usize, ix: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, m: Metrics, cx: &mut Context<Self>) -> AnyElement {
+        let base = h_flex().id(("pl", i)).h(m.row).w_full().px_3().gap_2().whitespace_nowrap().overflow_hidden();
+        // Program output keeps the mono font; what FluxCode itself says uses the UI font.
         let text = |s: &SharedString, col: theme::Tok| div().text_color(c(col)).child(s.clone());
+        let ui = |s: &SharedString, col: theme::Tok| div().font_family(UI_FONT).text_color(c(col)).child(s.clone());
+        // Wrapped rows hang two characters in, so a continued line reads as one.
+        let hang = theme::u(12.) + px(m.em * 2.);
         // One callout across several fixed-height rows: a tinted full-width band with a red edge.
         let card = |row: Stateful<Div>, inner: Div| {
-            row.child(inner.flex_1().h_full().items_center().px_3().gap_2().bg(c(theme::BG_ELEVATED)).border_l_2().border_color(c(theme::DANGER)))
+            row.child(inner.flex_1().min_w_0().h_full().items_center().px_3().gap_2().bg(c(theme::BG_ELEVATED)).border_l_2().border_color(c(theme::DANGER)))
                 .into_any_element()
         };
         let link = |label: SharedString, path: SharedString, line: u32, cx: &mut Context<Self>| {
@@ -481,26 +503,102 @@ impl Workbench {
         };
         match l.kind {
             LineKind::Blank => base.into_any_element(),
-            LineKind::Cmd => base
-                .child(text(&l.meta, theme::FG_DIM))
-                .child(div().text_color(c(theme::ACCENT_TEXT)).font_weight(FontWeight::BOLD).child("❯"))
-                .child(div().text_color(c(theme::FG_STRONG)).font_weight(FontWeight::MEDIUM).child(l.text.clone()))
-                .into_any_element(),
+            // The block header: what ran, where, and how it ended.
+            LineKind::Cmd => {
+                let lines = if terminal { &self.term_lines } else { &self.out_lines };
+                let (status, last) = block_status(lines, ix);
+                let live = if terminal { self.term_run.is_some() } else { self.out_run.is_some() };
+                let badge = match status {
+                    Some(s) => {
+                        let stopped = s.err && s.text.as_ref() == tr("Stopped");
+                        let (icon, col) = match (s.err, stopped) {
+                            (_, true) => (IconName::Square, theme::FG_DIM),
+                            (true, _) => (IconName::CircleX, theme::DANGER),
+                            _ => (IconName::CircleCheck, theme::GREEN),
+                        };
+                        h_flex()
+                            .flex_none()
+                            .gap_1()
+                            .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
+                            .when(!s.meta.is_empty(), |h| h.child(ui(&s.meta, theme::FG_DIM)))
+                            .into_any_element()
+                    }
+                    None if last && live => ui(&tr("Running").into(), theme::BLUE).flex_none().into_any_element(),
+                    None => div().into_any_element(),
+                };
+                base.child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h(m.row - px(2.))
+                        .px_2()
+                        .gap_2()
+                        .rounded(px(4.))
+                        .bg(c(theme::BG_ELEVATED))
+                        .child(text(&"❯".into(), theme::FG_DIM).flex_none())
+                        // The command keeps its room; the place gives way first.
+                        .child(text(&l.text, theme::FG_STRONG).flex_none().max_w(relative(0.6)).truncate())
+                        .child(div().flex_1())
+                        .when(!l.meta.is_empty(), |h| h.child(ui(&l.meta, theme::FG_DIM).min_w_0().truncate()))
+                        .child(badge),
+                )
+                .into_any_element()
+            }
             LineKind::Fixed => base
-                .child(div().text_color(c(theme::BLUE)).child(tr("↳ auto-corrected")))
-                .child(text(&l.text, theme::FG_MUTED))
+                .child(ui(&tr("↳ auto-corrected").into(), theme::BLUE).flex_none())
+                .child(text(&l.text, theme::FG_MUTED).min_w_0().truncate())
                 .into_any_element(),
+            // The outcome: a clear mark, the word, the time.
             LineKind::Status => {
-                let (mark, col) = if l.err { ("✕", theme::DANGER) } else { ("✓", theme::GREEN) };
+                let stopped = l.err && l.text.as_ref() == tr("Stopped");
+                let (icon, col) = match (l.err, stopped) {
+                    (_, true) => (IconName::Square, theme::FG_MUTED),
+                    (true, _) => (IconName::CircleX, theme::DANGER),
+                    _ => (IconName::CircleCheck, theme::GREEN),
+                };
                 let took: SharedString = match (l.meta.is_empty(), l.err) {
                     (true, _) => "".into(),
                     (false, false) => crate::trf!("in {0}"; 0 => l.meta).into(),
                     (false, true) => format!("· {}", l.meta).into(),
                 };
-                base.child(div().text_color(c(col)).child(mark))
-                    .child(text(&l.text, if l.err { theme::DANGER } else { theme::FG_MUTED }))
-                    .when(!took.is_empty(), |h| h.child(text(&took, theme::FG_DIM)))
+                base.font_family(UI_FONT)
+                    .child(Icon::new(icon).size(theme::u(14.)).text_color(c(col)))
+                    .child(div().font_weight(FontWeight::MEDIUM).text_color(c(if l.err && !stopped { theme::DANGER } else { theme::FG_STRONG })).child(l.text.clone()))
+                    .when(!took.is_empty(), |h| h.child(text(&took, theme::FG_MUTED)))
                     .into_any_element()
+            }
+            // Under the status: why it failed (a link when it names a file:line)...
+            LineKind::Result if l.err => {
+                let row = base.pl(theme::u(34.)).font_family(UI_FONT);
+                match l.link.clone() {
+                    Some((path, line)) => row.child(
+                        div()
+                            .id(("lk", i))
+                            .min_w_0()
+                            .text_color(c(theme::FG_STRONG))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(c(theme::BLUE)).underline())
+                            .child(shown.clone())
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
+                    ),
+                    None => row.child(text(shown, theme::FG_STRONG).min_w_0()),
+                }
+                .into_any_element()
+            }
+            // ...or what was built: "KiwEssentials 0.1.0 · 609 KB · 2.9s · build\libs\x.jar".
+            LineKind::Result => {
+                let parts: Vec<&str> = l.text.split(" · ").collect();
+                let row = base.pl(theme::u(34.)).font_family(UI_FONT);
+                match parts.as_slice() {
+                    [name, mid @ .., path] => {
+                        let mid: SharedString = mid.join(" · ").into();
+                        row.child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(name.to_string()))
+                            .when(!mid.is_empty(), |h| h.child(text(&mid, theme::FG_MUTED).min_w_0().truncate()))
+                            .child(text(&path.to_string().into(), theme::FG_DIM).flex_1().min_w_0().truncate())
+                            .into_any_element()
+                    }
+                    _ => row.child(text(&l.text, theme::FG_STRONG).min_w_0().truncate()).into_any_element(),
+                }
             }
             // Traceback frames and `file.py:12:` warnings: the whole line opens the file there.
             LineKind::Frame | LineKind::Warn | LineKind::Err if l.link.is_some() => {
@@ -510,63 +608,66 @@ impl Workbench {
                     LineKind::Err => theme::DANGER,
                     _ => theme::FG_MUTED,
                 };
-                base.child(
-                    div()
-                        .id(("lk", i))
-                        .text_color(c(col))
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(c(theme::BLUE)).underline())
-                        .child(shown.clone())
-                        .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
-                )
-                .into_any_element()
+                base.when(!first, |b| b.pl(hang))
+                    .child(
+                        div()
+                            .id(("lk", i))
+                            .text_color(c(col))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(c(theme::BLUE)).underline())
+                            .child(shown.clone())
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
+                    )
+                    .into_any_element()
             }
-            LineKind::Frame => base.child(text(shown, theme::FG_MUTED)).into_any_element(),
             LineKind::CardHead => {
                 let mut inner = h_flex()
+                    .font_family(UI_FONT)
                     .child(Icon::new(IconName::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)))
-                    .child(div().text_color(c(theme::DANGER)).font_weight(FontWeight::BOLD).child(l.text.clone()));
+                    .child(div().flex_none().text_color(c(theme::DANGER)).font_weight(FontWeight::SEMIBOLD).child(l.text.clone()));
                 if let Some((path, line)) = &l.link {
-                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, cx));
+                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, cx).min_w_0().truncate());
                 }
                 card(base, inner)
             }
-            LineKind::CardMsg => card(base, h_flex().child(text(&l.text, theme::FG_STRONG).pl(theme::u(22.)))),
+            LineKind::CardMsg => card(base, h_flex().child(ui(shown, theme::FG_STRONG).pl(theme::u(22.)))),
             LineKind::CardCode => card(
                 base,
                 h_flex()
-                    .child(div().pl(theme::u(22.)).text_color(c(theme::FG_DIM)).child(l.meta.clone()))
-                    .child(div().text_color(c(theme::BORDER_STRONG)).child("│"))
-                    .child(text(&l.text, theme::FG)),
+                    .child(div().flex_none().pl(theme::u(22.)).text_color(c(theme::FG_DIM)).child(l.meta.clone()))
+                    .child(div().flex_none().text_color(c(theme::BORDER_STRONG)).child("│"))
+                    .child(text(&l.text, theme::FG).min_w_0().truncate()),
             ),
-            // `err` marks a wrapped continuation row: no second icon.
+            // Wrapped hint rows: the icon only on the first one.
             LineKind::CardHint => card(
                 base,
                 h_flex()
-                    .when(!l.err, |h| h.child(Icon::new(IconName::Info).size(theme::u(14.)).text_color(c(theme::WARN))))
-                    .child(text(&l.text, theme::FG_MUTED).when(l.err, |d| d.pl(theme::u(22.)))),
+                    .when(first, |h| h.child(Icon::new(IconName::Info).size(theme::u(14.)).text_color(c(theme::WARN))))
+                    .child(ui(shown, theme::FG_MUTED).when(!first, |d| d.pl(theme::u(22.)))),
             ),
             LineKind::CardAction => {
                 let cmd = l.run.clone().unwrap_or_default();
                 card(
                     base,
                     h_flex()
-                    .child(
-                        h_flex()
-                            .id(("fix", i))
-                            .ml(theme::u(22.))
-                            .px_2()
-                            .gap_1()
-                            .rounded(px(3.))
-                            .bg(c(theme::ACCENT))
-                            .text_color(c(theme::ON_ACCENT))
-                            .cursor_pointer()
-                            .hover(|s| s.opacity(0.88))
-                            .child(Icon::new(IconName::Play).size(theme::u(12.)))
-                            .child(tr("Fix"))
-                            .on_click(cx.listener(move |this, _, w, cx| this.run_fix(&cmd, w, cx))),
-                    )
-                    .child(text(&l.text, theme::FG)),
+                        .child(
+                            h_flex()
+                                .id(("fix", i))
+                                .flex_none()
+                                .ml(theme::u(22.))
+                                .px_2()
+                                .gap_1()
+                                .rounded(px(3.))
+                                .font_family(UI_FONT)
+                                .bg(c(theme::ACCENT))
+                                .text_color(c(theme::ON_ACCENT))
+                                .cursor_pointer()
+                                .hover(|s| s.opacity(0.88))
+                                .child(Icon::new(IconName::Play).size(theme::u(12.)))
+                                .child(tr("Fix"))
+                                .on_click(cx.listener(move |this, _, w, cx| this.run_fix(&cmd, w, cx))),
+                        )
+                        .child(text(&l.text, theme::FG).min_w_0().truncate()),
                 )
             }
             k => {
@@ -577,22 +678,23 @@ impl Workbench {
                     LineKind::Dim => theme::FG_DIM,
                     LineKind::Success => theme::GREEN,
                     LineKind::Code => theme::FG_STRONG,
+                    LineKind::Frame => theme::FG_MUTED,
                     _ => theme::FG,
                 };
-                base.child(div().text_color(c(col)).child(shown.clone())).into_any_element()
+                base.when(!first, |b| b.pl(hang)).child(div().text_color(c(col)).child(shown.clone())).into_any_element()
             }
         }
     }
 
     /// The panel's lines as visual rows (wrapped to `cols`), cached per panel.
-    fn wrapped_rows(&self, terminal: bool, cols: usize) -> std::rc::Rc<Vec<Row>> {
+    fn wrapped_rows(&self, terminal: bool, cols: Cols) -> std::rc::Rc<Vec<Row>> {
         let (lines, cache) = if terminal { (&self.term_lines, &self.term_wrap) } else { (&self.out_lines, &self.out_wrap) };
         let key = (
             lines.len(),
             lines.first().map_or(0, |l| l.text.as_ptr() as usize),
             lines.last().map_or(0, |l| l.text.as_ptr() as usize),
             lines.last().map_or(0, |l| l.text.len()),
-            cols,
+            cols.mono | cols.card << 20 | cols.result << 40,
         );
         let mut cache = cache.borrow_mut();
         if cache.0 == key {
@@ -600,16 +702,23 @@ impl Workbench {
         }
         let mut rows = Vec::with_capacity(lines.len() + 8);
         for (ix, l) in lines.iter().enumerate() {
-            let wraps = matches!(
-                l.kind,
-                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Code | LineKind::Hunk
-            );
-            if !wraps {
+            // A code line with a ^^^ line under it stays one row, so the marks line up.
+            let marked = l.kind == LineKind::Code && lines.get(ix + 1).is_some_and(|n| n.kind == LineKind::Caret);
+            // Columns left after the row's own indent (card edge, status icon), and how
+            // many fewer the continuation rows get (log text hangs two characters in).
+            let (width, hang) = match l.kind {
+                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk => (cols.mono, 2),
+                LineKind::Code if !marked => (cols.mono, 2),
+                LineKind::CardMsg | LineKind::CardHint => (cols.card, 0),
+                LineKind::Result if l.err => (cols.result, 0),
+                _ => (0, 0),
+            };
+            if width == 0 {
                 rows.push(Row { line: ix, text: l.text.clone(), first: true });
                 continue;
             }
             let shown = term::display_text(&l.text);
-            let pieces = term::wrap_ranges(&shown, cols.saturating_sub(2));
+            let pieces = term::wrap_ranges(&shown, width, hang);
             if pieces.len() == 1 {
                 let text: SharedString = match shown {
                     std::borrow::Cow::Borrowed(_) => l.text.clone(),
@@ -618,7 +727,8 @@ impl Workbench {
                 rows.push(Row { line: ix, text, first: true });
             } else {
                 for (n, (a, b)) in pieces.into_iter().enumerate() {
-                    rows.push(Row { line: ix, text: shown[a..b].to_string().into(), first: n == 0 });
+                    let piece = if n == 0 { &shown[a..b] } else { shown[a..b].trim_start() };
+                    rows.push(Row { line: ix, text: piece.to_string().into(), first: n == 0 });
                 }
             }
         }
@@ -627,17 +737,32 @@ impl Workbench {
         rows
     }
 
+    /// Whether the newest command in these lines ran Python (or pip), so the
+    /// header's Python version is about what is on screen.
+    fn ran_python(lines: &[Line]) -> bool {
+        lines.iter().rev().find(|l| l.kind == LineKind::Cmd).is_some_and(|l| {
+            let mut words = l.text.split_whitespace();
+            let first = words.next().unwrap_or("").trim_matches('"');
+            term::is_python(first)
+                || ["pip", "pip3", "pip.exe"].iter().any(|p| first.eq_ignore_ascii_case(p))
+                || l.text.split_whitespace().any(|w| {
+                    let w = w.trim_matches('"').to_ascii_lowercase();
+                    w.ends_with(".py") || w.ends_with(".pyw")
+                })
+        })
+    }
+
     pub(crate) fn render_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = |id: &'static str, label: &'static str, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
             let on = this.panel_tab == which;
-            // VS Code's panel tabs: small caps label, a 1px underline on the open one.
+            // A 1px underline on the open tab, sentence case like the rest of the app.
             div()
                 .id(id)
                 .px_1()
                 .h_full()
                 .flex()
                 .items_center()
-                .text_xs()
+                .text_sm()
                 .cursor_pointer()
                 .border_b_1()
                 .border_color(if on { c(theme::ACCENT) } else { transparent_black() })
@@ -649,26 +774,27 @@ impl Workbench {
                     cx.notify();
                 }))
         };
-        let running = match self.panel_tab {
-            PanelTab::Terminal => self.term_proc.is_some(),
-            PanelTab::Output => self.out_proc.is_some(),
-        };
+        let terminal = self.panel_tab == PanelTab::Terminal;
+        let running = if terminal { self.term_proc.is_some() } else { self.out_proc.is_some() };
+        let shown_lines = if terminal { &self.term_lines } else { &self.out_lines };
+        let python = self.python_version.clone().filter(|_| Self::ran_python(shown_lines));
         let header = h_flex()
             .h(theme::u(35.))
             .px_3()
             .gap_4()
             .flex_none()
-            .child(tab("p-term", tr("TERMINAL"), PanelTab::Terminal, self, cx))
-            .child(tab("p-out", tr("OUTPUT"), PanelTab::Output, self, cx))
+            .child(tab("p-term", tr("Terminal"), PanelTab::Terminal, self, cx))
+            .child(tab("p-out", tr("Output"), PanelTab::Output, self, cx))
             .child(div().flex_1())
-            .when_some(self.python_version.clone(), |h, v| {
+            .when_some(python, |h, v| {
                 h.child(
                     h_flex()
+                        .min_w_0()
                         .gap_1()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .child(div().size(px(6.)).rounded_full().bg(c(theme::GREEN)))
-                        .child(v),
+                        .child(div().flex_none().size(px(6.)).rounded_full().bg(c(theme::GREEN)))
+                        .child(div().min_w_0().truncate().child(v)),
                 )
             })
             .when(running, |h| {
@@ -686,49 +812,70 @@ impl Workbench {
                 cx.notify();
             }));
 
-        let terminal = self.panel_tab == PanelTab::Terminal;
-        let count = if terminal { self.term_lines.len() } else { self.out_lines.len() };
+        let count = shown_lines.len();
         let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
-        // Long lines wrap to the panel's width instead of being cut off. The width comes
-        // from the probe below (last frame); the rows are cached until lines or width change.
-        let font_size = theme::u(13.);
-        let em = {
+        // Log text: the editor's font, a little smaller, normal weight, roomy rows.
+        let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
+        let m = {
             let ts = window.text_system();
             let id = ts.resolve_font(&font(self.settings.font_family.clone()));
-            ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.)
+            let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
+            Metrics { row: px((f32::from(font_size) * 1.6).round()), em }
         };
-        let width = self.panel_width.get();
-        let cols = if width <= 0. { 160 } else { (((width - f32::from(theme::u(24.)) - 14.) / em).floor() as usize).max(24) };
+        // Long lines wrap to the panel's width instead of being cut off. The size comes
+        // from the probe below (last frame); the rows are cached until lines or width change.
+        let (width, height) = self.panel_size.get();
+        let cols = if width <= 0. {
+            Cols { mono: 160, card: 160, result: 160 }
+        } else {
+            // Interface-font rows (card text, failure reason) by the font's average letter,
+            // with a little slack so a run of wide letters still fits.
+            let avg = {
+                let ts = window.text_system();
+                let id = ts.resolve_font(&font(UI_FONT));
+                let sample = "Python doesn't know this name, check the spelling: Main.java:12";
+                let w: f32 = sample.chars().map(|ch| ts.advance(id, font_size, ch).map(|s| f32::from(s.width)).unwrap_or(m.em)).sum();
+                (w / sample.chars().count() as f32).max(3.) * 1.08
+            };
+            let fit = |indent: f32, per: f32| (((width - indent - f32::from(theme::u(12.)) - 6.) / per).floor() as usize).max(16);
+            Cols { mono: fit(f32::from(theme::u(12.)), m.em).max(24), card: fit(f32::from(theme::u(46.)) + 2., avg), result: fit(f32::from(theme::u(34.)), avg) }
+        };
         let rows = self.wrapped_rows(terminal, cols);
+        // The list is a whole number of rows tall, so the top row is never cut in half.
+        let gap = 4.;
+        let row = f32::from(m.row);
+        let fit = if height > gap + row { ((height - gap) / row).floor() * row } else { 0. };
         let list = uniform_list(
             "panel-lines",
             rows.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
                     .map(|i| {
-                        let row = &rows[i];
+                        let r = &rows[i];
                         let lines = if terminal { &this.term_lines } else { &this.out_lines };
-                        match lines.get(row.line) {
-                            Some(l) => this.render_line(i, l, &row.text, row.first, terminal, cx),
-                            None => div().id(("pl", i)).h(theme::u(20.)).into_any_element(),
+                        match lines.get(r.line) {
+                            Some(l) => this.render_line(i, r.line, l, &r.text, r.first, terminal, m, cx),
+                            None => div().id(("pl", i)).h(m.row).into_any_element(),
                         }
                     })
                     .collect::<Vec<_>>()
             }),
         )
         .track_scroll(&scroll)
-        .size_full()
-        .py_1()
+        .w_full()
+        .map(|l| if fit > 0. { l.h(px(fit)) } else { l.h_full() })
         .font_family(self.settings.font_family.clone())
+        .font_weight(FontWeight::NORMAL)
         .text_size(font_size);
         let probe = {
-            let cell = self.panel_width.clone();
+            let cell = self.panel_size.clone();
             let id = cx.entity_id();
             canvas(
                 move |bounds, _, cx| {
-                    let w = f32::from(bounds.size.width);
-                    if (cell.get() - w).abs() > 0.5 {
-                        cell.set(w);
+                    let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                    let old = cell.get();
+                    if (old.0 - size.0).abs() > 0.5 || (old.1 - size.1).abs() > 0.5 {
+                        cell.set(size);
                         cx.defer(move |cx| cx.notify(id));
                     }
                 },
@@ -737,9 +884,10 @@ impl Workbench {
             .absolute()
             .size_full()
         };
-        let list = div().relative().flex_1().min_h_0().child(probe).child(list);
+        let list = div().relative().flex_1().min_h_0().pt(px(gap)).child(probe).child(list);
 
-        let empty = count == 0 && terminal;
+        let empty = count == 0;
+        let hint = |line: &'static str| div().min_w_0().child(line);
         v_flex()
             .size_full()
             .bg(c(theme::BG_EDITOR))
@@ -754,8 +902,11 @@ impl Workbench {
                         .gap_1()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .child(tr("Run any command, for example  py app.py  or  pip install -r requirements.txt"))
-                        .child(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you")),
+                        .when(terminal, |v| {
+                            v.child(hint(tr("Run any command, for example  py app.py  or  pip install -r requirements.txt")))
+                                .child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you")))
+                        })
+                        .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
                 )
             })
             .child(list)
@@ -773,25 +924,56 @@ impl Workbench {
                         .border_t_1()
                         .border_color(c(theme::BORDER))
                         .font_family(self.settings.font_family.clone())
-                        .text_size(theme::u(13.))
+                        .text_size(font_size)
                         .when(busy, |h| {
-                            h.child(div().size(px(6.)).rounded_full().bg(c(theme::BLUE)))
-                                .child(div().text_color(c(theme::BLUE)).child(tr("running · input")))
+                            h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(theme::BLUE)))
+                                .child(div().flex_none().font_family(UI_FONT).text_color(c(theme::BLUE)).child(tr("running · input")))
                         })
                         .when(!busy, |h| {
                             h.when_some(venv, |h, v| {
-                                h.child(div().px_1().rounded(px(3.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::GREEN)).child(format!("({v})")))
+                                h.child(div().flex_none().px_1().rounded(px(3.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::GREEN)).child(format!("({v})")))
                             })
-                            .child(div().text_color(c(theme::FG_DIM)).child(term::short_cwd(&self.term_cwd, self.root.as_deref())))
+                            .child(div().min_w_0().max_w(relative(0.4)).truncate().text_color(c(theme::FG_DIM)).child(term::short_cwd(&self.term_cwd, self.root.as_deref())))
                         })
-                        .child(div().text_color(c(theme::ACCENT_TEXT)).font_weight(FontWeight::BOLD).child("❯"))
-                        .child(div().flex_1().key_context("Terminal").child(Input::new(&self.term_input).appearance(false).small())),
+                        .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).font_weight(FontWeight::BOLD).child("❯"))
+                        .child(div().flex_1().min_w_0().key_context("Terminal").child(Input::new(&self.term_input).appearance(false).small())),
                 )
             })
     }
 }
 
-/// The error card's rows (fixed-height rows, so the message wraps by hand).
+/// How many characters fit on a row: mono log text, error-card text, the failure reason.
+#[derive(Clone, Copy)]
+struct Cols {
+    mono: usize,
+    card: usize,
+    result: usize,
+}
+
+/// Row height and character width of the panel's log, for one frame.
+#[derive(Clone, Copy)]
+struct Metrics {
+    row: Pixels,
+    em: f32,
+}
+
+/// What GPUI calls the platform's interface font (Segoe UI on Windows).
+const UI_FONT: &str = ".SystemUIFont";
+
+/// The status line that ends the block starting at `cmd`, and whether that block
+/// is the last one (still running when it has no status yet).
+fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
+    for l in lines.iter().skip(cmd + 1) {
+        match l.kind {
+            LineKind::Cmd => return (None, false),
+            LineKind::Status => return (Some(l), false),
+            _ => {}
+        }
+    }
+    (None, true)
+}
+
+/// The error card's rows (fixed-height rows; the message and hint wrap to the panel).
 fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     push_line(lines, "", LineKind::Blank);
     let mut head = Line::new(&e.kind, LineKind::CardHead);
@@ -804,9 +986,7 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     }
     lines.push(head);
     if !e.message.is_empty() {
-        for row in term::wrap(&e.message, 110) {
-            lines.push(Line::new(&row, LineKind::CardMsg));
-        }
+        lines.push(Line::new(&e.message, LineKind::CardMsg));
     }
     if let (Some(code), Some(line)) = (&e.code, e.line) {
         let mut l = Line::new(code, LineKind::CardCode);
@@ -814,17 +994,21 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
         lines.push(l);
     }
     if let Some(h) = &e.hint {
-        for (n, row) in term::wrap(h, 110).into_iter().enumerate() {
-            let mut l = Line::new(&row, LineKind::CardHint);
-            l.err = n > 0;
-            lines.push(l);
-        }
+        lines.push(Line::new(h, LineKind::CardHint));
     }
     if let Some(fix) = &e.fix {
         let mut l = Line::new(fix, LineKind::CardAction);
         l.run = Some(fix.clone().into());
         lines.push(l);
     }
+}
+
+/// The file extensions `run_command_for` knows (a test keeps the two in step).
+const RUNNABLE: &[&str] = &["py", "pyw", "js", "mjs", "cjs", "ts", "mts", "ps1", "bat", "cmd", "sh", "rs", "go", "php", "lua", "rb"];
+
+/// Can F5 run this file? Cheap enough for a render: it only looks at the extension.
+pub(crate) fn can_run(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 /// How to run a file, by extension (same choices as the Tauri app's Run).
@@ -860,4 +1044,19 @@ pub(crate) fn detect_python(root: Option<&Path>) -> Option<String> {
         Some(v) if exe.contains(['\\', '/']) => format!("{text} · {v}"),
         _ => text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
+    use super::{can_run, run_command_for};
+    use std::path::Path;
+
+    #[test]
+    fn can_run_matches_run_command_for() {
+        for name in ["a.py", "A.PY", "b.pyw", "c.js", "d.mjs", "e.cjs", "f.ts", "g.mts", "h.ps1", "i.bat", "j.cmd", "k.sh", "l.rs", "m.go", "n.php", "o.lua", "p.rb", "warps.yml", "x.txt", "y.json", "noext", "z.html"] {
+            let p = Path::new(name);
+            assert_eq!(can_run(p), run_command_for(p, None).is_some(), "{name}");
+        }
+    }
 }

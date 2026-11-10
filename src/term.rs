@@ -34,6 +34,9 @@ pub enum LineKind {
     Fixed,
     /// The end of a command: exit status and time.
     Status,
+    /// The outcome under a status line: what a build produced (FluxCompile's jar
+    /// line), or, with `err`, the line that says why the command failed.
+    Result,
     /// `@@ -5,3 +5,4 @@` in a diff.
     Hunk,
     /// Error card rows (see `PyError`).
@@ -550,6 +553,24 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     if t.starts_with("> Task ") || (t.starts_with("[INFO] ") && !t.contains("BUILD")) {
         return LineKind::Dim;
     }
+    // Gradle's housekeeping around a build: true, but not what happened.
+    const GRADLE_NOISE: &[&str] = &[
+        "Consider enabling configuration cache",
+        "Deprecated Gradle features were used",
+        "You can use '--warning-mode all'",
+        "For more on this, please refer to",
+        "Starting a Gradle Daemon",
+        "To honour the JVM settings",
+        "Reusing configuration cache",
+        "Configuration cache entry",
+        "Calculating task graph",
+        "* Try:",
+        "> Run with --",
+        "> Get more help at",
+    ];
+    if GRADLE_NOISE.iter().any(|p| t.starts_with(p)) || (t.contains(" actionable task") && t.contains(": ")) {
+        return LineKind::Dim;
+    }
     // rustc points at the place: `--> src/main.rs:3:5` (a link).
     if t.starts_with("--> ") && parse_path_line(t).is_some() {
         return LineKind::Warn;
@@ -861,22 +882,26 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
 }
 
 /// Break a long message into rows for the card (the panel list has fixed-height rows).
-pub fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut cur = String::new();
-    for word in text.split(' ') {
-        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
-            rows.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(word);
-    }
-    if !cur.is_empty() || rows.is_empty() {
-        rows.push(cur);
-    }
-    rows
+/// The line that says why a failed command failed, shown under its status line:
+/// the first compiler error with a file:line, else what Gradle says went wrong,
+/// else the last specific error line. `None` when the output doesn't say, or when
+/// the reason is already one of the last lines above the status.
+pub fn failure_reason(lines: &[(&str, LineKind)]) -> Option<String> {
+    let generic = |t: &str| {
+        let t = t.trim_start();
+        t.starts_with("BUILD FAILED") || t.starts_with("FAILURE:") || t.starts_with("[INFO] BUILD FAILURE") || t.starts_with("[ERROR] BUILD") || t.starts_with("Traceback")
+    };
+    let found = lines
+        .iter()
+        .position(|(t, k)| *k == LineKind::Err && parse_path_line(t).is_some())
+        .or_else(|| {
+            let i = lines.iter().position(|(t, _)| t.trim_start().starts_with("* What went wrong"))?;
+            lines[i + 1..].iter().position(|(t, _)| !t.trim().is_empty()).map(|j| i + 1 + j)
+        })
+        .or_else(|| lines.iter().rposition(|(t, k)| *k == LineKind::Err && !t.trim().is_empty() && !generic(t)))?;
+    let shown = lines.iter().rposition(|(t, k)| !t.trim().is_empty() && *k != LineKind::Blank).unwrap_or(0);
+    // Already in plain sight right above: saying it again is noise.
+    (found + 3 <= shown).then(|| lines[found].0.trim().to_string())
 }
 
 /// The user's home folder, lower-cased, for shortening paths to `~`.
@@ -927,22 +952,26 @@ pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
 /// Split a line into rows of at most `cols` characters, breaking after a space,
 /// `\` or `/` when one is near the end, so paths wrap at a folder boundary.
 /// Returns byte ranges.
-pub fn wrap_ranges(s: &str, cols: usize) -> Vec<(usize, usize)> {
-    let cols = cols.max(8);
+/// `hang` is how many fewer fit on the rows after the first (they are indented).
+pub fn wrap_ranges(s: &str, first: usize, hang: usize) -> Vec<(usize, usize)> {
+    let first = first.max(8);
+    let rest = first.saturating_sub(hang).max(8);
     let idx: Vec<usize> = s.char_indices().map(|(i, _)| i).chain(std::iter::once(s.len())).collect();
     let n = idx.len() - 1;
-    if n <= cols {
+    if n <= first {
         return vec![(0, s.len())];
     }
     let mut out = Vec::new();
     let mut start = 0; // char index
+    let mut cols = first;
     while n - start > cols {
         let hard = start + cols;
         let chars: Vec<char> = s[idx[start]..idx[hard]].chars().collect();
-        let soft = chars.iter().rposition(|c| matches!(c, ' ' | '\\' | '/' | ',')).filter(|p| *p >= cols / 2).map(|p| start + p + 1);
+        let soft = chars.iter().rposition(|c| matches!(c, ' ' | '\\' | '/' | ',' | '-' | '_')).filter(|p| *p >= cols / 3).map(|p| start + p + 1);
         let end = soft.unwrap_or(hard);
         out.push((idx[start], idx[end]));
         start = end;
+        cols = rest;
     }
     out.push((idx[start], s.len()));
     out
@@ -1106,12 +1135,46 @@ mod tests {
     #[test]
     fn wraps_at_folder_boundaries() {
         let s = "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages";
-        let rows = wrap_ranges(s, 30);
+        let rows = wrap_ranges(s, 30, 0);
         assert!(rows.len() > 1);
         assert!(rows.iter().all(|(a, b)| s[*a..*b].chars().count() <= 30));
         assert_eq!(rows.iter().map(|(a, b)| &s[*a..*b]).collect::<String>(), s);
         assert!(s[rows[0].0..rows[0].1].ends_with('\\'));
-        assert_eq!(wrap_ranges("short", 30), vec![(0, 5)]);
+        assert_eq!(wrap_ranges("short", 30, 2), vec![(0, 5)]);
+        // A jar name breaks at its dash, not one letter before the end.
+        let jar = "build\\main\\libs\\KiwEssentials-0.1.0-SNAPSHOT.jar";
+        let rows = wrap_ranges(jar, 46, 2);
+        assert!(rows.iter().all(|(a, b)| b - a > 3));
+    }
+
+    #[test]
+    fn gradle_housekeeping_is_dim() {
+        assert_eq!(classify("55 actionable tasks: 21 executed, 1 from cache, 33 up-to-date", false, None), LineKind::Dim);
+        assert_eq!(classify("1 actionable task: 1 executed", false, None), LineKind::Dim);
+        assert_eq!(classify("Consider enabling configuration cache to speed up this build: https://docs.gradle.org/x", false, None), LineKind::Dim);
+        assert_eq!(classify("> Run with --stacktrace option to get the stack trace.", true, None), LineKind::Dim);
+        assert_eq!(classify("> Compilation failed; see the compiler error output for details.", true, None), LineKind::Normal);
+        assert_eq!(classify("BUILD SUCCESSFUL in 2s", false, None), LineKind::Success);
+    }
+
+    #[test]
+    fn says_why_a_build_failed() {
+        let k = |t: &'static str| (t, classify(t, true, None));
+        let javac = [
+            k("C:\\p\\src\\Main.java:12: error: ';' expected"),
+            k("        foo()"),
+            k("1 error"),
+            k(""),
+            k("FAILURE: Build failed with an exception."),
+            k("* What went wrong:"),
+            k("Execution failed for task ':compileJava'."),
+            k("BUILD FAILED in 2s"),
+        ];
+        assert_eq!(failure_reason(&javac).as_deref(), Some("C:\\p\\src\\Main.java:12: error: ';' expected"));
+        let gradle = [k("FAILURE: Build failed with an exception."), k(""), k("* What went wrong:"), k("Could not resolve all files."), k(""), k("* Try:"), k("> Run with --info"), k("BUILD FAILED in 1s")];
+        assert_eq!(failure_reason(&gradle).as_deref(), Some("Could not resolve all files."));
+        // The only line is right above the status already.
+        assert_eq!(failure_reason(&[k("'foo' is not recognized as an internal or external command,")]), None);
     }
 
     #[test]

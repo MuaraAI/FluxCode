@@ -287,10 +287,10 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) term_run: Option<crate::panel::RunInfo>,
-    /// Wrapped rows of the terminal and output panels, and the panel's measured width.
+    /// Wrapped rows of the terminal and output panels, and the size of the panel's log (last frame).
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
-    pub(crate) panel_width: Rc<std::cell::Cell<f32>>,
+    pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
     /// Size of the image viewer area (measured last frame), to fit pictures exactly.
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
@@ -447,7 +447,7 @@ impl Workbench {
             term_run: None,
             term_wrap: Default::default(),
             out_wrap: Default::default(),
-            panel_width: Rc::default(),
+            panel_size: Rc::default(),
             image_box: Rc::default(),
             out_run: None,
             term_hist_ix: None,
@@ -1543,35 +1543,87 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// The Run view: the folder's projects (see `render_ext_run`), then the active file
+    /// when F5 can run it. With neither, it says why and what to do.
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let file = self.active.map(|a| self.docs[a].name.to_string());
-        let projects = self.render_ext_run(cx);
-        v_flex()
-            .id("run-view")
-            .size_full()
-            .overflow_y_scroll()
-            .p_3()
-            .gap_3()
-            .text_sm()
-            .when_some(projects, |v, p| {
-                v.child(p).child(div().h(px(1.)).bg(c(theme::BORDER))).child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("This file")))
-            })
-            .child(match &file {
-                Some(f) => self
-                    .action_button("run-file", crate::trf!("Run {f}"; f => f), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
-                    .into_any_element(),
-                None => div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Open a file to run it.")).into_any_element(),
-            })
-            .when(self.out_proc.is_some(), |v| {
-                v.child(self.action_button("stop-run", tr("Stop"), ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child(tr("F5 runs the active file (Python, Node, PowerShell, batch, Rust via cargo). Output appears in the Output panel. Projects get their build, test and deploy buttons above from their extension (Ctrl+Shift+X).")),
-            )
-            .into_any_element()
+        let doc = self.active.map(|a| &self.docs[a]);
+        let runnable = doc.filter(|d| crate::panel::can_run(&d.path));
+        // One accent in the view: the main task of the project you're in, else the
+        // active file when F5 runs it, else the first project's main task.
+        let (lead, holds_file) = self.ext_lead();
+        let file_leads = runnable.is_some() && !holds_file;
+        let projects = self.render_ext_run(if file_leads { None } else { lead }, cx);
+        let has_projects = projects.is_some();
+        // Something runs in the Output panel that isn't a project task: the file.
+        let file_running = self.out_proc.is_some() && self.ext.running.is_none();
+        let mut v = v_flex().id("run-view").size_full().overflow_y_scroll().px_3().pt_1().pb_4().gap(theme::u(20.)).when_some(projects, |v, p| v.child(p));
+        if let Some(d) = runnable {
+            let label: SharedString = crate::trf!("Run {f}"; f => d.name).into();
+            let tip: SharedString = crate::trf!("Run {f} (F5)"; f => d.name).into();
+            let run = |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.on_run_file(&RunFile, w, cx);
+            let body = if !file_leads {
+                crate::ext::view::run_row("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, tip)
+                    .on_click(cx.listener(move |this, _, w, cx| run(this, w, cx)))
+                    .when(file_running, |r| r.child(self.run_stop("run-file-stop", 20., cx)))
+                    .when(!file_running, |r| r.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child("F5")))
+                    .into_any_element()
+            } else {
+                h_flex()
+                    .w_full()
+                    .gap_1p5()
+                    .child(crate::ext::view::run_main_button("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, true, tip).on_click(cx.listener(move |this, _, w, cx| run(this, w, cx))))
+                    .when(file_running, |h| h.child(self.run_stop("run-file-stop", 30., cx)))
+                    .into_any_element()
+            };
+            v = v.child(
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .when(has_projects, |b| {
+                        b.child(div().h(px(1.)).bg(c(theme::BORDER))).child(div().px_2().pt_3().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(tr("This file")))
+                    })
+                    .child(body),
+            );
+        } else if !has_projects {
+            let (title, text): (SharedString, SharedString) = match (doc, &self.root) {
+                (Some(d), _) => (
+                    crate::trf!("{f} can't be run"; f => d.name).into(),
+                    tr("F5 runs Python, JavaScript, TypeScript, PowerShell, batch, shell, Rust and Go files. Build tasks for a project come from its extension.").into(),
+                ),
+                (None, None) => (tr("Nothing to run yet").into(), tr("Open a project folder to get its build tasks here, or open a script and press F5.").into()),
+                (None, Some(_)) if self.ext.scanning => (tr("Looking for projects…").into(), tr("Build tasks show up here for each project an extension knows.").into()),
+                (None, Some(_)) => (tr("Nothing to run yet").into(), tr("No project here has an installed extension. Open a script and press F5, or find an extension for your project.").into()),
+            };
+            let button = if self.root.is_none() {
+                self.action_button("run-open-folder", tr("Open folder"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)).into_any_element()
+            } else {
+                self.action_button("run-browse-ext", tr("Browse extensions"), ui::Kind::Plain, cx, |this, _, cx| this.show_view(SideView::Extensions, cx)).into_any_element()
+            };
+            v = v.child(
+                v_flex()
+                    .w_full()
+                    .px_2()
+                    .pt_2()
+                    .gap_1()
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
+                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(text))
+                    .child(h_flex().pt_2().child(button)),
+            );
+        }
+        if file_running && runnable.is_none() {
+            // The file that runs is no longer the active one: it and Stop stay in view.
+            let what = self.out_run.as_ref().map(|r| r.command.clone()).unwrap_or_default();
+            v = v.child(
+                crate::ext::view::run_row("run-file-bg".into(), gpui_kit::assets::IconName::Play, crate::trf!("Running {what}"; what => what).into(), true, tr("Show the output").into())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.panel_open = true;
+                        this.panel_tab = PanelTab::Output;
+                        cx.notify();
+                    }))
+                    .child(self.run_stop("run-file-bg-stop", 20., cx)),
+            );
+        }
+        v.into_any_element()
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1736,7 +1788,8 @@ impl Workbench {
                                 .items_center()
                                 .gap_1()
                                 .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
-                                .child(div().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
+                                // One word: cut short in a very narrow editor area, never broken letter by letter.
+                                .child(div().max_w_full().truncate().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
                                 .child(div().w_full().text_center().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
                         )
                         .child(

@@ -14,8 +14,6 @@ pub enum Kind {
     Primary,
     /// Outlined: secondary actions.
     Plain,
-    /// Outlined in the danger color: stop, delete.
-    Danger,
 }
 
 impl Workbench {
@@ -52,11 +50,6 @@ impl Workbench {
             Kind::Plain => base
                 .border_color(c(theme::BORDER_STRONG))
                 .text_color(c(theme::FG_STRONG))
-                .hover(|s| s.bg(c(theme::BG_HOVER)))
-                .active(|s| s.bg(c(theme::BG_ELEVATED))),
-            Kind::Danger => base
-                .border_color(c(theme::DANGER))
-                .text_color(c(theme::DANGER))
                 .hover(|s| s.bg(c(theme::BG_HOVER)))
                 .active(|s| s.bg(c(theme::BG_ELEVATED))),
         }

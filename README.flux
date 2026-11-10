@@ -246,6 +246,20 @@ FluxCode opens it drawn, with Preview and Source above it.
   Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message
   and the answer restarts from it; the agent gets an overview of the workspace and a local
   memory you can read, edit or switch off.
+- **Effort and models, with what they cost.** Effort is a slider (low to max) that starts at
+  medium: good results with fewer tokens. Claude Agent's models are grouped by generation,
+  newest first, each with its price per million tokens, since the newer ones do the same
+  work with fewer tokens.
+- **Usage without typing `/usage`.** A meter under the message box shows how full the
+  context is; it, the gauge button or typing `/usage` opens a panel with the plan's limits
+  (the 5-hour and weekly ones), when each resets, the context window, the session's cost and
+  what uses the limits most, all read from the agent itself. Limits reset by themselves;
+  Request usage credits asks first, then asks the plan for more and shows the answer.
+- **Web searches you can follow.** When the agent searches the web or reads a page, the
+  chat shows the query and its sources, each one click away.
+- **What the agent is doing, as it does it.** Thinking, reading, editing, running a command
+  and searching are steps on one line: a running step has a thin moving line under it, and
+  when it ends its label turns from "Reading" to "Read" and shows how long it took.
 - **A browser for every agent.** FluxCode hands each agent session a browser it can
   drive: the Chrome, Brave or Edge already on your PC (Chrome when it is there), through
   Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)

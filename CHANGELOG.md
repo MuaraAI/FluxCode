@@ -5,6 +5,54 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
+
+- The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
+  steps on one rail, joined to the steps around them. A running step has its icon in the
+  accent and a thin sweep under it; when it ends, the label cross-fades from "Reading" to
+  "Read" and the time it took appears; new steps slide in once (160 ms). Only running steps
+  animate, so an idle chat draws nothing.
+- Run view: each project has a compact header and one full-width main action (Build),
+  with the other tasks as quiet rows and rarely used ones under More; a running task shows
+  a spinner and Stop. Extensions not installed yet are one line under Suggested extensions.
+  "This file" shows only when F5 can run the file (no more "Run warps.yml").
+- An extension's page: the title shares its line with Install or Uninstall and a close
+  button (they wrap under it when narrow), one meta line, and each project as one row with
+  its main task and a menu for the rest.
+- Output and Terminal: log text in the editor font at a readable size and normal weight
+  with a 1.6 line height; each command is one header band (what ran, where, status, time);
+  the end says "Finished in 1.8s" or "Failed (exit code 1)" with a result line (what was
+  built) or the reason (the first compiler error, clickable); Gradle's housekeeping lines
+  are dimmed; wrapped lines indent by two characters; the top row is never cut in half at
+  the bottom; the Python version shows only for Python runs.
+- Live share: a short header, two choices side by side (Host this folder, Join with a
+  code) that stack when narrow, the invite code first with one Copy button while hosting,
+  people as a compact list with their file and line, the ways in as one line each with
+  details behind a toggle, and errors as a banner that says what to do.
+
+## The agent panel: effort slider, priced models, usage panel, web searches (10 November 2026)
+
+- The model menu (and the other menus above the message box) gets exactly the room between
+  the panel's top and the box, measured as it is drawn: it no longer runs over the panel's
+  header in a short window.
+- Effort is a slider of the agent's levels with a line on what each costs. New sessions
+  start at medium (good results with fewer tokens) unless a level was picked before.
+- Claude Agent's models are grouped by generation, newest first (Claude 5.5, Claude 5,
+  Claude 4), each with its price per million tokens from Anthropic's model table: Opus 5.5
+  $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50, Opus 5 and
+  4.x $5 / $25, Sonnet 4.6 $3 / $15, Haiku 4.5 $1 / $5.
+- A usage panel (the gauge button, the context meter under the message box, or typing
+  `/usage`): the plan's limits from the agent's own `/usage` (run quietly, no tokens), when
+  each resets (live from the agent's `usage_update`), the context window from `/context`,
+  the session's cost and tokens, and what uses the limits most. Request usage credits asks
+  for confirmation, runs `/usage-credits` and shows its answer; limits themselves reset on
+  their own.
+- Web searches and page reads are cards: the query, then the sources with their site, each
+  opening in the browser; a thin line sweeps while it searches and the rows ease in once
+  when results arrive. The agent's own tool-list lookups (ToolSearch) no longer show as rows.
+- The message box's model, mode and permission buttons give way in a narrow panel instead
+  of pushing Send out of the box; "Default (recommended)" shows as "Default".
+
 ## Extensions, FluxCompile, OpenCode 2 and a theme picker (10 November 2026)
 
 - An Extensions view (`Ctrl+Shift+X`, a new activity bar icon): 11 built-in extensions as

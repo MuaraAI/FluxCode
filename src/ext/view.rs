@@ -19,7 +19,10 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    spinner::Spinner,
     text::TextView,
+    tooltip::Tooltip,
     v_flex, Icon, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -67,6 +70,108 @@ fn tile(name: &str, size: f32) -> Div {
         .items_center()
         .justify_center()
         .child(Icon::new(icon(name)).size(theme::u(size * 0.55)).text_color(c(theme::FG_STRONG)))
+}
+
+/// A section of the extension page: a title, maybe one line under it, then its content
+/// (the caller adds it).
+fn page_section(title: SharedString, note: Option<SharedString>) -> Div {
+    v_flex()
+        .w_full()
+        .gap_2()
+        .child(
+            v_flex()
+                .gap_0p5()
+                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
+                .when_some(note, |v, n| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(n))),
+        )
+}
+
+/// Tasks few people need every day: behind More instead of in the list.
+fn rare(t: &Task) -> bool {
+    matches!(t.id.as_str(), "clean" | "wrapper")
+}
+
+/// Rows under a project's main button before the rest go behind More.
+const SHOWN: usize = 5;
+
+/// A project's tasks laid out: the main one (the manifest's `primary`, else the first),
+/// the ones shown as rows, and the ones behind More (rare ones and any past `SHOWN`).
+pub(crate) fn arrange(tasks: &[Task]) -> (Option<usize>, Vec<usize>, Vec<usize>) {
+    let main = tasks.iter().position(|t| t.primary).or(if tasks.is_empty() { None } else { Some(0) });
+    let (mut rows, mut more) = (Vec::new(), Vec::new());
+    for (i, t) in tasks.iter().enumerate() {
+        if Some(i) == main {
+            continue;
+        }
+        if rare(t) || rows.len() >= SHOWN {
+            more.push(i);
+        } else {
+            rows.push(i);
+        }
+    }
+    (main, rows, more)
+}
+
+/// What a task does, for its tooltip.
+fn task_tip(t: &Task) -> SharedString {
+    match (t.line.is_empty(), t.terminal) {
+        (true, _) => tr("Done by FluxCode itself").into(),
+        (false, true) => crate::trf!("Runs in the Terminal: {line}"; line => t.line).into(),
+        (false, false) => t.line.clone().into(),
+    }
+}
+
+/// The main action of a group in the Run view: a full-width button, with a spinner in
+/// place of its icon while it runs. `accent`: the accent fill, for the one group the
+/// view leads with; the others get a quieter filled button.
+pub(crate) fn run_main_button(id: ElementId, ic: Ico, label: SharedString, running: bool, accent: bool, tip: SharedString) -> Stateful<Div> {
+    let (fg, icon_fg) = if accent { (theme::ON_ACCENT, theme::ON_ACCENT) } else { (theme::FG_STRONG, theme::ACCENT_TEXT) };
+    h_flex()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .h(theme::u(30.))
+        .px_3()
+        .gap_2()
+        .justify_center()
+        .rounded(px(5.))
+        .border_1()
+        .when(accent, |d| d.bg(c(theme::ACCENT)).border_color(c(theme::ACCENT)).hover(|d| d.opacity(0.9)).active(|d| d.opacity(0.78)))
+        .when(!accent, |d| d.bg(c(theme::BG_ELEVATED)).border_color(c(theme::BORDER_STRONG)).hover(|d| d.bg(c(theme::BG_HOVER))).active(|d| d.opacity(0.85)))
+        .text_color(c(fg))
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .child(if running {
+            Spinner::new().icon(Ico::LoaderCircle).xsmall().color(c(icon_fg)).into_any_element()
+        } else {
+            Icon::new(ic).size(theme::u(14.)).text_color(c(icon_fg)).into_any_element()
+        })
+        .child(div().min_w_0().truncate().child(label))
+        .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
+}
+
+/// A quiet task row in the Run view; the caller adds what sits at its right end.
+pub(crate) fn run_row(id: ElementId, ic: Ico, label: SharedString, running: bool, tip: SharedString) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .h(theme::u(26.))
+        .px_2()
+        .gap_2()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_sm()
+        .text_color(c(if running { theme::FG_STRONG } else { theme::FG }))
+        .hover(|d| d.bg(c(theme::BG_HOVER)))
+        .child(if running {
+            Spinner::new().icon(Ico::LoaderCircle).xsmall().color(c(theme::ACCENT_TEXT)).into_any_element()
+        } else {
+            Icon::new(ic).size(theme::u(14.)).text_color(c(theme::FG_MUTED)).into_any_element()
+        })
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
 }
 
 impl super::Ext {
@@ -385,7 +490,7 @@ impl Workbench {
             if let Some(p) = project.filter(|p| p.ext == "paper" || p.ext == "java-gradle" || p.ext == "java-maven") {
                 let took = self.out_lines.iter().rev().find(|l| l.kind == LineKind::Status).map(|l| l.meta.to_string()).unwrap_or_default();
                 if let Some(s) = crate::ext::compile::summary(&p, &took) {
-                    let mut l = Line::new(&s, LineKind::Success);
+                    let mut l = Line::new(&s, LineKind::Result);
                     l.meta = "FluxCompile".into();
                     close_line(&mut self.out_lines);
                     self.out_lines.push(l);
@@ -666,93 +771,111 @@ impl Workbench {
     pub(crate) fn render_ext_page(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some(m) = self.ext_manifest(id).cloned() else { return div().into_any_element() };
         let installed = self.ext_installed(&m.id);
+
+        // Header: icon, name, one meta line and the summary, with the actions on the
+        // right. On a narrow editor area the actions drop below the text.
+        let mut meta: Vec<String> = Vec::new();
+        if !m.category.is_empty() {
+            meta.push(m.category.clone());
+        }
+        meta.push(format!("v{}", m.version));
+        meta.push(if m.builtin() {
+            tr("Built into FluxCode").to_string()
+        } else if m.publisher.is_empty() {
+            tr("Installed from a file").to_string()
+        } else {
+            crate::trf!("By {who}"; who => m.publisher)
+        });
         let mid = m.id.clone();
         let actions = h_flex()
             .flex_none()
-            .gap_2()
+            .gap_1()
             .child(if installed {
-                Button::new("ext-uninstall")
-                    .label(tr("Uninstall"))
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(move |this, _, _, cx| this.ext_uninstall(&mid, cx)))
-                    .into_any_element()
+                Button::new("ext-uninstall").label(tr("Uninstall")).small().on_click(cx.listener(move |this, _, _, cx| this.ext_uninstall(&mid, cx))).into_any_element()
             } else {
-                Button::new("ext-install-page")
-                    .label(tr("Install"))
-                    .small()
-                    .primary()
-                    .on_click(cx.listener(move |this, _, _, cx| this.ext_install(&mid, cx)))
-                    .into_any_element()
+                Button::new("ext-install-page").label(tr("Install")).small().primary().on_click(cx.listener(move |this, _, _, cx| this.ext_install(&mid, cx))).into_any_element()
             })
-            .child(Button::new("ext-close").label(tr("Close")).small().on_click(cx.listener(|this, _, _, cx| {
+            .child(Button::new("ext-close").icon(Icon::new(Ico::Close)).small().ghost().tooltip(tr("Close (Esc)")).on_click(cx.listener(|this, _, _, cx| {
                 this.ext.page = None;
                 cx.notify();
             })));
+        // The title shares its line with the actions; when the two don't fit (the title
+        // would get narrower than ~160 px) the actions move under it.
+        let title = h_flex()
+            .w_full()
+            .flex_wrap()
+            .gap_x_4()
+            .gap_y_1()
+            .child(div().flex_1().min_w(theme::u(160.)).truncate().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(m.name.clone()))
+            .child(actions);
+        let meta_line = h_flex()
+            .w_full()
+            .gap_2()
+            .text_xs()
+            .text_color(c(theme::FG_DIM))
+            .when(installed, |h| h.child(h_flex().flex_none().gap_1().text_color(c(theme::GREEN)).child(Icon::new(Ico::Check).size(theme::u(12.))).child(tr("Installed"))).child("·"))
+            .child(div().flex_1().min_w_0().truncate().child(meta.join("  ·  ")));
         let head = h_flex()
             .w_full()
             .gap_4()
             .items_start()
-            .child(tile(&m.icon, 52.))
+            .child(tile(&m.icon, 48.))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(m.name.clone()))
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_x_2()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
-                            .child(if m.builtin() { format!("{} · {}", m.publisher, tr("built in")) } else { m.publisher.clone() })
-                            .child(format!("v{}", m.version))
-                            .child(m.category.clone())
-                            .when(installed, |h| h.child(div().text_color(c(theme::GREEN)).child(tr("Installed")))),
-                    )
-                    .child(div().pt_1().text_sm().text_color(c(theme::FG)).child(m.summary.clone()))
-                    .child(actions.pt_2()),
+                    .child(title)
+                    .child(meta_line)
+                    .child(div().pt_1p5().text_sm().text_color(c(theme::FG)).child(m.summary.clone())),
             );
-        let section = |title: SharedString| div().pt_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title);
-        let mut body = v_flex().w_full().max_w(theme::u(760.)).gap_3().child(head);
 
-        // The folder's projects, with their tasks.
+        let mut body = v_flex().w_full().max_w(theme::u(760.)).gap(theme::u(28.)).child(head);
+
+        // The folder's projects, with their main task and the rest in a menu.
         let mine: Vec<usize> = self.ext.found.iter().enumerate().filter(|(_, p)| p.ext == m.id).map(|(i, _)| i).collect();
         if !mine.is_empty() {
-            body = body.child(section(tr("In this folder").into()));
-            for pix in mine {
-                body = body.child(self.render_project_card(pix, installed, cx));
+            let note: SharedString = if installed { tr("Their tasks are in the Run view too (Ctrl+Shift+D).").into() } else { tr("Install the extension to build and run them here.").into() };
+            let mut list = v_flex().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).overflow_hidden();
+            for (k, pix) in mine.into_iter().enumerate() {
+                list = list.child(self.render_project_card(pix, installed, k > 0, cx));
             }
+            body = body.child(page_section(tr("In this folder").into(), Some(note)).child(list));
         }
 
         // New project.
         if !m.templates.is_empty() {
             let t = m.templates[0].clone();
-            let what: SharedString = if t == "paper" { tr("New Paper plugin").into() } else { tr("New add-on").into() };
+            let (what, how): (SharedString, SharedString) = if t == "paper" {
+                (tr("New Paper plugin").into(), tr("A Gradle project for your server's Paper version, with the Gradle wrapper.").into())
+            } else {
+                (tr("New add-on").into(), tr("A behavior pack and its resource pack, ready to deploy.").into())
+            };
             let where_: SharedString = match &self.root {
-                Some(r) => crate::trf!("Goes into {dir}"; dir => r.display()).into(),
+                Some(r) => {
+                    let parent = if t == "paper" { [r.join("plugin-dev").join("projects"), r.join("plugin-dev")].into_iter().find(|d| d.is_dir()).unwrap_or(r.clone()) } else { r.clone() };
+                    let shown = r.parent().and_then(|top| parent.strip_prefix(top).ok()).map(|p| p.display().to_string()).unwrap_or_else(|| parent.display().to_string());
+                    crate::trf!("Goes into {dir}"; dir => shown).into()
+                }
                 None => tr("Open a folder first: the new project goes into it.").into(),
             };
-            body = body.child(section(what)).child(
-                v_flex()
-                    .gap_1p5()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().flex_1().max_w(theme::u(320.)).child(Input::new(&self.ext.new_name).small()))
-                            .child(Button::new("ext-create").label(tr("Create")).small().primary().on_click(cx.listener(move |this, _, w, cx| this.ext_create(&t, w, cx)))),
-                    )
-                    .child(div().text_xs().text_color(c(theme::FG_DIM)).child(where_)),
-            );
-        }
-        if let Some(n) = &self.ext.note {
+            let form = v_flex()
+                .gap_1p5()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().max_w(theme::u(360.)).child(Input::new(&self.ext.new_name).small()))
+                        .child(Button::new("ext-create").label(tr("Create")).small().on_click(cx.listener(move |this, _, w, cx| this.ext_create(&t, w, cx)))),
+                )
+                .child(div().w_full().truncate().text_xs().text_color(c(theme::FG_DIM)).child(where_))
+                .when_some(self.ext.note.clone(), |v, n| v.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(n)));
+            body = body.child(page_section(what, Some(how)).child(form));
+        } else if let Some(n) = &self.ext.note {
             body = body.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(n.clone()));
         }
 
-        // What it needs.
+        // The tools it needs.
         if !m.needs.is_empty() {
-            body = body.child(section(tr("Needs").into()));
             let checked = self.ext.needs.get(&m.id);
             let mut rows = v_flex().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).overflow_hidden();
             let list: Vec<(super::Need, Option<Tool>)> = match checked {
@@ -760,10 +883,10 @@ impl Workbench {
                 None => m.needs.iter().map(|n| (n.clone(), None)).collect(),
             };
             for (k, (need, state)) in list.into_iter().enumerate() {
-                let (mark, col, detail): (&str, theme::Tok, SharedString) = match &state {
-                    Some(Tool::Found(p)) => ("✓", theme::GREEN, p.clone().into()),
-                    Some(Tool::Missing) => ("✕", theme::DANGER, tr("Not found").into()),
-                    None => ("·", theme::FG_DIM, tr("Checking…").into()),
+                let (mark, detail): (AnyElement, SharedString) = match &state {
+                    Some(Tool::Found(p)) => (Icon::new(Ico::CircleCheck).size(theme::u(14.)).text_color(c(theme::GREEN)).into_any_element(), p.clone().into()),
+                    Some(Tool::Missing) => (Icon::new(Ico::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)).into_any_element(), tr("Not found").into()),
+                    None => (Spinner::new().icon(Ico::LoaderCircle).xsmall().color(c(theme::FG_DIM)).into_any_element(), tr("Checking…").into()),
                 };
                 let missing = matches!(state, Some(Tool::Missing));
                 let (winget, url) = (need.winget.clone(), need.url.clone());
@@ -771,15 +894,16 @@ impl Workbench {
                     h_flex()
                         .px_3()
                         .py_2()
-                        .gap_2()
+                        .gap_x_2p5()
+                        .gap_y_1()
                         .flex_wrap()
                         .when(k > 0, |h| h.border_t_1().border_color(c(theme::BORDER)))
-                        .child(div().flex_none().w(theme::u(14.)).text_color(c(col)).child(mark))
+                        .child(div().flex_none().child(mark))
                         .child(div().flex_none().text_sm().text_color(c(theme::FG_STRONG)).child(need.label.clone()))
                         .child(div().flex_1().min_w(theme::u(120.)).truncate().text_xs().text_color(c(theme::FG_DIM)).child(detail))
                         .when(missing && cfg!(windows) && !winget.is_empty(), |h| {
                             let w = winget.clone();
-                            h.child(Button::new(("ext-need-get", k)).label(tr("Install")).xsmall().primary().tooltip(format!("winget install -e --id {winget}")).on_click(cx.listener(move |this, _, _, cx| {
+                            h.child(Button::new(("ext-need-get", k)).label(tr("Install")).xsmall().tooltip(format!("winget install -e --id {winget}")).on_click(cx.listener(move |this, _, _, cx| {
                                 let line = format!("winget install -e --id {w} --accept-source-agreements --accept-package-agreements");
                                 this.panel_open = true;
                                 this.panel_tab = PanelTab::Terminal;
@@ -791,11 +915,10 @@ impl Workbench {
                         }),
                 );
             }
-            body = body.child(rows);
+            body = body.child(page_section(tr("Needs").into(), None).child(rows));
         }
 
         // What it adds.
-        body = body.child(section(tr("Tasks").into()));
         let mut tasks = v_flex().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).overflow_hidden();
         for (k, t) in m.tasks.iter().enumerate() {
             let flux = t.run.contains("{fluxcompile}");
@@ -812,16 +935,22 @@ impl Workbench {
             } else {
                 tr("Done by FluxCode itself").into()
             };
+            // Two lines at every width: the task, and under it what it runs.
             tasks = tasks.child(
                 h_flex()
                     .px_3()
-                    .py_1p5()
-                    .gap_2()
-                    .flex_wrap()
+                    .py_2()
+                    .gap_2p5()
+                    .items_start()
                     .when(k > 0, |h| h.border_t_1().border_color(c(theme::BORDER)))
-                    .child(Icon::new(icon(&t.icon)).size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
-                    .child(div().flex_none().w(theme::u(150.)).text_sm().text_color(c(theme::FG)).child(t.label.clone()))
-                    .child(div().flex_1().min_w(theme::u(160.)).text_xs().font_family("Cascadia Code").text_color(c(theme::FG_DIM)).child(how))
+                    .child(div().flex_none().pt(px(3.)).child(Icon::new(icon(&t.icon)).size(theme::u(14.)).text_color(c(theme::FG_MUTED))))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().text_color(c(theme::FG_STRONG)).child(t.label.clone()))
+                            .child(div().text_xs().font_family("Cascadia Code").text_color(c(theme::FG_DIM)).child(how)),
+                    )
                     .when(flux, |h| {
                         h.child(
                             div()
@@ -830,26 +959,27 @@ impl Workbench {
                                 .px_1p5()
                                 .rounded(px(4.))
                                 .border_1()
-                                .border_color(c(theme::BORDER_STRONG))
+                                .border_color(c(theme::BORDER))
                                 .text_xs()
-                                .text_color(c(theme::ACCENT_TEXT))
+                                .text_color(c(theme::FG_MUTED))
                                 .child("FluxCompile")
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::trf!("FluxCompile runs it with {what}"; what => crate::ext::compile::ABOUT)).build(w, cx)),
+                                .tooltip(|w, cx| Tooltip::new(crate::trf!("FluxCompile runs it with {what}"; what => crate::ext::compile::ABOUT)).build(w, cx)),
                         )
                     }),
             );
         }
-        body = body.child(tasks);
+        body = body.child(page_section(tr("Tasks").into(), Some(tr("What it adds to the Run view.").into())).child(tasks));
         if !m.about.is_empty() {
-            body = body.child(section(tr("About").into())).child(div().text_sm().text_color(c(theme::FG)).child(TextView::markdown("ext-about", m.about.clone())));
+            body = body.child(page_section(tr("About").into(), None).child(div().text_sm().text_color(c(theme::FG)).child(TextView::markdown("ext-about", m.about.clone()))));
         }
         v_flex()
             .id("ext-page")
             .key_context("ExtPage")
             .size_full()
             .items_center()
-            .px(theme::u(20.))
-            .py_6()
+            .px(theme::u(24.))
+            .pt(theme::u(28.))
+            .pb(theme::u(40.))
             .overflow_y_scroll()
             .bg(c(theme::BG_EDITOR))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
@@ -862,94 +992,210 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// One project: its name and folder, and its tasks as buttons.
-    fn render_project_card(&self, pix: usize, installed: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// One project on the page: its name and folder, its main task as a button and the
+    /// other tasks in a menu next to it (a row of every task wrapped into a cloud).
+    fn render_project_card(&self, pix: usize, installed: bool, divided: bool, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.ext.found[pix];
         let rel = self.rel_display(&p.dir.to_string_lossy());
-        let mut buttons = h_flex().flex_wrap().gap_1p5();
+        let tasks: &[Task] = self.ext.tasks.get(pix).map(|v| v.as_slice()).unwrap_or(&[]);
+        let (main, rows, more) = arrange(tasks);
+        let running_id = self.ext.running.as_ref().filter(|(rp, _)| *rp == pix).map(|(_, id)| id.clone());
+        let running_label = running_id.as_ref().and_then(|id| tasks.iter().find(|t| &t.id == id)).map(|t| t.label.clone());
+        let line: SharedString = match &running_label {
+            Some(l) => crate::trf!("Running {task}…"; task => l).into(),
+            None if rel.is_empty() => tr("The folder itself").into(),
+            None => rel.into(),
+        };
+        let mut right = h_flex().flex_none().gap_1();
         if installed {
-            for (tix, t) in self.ext.tasks.get(pix).into_iter().flatten().enumerate() {
-                let running = self.ext.running.as_ref().is_some_and(|(rp, rt)| *rp == pix && *rt == t.id);
-                let tip: SharedString = if t.line.is_empty() { tr("Done by FluxCode itself").into() } else { t.line.clone().into() };
-                let b = Button::new(("ext-task", pix * 100 + tix)).icon(Icon::new(if running { Ico::LoaderCircle } else { icon(&t.icon) })).label(t.label.clone()).xsmall().tooltip(tip);
-                let b = if t.primary { b.primary() } else { b };
-                buttons = buttons.child(b.on_click(cx.listener(move |this, _, w, cx| this.ext_run(pix, tix, w, cx))));
+            if let Some(mi) = main {
+                let t = &tasks[mi];
+                let on = running_id.as_deref() == Some(t.id.as_str());
+                let b = Button::new(("ext-main", pix)).icon(Icon::new(icon(&t.icon))).label(t.label.clone()).small();
+                // The accent once on the page: the first project's main task.
+                let b = if divided { b } else { b.primary() };
+                right = right.child(
+                    b.loading(on)
+                        .tooltip(task_tip(t))
+                        .on_click(cx.listener(move |this, _, w, cx| this.ext_run(pix, mi, w, cx))),
+                );
             }
-        } else {
-            buttons = buttons.child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Install the extension to get its tasks here.")));
+            let others: Vec<usize> = rows.into_iter().chain(more).collect();
+            if !others.is_empty() {
+                right = right.child(self.tasks_menu(("ext-more", pix).into(), pix, &others, None, false, cx));
+            }
         }
-        v_flex()
-            .p_3()
-            .gap_2()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(c(theme::BORDER))
-            .bg(c(theme::BG_SIDE))
+        h_flex()
+            .px_3()
+            .py_2p5()
+            .gap_3()
+            .when(divided, |h| h.border_t_1().border_color(c(theme::BORDER)))
             .child(
-                h_flex()
-                    .gap_2()
-                    .child(div().flex_none().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(p.name.clone()))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(rel)),
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(p.name.clone()))
+                    .child(div().truncate().text_xs().text_color(c(if running_label.is_some() { theme::ACCENT_TEXT } else { theme::FG_DIM })).child(line)),
             )
-            .child(buttons)
+            .child(right)
             .into_any_element()
+    }
+
+    /// A menu of a project's tasks (and, when `page` names the extension, its page).
+    fn tasks_menu(&self, id: ElementId, pix: usize, which: &[usize], page: Option<(String, String)>, labelled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let tasks: &[Task] = self.ext.tasks.get(pix).map(|v| v.as_slice()).unwrap_or(&[]);
+        let items: Vec<(usize, String, String)> = which.iter().filter_map(|&i| tasks.get(i).map(|t| (i, t.label.clone(), t.icon.clone()))).collect();
+        let weak = cx.entity().downgrade();
+        let b = Button::new(id).icon(Icon::new(Ico::Ellipsis)).ghost();
+        let b = if labelled { b.label(tr("More")).xsmall().px_2().h(theme::u(26.)) } else { b.small().tooltip(tr("More tasks")) };
+        b.dropdown_menu(move |mut menu: PopupMenu, _, _| {
+            menu = menu.min_w(px(200.));
+            for (ti, label, ic) in &items {
+                let (w, ti) = (weak.clone(), *ti);
+                menu = menu.item(PopupMenuItem::new(label.clone()).icon(Icon::new(icon(ic))).on_click(move |_, win, cx| {
+                    _ = w.update(cx, |this, cx| this.ext_run(pix, ti, win, cx));
+                }));
+            }
+            if let Some((ext, name)) = &page {
+                let (w, ext) = (weak.clone(), ext.clone());
+                menu = menu.separator().item(PopupMenuItem::new(crate::trf!("About {ext}"; ext => name)).icon(Icon::new(Ico::Info)).on_click(move |_, _, cx| {
+                    _ = w.update(cx, |this, cx| this.ext_open_page(&ext, cx));
+                }));
+            }
+            menu
+        })
+        .into_any_element()
     }
 
     // ------------------------------------------------------------ the Run view
 
-    /// The folder's projects and their tasks, at the top of the Run view.
-    pub(crate) fn render_ext_run(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The project the Run view leads with (its main button gets the accent): the one
+    /// holding the active file (the innermost), else the first. Only projects with more
+    /// than one task count: a lone shortcut like Preview index.html never leads. The
+    /// bool: the active file is inside it.
+    pub(crate) fn ext_lead(&self) -> (Option<usize>, bool) {
+        let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
+        let ok = |i: usize, p: &Project| self.ext_installed(&p.ext) && self.ext.tasks.get(i).is_some_and(|t| t.len() > 1);
+        let holding = active.and_then(|f| {
+            self.ext.found.iter().enumerate().filter(|(i, p)| ok(*i, p) && f.starts_with(&p.dir)).max_by_key(|(_, p)| p.dir.components().count()).map(|(i, _)| i)
+        });
+        match holding {
+            Some(i) => (Some(i), true),
+            None => (self.ext.found.iter().enumerate().find(|(i, p)| ok(*i, p)).map(|(i, _)| i), false),
+        }
+    }
+
+    /// Stop what runs in the Output panel (a task or the file), not the Terminal.
+    pub(crate) fn run_stop(&self, id: impl Into<ElementId>, size: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id(id)
+            .flex_none()
+            .size(theme::u(size))
+            .rounded(px(5.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|d| d.bg(c(theme::BG_HOVER)))
+            .child(Icon::new(Ico::Square).size(theme::u(size * 0.42)).text_color(c(theme::DANGER)))
+            .tooltip(|w, cx| Tooltip::new(tr("Stop")).build(w, cx))
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                if let Some(id) = this.out_proc {
+                    this.procs.kill(id);
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The folder's projects and their tasks, at the top of the Run view: per project
+    /// a header, its main task as a full-width button, the next few as quiet rows and
+    /// the rare ones (Clean, Add Gradle wrapper) behind More. Projects an extension
+    /// would build but isn't installed for get one line each below.
+    /// `lead`: the project whose main button gets the accent (None: the active file
+    /// leads instead, see `render_run_view`).
+    pub(crate) fn render_ext_run(&self, lead: Option<usize>, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.ext.found.is_empty() {
             return None;
         }
-        let mut col = v_flex().gap_3();
-        // Projects an installed extension builds.
+        let mut col = v_flex().w_full().gap(theme::u(20.));
+        let mut any = false;
         for (pix, p) in self.ext.found.iter().enumerate() {
             if !self.ext_installed(&p.ext) {
                 continue;
             }
+            any = true;
             let m = self.ext_manifest(&p.ext);
-            let mut rows = v_flex().gap_0p5();
-            for (tix, t) in self.ext.tasks.get(pix).into_iter().flatten().enumerate() {
-                let running = self.ext.running.as_ref().is_some_and(|(rp, rt)| *rp == pix && *rt == t.id);
-                let tip: SharedString = if t.line.is_empty() { tr("Done by FluxCode itself").into() } else { t.line.clone().into() };
-                rows = rows.child(
+            let ext_name = m.map(|m| m.name.clone()).unwrap_or_default();
+            let tasks: &[Task] = self.ext.tasks.get(pix).map(|v| v.as_slice()).unwrap_or(&[]);
+            let (main, rows, more) = arrange(tasks);
+            let running = |t: &Task| self.ext.running.as_ref().is_some_and(|(rp, rt)| *rp == pix && *rt == t.id);
+
+            let rel = self.rel_display(&p.dir.to_string_lossy());
+            let tip: SharedString = if rel.is_empty() { format!("{} · {ext_name}", p.name) } else { format!("{} · {rel}", p.name) }.into();
+            let ext_id = p.ext.clone();
+            let head = h_flex()
+                .id(("run-proj", pix))
+                .w_full()
+                .min_w_0()
+                .gap_2p5()
+                .cursor_pointer()
+                .child(tile(m.map(|m| m.icon.as_str()).unwrap_or(""), 28.))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(p.name.clone()))
+                        .child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(ext_name.clone())),
+                )
+                .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
+                .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&ext_id, cx)));
+
+            let mut group = v_flex().w_full().gap_1().child(head);
+            if let Some(mi) = main {
+                let t = &tasks[mi];
+                let on = running(t);
+                group = group.child(
                     h_flex()
-                        .id(("run-task", pix * 100 + tix))
-                        .h(theme::u(24.))
-                        .px_2()
-                        .gap_2()
-                        .rounded(px(4.))
-                        .cursor_pointer()
-                        .text_sm()
-                        .text_color(c(if t.primary { theme::FG_STRONG } else { theme::FG }))
-                        .hover(|d| d.bg(c(theme::BG_HOVER)))
-                        .child(Icon::new(if running { Ico::LoaderCircle } else { icon(&t.icon) }).size(theme::u(14.)).text_color(c(if t.primary { theme::ACCENT_TEXT } else { theme::FG_MUTED })))
-                        .child(div().flex_1().min_w_0().truncate().child(t.label.clone()))
-                        .when(t.terminal, |h| h.child(Icon::new(Ico::SquareTerminal).size(theme::u(12.)).text_color(c(theme::FG_DIM))))
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
-                        .on_click(cx.listener(move |this, _, w, cx| this.ext_run(pix, tix, w, cx))),
+                        .w_full()
+                        .pt_1p5()
+                        .pb_0p5()
+                        .gap_1p5()
+                        .child(run_main_button(("run-main", pix).into(), icon(&t.icon), t.label.clone().into(), on, lead == Some(pix), task_tip(t)).on_click(cx.listener(move |this, _, w, cx| this.ext_run(pix, mi, w, cx))))
+                        .when(on, |h| h.child(self.run_stop(("run-main-stop", pix), 30., cx))),
                 );
             }
-            let ext_id = p.ext.clone();
-            col = col.child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .id(("run-proj", pix))
-                            .gap_2()
-                            .cursor_pointer()
-                            .child(tile(m.map(|m| m.icon.as_str()).unwrap_or(""), 18.))
-                            .child(div().flex_none().max_w(relative(0.6)).truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(p.name.clone()))
-                            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(m.map(|m| m.name.clone()).unwrap_or_default()))
-                            .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&ext_id, cx))),
-                    )
-                    .child(rows),
-            );
+            for ti in rows {
+                let t = &tasks[ti];
+                let on = running(t);
+                let row = run_row(("run-task", pix * 100 + ti).into(), icon(&t.icon), t.label.clone().into(), on, task_tip(t))
+                    .on_click(cx.listener(move |this, _, w, cx| this.ext_run(pix, ti, w, cx)))
+                    .when(on, |r| r.child(self.run_stop(("run-task-stop", pix * 100 + ti), 20., cx)))
+                    .when(!on && t.terminal, |r| r.child(Icon::new(Ico::SquareTerminal).size(theme::u(12.)).text_color(c(theme::FG_DIM))));
+                group = group.child(row);
+            }
+            if !more.is_empty() {
+                let running_hidden = more.iter().any(|&i| running(&tasks[i]));
+                group = group.child(
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .child(self.tasks_menu(("run-more", pix).into(), pix, &more, Some((p.ext.clone(), ext_name.clone())), true, cx))
+                        .when(running_hidden, |h| {
+                            let label = more.iter().map(|&i| &tasks[i]).find(|t| running(t)).map(|t| t.label.clone()).unwrap_or_default();
+                            h.child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::ACCENT_TEXT)).child(crate::trf!("Running {task}…"; task => label)))
+                                .child(self.run_stop(("run-more-stop", pix), 20., cx))
+                        }),
+                );
+            }
+            col = col.child(group);
         }
-        // Projects an extension would build, not installed yet: one line each.
+
+        // Projects an extension would build, not installed yet: one calm line each.
         let mut offered: Vec<&str> = Vec::new();
+        let mut offers = v_flex().w_full().gap_0p5();
         for p in &self.ext.found {
             if self.ext_installed(&p.ext) || offered.contains(&p.ext.as_str()) {
                 continue;
@@ -957,36 +1203,63 @@ impl Workbench {
             offered.push(&p.ext);
             let Some(m) = self.ext_manifest(&p.ext) else { continue };
             let (id_a, id_b) = (m.id.clone(), m.id.clone());
-            col = col.child(
+            offers = offers.child(
                 h_flex()
                     .id(SharedString::from(format!("run-offer-{}", m.id)))
-                    .p_2()
+                    .w_full()
+                    .min_w_0()
+                    .h(theme::u(28.))
+                    .px_2()
                     .gap_2()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(c(theme::BORDER))
+                    .rounded(px(4.))
                     .cursor_pointer()
                     .hover(|d| d.bg(c(theme::BG_HOVER)))
-                    .child(tile(&m.icon, 22.))
+                    .child(Icon::new(icon(&m.icon)).size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
                     .child(
-                        v_flex()
+                        h_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().truncate().text_xs().text_color(c(theme::FG_STRONG)).child(m.name.clone()))
-                            .child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("For {name}"; name => p.name))),
+                            .gap_1p5()
+                            .child(div().flex_shrink(1.).min_w_0().truncate().text_sm().text_color(c(theme::FG)).child(m.name.clone()))
+                            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("for {name}"; name => p.name))),
                     )
-                    .child(Button::new(SharedString::from(format!("run-offer-i-{}", m.id))).label(tr("Install")).xsmall().primary().on_click(cx.listener(move |this, _, _, cx| {
+                    .child(Button::new(SharedString::from(format!("run-offer-i-{}", m.id))).label(tr("Install")).xsmall().on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.ext_install(&id_a, cx);
                     })))
                     .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&id_b, cx))),
             );
         }
-        Some(col.into_any_element())
+        if !offered.is_empty() {
+            any = true;
+            col = col.child(v_flex().w_full().gap_1().child(div().px_2().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(tr("Suggested extensions"))).child(offers));
+        }
+        any.then(|| col.into_any_element())
     }
 
     /// Re-read the folder after a new project was written (the tree, then the scan).
     fn ext_refresh_files(&mut self, cx: &mut Context<Self>) {
         self.refresh_tree(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
+    use super::arrange;
+    use crate::ext::Task;
+
+    fn t(id: &str, primary: bool) -> Task {
+        Task { id: id.into(), label: id.into(), icon: String::new(), line: String::new(), native: String::new(), then: String::new(), java: false, primary, terminal: false }
+    }
+
+    #[test]
+    fn main_task_rows_and_more() {
+        let paper = [t("build", true), t("deploy", false), t("copy", false), t("server", false), t("test", false), t("clean", false), t("wrapper", false)];
+        assert_eq!(arrange(&paper), (Some(0), vec![1, 2, 3, 4], vec![5, 6]));
+        // No primary: the first task leads; past SHOWN rows the rest go behind More.
+        let many: Vec<Task> = (0..9).map(|i| t(&format!("s{i}"), false)).collect();
+        assert_eq!(arrange(&many), (Some(0), vec![1, 2, 3, 4, 5], vec![6, 7, 8]));
+        assert_eq!(arrange(&[]), (None, vec![], vec![]));
     }
 }
