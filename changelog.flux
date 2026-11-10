@@ -10,6 +10,28 @@
 //   @en / @id                the Markdown that follows is English / Indonesian
 // Lines starting with // before the first @release are comments.
 
+@release 2026-11-11
+@title en: The agent asks before it acts
+@title id: Agent bertanya sebelum bertindak
+@en
+Before the agent **runs a command** or changes a file, a card in the chat shows exactly what it
+wants to do and it **waits for your answer**. The taskbar button flashes while FluxCode is in
+the background. **Full access** is one switch in the agent's new **settings dialog** (the gear
+in the panel's title row).
+
+The message box fits a **narrow panel**, the model list **lines up** in columns, and free
+models say so under Usage. Text in the **terminal can be selected and copied**, and clicking a
+menu over the chat no longer selects its text.
+@id
+Sebelum agent **menjalankan perintah** atau mengubah file, kartu di chat menunjukkan persis apa
+yang mau dilakukan dan agent **menunggu jawabanmu**. Tombol taskbar berkedip saat FluxCode di
+belakang. **Akses penuh** cukup satu switch di **dialog pengaturan** agent yang baru (gear di
+baris judul panel).
+
+Kotak pesan muat di **panel sempit**, daftar model **rapi** dalam kolom, dan model gratis
+ditandai di Usage. Teks di **terminal bisa diblok dan disalin**, dan klik menu di atas chat
+tidak lagi memblok teksnya.
+
 @release 2026-11-10
 @title en: A calmer chat, an effort slider you can drag
 @title id: Chat lebih tenang, slider effort yang bisa digeser

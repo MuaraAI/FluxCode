@@ -85,6 +85,10 @@ pub struct Settings {
     /// What the agent may do without asking: "read" (read only), "write" (read and
     /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
     pub agent_access: String,
+    /// The level Full access falls back to when it is switched off: "read" or "write".
+    pub agent_access_off: String,
+    /// A permission request flashes the taskbar button while FluxCode is in the background.
+    pub agent_notify: bool,
     /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or
     /// Chromium), a browser id, or "off".
     pub agent_browser: String,
@@ -137,6 +141,8 @@ impl Default for Settings {
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
+            agent_access_off: "write".into(),
+            agent_notify: true,
             agent_browser: "auto".into(),
             agent_browser_headless: false,
             extensions: crate::ext::default_installed(),
@@ -191,6 +197,11 @@ impl Settings {
             _ if self.agent_auto_approve => "full",
             _ => "write",
         }
+    }
+
+    /// What Full access switches back to: read only, or edits with commands asking.
+    pub fn access_off(&self) -> &'static str {
+        if self.agent_access_off == "read" { "read" } else { "write" }
     }
 
     /// The background image, if one is set and the file is still there.

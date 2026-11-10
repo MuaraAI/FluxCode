@@ -70,6 +70,47 @@ pub(crate) struct Row {
     pub first: bool,
 }
 
+/// Text selected with the mouse in a panel's log: from the row and character the press
+/// was on to where the pointer is (or was let go), counted in wrapped rows. Log rows
+/// are a fixed-width font, so a character is the pointer's x over one em; rows in the
+/// interface font (status, cards) are selected whole.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct PanelSel {
+    pub terminal: bool,
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+}
+
+impl PanelSel {
+    fn span(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.anchor == self.head
+    }
+
+    /// The characters selected on row `i` (of `len` characters), when any.
+    fn on_row(&self, i: usize, len: usize) -> Option<(usize, usize)> {
+        if self.is_empty() {
+            return None;
+        }
+        let ((r0, c0), (r1, c1)) = self.span();
+        if i < r0 || i > r1 {
+            return None;
+        }
+        let a = if i == r0 { c0.min(len) } else { 0 };
+        let b = if i == r1 { c1.min(len) } else { len };
+        // A row the selection only passes through is in it even when it is empty.
+        (b > a || i != r1).then_some((a, b.max(a)))
+    }
+}
+
+/// Rows drawn in the log's fixed-width font, selectable by the character.
+fn mono_kind(k: LineKind) -> bool {
+    matches!(k, LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk | LineKind::Code | LineKind::Caret | LineKind::Blank)
+}
+
 /// (lines fingerprint, rows) for one panel; see `wrapped_rows`.
 pub(crate) type WrapCache = std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
 
@@ -272,6 +313,11 @@ impl Workbench {
 
     /// Ctrl+C in the prompt: copy when text is selected, else stop the running command.
     pub(crate) fn on_term_interrupt(&mut self, _: &TermInterrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_sel.is_some_and(|s| s.terminal && !s.is_empty()) {
+            self.panel_copy(cx);
+            self.panel_sel = None;
+            return;
+        }
         if !self.term_input.read(cx).selected_range().is_empty() {
             window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
             return;
@@ -286,6 +332,7 @@ impl Workbench {
     }
 
     pub(crate) fn on_term_escape(&mut self, _: &TermEscape, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel_sel = None;
         self.term_hist_ix = None;
         self.set_term_input("", window, cx);
     }
@@ -519,15 +566,52 @@ impl Workbench {
     /// on continuation rows.
     #[allow(clippy::too_many_arguments)]
     fn render_line(&self, i: usize, ix: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, m: Metrics, cx: &mut Context<Self>) -> AnyElement {
-        let base = h_flex().id(("pl", i)).h(m.row).w_full().px_3().gap_2().whitespace_nowrap().overflow_hidden();
+        // The selection behind the text: the characters on a log row, or the whole row.
+        let mono = mono_kind(l.kind);
+        let text_left = theme::u(12.) + if first { px(0.) } else { px(m.em * 2.) };
+        let span = self.panel_sel.filter(|s| s.terminal == terminal).and_then(|s| s.on_row(i, shown.chars().count()));
+        // Log text gets it under the characters (an empty part, a blank line or the line
+        // break, still shows one cell); other rows, which may have a band of their own,
+        // get a see-through one over them.
+        let highlight = span.filter(|_| mono).map(|(a, b)| div().absolute().top_0().bottom_0().bg(c(theme::SELECT)).left(text_left + px(a as f32 * m.em)).w(px((b - a).max(1) as f32 * m.em)));
+        let over = span.filter(|_| !mono).map(|_| div().absolute().top_0().bottom_0().left(theme::u(8.)).right(theme::u(8.)).rounded(px(3.)).bg(c(theme::SELECT).opacity(0.6)));
+        let base = h_flex()
+            .id(("pl", i))
+            .relative()
+            .h(m.row)
+            .w_full()
+            .px_3()
+            .gap_2()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .children(highlight)
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                let col = if mono { this.panel_col(ev.position.x, text_left, m) } else { 0 };
+                this.panel_sel_press(terminal, i, col, mono, ev.click_count, ev.modifiers.shift, cx);
+            }))
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    return;
+                }
+                let Some(sel) = this.panel_sel.filter(|s| s.terminal == terminal) else { return };
+                // A row in the interface font is taken whole, in the drag's direction.
+                let col = if mono { this.panel_col(ev.position.x, text_left, m) } else if i >= sel.anchor.0 { usize::MAX } else { 0 };
+                if sel.head != (i, col) {
+                    this.panel_sel = Some(PanelSel { head: (i, col), ..sel });
+                    cx.notify();
+                }
+            }));
         // Program output keeps the mono font; what FluxCode itself says uses the UI font.
         let text = |s: &SharedString, col: theme::Tok| div().text_color(c(col)).child(s.clone());
         let ui = |s: &SharedString, col: theme::Tok| div().font_family(UI_FONT).text_color(c(col)).child(s.clone());
         // Wrapped rows hang two characters in, so a continued line reads as one.
         let hang = theme::u(12.) + px(m.em * 2.);
-        // One callout across several fixed-height rows: a tinted full-width band with a red edge.
+        // One callout across several fixed-height rows: one faintly red band, so its
+        // rows read as a block apart from the program's own output (no edge stripe:
+        // the red icon on its title already says what kind of block it is).
         let card = |row: Stateful<Div>, inner: Div| {
-            row.child(
+            // Edge to edge, so its icons line up with the status mark under it.
+            row.px_0().child(
                 inner
                     .flex_1()
                     .min_w_0()
@@ -535,9 +619,7 @@ impl Workbench {
                     .items_center()
                     .px_3()
                     .gap_2()
-                    .when(!terminal, |d| d.bg(c(theme::BG_ELEVATED)))
-                    .border_l_2()
-                    .border_color(c(theme::DANGER)),
+                    .bg(c(theme::DANGER).opacity(0.08)),
             )
             .into_any_element()
         };
@@ -550,7 +632,7 @@ impl Workbench {
                 .child(label)
                 .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx)))
         };
-        match l.kind {
+        let el = match l.kind {
             LineKind::Blank => base.into_any_element(),
             // Terminal: the command echoed as the prompt it was typed at (`folder ❯ dir`),
             // drawn exactly like the live prompt row, so a block starts where a prompt is.
@@ -765,7 +847,101 @@ impl Workbench {
                 };
                 base.when(!first, |b| b.pl(hang)).child(div().text_color(c(col)).child(shown.clone())).into_any_element()
             }
+        };
+        match over {
+            Some(o) => div().relative().h(m.row).w_full().child(el).child(o).into_any_element(),
+            None => el,
         }
+    }
+
+    /// The character under the pointer's `x` on a log row whose text starts `text_left`
+    /// into the row (between two characters, the nearer edge).
+    fn panel_col(&self, x: Pixels, text_left: Pixels, m: Metrics) -> usize {
+        let from = f32::from(x) - self.panel_left.get() - f32::from(text_left);
+        (from / m.em).round().max(0.) as usize
+    }
+
+    /// A left press on row `i`: start a selection there; a double press takes the
+    /// word, a triple press the row; with Shift the selection grows to here.
+    #[allow(clippy::too_many_arguments)]
+    fn panel_sel_press(&mut self, terminal: bool, i: usize, col: usize, mono: bool, clicks: usize, shift: bool, cx: &mut Context<Self>) {
+        let old = self.panel_sel.filter(|s| s.terminal == terminal);
+        let rows = self.panel_rows(terminal);
+        let text: Vec<char> = rows.get(i).map(|r| r.text.chars().collect()).unwrap_or_default();
+        self.panel_sel = Some(match (shift, old, clicks) {
+            (true, Some(s), _) => PanelSel { head: (i, col), ..s },
+            (_, _, 2) if mono => {
+                let at = col.min(text.len().saturating_sub(1));
+                let word = |c: &char| !c.is_whitespace();
+                if text.get(at).is_some_and(word) {
+                    let a = (0..=at).rev().take_while(|&k| word(&text[k])).last().unwrap_or(at);
+                    let b = (at..text.len()).take_while(|&k| word(&text[k])).last().map_or(at, |k| k + 1);
+                    PanelSel { terminal, anchor: (i, a), head: (i, b) }
+                } else {
+                    PanelSel { terminal, anchor: (i, col), head: (i, col) }
+                }
+            }
+            (_, _, n) if n >= 2 => PanelSel { terminal, anchor: (i, 0), head: (i, usize::MAX) },
+            _ => PanelSel { terminal, anchor: (i, col), head: (i, col) },
+        });
+        cx.notify();
+    }
+
+    /// The rows the panel drew last (wrapped to its width).
+    fn panel_rows(&self, terminal: bool) -> std::rc::Rc<Vec<Row>> {
+        (if terminal { &self.term_wrap } else { &self.out_wrap }).borrow().1.clone()
+    }
+
+    /// The selected text, as the program wrote it: whole lines keep their exact text,
+    /// a part of a line is cut from the rows on screen.
+    pub(crate) fn panel_sel_text(&self) -> Option<String> {
+        let sel = self.panel_sel.filter(|s| !s.is_empty())?;
+        let rows = self.panel_rows(sel.terminal);
+        let lines = if sel.terminal { &self.term_lines } else { &self.out_lines };
+        let ((r0, _), (r1, _)) = sel.span();
+        let last = r1.min(rows.len().checked_sub(1)?);
+        let mut out: Vec<String> = Vec::new();
+        let mut i = r0;
+        while i <= last {
+            let ix = rows[i].line;
+            let mut j = i;
+            while j < last && rows[j + 1].line == ix {
+                j += 1;
+            }
+            let Some(l) = lines.get(ix) else { break };
+            let whole = rows[i].first
+                && (j + 1 >= rows.len() || rows[j + 1].line != ix)
+                && (i..=j).all(|k| {
+                    let n = rows[k].text.chars().count();
+                    sel.on_row(k, n) == Some((0, n))
+                });
+            let piece = if whole || !mono_kind(l.kind) {
+                match (l.kind, l.meta.is_empty()) {
+                    (LineKind::Status, false) => format!("{} {}", l.text, l.meta),
+                    _ => l.text.to_string(),
+                }
+            } else {
+                (i..=j)
+                    .filter_map(|k| {
+                        let t = &rows[k].text;
+                        let (a, b) = sel.on_row(k, t.chars().count())?;
+                        Some(t.chars().skip(a).take(b - a).collect::<String>())
+                    })
+                    .collect()
+            };
+            out.push(piece);
+            i = j + 1;
+        }
+        Some(out.join("\n"))
+    }
+
+    /// Copy the selection; false when nothing is selected.
+    pub(crate) fn panel_copy(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(text) = self.panel_sel_text() else { return false };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.status = tr("Copied").into();
+        cx.notify();
+        true
     }
 
     /// The panel's lines as visual rows (wrapped to `cols`), cached per panel.
@@ -882,7 +1058,13 @@ impl Workbench {
             .when(running, |h| {
                 h.child(tool_button("p-stop", IconName::Square, "Stop (Shift+F5 or Ctrl+C)", cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
             })
+            .when(self.panel_sel.is_some_and(|s| s.terminal == terminal && !s.is_empty()), |h| {
+                h.child(tool_button("p-copy", IconName::Copy, "Copy the selection (Ctrl+C)", cx, |this, _, cx| {
+                    this.panel_copy(cx);
+                }))
+            })
             .child(tool_button("p-clear", IconName::Delete, "Clear", cx, |this, _, cx| {
+                this.panel_sel = None;
                 match this.panel_tab {
                     PanelTab::Terminal => this.term_lines.clear(),
                     PanelTab::Output => this.out_lines.clear(),
@@ -971,8 +1153,10 @@ impl Workbench {
             let cell = self.panel_size.clone();
             let id = cx.entity_id();
             let bottom = scroll.clone();
+            let left = self.panel_left.clone();
             canvas(
                 move |bounds, _, cx| {
+                    left.set(f32::from(bounds.origin.x));
                     let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
                     let old = cell.get();
                     if (old.0 - size.0).abs() > 0.5 || (old.1 - size.1).abs() > 0.5 {
@@ -1239,8 +1423,23 @@ pub(crate) fn detect_python(root: Option<&Path>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
-    use super::{can_run, run_command_for};
+    use super::{can_run, run_command_for, PanelSel};
     use std::path::Path;
+
+    #[test]
+    fn a_selection_covers_its_rows_in_either_direction() {
+        let s = PanelSel { terminal: true, anchor: (3, 10), head: (1, 4) };
+        // Dragged upwards: the first row from where it started, the last up to the press.
+        assert_eq!(s.on_row(0, 20), None);
+        assert_eq!(s.on_row(1, 20), Some((4, 20)));
+        assert_eq!(s.on_row(2, 0), Some((0, 0)), "an empty row in between is selected");
+        assert_eq!(s.on_row(3, 20), Some((0, 10)));
+        assert_eq!(s.on_row(4, 20), None);
+        // Past the end of a short row: cut to the row.
+        assert_eq!(PanelSel { terminal: true, anchor: (0, 2), head: (0, usize::MAX) }.on_row(0, 5), Some((2, 5)));
+        // A click without a drag selects nothing.
+        assert!(PanelSel { terminal: true, anchor: (2, 3), head: (2, 3) }.on_row(2, 9).is_none());
+    }
 
     #[test]
     fn can_run_matches_run_command_for() {

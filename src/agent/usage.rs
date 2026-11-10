@@ -262,6 +262,42 @@ fn level(pct: f32) -> theme::Tok {
     }
 }
 
+/// A 14 px ring filled clockwise from the top to `share` (0..1) of its turn.
+fn ring(share: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            let side = f32::from(b.size.width.min(b.size.height));
+            let stroke = 2.;
+            let r = (side - stroke) / 2.;
+            let (x0, y0) = (f32::from(b.origin.x) + side / 2., f32::from(b.origin.y) + side / 2.);
+            let at = |t: f32| {
+                let a = t * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                point(px(x0 + r * a.cos()), px(y0 + r * a.sin()))
+            };
+            let radii = point(px(r), px(r));
+            // An arc from the top to `t` of a turn, split in halves (one arc can't close).
+            let arc = |t: f32| {
+                let mut p = PathBuilder::stroke(px(stroke));
+                p.move_to(at(0.));
+                if t > 0.5 {
+                    p.arc_to(radii, px(0.), false, true, at(0.5));
+                }
+                p.arc_to(radii, px(0.), false, true, at(t));
+                p.build().ok()
+            };
+            if let Some(p) = arc(0.9999) {
+                window.paint_path(p, track);
+            }
+            if let Some(p) = arc(share.clamp(0.03, 0.9999)) {
+                window.paint_path(p, fill);
+            }
+        },
+    )
+    .flex_none()
+    .size(theme::u(14.))
+}
+
 /// A thin bar that fills to `pct` when the panel opens.
 fn bar(key: SharedString, pct: f32) -> AnyElement {
     let frac = (pct / 100.).clamp(0., 1.);
@@ -285,6 +321,15 @@ fn bar(key: SharedString, pct: f32) -> AnyElement {
 }
 
 impl Workbench {
+    /// The model in use, when it is a free one (OpenCode Zen's `-free` models): its name.
+    pub(crate) fn agent_model_free(&self) -> Option<String> {
+        let view = self.agent_config_view();
+        let m = view.iter().find(|o| o.category == "model")?;
+        let name = m.current_name().rsplit('/').next().unwrap_or("").to_string();
+        let free = m.current.ends_with("-free") || name.to_lowercase().ends_with(" free") || super::catalog::get(&m.current).is_some_and(|x| x.free);
+        free.then(|| name.strip_suffix(" Free").or_else(|| name.strip_suffix(" free")).unwrap_or(&name).to_string())
+    }
+
     /// The agent can tell its usage (Claude Agent: a `/usage` command or live updates).
     pub(crate) fn agent_has_usage(&self) -> bool {
         self.agent.usage.live.is_some() || self.agent.commands.iter().any(|c| c.name == "usage")
@@ -350,36 +395,29 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The meter under the message box: how full the context is. Opens the usage panel.
-    pub(crate) fn render_context_meter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The meter under the message box: how full the context is, as a ring (and the
+    /// share beside it when there's room). Opens the usage panel.
+    pub(crate) fn render_context_meter(&self, narrow: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.agent.usage;
         let l = u.live.as_ref()?;
         let share = u.context_share()?;
         let pct = (share * 100.).round();
-        let tip: SharedString = crate::trf!("Context: {used} of {size} tokens. Click for usage and limits."; used => tokens(l.used), size => tokens(l.size)).into();
-        // A small ring would be prettier but GPUI draws no arcs: a short bar reads the same.
+        let tip: SharedString = crate::trf!("Context: {used} of {size} tokens ({pct}%). Click for usage."; used => tokens(l.used), size => tokens(l.size), pct => pct).into();
         Some(
             h_flex()
                 .id("ag-ctx-meter")
                 .flex_none()
-                .h(theme::u(22.))
-                .px_1p5()
+                .h(theme::u(24.))
+                .px_1()
                 .gap_1()
-                .rounded(px(4.))
+                .rounded(px(5.))
                 .cursor_pointer()
                 .text_xs()
                 .text_color(c(theme::FG_DIM))
                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
-                .child(
-                    div()
-                        .w(theme::u(22.))
-                        .h(px(4.))
-                        .rounded_full()
-                        .bg(c(theme::BG_HOVER))
-                        .overflow_hidden()
-                        .child(div().h_full().rounded_full().bg(c(level(pct))).w(relative(share.max(0.04)))),
-                )
-                .child(format!("{pct}%"))
+                // In a tight box only the number stays: a ring alone reads like a spinner.
+                .when(!narrow, |h| h.child(ring(share, c(theme::BORDER_STRONG), c(level(pct)))))
+                .child(div().whitespace_nowrap().child(format!("{pct}%")))
                 .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
@@ -466,7 +504,25 @@ impl Workbench {
                 limits = limits.child(row(i, name, w.used * 100., until(w.resets, now).map(|t| crate::trf!("Resets in {t}"; t => t))));
             }
         }
-        if !any {
+        let free = self.agent_model_free();
+        if !any && free.is_some() {
+            // A free model has no plan behind it: nothing to count down.
+            let name = free.unwrap_or_default();
+            limits = limits.child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .child(div().flex_none().pt(px(1.)).child(Icon::new(IconName::BadgeCheck).size(theme::u(14.)).text_color(c(theme::GREEN))))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(div().text_sm().text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} is a free model"; name => name)))
+                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("It runs on OpenCode Zen's free tier, so there is no plan, no usage limit and no cost to show here. The context below still fills up as the chat grows."))),
+                    ),
+            );
+        } else if !any {
             limits = limits.child(div().text_xs().text_color(c(theme::FG_DIM)).child(if busy {
                 tr("Reading your limits from the agent…")
             } else if self.agent.session.is_none() {

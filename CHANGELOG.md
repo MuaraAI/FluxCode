@@ -5,6 +5,25 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The agent asks before it acts, settings in a dialog (11 November 2026)
+
+- When the agent wants to run a command or change a file, a card in the chat says what it
+  wants to do, with the exact command, and the agent waits for Allow once, Always allow or
+  Reject. The panel opens if it was hidden, and the taskbar button flashes while FluxCode is
+  in the background. Two requests at once are shown one after the other; none is lost.
+- Full access is a switch: on, every request is answered yes; off, the agent asks. What the
+  agent's own config denies stays denied either way.
+- The agent's settings open as a dialog from the gear in the panel's title row (model,
+  permissions, session, browser, agent), so the chat stays where it was.
+- The message box fits a narrow panel: the model's name is cut first, labels turn into
+  icons, Send never leaves the box. The context meter is a small ring with the share.
+- The model list lines up: context and output limits sit in right-aligned columns.
+- Usage says when the model is free (OpenCode Zen): no plan limits to show.
+- Clicking a menu, a dialog or a button over the chat no longer selects chat text.
+- Terminal and Output text can be selected with the mouse (double click: a word, triple
+  click: a line) and copied with Ctrl+C or the Copy button. Error cards are a quiet red
+  band, without the colored edge.
+
 ## A Windows installer and a macOS build (10 November 2026)
 
 - Windows releases have an installer: `FluxCode-<build>-windows-x64-setup.exe`. It installs

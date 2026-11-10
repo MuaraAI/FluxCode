@@ -295,6 +295,10 @@ pub struct Workbench {
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
     pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
+    /// The panel log's left edge in window pixels (last frame): where a row's text starts.
+    pub(crate) panel_left: Rc<std::cell::Cell<f32>>,
+    /// Text selected in the terminal or output log with the mouse.
+    pub(crate) panel_sel: Option<crate::panel::PanelSel>,
     /// Size of the image viewer area (measured last frame), to fit pictures exactly.
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
@@ -464,6 +468,8 @@ impl Workbench {
             term_wrap: Default::default(),
             out_wrap: Default::default(),
             panel_size: Rc::default(),
+            panel_left: Rc::default(),
+            panel_sel: None,
             image_box: Rc::default(),
             out_run: None,
             term_hist_ix: None,
@@ -2327,7 +2333,31 @@ impl Render for Workbench {
             .children(self.render_drop_ask(cx))
             .children(self.render_update(cx))
             .children(self.render_theme_menu(cx))
+            .children(self.render_agent_settings(window, cx))
+            .child(selection_guard())
     }
+}
+
+/// Text selection starts on text. The window's selection layer begins one on every left
+/// press, wherever it lands, and anchors it to the nearest text: a click on a menu row, a
+/// modal or a button over the chat then selected chat text once the view changed under
+/// the pointer (switching agents, opening a dialog). A press that isn't on selectable
+/// text now starts nothing; it still clears the old selection, as before.
+///
+/// Painted last, so its bubble handler runs before the layer's.
+fn selection_guard() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| {
+            window.on_mouse_event(|ev: &MouseDownEvent, phase, window, cx| {
+                if phase.bubble() && ev.button == MouseButton::Left && !gpui_kit::base::TextSelection::is_selectable_at(ev.position, window, cx) {
+                    gpui_kit::component::GlobalState::suppress_text_selection(cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .size(px(0.))
 }
 
 /// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.

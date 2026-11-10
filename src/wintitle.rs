@@ -68,3 +68,55 @@ pub use imp::begin_move;
 
 #[cfg(not(windows))]
 pub fn begin_move() {}
+
+/// Ask for the user's attention while FluxCode is in the background: the taskbar button
+/// flashes until the window comes to the front (an agent waiting for a permission).
+/// Nothing happens when FluxCode is already the window in front.
+#[cfg(windows)]
+pub fn flash_attention() {
+    #[repr(C)]
+    struct FlashInfo {
+        size: u32,
+        hwnd: isize,
+        flags: u32,
+        count: u32,
+        timeout: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumThreadWindows(thread: u32, f: extern "system" fn(isize, isize) -> i32, data: isize) -> i32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+        fn GetWindow(hwnd: isize, cmd: u32) -> isize;
+        fn GetForegroundWindow() -> isize;
+        fn FlashWindowEx(info: *const FlashInfo) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentThreadId() -> u32;
+    }
+    const GW_OWNER: u32 = 4;
+    const FLASHW_ALL: u32 = 3;
+    const FLASHW_TIMERNOFG: u32 = 12;
+    // The UI thread's visible top-level window: the workbench.
+    extern "system" fn pick(hwnd: isize, out: isize) -> i32 {
+        unsafe {
+            if IsWindowVisible(hwnd) != 0 && GetWindow(hwnd, GW_OWNER) == 0 {
+                *(out as *mut isize) = hwnd;
+                return 0;
+            }
+        }
+        1
+    }
+    unsafe {
+        let mut hwnd: isize = 0;
+        EnumThreadWindows(GetCurrentThreadId(), pick, &mut hwnd as *mut isize as isize);
+        if hwnd == 0 || GetForegroundWindow() == hwnd {
+            return;
+        }
+        let info = FlashInfo { size: std::mem::size_of::<FlashInfo>() as u32, hwnd, flags: FLASHW_ALL | FLASHW_TIMERNOFG, count: 0, timeout: 0 };
+        FlashWindowEx(&info);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn flash_attention() {}

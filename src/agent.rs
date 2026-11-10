@@ -11,7 +11,6 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    menu::DropdownMenu,
     switch::Switch,
     text::TextView,
     v_flex, Icon, IconName, Selectable, Sizable,
@@ -46,6 +45,7 @@ enum Req {
 mod activity;
 mod catalog;
 mod menu;
+mod settings_modal;
 mod usage;
 mod web;
 pub(crate) use menu::Menu;
@@ -125,6 +125,10 @@ pub struct Permission {
     rpc_id: Value,
     title: String,
     options: Vec<(String, String, String)>, // (id, name, kind)
+    /// ACP's tool kind: execute, edit, read, fetch, ...
+    kind: String,
+    /// The command or path, when the title doesn't already show it.
+    detail: Option<String>,
 }
 
 /// One saved conversation (user and agent messages only), in `agent-history.json`.
@@ -205,6 +209,9 @@ pub struct AgentState {
     can_image: bool,
     pub items: Vec<Item>,
     permission: Option<Permission>,
+    /// Requests that came while one was on screen (an agent running two tools at once):
+    /// each is shown in turn, none is dropped.
+    perm_queue: std::collections::VecDeque<Permission>,
     pub changes: Vec<Change>,
     /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
@@ -293,6 +300,11 @@ pub struct AgentState {
     /// The panel's top and the message box's top, in window pixels, as last drawn:
     /// the menus above the box get exactly the room between them.
     pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    /// The message box's width as last drawn: below `NARROW` the bottom row compacts.
+    pub compose_w: std::rc::Rc<std::cell::Cell<f32>>,
+    /// The settings dialog's open section, and its focus (for Esc and Tab).
+    pub settings_tab: settings_modal::Tab,
+    pub settings_focus: FocusHandle,
     _sub: Subscription,
     /// Redraws the removal page as its two name boxes change.
     _sub_un: Vec<Subscription>,
@@ -450,6 +462,7 @@ impl AgentState {
             can_image: false,
             items: Vec::new(),
             permission: None,
+            perm_queue: Default::default(),
             changes: Vec::new(),
             reloads: Vec::new(),
             input,
@@ -490,6 +503,9 @@ impl AgentState {
             effort_drag: std::cell::Cell::new(None),
             effort_gen: std::cell::Cell::new(0),
             geom: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
+            compose_w: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            settings_tab: Default::default(),
+            settings_focus: cx.focus_handle(),
             ask: None,
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
             ask_clear: Vec::new(),
@@ -697,24 +713,46 @@ impl Workbench {
     }
 
     pub(crate) fn agent_set_access(&mut self, level: &str, cx: &mut Context<Self>) {
+        if level != "full" {
+            self.settings.agent_access_off = level.into();
+        }
         self.settings.agent_access = level.into();
         self.settings.save();
+        // A request waiting now is answered by the new level when it covers it.
+        if level == "full" {
+            while let Some(p) = &self.agent.permission {
+                let Some(oid) = p.options.iter().find(|o| o.2.starts_with("allow_once")).or_else(|| p.options.iter().find(|o| o.2.starts_with("allow"))).map(|o| o.0.clone()) else { break };
+                self.agent_answer_permission(Some(oid), cx);
+            }
+        }
         cx.notify();
     }
 
-    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, _: &mut Window, cx: &mut Context<Self>) {
-        self.agent_open_options(cx);
+    /// The Full access switch: on, or back to the level it was switched on from.
+    pub(crate) fn agent_toggle_full(&mut self, on: bool, cx: &mut Context<Self>) {
+        let level = if on { "full" } else { self.settings.access_off() };
+        self.agent_set_access(level, cx);
     }
 
-    fn agent_open_options(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_open_options(window, cx);
+    }
+
+    /// The agent's settings: a dialog over the window, so the chat stays where it was.
+    pub(crate) fn agent_open_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.show_options = true;
-        self.agent.show_history = false;
-        if self.settings.agent_right {
-            self.agent_open = true;
-        } else {
-            self.view = crate::workbench::SideView::Agent;
-            self.sidebar_open = true;
-        }
+        self.agent.menu.open = None;
+        self.agent.usage.open = false;
+        gpui_kit::base::TextSelection::clear(window, cx);
+        let h = self.agent.settings_focus.clone();
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn agent_close_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent.show_options = false;
+        let h = self.agent.input.focus_handle(cx);
+        h.focus(window, cx);
         cx.notify();
     }
 
@@ -750,6 +788,7 @@ impl Workbench {
         self.agent.queue = vec![Queued { text, files }];
         self.agent.changes.clear();
         self.agent.permission = None;
+        self.agent.perm_queue.clear();
         self.agent.resume_id = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
@@ -855,6 +894,7 @@ impl Workbench {
         self.agent.session = None;
         self.agent.pending.clear();
         self.agent.permission = None;
+        self.agent.perm_queue.clear();
         self.agent.ask = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
@@ -968,7 +1008,8 @@ impl Workbench {
     fn agent_cancel(&mut self, cx: &mut Context<Self>) {
         if let (Status::Busy, Some(s)) = (&self.agent.status, self.agent.session.clone()) {
             self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
-            if let Some(p) = self.agent.permission.take() {
+            let waiting: Vec<Permission> = self.agent.permission.take().into_iter().chain(self.agent.perm_queue.drain(..)).collect();
+            for p in waiting {
                 self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": { "outcome": "cancelled" } } }));
             }
             if self.agent.ask.is_some() {
@@ -1132,6 +1173,7 @@ impl Workbench {
                     self.agent.items.push(Item::Note(stop.replace('_', " "), false));
                 }
                 self.agent.permission = None;
+                self.agent.perm_queue.clear();
                 self.agent.status = Status::Ready;
                 self.agent.save_chat();
                 self.agent_schedule_idle(cx);
@@ -1324,7 +1366,30 @@ impl Workbench {
                         return;
                     }
                 }
-                self.agent.permission = Some(Permission { rpc_id: id.clone(), title, options });
+                // What exactly runs: the command or the path, when the agent says it.
+                let detail = ["/toolCall/rawInput/command", "/toolCall/rawInput/cmd", "/toolCall/rawInput/filePath", "/toolCall/rawInput/file_path", "/toolCall/rawInput/path", "/toolCall/locations/0/path"]
+                    .iter()
+                    .find_map(|p| params.pointer(p).and_then(Value::as_str))
+                    .filter(|d| !d.trim().is_empty() && !title.contains(d.trim()))
+                    .map(str::to_string);
+                let req = Permission { rpc_id: id.clone(), title, options, kind: kind.to_string(), detail };
+                if self.agent.permission.is_some() {
+                    self.agent.perm_queue.push_back(req);
+                } else {
+                    self.agent.permission = Some(req);
+                }
+                // The agent waits for this: make sure it is seen.
+                if self.settings.agent_right {
+                    self.agent_open = true;
+                } else if !(self.sidebar_open && self.view == SideView::Agent) {
+                    self.view = SideView::Agent;
+                    self.sidebar_open = true;
+                }
+                self.agent.follow = true;
+                self.agent.scroll.scroll_to_bottom();
+                if self.settings.agent_notify {
+                    crate::wintitle::flash_attention();
+                }
                 cx.notify();
             }
             ("elicitation/create", _) => self.agent_on_elicitation(id.clone(), &params, cx),
@@ -1500,6 +1565,8 @@ impl Workbench {
             return;
         }
         let old = agent_name();
+        // The chat under the pointer changes: nothing in it stays selected.
+        gpui_kit::base::TextSelection::clear(window, cx);
         self.agent.save_chat();
         self.agent_stop(cx);
         self.agent.install_err = None;
@@ -1515,6 +1582,8 @@ impl Workbench {
         self.agent.resume_id = None;
         self.agent.relaunch = false;
         self.agent.config.clear();
+        // The context and limits were the old agent's.
+        self.agent.usage = Default::default();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
@@ -1705,7 +1774,7 @@ impl Workbench {
                         .xsmall()
                         .ghost()
                         .selected(self.agent.usage.open)
-                        .tooltip(crate::i18n::tr("Usage: limits, context and cost"))
+                        .tooltip(if self.agent_model_free().is_some() { crate::i18n::tr("Usage: context (free model, no limits)") } else { crate::i18n::tr("Usage: limits, context and cost") })
                         .on_click(cx.listener(|this, _, _, cx| {
                             if this.agent.usage.open {
                                 this.agent.usage.open = false;
@@ -1737,6 +1806,21 @@ impl Workbench {
                     .ghost()
                     .tooltip(if right { crate::i18n::tr("Move to the left side bar") } else { crate::i18n::tr("Move to the right side") })
                     .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
+            )
+            .child(
+                Button::new("ag-settings-btn")
+                    .icon(Icon::new(gpui_kit::assets::IconName::Settings))
+                    .xsmall()
+                    .ghost()
+                    .selected(self.agent.show_options)
+                    .tooltip(crate::i18n::tr("Agent settings: model, permissions, browser"))
+                    .on_click(cx.listener(|this, _, w, cx| {
+                        if this.agent.show_options {
+                            this.agent_close_options(w, cx);
+                        } else {
+                            this.agent_open_options(w, cx);
+                        }
+                    })),
             )
     }
 
@@ -1811,6 +1895,7 @@ impl Workbench {
             };
             self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": outcome } }));
         }
+        self.agent.permission = self.agent.perm_queue.pop_front();
         cx.notify();
     }
 
@@ -2446,6 +2531,9 @@ impl Workbench {
 
     /// "Working…" / "Starting…" for the input box's bottom row (nothing while idle).
     fn agent_status_line(&self) -> Option<(theme::Tok, String)> {
+        if self.agent.permission.is_some() {
+            return Some((theme::WARN, crate::i18n::tr("Waiting for you").into()));
+        }
         match &self.agent.status {
             Status::Busy => Some((theme::BLUE, crate::i18n::tr("Working…").into())),
             Status::Starting if self.agent.loading_id.is_some() => Some((theme::FG_MUTED, crate::i18n::tr("Opening the session…").into())),
@@ -2719,9 +2807,6 @@ impl Workbench {
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
         }
-        if a.show_options {
-            return self.render_options(cx);
-        }
         if let Some(id) = &a.uninstall {
             return self.render_uninstall(id, cx);
         }
@@ -2937,36 +3022,7 @@ impl Workbench {
             });
         }
 
-        let permission = a.permission.as_ref().map(|p| {
-            v_flex()
-                .m_3()
-                .p_2()
-                .gap_2()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(theme::ACCENT))
-                .bg(c(theme::BG_ELEVATED))
-                .text_xs()
-                .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Allow: {0}?"; 0 => p.title)))
-                .child(h_flex().gap_1().flex_wrap().children(p.options.iter().enumerate().map(|(i, (oid, name, kind))| {
-                    let oid = oid.clone();
-                    // One loud choice (allow once); the lasting ones and reject stay quiet.
-                    let label: String = match kind.as_str() {
-                        "allow_once" => crate::i18n::tr("Allow once").into(),
-                        "allow_always" => crate::i18n::tr("Always allow").into(),
-                        "reject_once" => crate::i18n::tr("Reject").into(),
-                        "reject_always" => crate::i18n::tr("Always reject").into(),
-                        _ => name.clone(),
-                    };
-                    let b = Button::new(("perm", i)).label(label).xsmall();
-                    let b = match kind.as_str() {
-                        "allow_once" => b.primary(),
-                        k if k.starts_with("reject") => b.ghost(),
-                        _ => b,
-                    };
-                    b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
-                })))
-        });
+        let permission = a.permission.as_ref().map(|p| self.render_permission(p, cx));
 
         // What the agent changed this turn, like a worktree: each file with its
         // lines added / removed, a diff, and undo.
@@ -3287,22 +3343,36 @@ impl Workbench {
         chips.extend(self.render_context_chips(cx));
         let menu = self.render_agent_menu(false, window, cx);
         let geom = self.agent.geom.clone();
+        let width = self.agent.compose_w.clone();
         let eid = cx.entity_id();
+        // The box's top (the menus above it get the room up to the panel's top) and its
+        // width (a narrow box compacts its bottom row), as drawn.
         let box_probe = canvas(
             move |b, _, cx| {
                 let y = f32::from(b.origin.y);
+                let w = f32::from(b.size.width);
                 let (top, box_top) = geom.get();
-                if (box_top - y).abs() > 0.5 {
+                let moved = (box_top - y).abs() > 0.5;
+                let resized = (width.get() - w).abs() > 0.5;
+                if moved {
                     geom.set((top, y));
+                }
+                if resized {
+                    width.set(w);
+                }
+                if moved || resized {
                     cx.defer(move |cx| cx.notify(eid));
                 }
             },
             |_, _, _, _| {},
         )
         .absolute()
-        .top_0()
-        .left_0()
-        .size(px(0.));
+        .inset_0();
+        let w = a.compose_w.get();
+        // Below NARROW the labels on the right turn into icons, below TIGHT the share
+        // beside the context ring goes too.
+        let narrow = w > 0. && w < NARROW;
+        let tight = w > 0. && w < TIGHT;
         let boxed = v_flex()
             .id("ag-composer")
             .relative()
@@ -3381,10 +3451,11 @@ impl Workbench {
             )
             .child(
                 h_flex()
-                    .h(theme::u(34.))
+                    .h(theme::u(36.))
                     .px_1p5()
                     .gap_0p5()
                     .items_center()
+                    .min_w_0()
                     .child(
                         icon_btn("ag-attach", Icon::new(gpui_kit::assets::IconName::Paperclip), tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
                             .on_click(cx.listener(|this, _, w, cx| {
@@ -3408,33 +3479,34 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    // Model, mode and permissions give way in a narrow panel (cut, never
-                    // pushing the send button out of the box).
-                    .child(
-                        h_flex()
-                            .flex_shrink(1.)
-                            .min_w_0()
-                            .overflow_hidden()
-                            .gap_0p5()
-                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
-                            .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
-                            .child(self.render_access_menu(cx)),
-                    )
+                    // The model and mode take what is left of the row; the model's name is
+                    // what gives way (cut at its end), after the labels on the right have
+                    // turned into icons. Send never leaves the box.
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w_0()
-                            .justify_end()
-                            .gap_1p5()
-                            .px_1()
-                            .overflow_hidden()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
-                            .when_some(self.agent_status_line(), |h, (dot, label)| {
-                                h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot))).child(div().min_w_0().truncate().child(label))
-                            }),
+                            .gap_0p5()
+                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, narrow, cx)))
+                            .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, tight, cx))),
                     )
-                    .children(self.render_context_meter(cx))
+                    .when_some(self.agent_status_line(), |h, (dot, label)| {
+                        let tip: SharedString = label.clone().into();
+                        h.child(
+                            h_flex()
+                                .id("ag-status")
+                                .flex_none()
+                                .px_1()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(c(if dot == theme::WARN { theme::WARN } else { theme::FG_DIM }))
+                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                                .child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot)))
+                                .when(!narrow, |h| h.child(div().whitespace_nowrap().child(label))),
+                        )
+                    })
+                    .child(self.render_access_menu(narrow, cx))
+                    .children(self.render_context_meter(tight, cx))
                     .child(if busy && !has_text {
                         // A solid square in the accent: the one action while the agent works.
                         send_btn("ag-stop", true, tr("Stop the answer"))
@@ -3461,222 +3533,6 @@ impl Workbench {
             .mb_3()
             .child(boxed.child(box_probe))
             .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(m)))
-    }
-
-    /// The harness's own settings for this session, compact enough to see at once:
-    /// one row per setting (label left, control right, wrapping in a narrow panel).
-    /// Few choices are a row of buttons; long lists (models) are one dropdown, free
-    /// models grouped first. Nothing here runs until a choice is made.
-    fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let a = &self.agent;
-        let name = agent_name();
-        let weak = cx.entity().downgrade();
-        let header = h_flex()
-            .px_3()
-            .h(theme::u(32.))
-            .gap_2()
-            .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} settings"; name => name)))
-            .child(Button::new("ag-opt-back").label(crate::i18n::tr("Back to the chat")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
-                this.agent.show_options = false;
-                cx.notify();
-            })));
-        // label | control, the control column wraps on its own when the panel is narrow
-        let row = |label: SharedString, control: AnyElement| {
-            h_flex()
-                .px_3()
-                .py_1p5()
-                .gap_3()
-                .items_start()
-                .child(div().w(theme::u(64.)).flex_none().pt_0p5().text_xs().text_color(c(theme::FG_MUTED)).child(label))
-                .child(div().flex_1().min_w_0().child(control))
-                .into_any_element()
-        };
-        let buttons = |opt: &ConfigOpt| {
-            let mut choices = opt.choices.clone();
-            if opt.category == "thought_level" {
-                choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
-            }
-            h_flex()
-                .gap_1()
-                .flex_wrap()
-                .children(choices.into_iter().map(|(v, n, _)| {
-                    let id = opt.id.clone();
-                    let on = opt.current == v;
-                    Button::new(SharedString::from(format!("ag-opt-{id}-{v}")))
-                        .label(n)
-                        .xsmall()
-                        .when(on, |b| b.primary())
-                        .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
-                }))
-                .into_any_element()
-        };
-        let dropdown = |opt: &ConfigOpt| {
-            let current = opt.current_name().rsplit('/').next().unwrap_or("").to_string();
-            let groups: Vec<(String, Vec<(String, String)>)> = if opt.category == "model" {
-                model_groups(&opt.choices)
-            } else {
-                vec![(String::new(), opt.choices.iter().map(|c| (c.0.clone(), c.1.clone())).collect())]
-            };
-            let (id, cur, weak) = (opt.id.clone(), opt.current.clone(), weak.clone());
-            Button::new(SharedString::from(format!("ag-opt-{}", opt.id)))
-                .label(current)
-                .xsmall()
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut m: gpui_kit::component::menu::PopupMenu, _, _| {
-                    m = m.min_w(px(240.)).max_h(px(380.)).scrollable(true);
-                    for (gi, (group, models)) in groups.iter().enumerate() {
-                        if gi > 0 {
-                            m = m.separator();
-                        }
-                        let title = match group.as_str() {
-                            "free" => crate::i18n::tr("Free (OpenCode Zen)").to_string(),
-                            g => g.to_string(),
-                        };
-                        if !title.is_empty() {
-                            m = m.item(gpui_kit::component::menu::PopupMenuItem::label(title));
-                        }
-                        for (v, n) in models {
-                            let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
-                            m = m.item(gpui_kit::component::menu::PopupMenuItem::new(n.clone()).checked(*v == cur).on_click(move |_, _, cx| {
-                                _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
-                            }));
-                        }
-                    }
-                    m
-                })
-                .into_any_element()
-        };
-        let mut body = v_flex().id("ag-options").flex_1().min_h_0().pt_1().pb_2().overflow_y_scroll();
-        if self.agent_config_view().is_empty() {
-            let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
-            body = body.child(
-                v_flex()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(c(theme::FG_MUTED))
-                    .child(if on {
-                        crate::trf!("{name} is starting. Its models and settings show here in a moment."; name => name)
-                    } else {
-                        crate::trf!("{name} lists its models and settings once it is on."; name => name)
-                    })
-                    .when(!on, |v| {
-                        v.child(h_flex().child(Button::new("ag-opt-on").label(crate::trf!("Turn {name} on"; name => name)).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_set_on(true, cx)))))
-                    }),
-            );
-        }
-        // Mode first (it changes what the agent does), then model, then effort, then the rest.
-        let order = |o: &ConfigOpt| match o.category.as_str() {
-            "mode" => 0,
-            "model" => 1,
-            "thought_level" => 2,
-            _ => 3,
-        };
-        let view = self.agent_config_view();
-        let mut opts: Vec<&ConfigOpt> = view.iter().collect();
-        opts.sort_by_key(|o| order(o));
-        for o in opts {
-            let label: SharedString = match o.category.as_str() {
-                "mode" => crate::i18n::tr("Mode").into(),
-                "model" => crate::i18n::tr("Model").into(),
-                "thought_level" => crate::i18n::tr("Effort").into(),
-                _ => o.name.clone().into(),
-            };
-            let control = if o.category == "model" || o.choices.len() > 6 {
-                dropdown(o)
-            } else if o.category == "mode" {
-                // The chosen mode's description in one dim line (the full text in its tooltip).
-                let desc = o.choices.iter().find(|c| c.0 == o.current).map(|c| c.2.clone()).unwrap_or_default();
-                let full: SharedString = desc.clone().into();
-                v_flex()
-                    .gap_1()
-                    .child(buttons(o))
-                    .when(!desc.is_empty(), |v| {
-                        v.child(
-                            div()
-                                .id("ag-opt-mode-desc")
-                                .truncate()
-                                .text_xs()
-                                .text_color(c(theme::FG_DIM))
-                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
-                                .child(desc),
-                        )
-                    })
-                    .into_any_element()
-            } else {
-                buttons(o)
-            };
-            body = body.child(row(label, control));
-        }
-        // FluxCode's own side of the agent.
-        let s = &self.settings;
-        let access = s.access().to_string();
-        body = body
-            .child(div().mx_3().my_1().h(px(1.)).bg(c(theme::BORDER)))
-            .child(row(
-                crate::i18n::tr("Access").into(),
-                h_flex()
-                    .gap_1()
-                    .flex_wrap()
-                    .children([("read", crate::i18n::tr("Read only")), ("write", crate::i18n::tr("Read & write")), ("full", crate::i18n::tr("Full access"))].into_iter().map(|(id, n)| {
-                        Button::new(SharedString::from(format!("ag-opt-access-{id}")))
-                            .label(n)
-                            .xsmall()
-                            .when(access == id, |b| b.primary())
-                            .on_click(cx.listener(move |this, _, _, cx| this.agent_set_access(id, cx)))
-                    }))
-                    .into_any_element(),
-            ))
-            .child(row(
-                crate::i18n::tr("Idle").into(),
-                h_flex()
-                    .items_start()
-                    .gap_2()
-                    .child(
-                        Button::new("ag-opt-idle")
-                            .label(if s.agent_idle_min > 0 { crate::i18n::tr("On") } else { crate::i18n::tr("Off") })
-                            .xsmall()
-                            .when(s.agent_idle_min > 0, |b| b.primary())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.settings.agent_idle_min = if this.settings.agent_idle_min == 0 { 10 } else { 0 };
-                                this.settings.save();
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().min_w_0().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("Turns off after 10 quiet minutes to free memory")))
-                    .into_any_element(),
-            ))
-            .child(row(crate::i18n::tr("Browser").into(), self.render_browser_setting(cx)));
-        let current = agent_id();
-        if crate::acp::managed(&current) {
-            body = body.child(
-                h_flex().px_3().pt_2().child(
-                    Button::new("ag-opt-remove")
-                        .label(crate::trf!("Remove {name}…"; name => name))
-                        .xsmall()
-                        .ghost()
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            this.agent.show_options = false;
-                            this.agent_ask_uninstall(&current, w, cx);
-                        })),
-                ),
-            );
-        }
-        if crate::acp::is_opencode(&agent_id()) {
-            if let Some(cfg) = opencode_config_file() {
-                body = body.child(
-                    h_flex().px_3().pt_1().child(
-                        Button::new("ag-opt-cfg")
-                            .label(crate::i18n::tr("Open OpenCode's config file"))
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(cfg.clone(), w, cx))),
-                    ),
-                );
-            }
-        }
-        v_flex().size_full().child(header).child(body).into_any_element()
     }
 
     /// Which browser the agents drive, and where its tools stand.
@@ -3761,13 +3617,139 @@ impl Workbench {
         )
     }
 
+    /// The agent is waiting for a yes or no: what it wants to do, in its own words and
+    /// (for a command or a file) exactly, then the choices. The one warm-colored card in
+    /// the panel, since nothing moves until it is answered.
+    fn render_permission(&self, p: &Permission, cx: &mut Context<Self>) -> AnyElement {
+        let name = agent_name();
+        let lu = gpui_kit::assets::IconName::ShieldAlert;
+        let what: &'static str = match p.kind.as_str() {
+            "execute" => "Run a command",
+            "edit" => "Change a file",
+            "delete" => "Delete a file",
+            "move" => "Move or rename a file",
+            "read" | "search" => "Read files",
+            "fetch" => "Open a web page",
+            _ => "Use a tool",
+        };
+        let (kind_icon, mono) = match p.kind.as_str() {
+            "execute" => (gpui_kit::assets::IconName::SquareTerminal, true),
+            "edit" | "delete" | "move" => (gpui_kit::assets::IconName::FilePen, true),
+            "read" | "search" => (gpui_kit::assets::IconName::FolderOpen, true),
+            "fetch" => (gpui_kit::assets::IconName::Globe, false),
+            _ => (gpui_kit::assets::IconName::Wrench, false),
+        };
+        let exact = p.detail.clone();
+        let mut options: Vec<(usize, String, String, String)> = p.options.iter().enumerate().map(|(i, (o, n, k))| (i, o.clone(), n.clone(), k.clone())).collect();
+        // Allow once first (the default answer), then the lasting allow, then the rejects.
+        options.sort_by_key(|o| match o.3.as_str() {
+            "allow_once" => 0,
+            "allow_always" => 1,
+            "reject_once" => 2,
+            _ => 3,
+        });
+        let buttons = options.into_iter().map(|(i, oid, label, kind)| {
+            let label: String = match kind.as_str() {
+                "allow_once" => tr("Allow once").into(),
+                "allow_always" => tr("Always allow").into(),
+                "reject_once" => tr("Reject").into(),
+                "reject_always" => tr("Always reject").into(),
+                _ => label,
+            };
+            let b = Button::new(("perm", i)).label(label).small();
+            let b = match kind.as_str() {
+                "allow_once" => b.primary(),
+                k if k.starts_with("reject") => b.ghost(),
+                _ => b,
+            };
+            b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
+        });
+        v_flex()
+            .id("ag-permission")
+            .mx_3()
+            .mb_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c(theme::WARN).opacity(0.55))
+            .bg(c(theme::BG_ELEVATED))
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt_2p5()
+                    .gap_2()
+                    .child(Icon::new(lu).size(theme::u(15.)).text_color(c(theme::WARN)).flex_none())
+                    .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} is waiting for you"; name => name)))
+                    .child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(match self.agent.perm_queue.len() {
+                        0 => tr("Paused").to_string(),
+                        n => crate::trf!("Paused · {n} more after this"; n => n),
+                    })),
+            )
+            .child(
+                v_flex()
+                    .px_3()
+                    .pt_2()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(Icon::new(kind_icon).size(theme::u(13.)).flex_none())
+                            .child(div().min_w_0().child(tr(what))),
+                    )
+                    .child(div().text_sm().text_color(c(theme::FG)).child(p.title.clone()))
+                    .when_some(exact, |v, d| {
+                        v.child(
+                            div()
+                                .id("ag-perm-exact")
+                                .px_2()
+                                .py_1p5()
+                                .rounded(px(5.))
+                                .bg(c(theme::BG_EDITOR))
+                                .border_1()
+                                .border_color(c(theme::BORDER))
+                                .text_xs()
+                                .text_color(c(theme::FG_STRONG))
+                                .when(mono, |d| d.font_family("Cascadia Code"))
+                                .max_h(theme::u(96.))
+                                .overflow_y_scroll()
+                                .child(d),
+                        )
+                    }),
+            )
+            .child(h_flex().px_3().pt_2p5().gap_1p5().flex_wrap().children(buttons))
+            .child(
+                h_flex()
+                    .mt_2p5()
+                    .px_2()
+                    .py_1()
+                    .gap_1()
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(
+                        Button::new("ag-perm-full")
+                            .icon(Icon::new(gpui_kit::assets::IconName::ShieldCheck))
+                            .label(tr("Turn on full access"))
+                            .xsmall()
+                            .ghost()
+                            .flex_none()
+                            .tooltip(tr("Allows this request and every next one: commands and any file on this PC, without asking. Switch it off in the agent's settings."))
+                            .on_click(cx.listener(|this, _, _, cx| this.agent_toggle_full(true, cx))),
+                    )
+
+            )
+            .into_any_element()
+    }
 }
 
 /// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
 impl Workbench {
-    /// The composer's model button: the model's short name (and effort, when set),
-    /// opening the model menu above the message box.
-    fn render_model_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The composer's model chip: the model's short name, then the effort when one is
+    /// set. The name is what gets cut when the box is narrow.
+    fn render_model_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let current = m.current_name();
         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
         // "Free" is said by the group in the menu; here it only takes room.
@@ -3777,17 +3759,22 @@ impl Workbench {
         if m.current == crate::acp::FLAG_DEFAULT && m.id.starts_with(FLAG_PREFIX) {
             short = tr("Model").to_string();
         }
-        // "Default (recommended)": the menu says why; the button only needs the name.
+        // "Default (recommended)": the menu says why; the chip only needs the name.
         if let Some(s) = short.strip_suffix(" (recommended)") {
             short = s.to_string();
         }
-        if let Some(e) = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
-            short = format!("{short} · {}", e.current_name());
-        }
-        if short.chars().count() > 20 {
-            short = format!("{}…", short.chars().take(19).collect::<String>());
-        }
-        menu_button("ag-model-btn", short, self.agent.menu.open == Some(Menu::Model), tr("Model"))
+        let effort = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default").map(|e| e.current_name().to_string());
+        let tip: SharedString = match &effort {
+            Some(e) => crate::trf!("Model: {m} · effort {e}"; m => current, e => e).into(),
+            None => crate::trf!("Model: {m}"; m => current).into(),
+        };
+        chip_button("ag-model-btn", self.agent.menu.open == Some(Menu::Model), tip)
+            // The one chip that shrinks: everything else keeps its size.
+            .flex_shrink(1.)
+            .min_w(theme::u(48.))
+            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(short))
+            .when_some(effort.filter(|_| !narrow), |h, e| h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(e)))
+            .child(chevron())
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Model, w, cx)
@@ -3795,29 +3782,40 @@ impl Workbench {
     }
 
     /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
-    fn render_mode_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut label = m.current_name().to_string();
-        if label.chars().count() > 11 {
-            label = format!("{}…", label.chars().take(10).collect::<String>());
+    fn render_mode_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = m.current_name().to_string();
+        let tip: SharedString = crate::trf!("Mode: {m}"; m => name).into();
+        let mut label = name;
+        let max = if narrow { 6 } else { 11 };
+        if label.chars().count() > max {
+            label = format!("{}…", label.chars().take(max - 1).collect::<String>());
         }
-        menu_button("ag-mode-btn", label, self.agent.menu.open == Some(Menu::Mode), tr("Mode"))
+        chip_button("ag-mode-btn", self.agent.menu.open == Some(Menu::Mode), tip)
+            .flex_none()
+            .child(div().whitespace_nowrap().text_color(c(theme::FG_MUTED)).child(label))
+            .child(chevron())
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Mode, w, cx)
             }))
     }
 
-    /// What the agent may do without asking: its icon, opening the permission menu.
-    fn render_access_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// What the agent may do without asking: an icon, and its name when there's room.
+    /// Full access is the one shown in the warning color, so it is never on unnoticed.
+    fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.settings.access().to_string();
         let (icon, label) = menu::ACCESS.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
-        Button::new("ag-access")
-            .icon(Icon::new(icon))
-            .ghost()
-            .xsmall()
+        let short = match level.as_str() {
+            "read" => tr("Read only"),
+            "full" => tr("Full access"),
+            _ => tr("Asks first"),
+        };
+        let full = level == "full";
+        let tip: SharedString = crate::trf!("Permissions: {level}"; level => tr(label)).into();
+        chip_button("ag-access", self.agent.menu.open == Some(Menu::Access), tip)
             .flex_none()
-            .selected(self.agent.menu.open == Some(Menu::Access))
-            .tooltip(crate::trf!("Permissions: {level}"; level => tr(label)))
+            .child(Icon::new(icon).size(theme::u(13.)).flex_none().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })))
+            .when(!narrow, |h| h.child(div().whitespace_nowrap().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })).child(short)))
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Access, w, cx)
@@ -3994,8 +3992,31 @@ fn is_step(item: Option<&Item>) -> bool {
     matches!(item, Some(Item::Thought(_) | Item::Tool { .. }))
 }
 
-fn menu_button(id: &'static str, label: String, open: bool, tip: &'static str) -> Button {
-    Button::new(id).label(label).ghost().xsmall().flex_none().dropdown_caret(true).selected(open).tooltip(tip)
+/// Below this width the composer's bottom row shows icons instead of labels.
+const NARROW: f32 = 500.;
+const TIGHT: f32 = 360.;
+
+/// A chip in the composer's bottom row that opens a menu: 24 px tall like the icon
+/// buttons beside it, its text cut to fit, highlighted while its menu is open.
+fn chip_button(id: &'static str, open: bool, tip: SharedString) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .h(theme::u(24.))
+        .min_w_0()
+        .px_1p5()
+        .gap_1()
+        .rounded(px(5.))
+        .overflow_hidden()
+        .cursor_pointer()
+        .text_xs()
+        .when(open, |d| d.bg(c(theme::BG_HOVER)))
+        .hover(|s| s.bg(c(theme::BG_HOVER)))
+        .active(|s| s.opacity(0.85))
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+}
+
+fn chevron() -> Icon {
+    Icon::new(IconName::ChevronDown).size(theme::u(12.)).flex_none().text_color(c(theme::FG_DIM))
 }
 
 fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
