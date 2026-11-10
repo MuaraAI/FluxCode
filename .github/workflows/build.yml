@@ -34,7 +34,10 @@ jobs:
     env:
       FLUXCODE_BUILD: ${{ needs.stamp.outputs.build }}
     steps:
+      # Full history and tags: build.rs names the build each release came in.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -62,7 +65,10 @@ jobs:
     env:
       FLUXCODE_BUILD: ${{ needs.stamp.outputs.build }}
     steps:
+      # Full history and tags: build.rs names the build each release came in.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: System libraries for GPUI
         run: |
           sudo apt-get update

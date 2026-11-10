@@ -20,6 +20,13 @@ page, and installed copies offer it on their own. Newest first.
 - The update notice is shorter: "Update ready", when the build was made, one line on what
   changed, and the two buttons. The build names are in its tooltip. Closing it leaves a
   small Update button in the title bar instead of losing the update until the next start.
+- What's new names the build each release came in (`BuildDev-...` on every card, "installed
+  now" on the ones in this build), instead of a date that several releases share. build.rs
+  works it out from git: the commit that added the release to changelog.flux, then the first
+  build tag containing it; CI now checks out the full history (3.7 MB) for this. The header
+  lists the installed build and the one before it, and leaves out "Before" when the old
+  build didn't record itself (it used to say "Before this you ran ."). The page is centered
+  and fits narrow windows.
 
 ## A browser for the agents, and a tidier message box (10 November 2026)
 

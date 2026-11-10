@@ -11,6 +11,14 @@ use gpui_kit::{prelude::FluentBuilder, *};
 
 pub const SOURCE: &str = include_str!("../changelog.flux");
 
+// RELEASE_BUILDS: the build each release came in, worked out from git by build.rs.
+include!(concat!(env!("OUT_DIR"), "/release_builds.rs"));
+
+/// The build a release came in, when git could tell (by its English title).
+pub fn build_of(title_en: &str) -> Option<&'static str> {
+    RELEASE_BUILDS.iter().find(|(t, _)| *t == title_en).map(|(_, b)| *b)
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Release {
     /// YYYY-MM-DD, as in the build names.
@@ -114,7 +122,9 @@ impl Page {
     pub fn after_update(from: &str) -> Self {
         let all = parse(SOURCE);
         let pick = since(&all, Some(from));
-        Self { releases: pick.into_iter().map(|i| all[i].clone()).collect(), from: Some(from.to_string()), update: None, loading: false, error: None }
+        // An empty name means the build before didn't record itself: say nothing about it.
+        let from = (!from.is_empty()).then(|| from.to_string());
+        Self { releases: pick.into_iter().map(|i| all[i].clone()).collect(), from, update: None, loading: false, error: None }
     }
     pub fn all() -> Self {
         Self { releases: parse(SOURCE), from: None, update: None, loading: false, error: None }
@@ -154,70 +164,112 @@ impl Workbench {
             cx.notify();
         }));
         let now = crate::update::BUILD;
-        let sub = match (&page.update, &page.from) {
-            (Some(u), _) if u.between.len() > 1 => crate::trf!("You are on {now}. {new} is ready, with {n} builds since yours."; now => now, new => u.tag, n => u.between.len()),
-            (Some(u), _) => crate::trf!("You are on {now}. {new} is ready."; now => now, new => u.tag),
-            (None, Some(f)) => crate::trf!("You are on {now}. Before this you ran {from}."; now => now, from => f),
-            (None, None) => crate::trf!("You are on {now}."; now => now),
-        };
         let title = match &page.update {
             Some(_) => tr("What the new build changes"),
             None => tr("What's new in FluxCode"),
         };
-        let header = h_flex()
+        // Label and build name, one pair per line; the names in a fixed-width font so
+        // the dates and times line up and read at a glance.
+        let pair = |label: SharedString, build: String, strong: bool| {
+            h_flex()
+                .flex_wrap()
+                .gap_x_2()
+                .text_xs()
+                .child(div().flex_none().w(theme::u(64.)).text_color(c(theme::FG_DIM)).child(label))
+                .child(div().font_family("Cascadia Code").text_color(c(if strong { theme::FG_STRONG } else { theme::FG_MUTED })).child(build))
+        };
+        let mut builds = v_flex().gap_0p5().pt_1();
+        builds = builds.child(pair(tr("Installed").into(), now.to_string(), true));
+        match (&page.update, &page.from) {
+            (Some(u), _) => {
+                builds = builds.child(pair(tr("Ready").into(), u.tag.clone(), false));
+                if u.between.len() > 1 {
+                    builds = builds.child(div().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("{n} builds since yours"; n => u.between.len())));
+                }
+            }
+            (None, Some(f)) => builds = builds.child(pair(tr("Before").into(), f.clone(), false)),
+            (None, None) => {}
+        }
+        // The logo, title and Close on one line; the build names get the full width below.
+        let header = v_flex()
             .flex_none()
             .w_full()
             .max_w(theme::u(760.))
-            .gap_4()
-            .items_center()
-            .child(crate::ui::meander(44., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)))
+            .gap_2()
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
-                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(sub)),
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(div().flex_none().child(crate::ui::meander(32., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))))
+                    .child(div().flex_1().min_w_0().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
+                    .child(div().flex_none().child(close)),
             )
-            .child(close);
+            .child(builds);
+        let newer = page.update.is_some();
         let cards = page.releases.iter().enumerate().map(|(i, r)| {
+            let build = build_of(&r.title_en);
+            let here = build == Some(now);
+            // The build name when git knew it, else the date.
+            let chip: SharedString = build.map(str::to_string).unwrap_or_else(|| r.date.clone()).into();
+            let note: Option<SharedString> = if here {
+                Some(tr("installed now").into())
+            } else if newer {
+                Some(tr("in the new build").into())
+            } else {
+                None
+            };
             v_flex()
                 .flex_none()
                 .w_full()
                 .max_w(theme::u(760.))
-                .mt_6()
+                .mt_5()
                 .rounded(px(8.))
                 .border_1()
-                .border_color(c(theme::BORDER))
+                .border_color(c(if here { theme::BORDER_STRONG } else { theme::BORDER }))
                 .bg(c(theme::BG_SIDE))
                 .overflow_hidden()
                 .child(
-                    h_flex()
-                        .px_5()
+                    v_flex()
+                        .px_4()
                         .py_3()
-                        .gap_3()
+                        .gap_1p5()
                         .border_b_1()
                         .border_color(c(theme::BORDER))
                         .child(
-                            div()
-                                .flex_none()
-                                .px_2()
-                                .rounded(px(4.))
-                                .border_1()
-                                .border_color(c(theme::BORDER_STRONG))
+                            h_flex()
+                                .flex_wrap()
+                                .gap_x_2()
+                                .gap_y_1()
+                                .items_center()
                                 .text_xs()
-                                .text_color(c(theme::ACCENT_TEXT))
-                                .child(r.date.clone()),
+                                .child({
+                                    let tip = chip.clone();
+                                    div()
+                                        .id(("wn-build", i))
+                                        .flex_shrink(1.)
+                                        .min_w_0()
+                                        .truncate()
+                                        .px_1p5()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(c(theme::BORDER_STRONG))
+                                        .text_color(c(theme::ACCENT_TEXT))
+                                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                                        .child(chip)
+                                })
+                                .children(note.map(|n| div().text_color(c(theme::FG_DIM)).child(n))),
                         )
-                        .child(div().flex_1().min_w_0().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(r.title(id).to_string())),
+                        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(r.title(id).to_string())),
                 )
-                .child(div().px_5().py_4().text_sm().text_color(c(theme::FG)).child(TextView::markdown(("wn-md", i), r.body(id).to_string())))
+                .child(div().px_4().py_3().text_sm().text_color(c(theme::FG)).child(TextView::markdown(("wn-md", i), r.body(id).to_string())))
         });
         v_flex()
             .id("whats-new")
             .key_context("WhatsNew")
             .size_full()
-            .px_8()
+            // The column sits in the middle of wide windows and fills narrow ones.
+            .items_center()
+            .px(theme::u(20.))
             .py_6()
             .overflow_y_scroll()
             .bg(c(theme::BG_EDITOR))
@@ -240,7 +292,7 @@ impl Workbench {
                 ),
             )
             .when(page.releases.is_empty() && !page.loading && page.error.is_none(), |v| {
-                v.child(div().pt_6().text_sm().text_color(c(theme::FG_DIM)).child(if page.update.is_some() { tr("The new build has no notes beyond the list above.") } else { tr("No notes for this build.") }))
+                v.child(div().w_full().max_w(theme::u(760.)).pt_6().text_sm().text_color(c(theme::FG_DIM)).child(if page.update.is_some() { tr("The new build has no notes beyond the list above.") } else { tr("No notes for this build.") }))
             })
             .into_any_element()
     }
@@ -264,22 +316,25 @@ impl Workbench {
                     .border_1()
                     .border_color(c(theme::BORDER))
                     .overflow_hidden()
-                    .child(div().px_5().py_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).border_b_1().border_color(c(theme::BORDER)).child(tr("Builds since yours")))
+                    .child(div().px_4().py_2().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).border_b_1().border_color(c(theme::BORDER)).child(tr("Builds since yours")))
                     .children(builds.into_iter().enumerate().map(|(i, (tag, first))| {
                         h_flex()
-                            .px_5()
+                            .px_4()
                             .py_2()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .gap_y_0p5()
                             .items_start()
                             .when(i > 0, |h| h.border_t_1().border_color(c(theme::BORDER)))
                             .child(div().flex_none().w(theme::u(230.)).font_family("Cascadia Code").text_xs().text_color(c(if i == 0 { theme::ACCENT_TEXT } else { theme::FG })).child(tag))
-                            .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG_MUTED)).child(first))
+                            .child(div().flex_1().min_w(theme::u(180.)).text_xs().text_color(c(theme::FG_MUTED)).child(first))
                     }))
                     .child(
                         h_flex()
-                            .px_5()
+                            .px_4()
                             .py_2()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x_3()
                             .border_t_1()
                             .border_color(c(theme::BORDER))
                             .bg(c(theme::BG_SIDE))
@@ -304,7 +359,23 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_date, not_in, parse, since, SOURCE};
+    use super::{build_date, build_of, not_in, parse, since, Page, SOURCE};
+
+    #[test]
+    fn no_previous_build_means_no_before_line() {
+        assert_eq!(Page::after_update("").from, None);
+        assert_eq!(Page::after_update("BuildDev-2026-11-09-10-00-00").from.as_deref(), Some("BuildDev-2026-11-09-10-00-00"));
+    }
+
+    #[test]
+    fn release_builds_are_build_names() {
+        // Empty without git tags (a shallow checkout); when known, each is a build name.
+        for r in parse(SOURCE) {
+            if let Some(b) = build_of(&r.title_en) {
+                assert!(build_date(b).is_some(), "{b}");
+            }
+        }
+    }
 
     #[test]
     fn the_shipped_changelog_parses_in_both_languages() {

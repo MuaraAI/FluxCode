@@ -20,6 +20,7 @@ to see its diff. **Pull** brings them in. A blue dot on the Source Control icon 
 there is something new.
 
 The update notice is smaller, and if you close it, an **Update** button waits in the title bar.
+This page now shows the **build** each change came in.
 @id
 **Source Control** sekarang mengecek remote setiap beberapa menit. Kalau ada commit yang
 belum kamu punya, bagian **Masuk** menampilkannya: buka satu commit untuk melihat file yang
@@ -27,6 +28,7 @@ diubah, lalu buka file untuk melihat diff-nya. **Pull** menariknya. Titik biru d
 Control menandakan ada yang baru.
 
 Notifikasi update lebih kecil, dan kalau ditutup, tombol **Update** tetap ada di title bar.
+Halaman ini sekarang menampilkan **build** tempat setiap perubahan masuk.
 
 @release 2026-11-10
 @title en: Agents can use a browser
