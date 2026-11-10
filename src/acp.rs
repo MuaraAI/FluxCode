@@ -1041,7 +1041,9 @@ mod tests {
         let json = r#"{"agents":[{"id":"kilo","name":"Kilo","version":"7","distribution":{
             "npx":{"package":"@kilocode/cli@7","args":["acp"]},
             "binary":{"windows-x86_64":{"archive":"https://x/kilo.zip","cmd":"./kilo.exe","args":["acp"],"sha256":"AB"},
-                      "linux-x86_64":{"archive":"https://x/kilo.tar.gz","cmd":"./kilo","args":["acp"]}}}},
+                      "linux-x86_64":{"archive":"https://x/kilo.tar.gz","cmd":"./kilo","args":["acp"]},
+                      "darwin-aarch64":{"archive":"https://x/kilo-arm.tar.gz","cmd":"./kilo","args":["acp"]},
+                      "darwin-x86_64":{"archive":"https://x/kilo-x64.tar.gz","cmd":"./kilo","args":["acp"]}}}},
             {"id":"gem","name":"Gemini","version":"1","distribution":{"npx":{"package":"@google/gemini-cli@1","args":["--acp"]}}}]}"#;
         let list = parse_registry(json);
         assert_eq!(list.len(), 2);
