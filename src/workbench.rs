@@ -1370,24 +1370,40 @@ impl Workbench {
                 })
                 .child(Icon::new(icon).small())
         };
-        h_flex()
-            .id("title-bar")
-            .relative()
-            .w_full()
-            .h(theme::u(34.))
-            .flex_none()
-            .bg(c(theme::BG_TITLE))
-            .border_b_1()
-            .border_color(c(theme::BORDER))
-            .child(row)
-            .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
-            .child(
-                ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
-                    .on_click(|_, w, _| w.zoom_window()),
-            )
-            .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
-            .child(center_layer)
-            .into_any_element()
+        // Start button (Run file) - like VS Code's run button
+                let start_btn = div()
+                    .id("tb-start")
+                    .w(px(46.))
+                    .h_full()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .child(Icon::new(IconName::Play).small())
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Run File (F5)")).build(w, cx))
+                    .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)));
+
+                h_flex()
+                    .id("title-bar")
+                    .relative()
+                    .w_full()
+                    .h(theme::u(34.))
+                    .flex_none()
+                    .bg(c(theme::BG_TITLE))
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .child(row)
+                    .child(start_btn)
+                    .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
+                    .child(
+                        ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
+                            .on_click(|_, w, _| w.zoom_window()),
+                    )
+                    .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+                    .child(center_layer)
+                    .into_any_element()
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
