@@ -44,6 +44,7 @@ enum Req {
 }
 
 mod activity;
+mod catalog;
 mod menu;
 mod usage;
 mod web;
@@ -196,6 +197,8 @@ pub struct AgentState {
     steer: bool,
     /// Files attached to the message being typed.
     pub attachments: Vec<PathBuf>,
+    /// The row of attachment and context chips above the message, when it is wider than the box.
+    chips_scroll: ScrollHandle,
     /// Thinking blocks the user expanded.
     open_thoughts: HashSet<usize>,
     /// The agent accepts image blocks (ACP promptCapabilities.image).
@@ -283,6 +286,10 @@ pub struct AgentState {
     open_thought: Option<String>,
     /// Where the effort slider's handle was before the last change (it slides from there).
     pub effort_from: std::cell::Cell<Option<f32>>,
+    /// The effort handle is held: where it is on the rail (0..1).
+    pub effort_drag: std::cell::Cell<Option<f32>>,
+    /// Bumped on each pick, so the handle glides even onto the level it was on.
+    pub effort_gen: std::cell::Cell<u32>,
     /// The panel's top and the message box's top, in window pixels, as last drawn:
     /// the menus above the box get exactly the room between them.
     pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
@@ -438,6 +445,7 @@ impl AgentState {
             queue: Vec::new(),
             steer: false,
             attachments: Vec::new(),
+            chips_scroll: ScrollHandle::new(),
             open_thoughts: HashSet::new(),
             can_image: false,
             items: Vec::new(),
@@ -479,6 +487,8 @@ impl AgentState {
             times: Default::default(),
             open_thought: None,
             effort_from: std::cell::Cell::new(None),
+            effort_drag: std::cell::Cell::new(None),
+            effort_gen: std::cell::Cell::new(0),
             geom: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
             ask: None,
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
@@ -3223,6 +3233,14 @@ impl Workbench {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (icon, tint) = crate::files::icon_for(&name);
             let path = p.clone();
+            let image = crate::files::is_image(p) && !name.to_lowercase().ends_with(".svg");
+            let name_tip: SharedString = crate::trf!("{name} · click to open"; name => name.clone()).into();
+            let preview = p.clone();
+            let lead = if image {
+                img(p.clone()).flex_none().size(theme::u(16.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element()
+            } else {
+                Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none().into_any_element()
+            };
             chip_shell(SharedString::from(format!("ag-att-{i}")), true)
                 .child(
                     h_flex()
@@ -3233,14 +3251,27 @@ impl Workbench {
                         .gap_1()
                         .cursor_pointer()
                         .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                        .tooltip(move |w, cx| {
+                            if image {
+                                let (p, label) = (preview.clone(), name_tip.clone());
+                                gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
+                                    v_flex()
+                                        .gap_1()
+                                        .child(img(p.clone()).max_w(px(260.)).max_h(px(200.)).rounded(px(4.)).object_fit(ObjectFit::Contain))
+                                        .child(div().text_xs().child(label.clone()))
+                                })
+                                .build(w, cx)
+                            } else {
+                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx)
+                            }
+                        })
                         .on_click(cx.listener(move |this, _, w, cx| {
                             cx.stop_propagation();
                             if path.is_file() {
                                 this.open_file(path.clone(), w, cx);
                             }
                         }))
-                        .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none())
+                        .child(lead)
                         .child(div().min_w_0().truncate().child(name)),
                 )
                 .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
@@ -3287,7 +3318,33 @@ impl Workbench {
                     h.focus(w, cx);
                 }
             }))
-            .when(!chips.is_empty(), |v| v.child(h_flex().px_2().pt_2().gap_1().min_w_0().overflow_hidden().children(chips)))
+            .when(!chips.is_empty(), |v| {
+                let h = a.chips_scroll.clone();
+                v.child(
+                    h_flex()
+                        .id("ag-chips")
+                        .gap_1()
+                        .mx_2()
+                        .mt_2()
+                        .min_w_0()
+                        .overflow_x_scroll()
+                        .track_scroll(&a.chips_scroll)
+                        // A wheel turned over the row moves it left and right.
+                        .on_scroll(move |ev: &ScrollEvent, _, cx| {
+                            let d = ev.delta.pixel_delta(px(24.));
+                            if d.x != px(0.) || d.y == px(0.) {
+                                return;
+                            }
+                            let (off, max) = (h.offset(), h.max_offset());
+                            if max.x <= px(0.) {
+                                return;
+                            }
+                            h.set_offset(point((off.x + d.y).clamp(-max.x, px(0.)), off.y));
+                            cx.stop_propagation();
+                        })
+                        .children(chips),
+                )
+            })
             .child(
                 div().px_1().pt_1().key_context("AgentInput").child(
                     Textarea::new(&a.input).appearance(false).on_paste(move |item, _, cx| {
@@ -3991,9 +4048,8 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
 fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
     h_flex()
         .id(id)
-        // In one row with the others: it narrows (its name cut short) rather than wrap.
-        .flex_shrink(1.)
-        .min_w(theme::u(64.))
+        // In one row with the others, which scrolls sideways when they don't fit.
+        .flex_none()
         .max_w(theme::u(200.))
         .h(theme::u(22.))
         .gap_0p5()

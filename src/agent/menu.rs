@@ -75,6 +75,8 @@ enum Trail {
     Note(SharedString),
     /// A dot and a word: whether the agent is on.
     State(theme::Tok, SharedString),
+    /// The model costs nothing to use.
+    Free,
     None,
 }
 
@@ -125,6 +127,10 @@ impl Workbench {
             return self.agent_menu_close(true, window, cx);
         }
         st.open = Some(m);
+        if m == Menu::Model {
+            self.agent_menu_load_catalog(cx);
+        }
+        let st = &mut self.agent.menu;
         let q = st.query.clone();
         q.update(cx, |s, cx| {
             s.set_value("", window, cx);
@@ -151,6 +157,28 @@ impl Workbench {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Read the model catalog for the agent's models (once, in the background), then
+    /// redraw the menu with what it says.
+    fn agent_menu_load_catalog(&mut self, cx: &mut Context<Self>) {
+        let view = self.agent_config_view();
+        let Some(o) = view.iter().find(|o| o.category == "model") else { return };
+        let mut ids: Vec<String> = o.choices.iter().map(|c| c.0.clone()).collect();
+        ids.extend(o.choices.iter().filter_map(|(_, n, _)| {
+            let (v, _) = claude_version(n)?;
+            Some(super::catalog::claude_id(n.split_whitespace().next()?, v))
+        }));
+        let ids = super::catalog::missing(&ids);
+        if ids.is_empty() {
+            return;
+        }
+        let task = cx.background_spawn(async move { super::catalog::load(&ids) });
+        cx.spawn(async move |this, cx| {
+            task.await;
+            _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     /// Close the open menu. `quiet`: focus stays where the click went.
@@ -237,16 +265,19 @@ impl Workbench {
                             "free" => tr("Free (OpenCode Zen)").into(),
                             g => g.to_string().into(),
                         };
-                        let (id, cur) = (o.id.clone(), o.current.clone());
-                        models.into_iter().map(move |(v, n)| Row {
-                            group: title.clone(),
-                            lead: Lead::None,
-                            title: n.into(),
-                            sub: SharedString::default(),
-                            wrap: false,
-                            checked: v == cur,
-                            trail: Trail::None,
-                            act: Act::Opt(id.clone(), v),
+                        let (id, cur, free_group) = (o.id.clone(), o.current.clone(), group == "free");
+                        models.into_iter().map(move |(v, n)| {
+                            let meta = super::catalog::get(&v);
+                            Row {
+                                group: title.clone(),
+                                lead: Lead::None,
+                                title: n.into(),
+                                sub: meta.map(limits_line).unwrap_or_default().into(),
+                                wrap: false,
+                                checked: v == cur,
+                                trail: if free_group || meta.is_some_and(|m| m.free) { Trail::Free } else { Trail::None },
+                                act: Act::Opt(id.clone(), v),
+                            }
                         })
                     })
                     .collect()
@@ -442,6 +473,17 @@ impl Workbench {
                     .child(div().text_xs().text_color(c(if *tok == theme::FG_DIM { theme::FG_DIM } else { theme::FG_MUTED })).child(t.clone()))
                     .into_any_element(),
             ),
+            Trail::Free => Some(
+                div()
+                    .px_1p5()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .text_size(theme::u(11.))
+                    .text_color(c(theme::GREEN))
+                    .child(tr("Free"))
+                    .into_any_element(),
+            ),
             Trail::None => None,
         };
         let act = r.act.clone();
@@ -488,101 +530,207 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Effort, as a slider above the models (it changes without closing the menu): the
-    /// levels from least to most thinking, the current one named with what it costs.
+    /// Effort, as a slider above the models (it changes without closing the menu).
+    ///
+    /// Press anywhere on the rail and drag: the handle follows the pointer and the level
+    /// under it is named as it goes; on release it settles on the nearest level with a
+    /// short glide. A click jumps to the nearest level, and the labels are click targets.
+    /// The handle is a short upright bar with a gap around it in the rail, and the levels
+    /// are marked with stops (Material 3's slider); it slims and grows while held so it
+    /// stays visible under the pointer. "Default" (the agent decides) has no handle: the
+    /// rail is empty until a level is picked, and Reset goes back to it.
     fn render_effort_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let e = self.agent_effort()?;
         let levels: Vec<(String, String)> = e.choices.iter().filter(|c| c.0 != "default").map(|c| (c.0.clone(), c.1.clone())).collect();
         if levels.len() < 2 {
             return None;
         }
+        let has_default = e.choices.iter().any(|c| c.0 == "default");
         let n = levels.len();
         let at = levels.iter().position(|l| l.0 == e.current);
-        let pos = |i: usize| i as f32 / (n - 1) as f32;
-        let to = at.map(pos).unwrap_or(0.5);
-        let from = self.agent.effort_from.get().unwrap_or(to);
-        let name: SharedString = match at {
+        let pos = move |i: usize| i as f32 / (n - 1) as f32;
+        let nearest = move |f: f32| ((f * (n - 1) as f32).round() as usize).min(n - 1);
+        let drag = self.agent.effort_drag.get();
+        // While held, the level under the pointer is the one named.
+        let shown = drag.map(nearest).or(at);
+        let name: SharedString = match shown {
             Some(i) => levels[i].1.clone().into(),
             None => tr("Default").into(),
         };
-        let note: SharedString = tr(effort_note(&e.current)).into();
-        let key: SharedString = format!("ag-effort-{}", e.current).into();
-        let track = div()
-            .relative()
-            .h(theme::u(18.))
-            .mx(theme::u(7.))
-            .flex()
-            .items_center()
-            // The rail, and the part up to the current level.
-            .child(div().absolute().left_0().right_0().h(px(4.)).rounded_full().bg(c(theme::BG_HOVER)))
-            // A tick at each level.
-            .children((0..n).map(|i| {
-                let on = at.is_some_and(|a| i <= a);
-                div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(if on { theme::ACCENT } else { theme::BORDER_STRONG }))
-            }))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .child(div().h(px(4.)).rounded_full().bg(c(theme::ACCENT)).with_animation(SharedString::from(format!("{key}-fill")), Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui_kit::ease_out_quint()), move |el, t| el.w(relative(from + (to - from) * t)))),
-            )
-            // The handle.
-            .child(
-                div()
-                    .absolute()
-                    .ml(theme::u(-7.))
-                    .size(theme::u(14.))
-                    .rounded_full()
-                    .bg(c(theme::FG_STRONG))
-                    .border_2()
-                    .border_color(c(theme::ACCENT))
-                    .shadow_sm()
-                    .with_animation(SharedString::from(format!("{key}-knob")), Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui_kit::ease_out_quint()), move |el, t| el.left(relative(from + (to - from) * t))),
-            )
-            // Each level is a click target as wide as its share of the rail.
-            .child(h_flex().absolute().inset_0().mx(theme::u(-7.)).children(levels.iter().enumerate().map(|(i, (v, _))| {
-                let (id, v, here) = (e.id.clone(), v.clone(), to);
-                div().id(("ag-effort", i)).flex_1().h_full().cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+        let note: SharedString = tr(effort_note(shown.map_or("default", |i| levels[i].0.as_str()))).into();
+        let to = at.map(pos);
+        let from = self.agent.effort_from.get().or(to).unwrap_or(0.);
+        let key: SharedString = format!("ag-effort-{}-{}", e.current, self.agent.effort_gen.get()).into();
+
+        let gap = px(5.);
+        let rail_h = px(6.);
+        // The rail at a handle position `p` (0..1): filled up to it, empty after, with a
+        // gap around the handle; `held` makes the handle slimmer and taller.
+        let rail = move |p: Option<f32>, held: bool| {
+            let mut d = div().absolute().inset_0().flex().items_center();
+            match p {
+                Some(p) => {
+                    d = d
+                        .child(div().absolute().left_0().w(relative(p)).h(rail_h).flex().child(div().flex_1().mr(gap).rounded_l_full().rounded_r(px(2.)).bg(c(theme::ACCENT))))
+                        .child(div().absolute().right_0().w(relative(1. - p)).h(rail_h).flex().child(div().flex_1().ml(gap).rounded_r_full().rounded_l(px(2.)).bg(c(theme::BG_HOVER))))
+                        // No stop at the very start (the rail's rounded end is there) or under the handle.
+                        .children((1..n).filter(|&i| (pos(i) - p).abs() > 0.035).map(move |i| {
+                            let on = pos(i) < p;
+                            div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(if on { theme::ON_ACCENT } else { theme::FG_DIM }))
+                        }))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(relative(p))
+                                .ml(px(if held { -1.5 } else { -2. }))
+                                .w(px(if held { 3. } else { 4. }))
+                                .h(px(if held { 24. } else { 20. }))
+                                .rounded_full()
+                                .bg(c(theme::ACCENT)),
+                        );
+                }
+                None => {
+                    d = d.child(div().absolute().left_0().right_0().h(rail_h).rounded_full().bg(c(theme::BG_HOVER))).children((0..n).map(move |i| {
+                        div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(theme::FG_DIM))
+                    }));
+                }
+            }
+            d
+        };
+        let drawn = match (drag, to) {
+            // Held: exactly under the pointer, no easing to lag behind it.
+            (Some(f), _) => rail(Some(f), true).into_any_element(),
+            (None, Some(to)) => div()
+                .absolute()
+                .inset_0()
+                .with_animation(key, Animation::new(std::time::Duration::from_millis(240)).with_easing(gpui_kit::ease_out_quint()), move |el, t| {
+                    el.child(rail(Some(from + (to - from) * t), false))
+                })
+                .into_any_element(),
+            (None, None) => rail(None, false).into_any_element(),
+        };
+
+        // Press, drag and release, read from the window while the rail is on screen.
+        let weak = cx.entity().downgrade();
+        let values: Vec<String> = levels.iter().map(|l| l.0.clone()).collect();
+        let opt = e.id.clone();
+        let input = canvas(
+            |bounds, window, _| (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal)),
+            move |_, (bounds, hitbox), window, _| {
+                window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+                let frac = move |x: Pixels| ((x - bounds.left()) / bounds.size.width).clamp(0., 1.);
+                let w = weak.clone();
+                let hb = hitbox.clone();
+                window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !hb.is_hovered(window) {
+                        return;
+                    }
                     cx.stop_propagation();
-                    this.agent.effort_from.set(Some(here));
-                    this.agent_set_option(&id, v.clone(), true, cx)
-                }))
-            })));
-        let labels = h_flex().children(levels.iter().enumerate().map(|(i, (v, l))| {
-            let on = at == Some(i);
-            let (id, v, here) = (e.id.clone(), v.clone(), to);
-            div()
+                    let f = frac(ev.position.x);
+                    _ = w.update(cx, |this, cx| {
+                        this.agent.effort_drag.set(Some(f));
+                        cx.notify();
+                    });
+                });
+                let w = weak.clone();
+                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    let f = frac(ev.position.x);
+                    _ = w.update(cx, |this, cx| {
+                        if this.agent.effort_drag.get().is_some() {
+                            this.agent.effort_drag.set(Some(f));
+                            cx.notify();
+                        }
+                    });
+                });
+                let w = weak.clone();
+                window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
+                        return;
+                    }
+                    let f = frac(ev.position.x);
+                    let (opt, values) = (opt.clone(), values.clone());
+                    _ = w.update(cx, |this, cx| {
+                        if this.agent.effort_drag.take().is_none() {
+                            return;
+                        }
+                        // Settle from where it was let go.
+                        this.agent.effort_from.set(Some(f));
+                        this.agent.effort_gen.set(this.agent.effort_gen.get().wrapping_add(1));
+                        let v = values[nearest(f)].clone();
+                        this.agent_set_option(&opt, v, true, cx);
+                        cx.notify();
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
+        let track = div().relative().h(theme::u(26.)).mx(theme::u(8.)).child(drawn).child(input);
+
+        // A label under each stop: the first starts at it, the last ends at it, the rest
+        // are centered on it.
+        let labels = div().relative().h(theme::u(16.)).mx(theme::u(8.)).children(levels.iter().enumerate().map(|(i, (v, l))| {
+            let on = shown == Some(i);
+            let (id, v) = (e.id.clone(), v.clone());
+            let here = to.unwrap_or(pos(i));
+            let label = div()
                 .id(("ag-effort-l", i))
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_center()
+                .absolute()
+                .top_0()
                 .text_size(theme::u(11.))
+                .whitespace_nowrap()
                 .cursor_pointer()
                 .text_color(c(if on { theme::FG_STRONG } else { theme::FG_DIM }))
-                .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
+                .when(on, |d| d.font_weight(FontWeight::MEDIUM))
                 .hover(|s| s.text_color(c(theme::FG)))
-                .child(l.clone())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.agent.effort_from.set(Some(here));
+                    this.agent.effort_gen.set(this.agent.effort_gen.get().wrapping_add(1));
                     this.agent_set_option(&id, v.clone(), true, cx)
-                }))
+                }));
+            if i == 0 {
+                label.left_0().child(l.clone())
+            } else if i == n - 1 {
+                label.right_0().child(l.clone())
+            } else {
+                label.left(relative(pos(i))).ml(theme::u(-40.)).w(theme::u(80.)).flex().justify_center().child(l.clone())
+            }
         }));
+
+        let reset = (has_default && at.is_some()).then(|| {
+            let id = e.id.clone();
+            div()
+                .id("ag-effort-reset")
+                .flex_none()
+                .px_1p5()
+                .rounded(px(4.))
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                .child(tr("Reset"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.agent.effort_from.set(None);
+                    this.agent_set_option(&id, "default".to_string(), true, cx)
+                }))
+        });
         Some(
             v_flex()
                 .px_3()
-                .pt_0p5()
+                .pt_1()
                 .pb_2()
-                .gap_1()
                 .child(
                     h_flex()
                         .gap_2()
                         .child(div().flex_none().text_xs().text_color(c(theme::FG_MUTED)).child(tr("Effort")))
                         .child(div().flex_none().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(name))
-                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(note)),
+                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(note))
+                        .children(reset),
                 )
                 .child(track)
                 .child(labels)
@@ -665,6 +813,16 @@ pub(super) fn claude_price(name: &str) -> Option<(f32, f32)> {
     table.iter().filter(|(k, _, _)| n == *k || n.starts_with(&format!("{k} ")) || n.ends_with(k)).max_by_key(|(k, _, _)| k.len()).map(|(_, i, o)| (*i, *o))
 }
 
+/// "1M context · 131K out": what a model reads at once and writes in one answer.
+fn limits_line(m: super::catalog::Meta) -> String {
+    let ctx = super::catalog::tokens(m.context);
+    if m.output > 0 {
+        crate::trf!("{c} context · {o} out"; c => ctx, o => super::catalog::tokens(m.output))
+    } else {
+        crate::trf!("{c} context"; c => ctx)
+    }
+}
+
 fn money(v: f32) -> String {
     if v < 1. { format!("${v:.2}") } else if v.fract() == 0. { format!("${v:.0}") } else { format!("${v:.1}") }
 }
@@ -691,7 +849,12 @@ fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
     if named.iter().filter(|x| x.3.is_some()).count() < 3 {
         return None;
     }
-    let price_line = |name: &str| claude_price(name).map(|(i, out)| crate::trf!("{i} / {o} per 1M"; i => money(i), o => money(out))).unwrap_or_default();
+    let price_line = |name: &str| {
+        let price = claude_price(name).map(|(i, out)| crate::trf!("{i} / {o} per 1M"; i => money(i), o => money(out)));
+        let fam = name.split_whitespace().next().unwrap_or("");
+        let limits = claude_version(name).and_then(|(v, _)| super::catalog::get(&super::catalog::claude_id(fam, v))).map(limits_line);
+        [price, limits].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    };
     let row = |group: SharedString, v: &String, title: &String, sub: String| Row {
         group,
         lead: Lead::None,

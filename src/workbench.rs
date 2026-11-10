@@ -235,6 +235,8 @@ pub struct Workbench {
     pub(crate) drop_focus: FocusHandle,
     /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
     pub(crate) smooth: Option<SmoothScroll>,
+    /// The welcome page's width as last drawn: too narrow for its text, it shows the logo alone.
+    welcome_w: std::rc::Rc<std::cell::Cell<f32>>,
     /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
@@ -404,6 +406,7 @@ impl Workbench {
             workspace: Default::default(),
             drop_focus: cx.focus_handle(),
             smooth: None,
+            welcome_w: std::rc::Rc::new(std::cell::Cell::new(f32::MAX)),
             status_seen: SharedString::default(),
             tree,
             dirs: Rc::default(),
@@ -1764,11 +1767,26 @@ impl Workbench {
                 .into_any_element(),
             // The welcome page: one column, at most 320 wide, that narrows with the editor
             // area and scrolls when the window is short (nothing is cut off at the sides).
+            // A strip too narrow for a line of text (a wide agent panel beside it): the logo
+            // alone, rather than words broken letter by letter.
+            None if self.welcome_w.get() < 230. => div()
+                .relative()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
+                .when(self.welcome_w.get() >= 84., |d| d.child(ui::meander(48., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))))
+                .into_any_element(),
             None => v_flex()
                 .id("welcome")
+                .relative()
                 .size_full()
                 .overflow_y_scroll()
                 .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
                 .child(
                     // flex_none: taller than the window it grows (and scrolls) instead of
                     // shrinking and spilling over the top.
@@ -1817,6 +1835,28 @@ impl Workbench {
                 )
                 .into_any_element(),
         }
+    }
+
+    /// Measures the welcome page as it is drawn, and redraws it when its width crosses
+    /// what the text needs.
+    fn welcome_probe(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let cell = self.welcome_w.clone();
+        let eid = cx.entity_id();
+        canvas(
+            move |b, _, cx| {
+                let w = f32::from(b.size.width);
+                let was = cell.replace(w);
+                let side = |v: f32| (v < 84., v < 230.);
+                if side(was) != side(w) {
+                    cx.defer(move |cx| cx.notify(eid));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
