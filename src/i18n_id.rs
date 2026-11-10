@@ -675,6 +675,16 @@ pub const ID: &[(&str, &str)] = &[
     ("{m} min ago", "{m} menit lalu"),
     ("{name} joined the session", "{name} bergabung ke sesi"),
     ("{name} left the session", "{name} keluar dari sesi"),
+    // ------------------------------------------------------------ update notes
+    ("Builds since yours", "Build sejak versimu"),
+    ("Could not read the new build's notes. {why}", "Catatan build baru tidak bisa dibaca. {why}"),
+    ("Reading the new build's notes…", "Membaca catatan build baru…"),
+    ("Release page", "Halaman rilis"),
+    ("The new build has no notes beyond the list above.", "Build baru tidak punya catatan lain selain daftar di atas."),
+    ("What the new build changes", "Yang berubah di build baru"),
+    ("You are on {now}. {new} is ready, with {n} builds since yours.", "Kamu memakai {now}. {new} sudah siap, dengan {n} build sejak versimu."),
+    ("You are on {now}. {new} is ready.", "Kamu memakai {now}. {new} sudah siap."),
+    ("Yours, installed now", "Punyamu, yang terpasang sekarang"),
 ];
 
 #[cfg(test)]

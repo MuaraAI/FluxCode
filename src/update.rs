@@ -45,6 +45,8 @@ pub struct Release {
     pub page: String,
     pub url: String,
     pub size: u64,
+    /// Every build newer than this one, newest first: its tag and the first point of its notes.
+    pub between: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -91,7 +93,20 @@ pub fn check() -> Result<Option<Release>, String> {
 /// The newest release in GitHub's list that is newer than `current` and carries
 /// this platform's archive. Tags are zero-padded, so they sort as text.
 fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
-    list.as_array()?
+    let mut between: Vec<(String, String)> = list
+        .as_array()?
+        .iter()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .filter_map(|r| {
+            let tag = r["tag_name"].as_str()?;
+            (tag.starts_with("BuildDev-") && tag > current).then(|| {
+                let first = highlights(r["body"].as_str().unwrap_or_default(), 1).into_iter().next().unwrap_or_default();
+                (tag.to_string(), first)
+            })
+        })
+        .collect();
+    between.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut best = list.as_array()?
         .iter()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
         .filter_map(|r| {
@@ -106,9 +121,12 @@ fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
                 page: r["html_url"].as_str().unwrap_or_default().to_string(),
                 url: asset["browser_download_url"].as_str()?.to_string(),
                 size: asset["size"].as_u64().unwrap_or(0),
+                between: Vec::new(),
             })
         })
-        .max_by(|a, b| a.tag.cmp(&b.tag))
+        .max_by(|a, b| a.tag.cmp(&b.tag))?;
+    best.between = between;
+    Some(best)
 }
 
 /// The first sentence of up to `n` bullets from the notes, without Markdown marks.
@@ -336,7 +354,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn update_start(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn update_start(&mut self, cx: &mut Context<Self>) {
         let rel = match &self.update.phase {
             Phase::Available(r) | Phase::Failed(Some(r), _) => r.clone(),
             _ => return,
@@ -482,6 +500,7 @@ impl Workbench {
             Phase::Idle => {}
         }
         let page = rel.map(|r| r.page.clone()).unwrap_or_default();
+        let notes_for = rel.cloned();
         let actions = match &u.phase {
             Phase::Available(_) | Phase::Failed(Some(_), _) => Some(
                 h_flex()
@@ -495,7 +514,12 @@ impl Workbench {
                             .on_click(cx.listener(|this, _, _, cx| this.update_start(cx))),
                     )
                     .when(!page.is_empty(), |h| {
-                        h.child(Button::new("upd-notes").label(tr("What's new")).ghost().xsmall().on_click(move |_, _, cx| cx.open_url(&page)))
+                        // The notes open in FluxCode: what changed between this build and the new one.
+                        h.child(Button::new("upd-notes").label(tr("What's new")).ghost().xsmall().on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(r) = notes_for.clone() {
+                                this.show_update_notes(r, cx);
+                            }
+                        })))
                     }),
             ),
             _ => None,
