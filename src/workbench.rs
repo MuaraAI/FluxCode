@@ -134,7 +134,6 @@ pub(crate) enum SideView {
     Run,
     Scm,
     Agent,
-    Collab,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -525,6 +524,7 @@ impl Workbench {
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.whats_new = None;
+        self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
             return;
@@ -1345,7 +1345,18 @@ impl Workbench {
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child({
                 let live = self.collab.active();
-                div().relative().child(view_item("ab-collab", Icon::new(gpui_kit::assets::IconName::Users), SideView::Collab, self, cx)).when(live, |d| {
+                // Live share is a page in the editor area: there is room for it there.
+                let active = self.collab.page && !self.settings_open;
+                div()
+                    .id("ab-collab-page")
+                    .relative()
+                    .child(item("ab-collab", Icon::new(gpui_kit::assets::IconName::Users), active, self, cx))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.collab.page = !(this.collab.page && !this.settings_open);
+                        this.settings_open = false;
+                        cx.notify();
+                    }))
+                    .when(live, |d| {
                     d.child(div().absolute().right(theme::u(9.)).bottom(theme::u(9.)).size(theme::u(7.)).rounded_full().bg(c(theme::GREEN)))
                 })
             })
@@ -1367,7 +1378,6 @@ impl Workbench {
             SideView::Run => tr("RUN"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
-            SideView::Collab => tr("LIVE SHARE"),
         };
         // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
@@ -1398,7 +1408,6 @@ impl Workbench {
             SideView::Run => self.render_run_view(cx),
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
-            SideView::Collab => self.render_collab(cx),
         };
         v_flex()
             .size_full()
@@ -1512,6 +1521,9 @@ impl Workbench {
     fn render_editor_area(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.settings_open {
             return self.render_settings(window, cx);
+        }
+        if self.collab.page {
+            return self.render_collab_page(cx);
         }
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
@@ -1876,7 +1888,9 @@ impl Render for Workbench {
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel))
                 .into_any_element()
         } else {
-            editor_and_panel
+            // Beside the activity bar it takes what is left (a full-width child would
+            // run past the window's right edge by the activity bar's width).
+            div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel).into_any_element()
         };
         // The right dock is a fixed-width column (dragged by its left edge), so it always
         // fits in the window: the editor side gives up the space, never the dock.

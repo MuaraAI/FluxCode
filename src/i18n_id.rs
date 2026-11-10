@@ -768,6 +768,49 @@ pub const ID: &[(&str, &str)] = &[
     ("Search agents", "Cari agent"),
     ("Search models", "Cari model"),
     ("Permissions", "Izin"),
+    ("Address", "Alamat"),
+    (
+        "Anyone with this code can join {folder} and edit it with you. Send it only to the people you invite.",
+        "Siapa pun yang punya kode ini bisa masuk ke {folder} dan mengeditnya bersamamu. Kirim hanya ke orang yang kamu undang.",
+    ),
+    ("Click to copy", "Klik untuk menyalin"),
+    (
+        "Code together in real time. Your PC is the server: no account, no VPN, no server to rent.",
+        "Ngoding bareng secara real time. PC-mu jadi servernya: tanpa akun, tanpa VPN, tanpa sewa server.",
+    ),
+    ("Connected · {host}'s {folder}", "Tersambung · {folder} milik {host}"),
+    ("Connection", "Koneksi"),
+    ("End session", "Akhiri sesi"),
+    (
+        "Every way in that opened is in the code. A guest's FluxCode tries them all at once and keeps the first that answers.",
+        "Semua jalur yang terbuka ada di dalam kode. FluxCode tamu mencoba semuanya sekaligus dan memakai yang pertama menjawab.",
+    ),
+    ("Files on this PC", "File di PC ini"),
+    ("Invite code", "Kode undangan"),
+    ("Live share", "Live share"),
+    ("Live · hosting {folder}", "Live · host {folder}"),
+    ("Nobody else yet. They show here as soon as they join.", "Belum ada orang lain. Mereka muncul di sini begitu bergabung."),
+    ("Not in a session", "Tidak dalam sesi"),
+    ("Only you so far.", "Baru kamu saja."),
+    (
+        "Open a file to edit it with the others. It comes from the host and stays in sync.",
+        "Buka file untuk mengeditnya bersama yang lain. File datang dari host dan tetap sinkron.",
+    ),
+    ("Paste the code the host sent you.", "Tempel kode yang dikirim host."),
+    (
+        "Share {folder} with the people you invite. Edits go straight between your PC and each guest, encrypted with the invite code.",
+        "Bagikan {folder} ke orang yang kamu undang. Edit langsung bolak-balik antara PC-mu dan tiap tamu, terenkripsi dengan kode undangan.",
+    ),
+    ("open", "terbuka"),
+    ("Host", "Jadi host"),
+    ("Start hosting and copy the invite code.", "Mulai jadi host dan salin kode undangannya."),
+    ("Send the code", "Kirim kodenya"),
+    (
+        "In any chat or e-mail. It works on the same network and over the internet.",
+        "Lewat chat atau e-mail apa saja. Bisa di jaringan yang sama maupun lewat internet.",
+    ),
+    ("Code together", "Ngoding bareng"),
+    ("Edits merge live. An edit an AI agent made says which agent and model.", "Edit digabung langsung. Edit dari agent AI menyebut agent dan modelnya."),
 ];
 
 #[cfg(test)]

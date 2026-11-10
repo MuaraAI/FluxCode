@@ -5,6 +5,19 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Live share gets its own page (10 November 2026)
+
+- The people icon in the activity bar now opens Live share as a page in the editor area,
+  like Settings, instead of squeezing it into the side bar. Its cards (host and join;
+  invite code and ways in; people and activity; a guest's connection and shared files)
+  sit two to a row on a wide window and wrap to one per row when it is narrow.
+- The page header says where the session stands (not in a session, live, connected) with
+  End session or Leave next to it. Before a session, three short steps say how it works.
+- Copy invite code sits next to the code; the code box copies on click too. Enter in the
+  invite box joins. Opening a shared file goes to the editor; the icon brings the page back.
+- Fixed: with the side bar hidden, the editor area ran past the window's right edge by
+  the activity bar's width (tabs, the page and the welcome screen were cut off there).
+
 ## One look for the agent menus, and models for GitHub Copilot (10 November 2026)
 
 - The agent, model, mode and permission menus are drawn by FluxCode now, in one style:

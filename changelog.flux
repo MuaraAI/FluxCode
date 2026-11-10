@@ -11,6 +11,18 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Live share has its own page
+@title id: Live share punya halaman sendiri
+@en
+The people icon now opens **Live share** as a full page in the editor, with room for the
+invite code, every way in, the people in the session and their edits. On a wide window
+the cards sit side by side; on a narrow one they stack.
+@id
+Ikon orang sekarang membuka **Live share** sebagai halaman penuh di editor, cukup luas untuk
+kode undangan, semua jalur masuk, orang-orang di sesi dan edit mereka. Di jendela lebar
+kartunya berdampingan; di jendela sempit bertumpuk.
+
+@release 2026-11-10
 @title en: Tidier agent menus, and models for GitHub Copilot
 @title id: Menu agent lebih rapi, dan model untuk GitHub Copilot
 @en
