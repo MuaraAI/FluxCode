@@ -385,7 +385,7 @@ impl Workbench {
             if let Some(p) = project.filter(|p| p.ext == "paper" || p.ext == "java-gradle" || p.ext == "java-maven") {
                 let took = self.out_lines.iter().rev().find(|l| l.kind == LineKind::Status).map(|l| l.meta.to_string()).unwrap_or_default();
                 if let Some(s) = crate::ext::compile::summary(&p, &took) {
-                    let mut l = Line::new(&s, LineKind::Success);
+                    let mut l = Line::new(&s, LineKind::Result);
                     l.meta = "FluxCompile".into();
                     close_line(&mut self.out_lines);
                     self.out_lines.push(l);
