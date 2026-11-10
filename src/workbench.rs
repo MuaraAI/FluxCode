@@ -287,10 +287,10 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) term_run: Option<crate::panel::RunInfo>,
-    /// Wrapped rows of the terminal and output panels, and the panel's measured width.
+    /// Wrapped rows of the terminal and output panels, and the size of the panel's log (last frame).
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
-    pub(crate) panel_width: Rc<std::cell::Cell<f32>>,
+    pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
     /// Size of the image viewer area (measured last frame), to fit pictures exactly.
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
@@ -447,7 +447,7 @@ impl Workbench {
             term_run: None,
             term_wrap: Default::default(),
             out_wrap: Default::default(),
-            panel_width: Rc::default(),
+            panel_size: Rc::default(),
             image_box: Rc::default(),
             out_run: None,
             term_hist_ix: None,
