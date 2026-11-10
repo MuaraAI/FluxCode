@@ -41,6 +41,19 @@ pub fn verbs(kind: &str) -> (&'static str, &'static str, IconName) {
     }
 }
 
+/// Agents that send web tools as kind `other` with the tool's bare name (OpenCode's
+/// `websearch`, `webfetch`): the kind they mean, and what the row says they worked on.
+pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str)> {
+    if !matches!(kind, "other" | "") {
+        return None;
+    }
+    match title.trim().to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
+        "websearch" => Some(("search", "the web")),
+        "webfetch" => Some(("fetch", "a page")),
+        _ => None,
+    }
+}
+
 /// What a step works on, from its title: "Read src/main.rs" → "src/main.rs" (the
 /// verb is said by the row), "`cargo build`" → "cargo build" (shown as code).
 pub fn target(title: &str, kind: &str) -> (String, bool) {
@@ -83,15 +96,24 @@ pub struct Step<'a> {
     /// A thought: its last line, shown dim after the label.
     pub note: Option<String>,
     pub open: bool,
+    /// An opened thought's full text: it sits inside the step, so the rail runs down
+    /// beside it to the next step.
+    pub detail: Option<String>,
 }
 
 impl Workbench {
     pub(crate) fn render_step(&self, s: Step, on_click: Option<Box<dyn Fn(&mut Workbench, &mut Context<Workbench>) + 'static>>, cx: &mut Context<Self>) -> AnyElement {
         let running = s.live && matches!(s.status, "pending" | "in_progress" | "");
         let failed = s.status == "failed";
-        let (doing, done, icon) = verbs(s.kind);
-        let label: SharedString = tr(if running { doing } else if failed && s.kind != "think" { "Failed" } else { done }).into();
-        let (what, code) = if s.kind == "think" { (s.note.clone().unwrap_or_default(), false) } else { target(s.title, s.kind) };
+        let web = web_kind(s.kind, s.title);
+        let kind = web.map_or(s.kind, |w| w.0);
+        let (doing, done, icon) = verbs(kind);
+        let label: SharedString = tr(if running { doing } else if failed && kind != "think" { "Failed" } else { done }).into();
+        let (what, code) = match web {
+            Some((_, what)) => (tr(what).to_string(), false),
+            None if kind == "think" => (s.note.clone().unwrap_or_default(), false),
+            None => target(s.title, kind),
+        };
         let time = self.agent.times.get(&s.key).and_then(|(_, d)| *d).map(took);
         let col = if failed { theme::DANGER } else if running { theme::ACCENT_TEXT } else { theme::FG_DIM };
 
@@ -136,16 +158,31 @@ impl Workbench {
                 h.child(if code {
                     w.font_family("Cascadia Code").text_color(c(theme::FG)).child(what.clone())
                 } else if s.kind == "think" {
-                    w.italic().text_color(c(theme::FG_DIM)).child(what.clone())
+                    w.text_color(c(theme::FG_DIM)).child(what.clone())
                 } else {
                     w.text_color(c(theme::FG)).child(what.clone())
                 })
             })
             .when(what.is_empty(), |h| h.child(div().flex_1()))
-            .when_some(time, |h, t| {
-                h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(t).with_animation(SharedString::from(format!("{state_key}-t")), Animation::new(Duration::from_millis(220)), |el, t| el.opacity(t)))
-            })
-            .when(s.kind == "think", |h| h.child(Icon::new(if s.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)).flex_none()));
+            // Time and chevron sit in fixed columns, so every row's time lines up on the
+            // right whether the row opens or not.
+            .child(
+                div()
+                    .flex_none()
+                    .min_w(theme::u(40.))
+                    .flex()
+                    .justify_end()
+                    .text_color(c(theme::FG_DIM))
+                    .when_some(time, |d, t| d.child(div().child(t).with_animation(SharedString::from(format!("{state_key}-t")), Animation::new(Duration::from_millis(220)), |el, t| el.opacity(t)))),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme::u(12.))
+                    .flex()
+                    .justify_center()
+                    .when(s.kind == "think", |d| d.child(Icon::new(if s.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)))),
+            );
         // While it runs: the sweep under the label (the one thing that keeps moving).
         let sweep = running.then(|| {
             div().relative().h(px(2.)).mr_2().rounded_full().bg(c(theme::BG_HOVER)).overflow_hidden().child(
@@ -160,7 +197,8 @@ impl Workbench {
             )
         });
         let tip: SharedString = s.title.to_string().into();
-        let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep);
+        let detail = s.detail.map(|t| div().pb_2().pr_4().text_xs().line_height(relative(1.55)).text_color(c(theme::FG_DIM)).child(t));
+        let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
             // The chat puts 8 px between items: a step joined to the one above eats it,
@@ -193,5 +231,8 @@ mod tests {
         assert_eq!(target("Search \"fn main\"", "search"), ("fn main".into(), false));
         assert_eq!(took(Duration::from_millis(420)), "0.4 s");
         assert_eq!(took(Duration::from_secs(65)), "1 min 5 s");
+        assert_eq!(super::web_kind("other", "websearch"), Some(("search", "the web")));
+        assert_eq!(super::web_kind("other", "webfetch"), Some(("fetch", "a page")));
+        assert_eq!(super::web_kind("read", "websearch"), None);
     }
 }

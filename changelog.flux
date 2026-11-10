@@ -11,6 +11,24 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: A calmer chat, an effort slider you can drag
+@title id: Chat lebih tenang, slider effort yang bisa digeser
+@en
+Scroll up while the agent answers and the chat **stays where you put it**; scroll back down
+and it follows again. Opened thoughts stay on the timeline, and every step's time lines up.
+
+**Drag** the effort slider, see each model's **token limits**, and spot **free** models at a
+glance. Attached images show a **preview**, and a long row of attachments scrolls sideways.
+@id
+Scroll ke atas saat agent menjawab dan chat **tetap di posisimu**; scroll ke bawah lagi dan
+chat kembali mengikuti. Thought yang dibuka tetap di garis langkah, dan waktu tiap langkah
+sejajar.
+
+**Geser** slider effort, lihat **batas token** tiap model, dan kenali model **gratis** sekilas.
+Gambar yang dilampirkan punya **preview**, dan deretan lampiran yang panjang bisa digeser ke
+samping.
+
+@release 2026-11-10
 @title en: Watch the agent work, step by step
 @title id: Lihat agent bekerja, langkah demi langkah
 @en

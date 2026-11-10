@@ -85,8 +85,6 @@ pub struct Settings {
     /// What the agent may do without asking: "read" (read only), "write" (read and
     /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
     pub agent_access: String,
-    /// Agent memory is off: nothing is recalled, saved or asked of the agent.
-    pub memory_off: bool,
     /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or
     /// Chromium), a browser id, or "off".
     pub agent_browser: String,
@@ -139,7 +137,6 @@ impl Default for Settings {
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
-            memory_off: false,
             agent_browser: "auto".into(),
             agent_browser_headless: false,
             extensions: crate::ext::default_installed(),

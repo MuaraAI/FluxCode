@@ -5,6 +5,45 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## A calmer chat while the agent answers; effort you can drag; models with their limits (10 November 2026)
+
+- Scrolling up while an answer streams keeps the view where you put it; scrolling back to
+  the bottom (or sending a message) follows the answer again. A wheel glide toward the
+  bottom lands on the newest line even as it grows.
+- An opened thought sits inside its step, so the rail runs on beside it to the next step.
+  Thoughts are no longer in italics. The time of every step lines up in one column on the
+  right, whether the step opens or not.
+- Agents that send web tools by their bare name (OpenCode's `websearch`, `webfetch`) show
+  "Searched the web" and "Fetched a page" instead of "Done websearch".
+- Headings in answers are a step or two above the body text (a `#` was twice its size),
+  and paragraphs sit a little closer.
+- FluxCode's own memory is gone: the "Used 1 note from memory" lines, the Memory view and
+  button, `/remember` and `/memory`, and the note asking the agent to save facts. Agents
+  keep their own memory.
+- Effort: press on the rail and drag; the handle follows the pointer, names the level under
+  it, and settles on the nearest level when let go. The handle is an upright bar with a gap
+  in the rail and stops at each level; Default (the agent decides) shows an empty rail, and
+  Reset goes back to it. The labels sit under their stops.
+- The model menu shows each model's context window and its longest answer ("200K context ·
+  32K out") and marks free models Free, read from the model list OpenCode keeps on the PC
+  (`~/.cache/opencode/models.json`); nothing is fetched. Claude's models get the same line
+  after their price.
+- Attached images show a thumbnail in their chip and a bigger preview on hover. When the
+  chips don't fit, the row scrolls sideways (a mouse wheel moves it too) instead of cutting
+  every name to two letters.
+- The welcome page in a very narrow editor area shows the logo alone instead of words
+  broken letter by letter.
+
+## The taskbar shows the new icon; lighter debug builds (10 November 2026)
+
+- After an update or a reinstall, Windows kept showing the old blue icon on the taskbar
+  and in Start, because the shell caches a shortcut's icon by the exe's path. The updater
+  now tells the shell the exe changed (and again on the first start after an update), and
+  the installer refreshes the icon cache.
+- Debug builds keep line numbers for FluxCode's own code and no debug info for the
+  dependencies: the local build cache went from 48 GB to 2.5 GB. Release builds are
+  unchanged.
+
 ## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
 
 - The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
