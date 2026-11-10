@@ -75,8 +75,10 @@ enum Trail {
     Note(SharedString),
     /// A dot and a word: whether the agent is on.
     State(theme::Tok, SharedString),
-    /// The model costs nothing to use.
-    Free,
+    /// A model's limits in two right-aligned columns, so every row lines up: what it
+    /// reads at once and what it writes in one answer (blank when unknown). `free` marks
+    /// a free model outside the Free group (inside it, the group title says so).
+    Cols(SharedString, SharedString, bool),
     None,
 }
 
@@ -97,6 +99,16 @@ impl Row {
         let hay = format!("{} {} {}", self.title, self.sub, self.group).to_lowercase();
         q.split_whitespace().all(|w| hay.contains(w))
     }
+}
+
+/// Widths of the model columns (context, output), shared by the rows and their header;
+/// they follow the interface size like the text in them.
+fn col_ctx() -> Pixels {
+    theme::u(54.)
+}
+
+fn col_out() -> Pixels {
+    theme::u(50.)
 }
 
 /// Lists this long get a search box.
@@ -268,14 +280,16 @@ impl Workbench {
                         let (id, cur, free_group) = (o.id.clone(), o.current.clone(), group == "free");
                         models.into_iter().map(move |(v, n)| {
                             let meta = super::catalog::get(&v);
+                            let (ctx, out) = meta.map(|m| (super::catalog::tokens(m.context), if m.output > 0 { super::catalog::tokens(m.output) } else { String::new() })).unwrap_or_default();
                             Row {
                                 group: title.clone(),
                                 lead: Lead::None,
                                 title: n.into(),
-                                sub: meta.map(limits_line).unwrap_or_default().into(),
+                                // Searchable by its id too ("glm", "zen").
+                                sub: v.clone().into(),
                                 wrap: false,
                                 checked: v == cur,
-                                trail: if free_group || meta.is_some_and(|m| m.free) { Trail::Free } else { Trail::None },
+                                trail: Trail::Cols(ctx.into(), out.into(), !free_group && meta.is_some_and(|m| m.free)),
                                 act: Act::Opt(id.clone(), v),
                             }
                         })
@@ -392,7 +406,25 @@ impl Workbench {
         let (mut child, mut sel_child) = (0usize, 0usize);
         for (i, r) in rows.iter().enumerate() {
             if !r.group.is_empty() && last.as_ref() != Some(&r.group) {
-                list = list.child(div().flex_none().px_3().pt_2().pb_0p5().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_DIM)).child(r.group.clone()));
+                // Model groups name their columns once, over the numbers.
+                let cols = matches!(r.trail, Trail::Cols(..));
+                list = list.child(
+                    h_flex()
+                        .flex_none()
+                        .mx_1()
+                        .px_2()
+                        .pt_2()
+                        .pb_0p5()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).child(r.group.clone()))
+                        .when(cols, |h| {
+                            h.child(div().flex_none().w(col_ctx()).text_right().whitespace_nowrap().text_size(theme::u(11.)).child(tr("Context")))
+                                .child(div().flex_none().w(col_out()).text_right().whitespace_nowrap().text_size(theme::u(11.)).child(tr("Output")))
+                                .child(div().flex_none().w(theme::u(14.)))
+                        }),
+                );
                 child += 1;
             }
             last = Some(r.group.clone());
@@ -473,15 +505,14 @@ impl Workbench {
                     .child(div().text_xs().text_color(c(if *tok == theme::FG_DIM { theme::FG_DIM } else { theme::FG_MUTED })).child(t.clone()))
                     .into_any_element(),
             ),
-            Trail::Free => Some(
-                div()
-                    .px_1p5()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG))
-                    .text_size(theme::u(11.))
-                    .text_color(c(theme::GREEN))
-                    .child(tr("Free"))
+            Trail::Cols(ctx, out, free) => Some(
+                h_flex()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .when(*free, |h| h.child(div().text_size(theme::u(11.)).text_color(c(theme::GREEN)).child(tr("Free"))))
+                    .child(div().w(col_ctx()).text_right().child(ctx.clone()))
+                    .child(div().w(col_out()).text_right().text_color(c(theme::FG_DIM)).child(out.clone()))
                     .into_any_element(),
             ),
             Trail::None => None,
@@ -511,6 +542,9 @@ impl Workbench {
                         .min_w_0()
                         .child(name.truncate())
                         .when(!r.sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).line_clamp(2).child(r.sub.clone())))
+                } else if matches!(r.trail, Trail::Cols(..)) {
+                    // A model: its name takes the row; the numbers sit in their columns.
+                    h_flex().flex_1().min_w_0().child(name.flex_1().min_w_0().truncate())
                 } else {
                     // One line: the name, then who makes it, cut to fit.
                     h_flex()
@@ -752,7 +786,7 @@ impl Workbench {
             .border_color(c(theme::BORDER))
             .child(link("ag-menu-settings", tr("Agent settings").into()).on_click(cx.listener(|this, _, w, cx| {
                 this.agent_menu_close(false, w, cx);
-                this.agent_open_options(cx);
+                this.agent_open_options(w, cx);
             })))
             .child(div().flex_1())
             .when(crate::acp::managed(&current), |h| {

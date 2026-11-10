@@ -595,6 +595,8 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
         || lower.starts_with("fatal:")
         || lower.starts_with("npm err!")
         || lower.contains("is not recognized as an internal or external command")
+        // cmd.exe's second line of the same message.
+        || (prev == Some(LineKind::Err) && lower.starts_with("operable program or batch file"))
         || lower.starts_with("the system cannot find")
         || lower.contains(": can't open file '")
     {
@@ -1212,6 +1214,9 @@ mod tests {
         assert_eq!(failure_reason(&gradle).as_deref(), Some("Could not resolve all files."));
         // The only line is right above the status already.
         assert_eq!(failure_reason(&[k("'foo' is not recognized as an internal or external command,")]), None);
+        // Both lines of cmd's message read as the error.
+        assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Err)), LineKind::Err);
+        assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Normal)), LineKind::Normal);
     }
 
     #[test]
