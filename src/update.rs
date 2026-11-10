@@ -282,6 +282,7 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
         let _ = std::fs::remove_file(&old);
         let _ = std::process::Command::new("/usr/bin/codesign").args(["--force", "--deep", "--sign", "-"]).arg(app).output();
     }
+    refresh_icon(&exe);
     // Settings > Apps shows the build that is installed.
     #[cfg(windows)]
     {
@@ -297,9 +298,38 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
 /// Remove what the last update left behind.
 pub fn cleanup() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(sibling(&exe, "old"));
+        if std::fs::remove_file(sibling(&exe, "old")).is_ok() {
+            // First start after an update: in case the shell drew the taskbar from its cache
+            // before the restart, tell it again.
+            refresh_icon(&exe);
+        }
         let _ = std::fs::remove_file(sibling(&exe, "new"));
     }
+}
+
+/// Tell Windows the exe changed. The taskbar and Start Menu take the icon of the shortcut
+/// that points at the exe, and the shell caches it by path: an update that brings a new
+/// icon kept showing the old one until the cache was rebuilt.
+fn refresh_icon(exe: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHChangeNotify(event: i32, flags: u32, item1: *const std::ffi::c_void, item2: *const std::ffi::c_void);
+        }
+        const SHCNE_UPDATEITEM: i32 = 0x0000_2000;
+        const SHCNE_ASSOCCHANGED: i32 = 0x0800_0000;
+        const SHCNF_IDLIST: u32 = 0x0000;
+        const SHCNF_PATHW: u32 = 0x0005;
+        let path: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+        unsafe {
+            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, path.as_ptr().cast(), std::ptr::null());
+            // Makes Explorer drop its icon cache, the same as `ie4uinit -show`.
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        }
+    }
+    let _ = exe;
 }
 
 impl Workbench {

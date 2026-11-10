@@ -40,6 +40,9 @@ $lnk.WorkingDirectory = $env:USERPROFILE
 $lnk.IconLocation = "$Dir\FluxCode.exe,0"
 $lnk.Description = "FluxCode Development - lightweight native code editor"
 $lnk.Save()
+# The shell caches the shortcut's icon by path; a reinstall with a new icon kept the
+# old one on the taskbar and in Start until this.
+Start-Process -FilePath "$env:SystemRoot\System32\ie4uinit.exe" -ArgumentList "-show" -WindowStyle Hidden -Wait -ErrorAction SilentlyContinue
 
 New-Item -Path $regKey -Force | Out-Null
 $size = [int]((Get-Item "$Dir\FluxCode.exe").Length / 1KB)
