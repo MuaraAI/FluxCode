@@ -11,6 +11,26 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Tidier agent menus, and models for GitHub Copilot
+@title id: Menu agent lebih rapi, dan model untuk GitHub Copilot
+@en
+The agent, model, mode and permission menus now share one look and stay inside the
+agent panel: the agent list opens under its title, the others right above the message
+box. Long lists have a **search box**, and the arrow keys, Enter and Esc work.
+
+- The agent list says which agent is **On** and which are **Off**, one line each.
+- **GitHub Copilot** now has a model menu: pick one and Copilot restarts with it, in the
+  same chat.
+@id
+Menu agent, model, mode dan izin sekarang tampil seragam dan tetap di dalam panel agent:
+daftar agent terbuka di bawah judulnya, yang lain tepat di atas kotak pesan. Daftar yang
+panjang punya **kotak pencarian**, dan tombol panah, Enter serta Esc bisa dipakai.
+
+- Daftar agent menunjukkan agent mana yang **Nyala** dan mana yang **Mati**, satu baris per agent.
+- **GitHub Copilot** sekarang punya menu model: pilih satu dan Copilot dimulai ulang
+  dengan model itu, di chat yang sama.
+
+@release 2026-11-10
 @title en: Live share works over the internet now
 @title id: Live share sekarang bisa lewat internet
 @en

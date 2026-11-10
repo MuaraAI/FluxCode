@@ -757,6 +757,17 @@ pub const ID: &[(&str, &str)] = &[
         "The code changed after you copied it (a new way in opened). Copy it again before you send it.",
         "Kodenya berubah setelah kamu salin (ada jalur masuk baru). Salin lagi sebelum dikirim.",
     ),
+    ("Agents", "Agent"),
+    ("Available to download", "Bisa diunduh"),
+    ("Error", "Error"),
+    ("Nothing matches “{q}”", "Tidak ada yang cocok dengan “{q}”"),
+    ("Nothing to choose yet: the agent lists these once it is on.", "Belum ada pilihan: agent menampilkannya setelah dinyalakan."),
+    ("Starting", "Memulai"),
+    ("Working", "Bekerja"),
+    ("↑↓ Enter · Esc", "↑↓ Enter · Esc"),
+    ("Search agents", "Cari agent"),
+    ("Search models", "Cari model"),
+    ("Permissions", "Izin"),
 ];
 
 #[cfg(test)]

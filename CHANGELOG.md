@@ -5,6 +5,24 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## One look for the agent menus, and models for GitHub Copilot (10 November 2026)
+
+- The agent, model, mode and permission menus are drawn by FluxCode now, in one style:
+  each opens inside the agent panel and as wide as it (the agent list under the title,
+  the others right above the message box), so none runs off the panel or covers the box.
+  The agent and model lists have a search box; Up, Down, Enter and Esc work in all four,
+  and the current choice is checked and scrolled into view.
+- The agent list is one line per agent (name and maker) with whether it is **On**,
+  **Starting**, **Working**, **Off** or in **Error**. Every row looks the same whether or
+  not the ACP registry has loaded yet.
+- Effort is a row of choices at the top of the model list, so it changes without closing
+  it. Mode and permission rows show their description in up to two lines.
+- GitHub Copilot CLI sends no models over ACP. FluxCode reads them from
+  `copilot help config`, groups them by maker, and restarts Copilot with `--model` when
+  one is picked; the chat continues in the same session (Copilot can resume sessions).
+  Its effort setting is left out because Copilot refuses to start when the model can't
+  take it.
+
 ## Live share over the internet, without a VPN or server, and a clearer panel (10 November 2026)
 
 - Hosting now opens every way in it can, at once: the same network, a port on the router
