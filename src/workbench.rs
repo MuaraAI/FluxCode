@@ -280,6 +280,8 @@ pub struct Workbench {
     pub(crate) term_lines: Vec<Line>,
     pub(crate) term_cwd: PathBuf,
     pub(crate) term_input: Entity<InputState>,
+    /// The prompt has text in it (the panel draws its own placeholder in the UI font).
+    pub(crate) term_typed: bool,
     pub(crate) term_proc: Option<u32>,
     pub(crate) term_history: Vec<String>,
     pub(crate) term_scroll: UniformListScrollHandle,
@@ -329,7 +331,8 @@ impl Workbench {
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
-        let term_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type a command (Tab completes, ↑ for history)")));
+        // No placeholder of its own: the panel draws one in the UI font (see `render_panel`).
+        let term_input = cx.new(|cx| InputState::new(window, cx));
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
         crate::boot::mark("  inputs");
         let mut subs = vec![
@@ -344,8 +347,17 @@ impl Workbench {
                 }
             }),
             cx.subscribe_in(&term_input, window, |this, _, ev: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = ev {
-                    this.terminal_enter(window, cx);
+                match ev {
+                    InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
+                    // Redraw only when the placeholder should appear or go.
+                    InputEvent::Change => {
+                        let typed = !this.term_input.read(cx).value().is_empty();
+                        if typed != this.term_typed {
+                            this.term_typed = typed;
+                            cx.notify();
+                        }
+                    }
+                    _ => {}
                 }
             }),
         ];
@@ -438,6 +450,7 @@ impl Workbench {
             term_lines: Vec::new(),
             term_cwd,
             term_input,
+            term_typed: false,
             term_proc: None,
             term_history: Vec::new(),
             term_scroll: UniformListScrollHandle::new(),
@@ -2282,7 +2295,6 @@ impl Workbench {
     /// After a language change: the text set once at creation (input placeholders).
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
-        self.term_input.update(cx, |s, cx| s.set_placeholder(tr("Type a command (Tab completes, ↑ for history)"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));

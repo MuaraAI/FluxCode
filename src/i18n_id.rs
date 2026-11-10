@@ -134,13 +134,18 @@ pub const ID: &[(&str, &str)] = &[
     // ------------------------------------------------------------ terminal and output
     ("TERMINAL", "TERMINAL"),
     ("OUTPUT", "OUTPUT"),
-    ("Type a command (Tab completes, ↑ for history)", "Ketik perintah (Tab melengkapi, ↑ untuk riwayat)"),
-    ("Run any command, for example  py app.py  or  pip install -r requirements.txt", "Jalankan perintah apa saja, misalnya  py app.py  atau  pip install -r requirements.txt"),
+    ("Type a command, then press Enter", "Ketik perintah, lalu tekan Enter"),
+    ("Type a command", "Ketik perintah"),
+    ("Running. Type here if the program asks for something", "Berjalan. Ketik di sini kalau program meminta sesuatu"),
+    ("Type a command after the ❯ and press Enter to run it.", "Ketik perintah setelah tanda ❯, lalu tekan Enter untuk menjalankannya."),
+    (
+        "For example:  dir  lists the files here,  cd folder  goes into a folder,  py app.py  runs a Python file.",
+        "Contoh:  dir  menampilkan file di sini,  cd folder  masuk ke folder,  py app.py  menjalankan file Python.",
+    ),
     (
         "↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you",
         "↑ ↓ riwayat  ·  Tab melengkapi nama  ·  Ctrl+C berhenti  ·  salah ketik seperti  pip i  dibetulkan otomatis",
     ),
-    ("running · input", "berjalan · input"),
     ("{shown}, line {line}", "{shown}, baris {line}"),
     ("No folder named '{arg}' here.", "Tidak ada folder bernama '{arg}' di sini."),
     ("{0}   … {more} more", "{0}   … {more} lagi"),

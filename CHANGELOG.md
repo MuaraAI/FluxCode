@@ -5,6 +5,21 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The terminal reads like a normal terminal (10 November 2026)
+
+- The Terminal tab has no separate input bar any more: the prompt (`folder ❯ `) is the
+  line right after the output, like Windows Terminal or VS Code. A click anywhere in the
+  terminal puts the caret at the prompt (links to errors still open the file).
+- Each command stays in the scrollback as the prompt it was typed at, in the same style,
+  so it is clear where one command starts. A quick success ends quietly; a failure, a
+  stop or a command that took a second or more gets one short line, failures in red.
+- The folder in the prompt is cut from the left (`…\Project\app`, the whole path on
+  hover), only the folder's name on a narrow panel. Typed text is the log's mono font
+  and size; the hint ("Type a command, then press Enter") is a plain sentence and only
+  shows on an empty terminal or while a program waits for input.
+- The prompt is never cut off at the bottom: the log shrinks above it, and a resized
+  panel stays scrolled to the newest lines.
+
 ## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
 
 - The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
