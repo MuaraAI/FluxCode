@@ -1,11 +1,13 @@
-//! The wire: the host's PC listens on TCP; each guest connects to it directly. No
-//! server of ours is involved.
+//! The wire: the host's PC listens on TCP (IPv4 and IPv6); each guest connects to it
+//! directly, or through the public relay when the host opened one (`reach`). No server
+//! of ours is involved.
 //!
 //! Every frame is encrypted and authenticated with ChaCha20-Poly1305. The key is the
 //! 32-byte secret inside the invite code, so only someone holding the code can join
 //! or read the traffic. Each connection derives its own key from that secret and a
 //! random salt from both sides, and each direction counts its own nonces, so no
-//! nonce is ever used twice under one key.
+//! nonce is ever used twice under one key. The host's first frame proves it holds the
+//! same secret, so a guest knows it reached the right session before it says hello.
 //!
 //! Frames are `u32` length + ciphertext of one JSON message. Reading and writing run
 //! on two threads per connection; the UI thread only sees whole messages.
@@ -17,19 +19,24 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_PORT: u16 = 47615;
-const MAGIC: &[u8; 4] = b"FXC1";
+/// Version 2 adds the host's proof frame; a version 1 peer is turned away at once.
+const MAGIC: &[u8; 4] = b"FXC2";
+const PROOF: &[u8] = b"fluxcode-live-share";
 /// Larger frames are refused (a file snapshot above this is not shared).
 pub const MAX_FRAME: usize = 24 << 20;
 
 /// What the invite code carries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Invite {
-    /// Addresses to try, in order: the host's LAN address first.
+    /// Addresses to try (all at once, earlier ones a moment sooner): the host's LAN
+    /// address first, then the ways in from the internet.
     pub a: Vec<String>,
     /// The session secret (base64url, 32 bytes).
     pub k: String,
@@ -187,86 +194,155 @@ fn run_conn(conn: u64, stream: TcpStream, cipher: Cipher, events: UnboundedSende
 /// they are sent `Bye`).
 pub struct Host {
     pub port: u16,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Also listening on IPv6.
+    pub ipv6: bool,
+    stop: Arc<AtomicBool>,
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // Wake the accept loop.
+        self.stop.store(true, Ordering::Relaxed);
+        // Wake the accept loops.
         let _ = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(200));
+        if self.ipv6 {
+            let _ = TcpStream::connect_timeout(&SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, self.port)), Duration::from_millis(200));
+        }
     }
 }
 
-/// Listen on the default port (or any free one) for guests holding `secret`.
+/// Listen on the default port (or any free one) for guests holding `secret`, on IPv4
+/// and, when the PC has it, IPv6 on the same port.
 pub fn host(secret: [u8; 32]) -> Result<(Host, UnboundedReceiver<NetEvent>), String> {
     let listener = TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).or_else(|_| TcpListener::bind(("0.0.0.0", 0))).map_err(|e| format!("Could not open a port for the session: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let v6 = bind_v6_only(port);
     let (tx, rx) = unbounded();
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop2 = stop.clone();
-    std::thread::spawn(move || {
-        let mut next = 1u64;
-        for stream in listener.incoming() {
-            if stop2.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-            let Ok(mut stream) = stream else { continue };
-            let events = tx.clone();
-            let conn = next;
-            next += 1;
-            std::thread::spawn(move || {
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-                let mut hello = [0u8; 10];
-                if stream.read_exact(&mut hello).is_err() || &hello[..4] != MAGIC {
-                    return;
-                }
-                let guest_salt: [u8; 6] = hello[4..].try_into().unwrap();
-                let host_salt = random::<6>();
-                if stream.write_all(&host_salt).is_err() {
-                    return;
-                }
-                let _ = stream.set_read_timeout(None);
-                let cipher = Cipher::new(&secret, &host_salt, &guest_salt, true);
-                let (mtx, mrx) = channel();
-                if events.unbounded_send(NetEvent::Connected { conn, tx: mtx }).is_err() {
-                    return;
-                }
-                run_conn(conn, stream, cipher, events, mrx);
-            });
-        }
-    });
-    Ok((Host { port, stop }, rx))
+    let stop = Arc::new(AtomicBool::new(false));
+    let next = Arc::new(AtomicU64::new(1));
+    let ipv6 = v6.is_some();
+    for l in std::iter::once(listener).chain(v6) {
+        let (tx, stop, next) = (tx.clone(), stop.clone(), next.clone());
+        std::thread::spawn(move || accept_loop(l, secret, tx, stop, next));
+    }
+    Ok((Host { port, ipv6, stop }, rx))
 }
 
-/// Connect to a host from an invite: each address in turn, 4 s each.
+/// An IPv6 listener that leaves IPv4 to the other one (on Linux an IPv6 socket would
+/// otherwise claim the IPv4 port too, and fail to bind next to it).
+fn bind_v6_only(port: u16) -> Option<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)).ok()?;
+    s.set_only_v6(true).ok()?;
+    // What std's TcpListener::bind does on Unix, so a restarted session can reuse the port.
+    #[cfg(unix)]
+    let _ = s.set_reuse_address(true);
+    s.bind(&SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)).into()).ok()?;
+    s.listen(128).ok()?;
+    Some(s.into())
+}
+
+fn accept_loop(listener: TcpListener, secret: [u8; 32], tx: UnboundedSender<NetEvent>, stop: Arc<AtomicBool>, next: Arc<AtomicU64>) {
+    for stream in listener.incoming() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(mut stream) = stream else { continue };
+        let events = tx.clone();
+        let conn = next.fetch_add(1, Ordering::Relaxed);
+        std::thread::spawn(move || {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+            let mut hello = [0u8; 10];
+            if stream.read_exact(&mut hello).is_err() || &hello[..4] != MAGIC {
+                return;
+            }
+            let guest_salt: [u8; 6] = hello[4..].try_into().unwrap();
+            let host_salt = random::<6>();
+            let mut cipher = Cipher::new(&secret, &host_salt, &guest_salt, true);
+            let proof = cipher.seal(PROOF);
+            let mut out = host_salt.to_vec();
+            out.extend_from_slice(&(proof.len() as u32).to_be_bytes());
+            out.extend_from_slice(&proof);
+            if stream.write_all(&out).is_err() {
+                return;
+            }
+            let _ = stream.set_read_timeout(None);
+            let (mtx, mrx) = channel();
+            if events.unbounded_send(NetEvent::Connected { conn, tx: mtx }).is_err() {
+                return;
+            }
+            run_conn(conn, stream, cipher, events, mrx);
+        });
+    }
+}
+
+/// Connect to one address and check that the host there holds the session's secret.
+fn try_one(addr: &str, secret: &[u8; 32]) -> Result<(TcpStream, Cipher), String> {
+    let sockets: Vec<SocketAddr> = addr.to_socket_addrs().map_err(|e| format!("{addr}: {e}"))?.collect();
+    let mut last = format!("{addr}: no address");
+    for sa in sockets {
+        let mut stream = match TcpStream::connect_timeout(&sa, Duration::from_secs(5)) {
+            Ok(s) => s,
+            Err(e) => {
+                last = format!("{addr}: {e}");
+                continue;
+            }
+        };
+        let guest_salt = random::<6>();
+        let mut hello = MAGIC.to_vec();
+        hello.extend_from_slice(&guest_salt);
+        // Through the relay the host's answer takes a round trip more.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let mut host_salt = [0u8; 6];
+        let mut len = [0u8; 4];
+        if stream.write_all(&hello).is_err() || stream.read_exact(&mut host_salt).is_err() || stream.read_exact(&mut len).is_err() {
+            last = format!("{addr} answered but is not a FluxCode host of this version (or the session ended)");
+            continue;
+        }
+        let n = (u32::from_be_bytes(len) as usize).min(256);
+        let mut proof = vec![0u8; n];
+        if stream.read_exact(&mut proof).is_err() {
+            last = format!("{addr} stopped answering");
+            continue;
+        }
+        let mut cipher = Cipher::new(secret, &host_salt, &guest_salt, false);
+        if cipher.open(&proof).as_deref() != Some(PROOF) {
+            last = format!("{addr} is hosting a different session (the invite code is out of date)");
+            continue;
+        }
+        let _ = stream.set_read_timeout(None);
+        return Ok((stream, cipher));
+    }
+    Err(last)
+}
+
+/// Connect to a host from an invite. Every address is tried at once, each a moment
+/// after the one before (the same network beats the internet), and the first that
+/// proves it is this session's host is used.
 pub fn join(inv: &Invite) -> Result<(Sender<Msg>, UnboundedReceiver<NetEvent>, String), String> {
     let secret = inv.secret().ok_or("The invite code is damaged.")?;
-    let mut last = String::from("no address in the code");
-    for a in &inv.a {
-        let Ok(addr) = a.parse::<SocketAddr>() else { continue };
-        match TcpStream::connect_timeout(&addr, Duration::from_secs(4)) {
-            Ok(mut stream) => {
-                let guest_salt = random::<6>();
-                let mut hello = MAGIC.to_vec();
-                hello.extend_from_slice(&guest_salt);
-                let mut host_salt = [0u8; 6];
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(6)));
-                if stream.write_all(&hello).is_err() || stream.read_exact(&mut host_salt).is_err() {
-                    last = format!("{a} answered but did not finish the handshake");
-                    continue;
-                }
-                let _ = stream.set_read_timeout(None);
-                let cipher = Cipher::new(&secret, &host_salt, &guest_salt, false);
+    let (rtx, rrx) = channel();
+    for (i, a) in inv.a.iter().enumerate() {
+        let (a, rtx) = (a.clone(), rtx.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150 * i as u64));
+            let r = try_one(&a, &secret);
+            let _ = rtx.send((a, r));
+        });
+    }
+    drop(rtx);
+    let mut errors = Vec::new();
+    while let Ok((a, r)) = rrx.recv() {
+        match r {
+            Ok((stream, cipher)) => {
                 let (tx, rx) = unbounded();
                 let (mtx, mrx) = channel();
                 std::thread::spawn(move || run_conn(0, stream, cipher, tx, mrx));
-                return Ok((mtx, rx, a.clone()));
+                return Ok((mtx, rx, a));
             }
-            Err(e) => last = format!("{a}: {e}"),
+            Err(e) => errors.push(e),
         }
     }
-    Err(format!("Could not reach the host ({last}). On the same network, check that the host's firewall lets FluxCode in. Over the internet, the host forwards port {} on their router to their PC.", inv.a.first().and_then(|a| a.rsplit(':').next()).unwrap_or("47615")))
+    Err(format!("Could not reach the host. Tried {}. Ask the host to send a fresh code once their panel shows a way in from the internet.", errors.join("; ")))
 }
 
 #[cfg(test)]
@@ -336,18 +412,17 @@ mod tests {
             None
         });
         assert!(matches!(back, Some(Msg::Refused { why }) if why == "pong"));
-        // A wrong secret is refused: the host can't read its hello and drops it.
-        let bad = Invite { k: super::new_secret(), ..inv };
-        let (btx, mut brx, _) = join(&bad).unwrap();
-        btx.send(Msg::Cursor { path: "x".into(), line: 1 }).ok();
-        let closed = futures::executor::block_on(async {
-            while let Some(ev) = brx.next().await {
-                if let NetEvent::Closed { .. } = ev {
-                    return true;
-                }
-            }
-            true
-        });
-        assert!(closed);
+        // A code with another secret is told so before it says anything.
+        let bad = Invite { k: super::new_secret(), ..inv.clone() };
+        let err = join(&bad).err().unwrap();
+        assert!(err.contains("different session"), "{err}");
+        // A dead address next to a live one: the live one wins, by host name too.
+        let mixed = Invite { a: vec!["127.0.0.1:1".into(), format!("localhost:{}", srv.port)], ..inv };
+        let (_, _, via) = join(&mixed).unwrap();
+        assert_eq!(via, format!("localhost:{}", srv.port));
+        if srv.ipv6 {
+            let v6 = Invite { a: vec![format!("[::1]:{}", srv.port)], ..mixed };
+            assert!(join(&v6).is_ok(), "IPv6 listener");
+        }
     }
 }

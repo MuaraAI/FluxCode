@@ -5,6 +5,28 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Live share over the internet, without a VPN or server, and a clearer panel (10 November 2026)
+
+- Hosting now opens every way in it can, at once: the same network, a port on the router
+  (UPnP, the way game servers open theirs), the PC's public IPv6 address, and a free
+  public relay (bore.pub) that works behind any router, including carrier-grade NAT.
+  The panel lists each one with its address, or why it isn't open (UPnP off, a private
+  router address, no IPv6 from the provider). The invite code carries every address
+  that opened and updates as they open.
+- Guests try every address at once, the same network first, and use the first host that
+  proves it holds the code's secret: the host's first message is sealed with it, so a
+  wrong or out-of-date code is told so instead of hanging. The protocol version is now
+  `FXC2`; builds from before this one can't join these sessions.
+- Session traffic stays end-to-end encrypted through the relay, which only passes bytes.
+  The router's port is closed and the tunnel shut when the session ends; a dropped
+  tunnel reopens on its own (with a new address, so the code changes).
+- Tested: a guest given only the relay's address joined and co-edited a file through
+  bore.pub (`cargo test session_through_the_relay -- --ignored`, about 2.7 s).
+- The panel: separate cards for hosting and joining, a tick box for **Let people join over
+  the internet**, a two-way choice for where a guest's files go, the invite code in a box
+  that copies on click, a warning when the code changed after you copied it, and people
+  with their file and line.
+
 ## What's new in an update, and the benchmark in the README (10 November 2026)
 
 - The update card's "What's new" opens a page in FluxCode instead of the browser: every
