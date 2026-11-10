@@ -401,7 +401,9 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Source Control
     GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2,
     // Agent panel
-    TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert
+    TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert, PencilLine, MessageSquareCode, MessagesSquare,
+    // Agent picker: download an agent, and the spinner while it installs
+    Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus
 ]);
 
 #[cfg(test)]

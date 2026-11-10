@@ -5,6 +5,57 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## New look, any ACP agent with one click, agents that ask, and VS Code's keys (10 November 2026)
+
+| | Before | After |
+| --- | --- | --- |
+| Icon | blue tile with `</>` and a lightning bolt | a meander in ivory and ochre on ink (README, The icon) |
+| FluxDark | near-black with a crimson accent on every button and switch | ink and ivory, one muted ochre accent |
+| FluxCream, FluxRed | red accents | umber accent on paper; FluxRed is a quieter oxblood with a clay accent |
+| Agents | Mura or OpenCode, installed by hand | every agent in the ACP registry; the agent menu downloads any of them |
+| No agent installed | an error after the first message | the panel lists agents to download, each with a button |
+| Agent menu | names only | each agent's own icon from the ACP registry, tinted to the theme |
+| Installing | text only | a liquid ring that fills with the real byte count, then a box that opens as tar writes each file |
+| Model | a chip that opened the settings page | a dropdown under the message box, with effort in the same menu |
+| Mode | settings page only | its own dropdown, each mode with its description |
+| Permissions menu | one line per level, partly cut off | an icon, a name and one plain sentence per level |
+| Agent questions | not supported | a card with lettered choices (A, B, C...), descriptions and "Type my own answer" (ACP elicitation) |
+| Removing an agent | one click | type its name twice |
+| Agent instruction files | find them yourself | Settings > Agent instructions (soul files): Open or Create for each |
+| Shortcuts | 15 of VS Code's | VS Code's for every command FluxCode has, plus a Command Palette (`Ctrl+Shift+P`, `F1`) |
+| Line editing | the editor's defaults | toggle comment, move / copy / delete line, new line above / below, go to line |
+| After an update | nothing | a "What's new" page from `changelog.flux`, once, in the interface language |
+| Editor settings | font size, tab size, wrap, whitespace, auto save | also font, line numbers, folding, bracket closing, smart indent, cursor padding, scrolling past the end |
+
+- Agents FluxCode installs live in `~/.fluxcode/agents/<id>`. Native builds are
+  preferred; the download is checked against the registry's SHA-256 before it is used.
+  npm agents are installed into that folder and started with `node` directly. The agent
+  menu can remove an agent it installed.
+- Agents already on PATH (`gemini`, `copilot`, `cursor-agent`, `qwen`, `goose` and more)
+  are found and used as they are.
+- Agent icons are the registry's own SVGs, fetched in one curl call and kept per agent
+  version, so a new logo arrives with the agent's next version. Agents without one (Mura)
+  show their initial.
+- The install animation is drawn with a few GPU paths at about 30 frames a second, in a
+  view of its own, and stops once the install ends. It shows only what is measured: bytes
+  against the server's size, files against the ZIP's entry count; with no size it swirls
+  without a percentage. A failed install leaves a broken red ring, the reason in plain
+  words, and Try again. Under Windows' reduce-motion setting the liquid holds still.
+- The robot icon is gone from the activity bar, status bar and chat; the agent panel
+  uses a chat-with-code icon and the welcome screens show the meander.
+- Every text color still reaches WCAG AA (4.5:1) on every surface, and over a
+  background image at the Balanced strength.
+- Start-up, measured on one Windows 11 PC: the window shows about 0.21 s after launch
+  (the previous build: 0.21 s) and FluxCode holds about 95 MB. Finding installed agents
+  reads each PATH folder once, skips the Windows folders, and runs on its own thread
+  while GPUI opens the window. `FLUXCODE_STARTUP_LOG=<file>` writes the time of each
+  start-up step.
+- The agent is told the interface language, so it defaults to Indonesian when FluxCode is
+  in Indonesian.
+- Tests cover every install failure (missing file, wrong checksum, broken archive,
+  missing program), the animation's geometry (no NaN point can reach the tessellator,
+  which would end the app), the line commands, the question forms and `changelog.flux`.
+
 ## About section, title bar and README screenshots (9 November 2026)
 
 | | Before | After |

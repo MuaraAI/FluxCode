@@ -62,3 +62,33 @@ impl Workbench {
         }
     }
 }
+
+/// The FluxCode mark, the meander from the app icon, drawn from rectangles so it
+/// needs no image file and takes theme colors. `a` is the first hook (ivory in the
+/// icon), `b` the second (ochre). `size` is the width in px before UI scaling.
+///
+/// The line runs on a 0..8 grid with stroke and gap of one ninth of the width each;
+/// it is point-symmetric about the centre, where the two hooks meet.
+pub fn meander(size: f32, a: Hsla, b: Hsla) -> Div {
+    const HALF_A: [(f32, f32); 6] = [(2., 8.), (8., 8.), (8., 2.), (2., 2.), (2., 4.), (4., 4.)];
+    const HALF_B: [(f32, f32); 6] = [(4., 4.), (6., 4.), (6., 6.), (0., 6.), (0., 0.), (6., 0.)];
+    let w = (size * theme::scale() / 9.).round() * 9.;
+    let u = w / 9.;
+    let mut root = div().relative().flex_none().size(px(w));
+    for (path, col) in [(&HALF_A, a), (&HALF_B, b)] {
+        for pair in path.windows(2) {
+            let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+            // Grid coordinate -> pixel offset of the line's near edge; the centre bar is split in half.
+            let (left, top, width, height) = if x0 == x1 {
+                (x0 * u, y0.min(y1) * u, u, (y0 - y1).abs() * u + u)
+            } else {
+                let (l, r) = (x0.min(x1), x0.max(x1));
+                let le = if l == 4. { 4.5 * u } else { l * u };
+                let re = if r == 4. { 4.5 * u } else { r * u + u };
+                (le, y0 * u, re - le, u)
+            };
+            root = root.child(div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height)).bg(col));
+        }
+    }
+    root
+}

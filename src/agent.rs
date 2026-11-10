@@ -1,12 +1,11 @@
-//! OpenCode panel over the Agent Client Protocol (ACP), ported from
-//! `src-tauri/src/acp.rs` (process) and `src/agent.js` (protocol + UI).
-//! `opencode acp` speaks newline-delimited JSON-RPC on stdio.
+//! The agent panel, over the Agent Client Protocol (ACP): newline-delimited
+//! JSON-RPC on the agent's stdio. Which agents exist and how each one starts is
+//! `crate::acp`; this file is the protocol and the panel.
 
 use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
 use crate::memory;
-use crate::proc;
 use crate::theme::{self, c};
 use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
@@ -248,13 +247,30 @@ pub struct AgentState {
     silent_load: bool,
     /// The session to resume on the next message after an idle stop.
     resume_id: Option<String>,
+    /// An agent being installed: its id and what the installer is doing.
+    pub installing: Option<(String, crate::acp::Tracker, Entity<crate::flux_anim::InstallAnim>)>,
+    /// A question the agent asked (elicitation), waiting for the user.
+    pub ask: Option<crate::agent_ask::Ask>,
+    /// Text boxes for typed answers, one per question of a form.
+    pub ask_inputs: Vec<Entity<InputState>>,
+    /// Boxes to empty before the next frame (a new form arrived).
+    pub ask_clear: Vec<usize>,
+    /// The first required question still unanswered, after Send.
+    pub ask_missing: Option<String>,
+    /// Removing an agent: its id, while the user types its name twice.
+    pub uninstall: Option<String>,
+    pub uninstall_inputs: [Entity<InputState>; 2],
+    /// The last install that failed: the agent's id, why, and its stopped animation.
+    pub install_err: Option<(String, String, Option<Entity<crate::flux_anim::InstallAnim>>)>,
     _sub: Subscription,
     _sub2: Subscription,
+    /// Redraws the removal page as its two name boxes change.
+    _sub_un: Vec<Subscription>,
 }
 
 /// MuaraAI's Mura harness (`mura`, one Rust binary, github.com/MuaraAI/Mura-Harness),
 /// installed on its own next to FluxCode (its README puts it in ~/.local/bin).
-fn find_mura() -> Option<PathBuf> {
+pub(crate) fn find_mura() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "mura.exe" } else { "mura" };
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
@@ -271,23 +287,23 @@ fn find_mura() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-static MURA_FOUND: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
-
-pub fn mura_installed() -> bool {
-    let Ok(mut f) = MURA_FOUND.lock() else { return find_mura().is_some() };
-    *f.get_or_insert_with(|| find_mura().is_some())
-}
-
-/// The harness chosen in the panel's title menu: 0 auto, 1 OpenCode, 3 Mura Harness.
-static CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// The agent picked in the panel's title menu: "auto" or an agent id (`crate::acp`).
+static CHOICE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 pub fn set_choice(cli: &str) {
-    let v = match cli {
-        "opencode" => 1,
-        "mura" => 3,
-        _ => 0,
-    };
-    CHOICE.store(v, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut g) = CHOICE.lock() {
+        *g = cli.to_string();
+    }
+}
+
+/// The agent the panel runs: the one picked, or with "auto" the first installed one
+/// in the known list (Mura, then OpenCode, ...); OpenCode when none is installed.
+pub fn agent_id() -> String {
+    let c = CHOICE.lock().map(|g| g.clone()).unwrap_or_default();
+    if !c.is_empty() && c != "auto" {
+        return c;
+    }
+    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode".into())
 }
 
 /// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
@@ -311,18 +327,23 @@ fn builtin_commands() -> Vec<SlashCmd> {
     ]
 }
 
-/// Which harness the panel talks to. Both speak ACP over stdio (`<cli> acp`).
+/// The running agent's display name. Names are kept for the whole run (a handful of
+/// short strings), so call sites can hold a `&'static str`.
 pub fn agent_name() -> &'static str {
-    match CHOICE.load(std::sync::atomic::Ordering::Relaxed) {
-        1 => "OpenCode",
-        3 => "Mura",
-        _ if mura_installed() => "Mura",
-        _ => "OpenCode",
+    static NAMES: std::sync::Mutex<Option<HashMap<String, &'static str>>> = std::sync::Mutex::new(None);
+    let id = agent_id();
+    let Ok(mut g) = NAMES.lock() else { return "Agent" };
+    let map = g.get_or_insert_with(HashMap::new);
+    if let Some(n) = map.get(&id) {
+        return n;
     }
+    let name: &'static str = Box::leak(crate::acp::display_name(&id).into_boxed_str());
+    map.insert(id, name);
+    name
 }
 
 /// Where the OpenCode CLI lives (same search as the Tauri app).
-fn find_opencode() -> Option<PathBuf> {
+pub(crate) fn find_opencode() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
@@ -349,23 +370,20 @@ fn find_opencode() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-fn opencode_cmd() -> Option<std::process::Command> {
-    match agent_name() {
-        "Mura" => return find_mura().map(|e| proc::command(e.to_string_lossy().as_ref())),
-        _ => {}
+/// The command line that starts the running agent in ACP mode.
+fn agent_cmd() -> Option<std::process::Command> {
+    crate::acp::locate(&agent_id()).map(|l| l.command())
+}
+
+/// Mura and OpenCode list their saved sessions (`<cli> session list`); others don't.
+fn sessions_cmd() -> Option<std::process::Command> {
+    let id = agent_id();
+    if id != "mura" && id != "opencode" {
+        return None;
     }
-    let exe = find_opencode();
-    if let Some(exe) = exe {
-        return Some(proc::command(exe.to_string_lossy().as_ref()));
-    }
-    if cfg!(windows)
-        && std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("opencode.cmd").is_file()))
-    {
-        let mut c = proc::command("cmd.exe");
-        c.args(["/d", "/c", "opencode"]);
-        return Some(c);
-    }
-    None
+    let mut l = crate::acp::locate(&id)?;
+    l.args.clear();
+    Some(l.command())
 }
 
 impl AgentState {
@@ -385,6 +403,10 @@ impl AgentState {
             _ => {}
         });
         let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Remember something about this project…")));
+        let uninstall_inputs = [
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type the name"))),
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type it again"))),
+        ];
         let sub2 = cx.subscribe_in(&memory_input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
                 let text = this.agent.memory_input.read(cx).value().to_string();
@@ -444,6 +466,15 @@ impl AgentState {
             last_active: None,
             silent_load: false,
             resume_id: None,
+            installing: None,
+            install_err: None,
+            ask: None,
+            ask_inputs: crate::agent_ask::make_inputs(window, cx),
+            ask_clear: Vec::new(),
+            ask_missing: None,
+            uninstall: None,
+            _sub_un: uninstall_inputs.iter().map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify())).collect(),
+            uninstall_inputs,
             _sub: sub,
             _sub2: sub2,
         }
@@ -496,7 +527,7 @@ impl AgentState {
 }
 
 impl Workbench {
-    fn agent_write(&mut self, msg: Value) {
+    pub(crate) fn agent_write(&mut self, msg: Value) {
         if let Some(id) = self.agent.proc_id {
             self.procs.write_stdin(id, &format!("{msg}\n"));
         }
@@ -663,16 +694,16 @@ impl Workbench {
         if matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy) {
             return;
         }
-        let Some(mut cmd) = opencode_cmd() else {
-            self.agent.status = Status::Error(if agent_name() == "Mura" {
-                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick OpenCode in the panel title menu.").into()
+        let Some(mut cmd) = agent_cmd() else {
+            self.agent.status = Status::Error(if agent_id() == "mura" {
+                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick another agent in the menu above.").into()
             } else {
-                "OpenCode isn't installed. Install it with  npm i -g opencode-ai , or pick Mura in the panel title menu.".into()
+                crate::trf!("{name} isn't installed yet. Download it from the agent menu above, or pick another agent."; name => agent_name()).into()
             });
             cx.notify();
             return;
         };
-        cmd.arg("acp").env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+        cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
         crate::github::apply_env(&mut cmd);
         self.agent.status = Status::Starting;
         self.agent.buf.clear();
@@ -685,7 +716,8 @@ impl Workbench {
                     "initialize",
                     json!({
                         "protocolVersion": 1,
-                        "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false },
+                        // Elicitation: the agent may ask the user questions (agent_ask.rs).
+                        "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false, "elicitation": { "form": {}, "url": {} } },
                         "clientInfo": { "name": "FluxCode", "version": crate::update::BUILD }
                     }),
                 );
@@ -703,6 +735,7 @@ impl Workbench {
         self.agent.session = None;
         self.agent.pending.clear();
         self.agent.permission = None;
+        self.agent.ask = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
         self.agent.loading_id = None;
@@ -810,6 +843,9 @@ impl Workbench {
             self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
             if let Some(p) = self.agent.permission.take() {
                 self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": { "outcome": "cancelled" } } }));
+            }
+            if self.agent.ask.is_some() {
+                self.agent_answer_ask(None, cx);
             }
         }
         cx.notify();
@@ -1094,6 +1130,7 @@ impl Workbench {
                 self.agent.permission = Some(Permission { rpc_id: id.clone(), title, options });
                 cx.notify();
             }
+            ("elicitation/create", _) => self.agent_on_elicitation(id.clone(), &params, cx),
             ("fs/read_text_file", Some(p)) => {
                 // Unsaved editor text wins over the file on disk.
                 let text = match self.docs.iter().find(|d| d.path == p) {
@@ -1246,7 +1283,7 @@ impl Workbench {
                     .pr_2()
                     .gap_1()
                     .flex_none()
-                    .child(self.render_agent_picker())
+                    .child(self.render_agent_picker(cx))
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
                     .child(self.render_agent_tools(cx))
@@ -1267,6 +1304,7 @@ impl Workbench {
         let old = agent_name();
         self.agent.save_chat();
         self.agent_stop(cx);
+        self.agent.install_err = None;
         self.settings.agent_cli = cli.into();
         self.settings.save();
         set_choice(cli);
@@ -1293,22 +1331,221 @@ impl Workbench {
         self.agent_use("mura", w, cx);
     }
 
-    /// The panel title: the harness name, which opens a menu to pick Mura or OpenCode.
-    pub(crate) fn render_agent_picker(&self) -> impl IntoElement {
+    /// The panel title: the agent's icon and name, opening the agent menu. Agents on
+    /// this PC come first (a check marks the running one), then the well-known ones
+    /// with a download button, then the rest of the ACP registry. Icons are the
+    /// registry's own, tinted to the theme.
+    pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::PopupMenuItem;
         let name = agent_name();
-        Button::new("ag-pick")
-            .label(name.to_uppercase())
-            .ghost()
-            .xsmall()
-            .dropdown_caret(true)
-            .tooltip(tr("Choose the AI agent"))
-            .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
-                m.min_w(px(220.))
-                    .menu_with_check(if mura_installed() { "Mura" } else { crate::i18n::tr("Mura, not installed") }, name == "Mura", Box::new(crate::workbench::AgentUseMura))
-                    .menu_with_check("OpenCode", name == "OpenCode", Box::new(crate::workbench::AgentUseOpenCode))
-                    .separator()
-                    .menu(crate::trf!("{name} settings: model, effort, mode…"; name => name), Box::new(crate::workbench::AgentShowOptions))
-            })
+        let current = agent_id();
+        let weak = cx.entity().downgrade();
+        let busy = self.agent.installing.as_ref().map(|(id, _, _)| id.clone());
+        let mut button = Button::new("ag-pick").label(name).ghost().xsmall().dropdown_caret(true).tooltip(tr("Choose the agent"));
+        if let Some(path) = crate::acp::icon_asset(&current) {
+            button = button.icon(Icon::new(IconName::Bot).path(path));
+        }
+        button.dropdown_menu(move |mut m: gpui_kit::component::menu::PopupMenu, _, _| {
+            crate::acp::refresh_registry_soon();
+            let installed = crate::acp::installed();
+            let reg = crate::acp::registry();
+            m = m.min_w(px(288.)).max_h(px(480.)).scrollable(true);
+            // One row: icon, name over a dim line, and what a click does on the right.
+            let row = |id: String, name: String, by: String, right: Option<gpui_kit::assets::IconName>, note: Option<SharedString>| {
+                PopupMenuItem::element(move |_, _| {
+                    h_flex()
+                        .w_full()
+                        .gap_2p5()
+                        .py_0p5()
+                        .child(agent_glyph(&id, 18.))
+                        .child(two_line(name.clone(), by.clone()))
+                        .when_some(note.clone(), |h, n| h.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(n)))
+                        .when_some(right, |h, i| h.child(Icon::new(i).size(theme::u(14.)).text_color(c(theme::FG_MUTED))))
+                })
+            };
+            let by_of = |id: &str| -> String {
+                crate::acp::known(id).map(|k| k.by.to_string()).or_else(|| reg.iter().find(|e| e.id == id).map(|e| short_line(&e.description))).unwrap_or_default()
+            };
+            if !installed.is_empty() {
+                m = m.item(PopupMenuItem::label(tr("On this PC")));
+                for id in &installed {
+                    let (weak, id2) = (weak.clone(), id.clone());
+                    let on = *id == current;
+                    m = m.item(
+                        row(id.clone(), crate::acp::display_name(id), by_of(id), on.then_some(gpui_kit::assets::IconName::Check), None).on_click(move |_, w, cx| {
+                            _ = weak.update(cx, |this, cx| this.agent_use(&id2, w, cx));
+                        }),
+                    );
+                }
+            }
+            let get = |m: gpui_kit::component::menu::PopupMenu, id: String, name: String, by: String| {
+                let (weak, id2) = (weak.clone(), id.clone());
+                let now = busy.as_deref() == Some(id.as_str());
+                let item = if now {
+                    row(id, name, by, None, Some(tr("Installing…").into()))
+                } else {
+                    row(id, name, by, Some(gpui_kit::assets::IconName::Download), None)
+                };
+                m.item(item.on_click(move |_, w, cx| {
+                    _ = weak.update(cx, |this, cx| this.agent_install(id2.clone(), w, cx));
+                }))
+            };
+            let missing: Vec<&crate::acp::Known> = crate::acp::KNOWN.iter().filter(|k| !installed.iter().any(|i| i == k.id)).collect();
+            if !missing.is_empty() {
+                if !installed.is_empty() {
+                    m = m.separator();
+                }
+                m = m.item(PopupMenuItem::label(tr("Available")));
+                for k in missing {
+                    m = get(m, k.id.to_string(), k.name.to_string(), k.by.to_string());
+                }
+            }
+            let more: Vec<&crate::acp::Entry> = reg
+                .iter()
+                .filter(|e| crate::acp::known(&e.id).is_none() && !installed.iter().any(|i| *i == e.id) && e.method().is_some())
+                .collect();
+            if !more.is_empty() {
+                m = m.separator().item(PopupMenuItem::label(tr("More in the ACP registry")));
+                for e in more {
+                    m = get(m, e.id.clone(), e.name.clone(), short_line(&e.description));
+                }
+            }
+            m = m.separator().menu(tr("Agent settings"), Box::new(crate::workbench::AgentShowOptions));
+            if crate::acp::managed(&current) {
+                let (weak, id) = (weak.clone(), current.clone());
+                m = m.item(PopupMenuItem::new(crate::trf!("Remove {name}…"; name => name)).on_click(move |_, w, cx| {
+                    _ = weak.update(cx, |this, cx| this.agent_ask_uninstall(&id, w, cx));
+                }));
+            }
+            m
+        })
+    }
+
+    /// Install an agent from the ACP registry, off the UI thread, then switch to it.
+    /// The panel shows the install animation, which reads the same tracker.
+    pub(crate) fn agent_install(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent.installing.is_some() {
+            return;
+        }
+        if id == "mura" {
+            // Mura is built from its repository; it is not in the registry.
+            cx.open_url("https://github.com/MuaraAI/Mura-Harness");
+            return;
+        }
+        let tracker = crate::acp::Tracker::default();
+        let title: SharedString = crate::trf!("Installing {name}"; name => crate::acp::display_name(&id)).into();
+        let anim = cx.new(|cx| crate::flux_anim::InstallAnim::new(tracker.clone(), title, cx));
+        self.agent.installing = Some((id.clone(), tracker.clone(), anim));
+        self.agent.install_err = None;
+        cx.notify();
+        let id2 = id.clone();
+        let task = cx.background_spawn(async move {
+            let find = |reg: &[crate::acp::Entry]| reg.iter().find(|e| e.id == id2).cloned();
+            let entry = match find(&crate::acp::registry()) {
+                Some(e) if !crate::acp::registry_stale() => Ok(e),
+                _ => {
+                    // Fresh versions when the saved list is old; the saved one when offline.
+                    let fetched = crate::acp::refresh_registry();
+                    crate::acp::fetch_icons_soon();
+                    match (find(&crate::acp::registry()), fetched) {
+                        (Some(e), _) => Ok(e),
+                        (None, Err(e)) => Err(format!("{}: {e}", tr("Could not read the ACP registry"))),
+                        (None, Ok(())) => Err(tr("This agent is no longer in the ACP registry.").to_string()),
+                    }
+                }
+            };
+            let res = entry.and_then(|e| crate::acp::install(&e, &tracker));
+            tracker.phase(if res.is_ok() { crate::acp::Phase::Done } else { crate::acp::Phase::Failed });
+            res
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let res = task.await;
+            if res.is_ok() {
+                // Long enough for the check to draw in before the chat appears.
+                cx.background_executor().timer(std::time::Duration::from_millis(800)).await;
+            }
+            _ = this.update_in(cx, |this, window, cx| {
+                let anim = this.agent.installing.take().map(|(_, _, a)| a);
+                match res {
+                    Ok(_) => this.agent_use(&id, window, cx),
+                    Err(e) => this.agent.install_err = Some((id.clone(), e, anim)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Ask before removing an agent: its name, typed twice.
+    pub(crate) fn agent_ask_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent.uninstall = Some(id.to_string());
+        for i in &self.agent.uninstall_inputs {
+            i.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        let h = self.agent.uninstall_inputs[0].focus_handle(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    fn render_uninstall(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let name = crate::acp::display_name(id);
+        let typed: Vec<String> = self.agent.uninstall_inputs.iter().map(|i| i.read(cx).value().to_string()).collect();
+        let ok = typed.iter().all(|t| t.trim() == name);
+        let folder = crate::acp::agents_dir().join(id);
+        let id2 = id.to_string();
+        let mismatch = typed.iter().any(|t| !t.trim().is_empty() && !name.starts_with(t.trim()));
+        v_flex()
+            .size_full()
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(agent_glyph(id, 20.))
+                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Remove {name}?"; name => name))),
+            )
+            .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(crate::trf!("This deletes {path}: the program and its files. Your chats stay. To be sure it is the right agent, type {name} twice."; path => folder.display(), name => name)))
+            .child(v_flex().gap_2().children(self.agent.uninstall_inputs.iter().map(|i| Input::new(i).small())))
+            .when(mismatch, |v| v.child(div().text_xs().text_color(c(theme::WARN)).child(crate::trf!("That is not “{name}”. Check the spelling (capital letters count)."; name => name))))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Button::new("un-cancel").label(tr("Cancel")).small().ghost().on_click(cx.listener(|this, _, _, cx| {
+                        this.agent.uninstall = None;
+                        cx.notify();
+                    })))
+                    .child(
+                        Button::new("un-go")
+                            .label(crate::trf!("Remove {name}"; name => name))
+                            .small()
+                            .danger()
+                            .when(!ok, |b| b.ghost())
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                // Checked again at the click: the name, exactly, in both boxes.
+                                let name = crate::acp::display_name(&id2);
+                                if !this.agent.uninstall_inputs.iter().all(|i| i.read(cx).value().trim() == name) {
+                                    return;
+                                }
+                                this.agent.uninstall = None;
+                                this.agent_uninstall(&id2, w, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Delete an agent FluxCode installed, and fall back to another one.
+    fn agent_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if agent_id() == id {
+            self.agent_stop(cx);
+        }
+        if let Err(e) = crate::acp::uninstall(id) {
+            self.agent.install_err = Some((id.to_string(), e, None));
+        }
+        if self.settings.agent_cli == id {
+            self.agent_use("auto", window, cx);
+        }
+        cx.notify();
     }
 
     /// The ON/OFF switch, shown right of the panel title.
@@ -1347,7 +1584,7 @@ impl Workbench {
             )
             .child(
                 Button::new("ag-history-btn")
-                    .icon(if self.agent.show_history { gpui_kit::component::Icon::new(IconName::Bot) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
+                    .icon(if self.agent.show_history { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::MessageSquareCode) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
                     .xsmall()
                     .ghost()
                     .tooltip(if self.agent.show_history { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Saved chats") })
@@ -1922,6 +2159,11 @@ impl Workbench {
             self.agent.hinted = true;
             // FluxCode keeps the memory natively; the agent's own memory skill would start
             // a Python process for the same store, so it is asked not to.
+            let lang = if crate::i18n::is_id() {
+                "FluxCode's interface is in Indonesian: when the user's language is unclear, answer in Indonesian. "
+            } else {
+                "FluxCode's interface is in English. "
+            };
             let text = if self.settings.memory_off {
                 "FluxCode note: answer in the language the user writes in. Memory is switched off for now: don't run a \
                  memory skill or ant_memory.py."
@@ -1931,7 +2173,7 @@ impl Workbench {
                  this project (how to run, test or deploy it, a convention, a decision), end your reply with one line \
                  `REMEMBER: <fact>`; FluxCode saves it and hides the line."
             };
-            blocks.push(json!({ "type": "text", "text": text }));
+            blocks.push(json!({ "type": "text", "text": format!("{lang}{text}") }));
         }
         blocks
     }
@@ -2023,9 +2265,17 @@ impl Workbench {
         if self.agent.remote_state == 1 {
             return;
         }
-        let (Some(root), Some(mut cmd)) = (self.root.clone(), opencode_cmd()) else {
+        let Some(root) = self.root.clone() else {
             self.agent.remote_state = 2;
-            self.agent.remote_err = Some(format!("{} isn't installed, so its sessions can't be read.", agent_name()));
+            return;
+        };
+        let Some(mut cmd) = sessions_cmd() else {
+            self.agent.remote_state = 2;
+            self.agent.remote.clear();
+            // Agents other than Mura and OpenCode keep no session list FluxCode can read.
+            if crate::acp::locate(&agent_id()).is_none() {
+                self.agent.remote_err = Some(format!("{} isn't installed, so its sessions can't be read.", agent_name()));
+            }
             return;
         };
         let harness = agent_name();
@@ -2248,7 +2498,7 @@ impl Workbench {
                     .cursor_pointer()
                     .when(current, |d| d.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(Icon::new(IconName::Bot).size(theme::u(14.)).text_color(c(theme::FG_DIM)))
+                    .child(Icon::new(gpui_kit::assets::IconName::MessagesSquare).size(theme::u(14.)).text_color(c(theme::FG_DIM)))
                     .child(
                         v_flex()
                             .flex_1()
@@ -2406,11 +2656,11 @@ impl Workbench {
             );
         }
         let more = if self.agent.commands.is_empty() && !matches!(self.agent.status, Status::Ready | Status::Busy) {
-            format!(" · {name}'s own commands appear once it is on")
+            format!(" · {}", crate::trf!("{name}'s own commands appear once it is on"; name => name))
         } else {
             String::new()
         };
-        Some(v.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("↑↓ choose · Tab fills · Enter runs · Esc closes{more}"))).into_any_element())
+        Some(v.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{}{more}", tr("↑↓ choose · Tab fills · Enter runs · Esc closes")))).into_any_element())
     }
 
     fn render_mention_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2482,40 +2732,14 @@ impl Workbench {
         if a.show_options {
             return self.render_options(cx);
         }
+        if let Some(id) = &a.uninstall {
+            return self.render_uninstall(id, cx);
+        }
 
         let name = agent_name();
         let mut log = v_flex().id("ag-log").size_full().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
         if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
-            let missing = name == "Mura" && !mura_installed();
-            let hint = if missing {
-                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick OpenCode in the panel title menu.").to_string()
-            } else if on {
-                crate::i18n::tr("Type @ to add a file. Your open file, selection and last error go along when they help.").to_string()
-            } else {
-                crate::i18n::tr("Off for now. Your first message turns it on. Type @ to add a file.").to_string()
-            };
-            log = log.child(
-                v_flex()
-                    .size_full()
-                    .min_h(theme::u(220.))
-                    .items_center()
-                    .justify_center()
-                    .gap_2()
-                    .px_4()
-                    .child(Icon::new(IconName::Bot).size(theme::u(36.)).text_color(c(theme::FG_DIM)))
-                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Ask {name}"; name => name)))
-                    .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint))
-                    .when(missing, |v| {
-                        v.child(
-                            h_flex()
-                                .pt_2()
-                                .gap_2()
-                                .child(Button::new("ag-use-oc").label(tr("Use OpenCode")).small().primary().on_click(cx.listener(|this, _, w, cx| {
-                                    this.on_agent_use_opencode(&crate::workbench::AgentUseOpenCode, w, cx)
-                                }))),
-                        )
-                    }),
-            );
+            log = log.child(self.render_agent_welcome(on, cx));
         }
         if let Status::Error(e) = &a.status {
             log = log.child(div().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
@@ -2538,7 +2762,7 @@ impl Workbench {
             }
             let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::MemoryUsed(_) | Item::Branch(_));
             if starts_answer {
-                log = log.child(speaker(name, Icon::new(IconName::Bot)));
+                log = log.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
                 after_user = false;
             }
             log = log.child(match item {
@@ -2908,6 +3132,7 @@ impl Workbench {
                     .child(log)
                     .child(self.smooth_scroll_layer(crate::workbench::ScrollTarget::Handle(CHAT_SCROLL_KEY, a.scroll.clone()), cx)),
             )
+            .children(self.render_agent_ask(cx))
             .when_some(permission, |v, p| v.child(p))
             .when_some(changes, |v, ch| v.child(ch))
             .children(self.render_queue(cx))
@@ -3156,60 +3381,9 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    .when_some(a.config.iter().find(|o| o.category == "model"), |h, m| {
-                        // "provider/Model name" reads as just the model name here, plus a non-default effort.
-                        let current = m.current_name();
-                        let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
-                        // "Free" is said by the group in the settings list; here it only takes room.
-                        if let Some(s) = short.strip_suffix(" Free") {
-                            short = s.to_string();
-                        }
-                        if let Some(e) = a.config.iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
-                            short = format!("{short} · {}", e.current_name());
-                        }
-                        h.child(
-                            h_flex()
-                                .id("ag-model-btn")
-                                .flex_none()
-                                .max_w(theme::u(170.))
-                                .h(theme::u(24.))
-                                .px_1p5()
-                                .gap_1()
-                                .rounded(px(4.))
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(c(theme::FG_MUTED))
-                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Model, effort and mode")).build(w, cx))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.agent_open_options(cx)
-                                }))
-                                .child(div().min_w_0().truncate().child(short))
-                                .child(Icon::new(IconName::ChevronDown).xsmall()),
-                        )
-                    })
-                    .child({
-                        let level = self.settings.access().to_string();
-                        let (icon, label) = match level.as_str() {
-                            "read" => (Icon::new(IconName::Eye), crate::i18n::tr("Read only")),
-                            "full" => (Icon::new(gpui_kit::assets::IconName::ShieldAlert), crate::i18n::tr("Full access")),
-                            _ => (Icon::new(gpui_kit::assets::IconName::Pencil), crate::i18n::tr("Read & write")),
-                        };
-                        // Icon only (eye / pencil / shield): the row stays one line in a narrow panel.
-                        Button::new("ag-access")
-                            .icon(icon)
-                            .ghost()
-                            .xsmall()
-                            .flex_none()
-                            .tooltip(crate::trf!("Access: {level}. What the agent may do without asking"; level => label))
-                            .dropdown_menu(move |m: gpui_kit::component::menu::PopupMenu, _, _| {
-                                m.min_w(px(230.))
-                                    .menu_with_check(crate::i18n::tr("Read only: reads and explains"), level == "read", Box::new(crate::workbench::AgentAccessRead))
-                                    .menu_with_check(crate::i18n::tr("Read & write: edits files, commands ask"), level == "write", Box::new(crate::workbench::AgentAccessWrite))
-                                    .menu_with_check(crate::i18n::tr("Full access: nothing asks"), level == "full", Box::new(crate::workbench::AgentAccessFull))
-                            })
-                    })
+                    .when_some(a.config.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
+                    .when_some(a.config.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
+                    .child(self.render_access_menu())
                     .child(
                         h_flex()
                             .flex_1()
@@ -3428,6 +3602,21 @@ impl Workbench {
                     .child(div().min_w_0().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("Turns off after 10 quiet minutes to free memory")))
                     .into_any_element(),
             ));
+        let current = agent_id();
+        if crate::acp::managed(&current) {
+            body = body.child(
+                h_flex().px_3().pt_2().child(
+                    Button::new("ag-opt-remove")
+                        .label(crate::trf!("Remove {name}…"; name => name))
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.agent.show_options = false;
+                            this.agent_ask_uninstall(&current, w, cx);
+                        })),
+                ),
+            );
+        }
         if name == "OpenCode" {
             if let Some(cfg) = opencode_config_file() {
                 body = body.child(
@@ -3475,6 +3664,333 @@ impl Workbench {
 }
 
 /// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
+impl Workbench {
+    /// The composer's model button: the model's short name, opening every model the
+    /// agent offers (free ones first, grouped by provider) and, when the agent has
+    /// it, the effort levels below. A choice applies at once; nothing opens Settings.
+    fn render_model_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::PopupMenuItem;
+        let a = &self.agent;
+        let current = m.current_name();
+        let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
+        // "Free" is said by the group in the menu; here it only takes room.
+        if let Some(s) = short.strip_suffix(" Free") {
+            short = s.to_string();
+        }
+        let effort = a.config.iter().find(|o| o.category == "thought_level").cloned();
+        if let Some(e) = effort.as_ref().filter(|e| e.current != "default") {
+            short = format!("{short} · {}", e.current_name());
+        }
+        if short.chars().count() > 22 {
+            short = format!("{}…", short.chars().take(21).collect::<String>());
+        }
+        let groups = model_groups(&m.choices);
+        let (id, cur) = (m.id.clone(), m.current.clone());
+        let weak = cx.entity().downgrade();
+        Button::new("ag-model-btn")
+            .label(short)
+            .ghost()
+            .xsmall()
+            .flex_none()
+            .dropdown_caret(true)
+            .tooltip(tr("Model"))
+            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
+                menu = menu.min_w(px(248.)).max_h(px(420.)).scrollable(true);
+                for (gi, (group, models)) in groups.iter().enumerate() {
+                    if gi > 0 {
+                        menu = menu.separator();
+                    }
+                    let title = match group.as_str() {
+                        "free" => tr("Free (OpenCode Zen)").to_string(),
+                        g => g.to_string(),
+                    };
+                    if !title.is_empty() {
+                        menu = menu.item(PopupMenuItem::label(title));
+                    }
+                    for (v, n) in models {
+                        let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
+                        let on = v == cur;
+                        menu = menu.item(PopupMenuItem::new(n.clone()).checked(on).on_click(move |_, _, cx| {
+                            _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
+                        }));
+                    }
+                }
+                if let Some(e) = &effort {
+                    menu = menu.separator().item(PopupMenuItem::label(tr("Effort")));
+                    let mut choices = e.choices.clone();
+                    choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
+                    for (v, n, _) in choices {
+                        let (eid, weak, on) = (e.id.clone(), weak.clone(), e.current == v);
+                        menu = menu.item(PopupMenuItem::new(n).checked(on).on_click(move |_, _, cx| {
+                            _ = weak.update(cx, |this, cx| this.agent_set_option(&eid, v.clone(), true, cx));
+                        }));
+                    }
+                }
+                menu
+            })
+    }
+
+    /// The agent's modes (build, plan, ...), each with its description under it.
+    fn render_mode_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::menu::PopupMenuItem;
+        let mut label = m.current_name().to_string();
+        if label.chars().count() > 12 {
+            label = format!("{}…", label.chars().take(11).collect::<String>());
+        }
+        let (id, cur, choices) = (m.id.clone(), m.current.clone(), m.choices.clone());
+        let weak = cx.entity().downgrade();
+        Button::new("ag-mode-btn")
+            .label(label)
+            .ghost()
+            .xsmall()
+            .flex_none()
+            .dropdown_caret(true)
+            .tooltip(tr("Mode"))
+            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
+                menu = menu.min_w(px(240.)).max_w(px(320.));
+                for (v, n, desc) in &choices {
+                    let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
+                    let on = v == cur;
+                    let (n, desc) = (n.clone(), short_line(desc));
+                    menu = menu.item(
+                        PopupMenuItem::element(move |_, _| two_line(&n, &desc).w(px(236.)))
+                            .checked(on)
+                            .on_click(move |_, _, cx| {
+                                _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
+                            }),
+                    );
+                }
+                menu
+            })
+    }
+
+    /// What the agent may do without asking: an icon in the composer, and a menu
+    /// that says in plain words what each level allows.
+    fn render_access_menu(&self) -> impl IntoElement {
+        use gpui_kit::component::menu::PopupMenuItem;
+        use gpui_kit::assets::IconName as I;
+        let level = self.settings.access().to_string();
+        let levels: [(&'static str, I, &'static str, &'static str); 3] = [
+            ("read", I::Eye, "Read only", "Reads files and answers. Changes nothing."),
+            ("write", I::PencilLine, "Edit files", "Edits files. Asks before running commands."),
+            ("full", I::ShieldAlert, "Full access", "Edits files and runs commands without asking."),
+        ];
+        let (icon, label) = levels.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((I::PencilLine, "Edit files"));
+        Button::new("ag-access")
+            .icon(Icon::new(icon))
+            .ghost()
+            .xsmall()
+            .flex_none()
+            .tooltip(crate::trf!("Permissions: {level}"; level => tr(label)))
+            .dropdown_menu(move |mut menu: gpui_kit::component::menu::PopupMenu, _, _| {
+                menu = menu.min_w(px(276.)).item(PopupMenuItem::label(tr("What the agent may do without asking")));
+                for (id, icon, title, desc) in levels {
+                    let action: Box<dyn Action> = match id {
+                        "read" => Box::new(crate::workbench::AgentAccessRead),
+                        "full" => Box::new(crate::workbench::AgentAccessFull),
+                        _ => Box::new(crate::workbench::AgentAccessWrite),
+                    };
+                    let warn = id == "full";
+                    menu = menu.item(
+                        PopupMenuItem::element(move |_, _| {
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .items_start()
+                                .child(div().pt(px(2.)).child(Icon::new(icon).size(theme::u(14.)).text_color(c(if warn { theme::WARN } else { theme::FG_MUTED }))))
+                                .child(two_line(tr(title), tr(desc)))
+                        })
+                        .checked(level == id)
+                        .action(action),
+                    );
+                }
+                menu
+            })
+    }
+
+    /// The chat before the first message: the agent and what to type, or, when the
+    /// agent isn't on this PC, a way to get it (or any other agent).
+    fn render_agent_welcome(&self, on: bool, cx: &mut Context<Self>) -> AnyElement {
+        let name = agent_name();
+        let id = agent_id();
+        let installed = crate::acp::locate(&id).is_some();
+        let any = !crate::acp::installed().is_empty();
+        let mut col = v_flex().size_full().min_h(theme::u(240.)).items_center().justify_center().gap_2().px_4();
+        if let Some((_, _, anim)) = &self.agent.installing {
+            return col.child(anim.clone()).into_any_element();
+        }
+        if let Some((who, why, Some(anim))) = &self.agent.install_err {
+            let retry = who.clone();
+            return col
+                .child(anim.clone())
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} wasn't installed"; name => crate::acp::display_name(who))))
+                .child(div().max_w(theme::u(320.)).text_xs().text_center().text_color(c(theme::DANGER)).child(why.clone()))
+                .child(
+                    h_flex()
+                        .pt_2()
+                        .gap_2()
+                        .child(Button::new("ag-retry").label(tr("Try again")).small().primary().on_click(cx.listener(move |this, _, w, cx| this.agent_install(retry.clone(), w, cx))))
+                        .child(Button::new("ag-retry-no").label(tr("Back")).small().ghost().on_click(cx.listener(|this, _, _, cx| {
+                            this.agent.install_err = None;
+                            cx.notify();
+                        }))),
+                )
+                .into_any_element();
+        }
+        col = col.child(crate::ui::meander(36., c(theme::FG_DIM), c(theme::ACCENT_TEXT)).mb_2());
+        let err_box = self.agent.install_err.as_ref().map(|(i, e, _)| {
+            div()
+                .w_full()
+                .p_2()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(c(theme::DANGER))
+                .text_xs()
+                .text_color(c(theme::DANGER))
+                .child(crate::trf!("{name} wasn't installed. {why}"; name => crate::acp::display_name(i), why => e))
+        });
+        if installed {
+            let hint = if on {
+                tr("Type @ to add a file. Your open file, selection and last error go along when they help.")
+            } else {
+                tr("Off for now. Your first message turns it on. Type @ to add a file.")
+            };
+            let skills: Vec<SlashCmd> = self.agent.commands.iter().filter(|c| !c.builtin).take(12).cloned().collect();
+            let chips = (!skills.is_empty()).then(|| {
+                v_flex()
+                    .w_full()
+                    .max_w(theme::u(340.))
+                    .pt_3()
+                    .gap_1p5()
+                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(crate::trf!("Skills and commands from {name}"; name => name)))
+                    .child(h_flex().flex_wrap().gap_1().children(skills.into_iter().enumerate().map(|(i, s)| {
+                        let fill = format!("/{} ", s.name);
+                        let desc: SharedString = s.desc.clone().into();
+                        div()
+                            .id(("ag-skill", i))
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(c(theme::FG))
+                            .hover(|st| st.border_color(c(theme::BORDER_STRONG)).bg(c(theme::BG_HOVER)))
+                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(desc.clone()).build(w, cx))
+                            .child(format!("/{}", s.name))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                let f = fill.clone();
+                                this.agent.input.update(cx, |st, cx| {
+                                    let end = f.len();
+                                    st.set_value(f.clone(), w, cx);
+                                    st.set_selected_range(end..end, cx);
+                                });
+                                let h = this.agent.input.focus_handle(cx);
+                                h.focus(w, cx);
+                            }))
+                    })))
+            });
+            return col
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Ask {name}"; name => name)))
+                .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint))
+                .children(chips)
+                .children(err_box)
+                .into_any_element();
+        }
+        // Not on this PC: the chosen agent first, then the most used ones.
+        let mut ids: Vec<&'static str> = Vec::new();
+        if let Some(k) = crate::acp::known(&id) {
+            ids.push(k.id);
+        }
+        ids.extend(crate::acp::KNOWN.iter().map(|k| k.id).filter(|k| *k != id && crate::acp::locate(k).is_none()).take(if any { 0 } else { 3 }));
+        let title = if any { crate::trf!("{name} isn't installed"; name => name) } else { tr("Pick an agent to start").into() };
+        let note = if any {
+            tr("Download it, or pick an agent you have in the menu above.")
+        } else {
+            tr("Every agent here speaks the Agent Client Protocol. FluxCode downloads it into its own folder and starts it only while you use it.")
+        };
+        let list = v_flex().w_full().max_w(theme::u(300.)).pt_2().gap_1().children(ids.into_iter().map(|k| {
+            let known = crate::acp::known(k).expect("a known agent");
+            let kid = k.to_string();
+            h_flex()
+                .id(SharedString::from(format!("ag-get-{k}")))
+                .w_full()
+                .px_2()
+                .py_1()
+                .gap_2p5()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(c(theme::BORDER))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
+                .child(agent_glyph(k, 20.))
+                .child(two_line(known.name, known.by))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(Icon::new(gpui_kit::assets::IconName::Download).size(theme::u(14.)))
+                        .child(if k == "mura" { tr("Get") } else { tr("Download") }),
+                )
+                .on_click(cx.listener(move |this, _, w, cx| this.agent_install(kid.clone(), w, cx)))
+        }));
+        col.child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
+            .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(note))
+            .child(list)
+            .when(!any, |v| v.child(div().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("The menu above lists every agent in the ACP registry."))))
+            .children(err_box)
+            .into_any_element()
+    }
+}
+
+/// An agent's icon from the ACP registry, drawn in the theme's text color; agents
+/// without one (Mura, or before the icons arrive) get their initial in a square.
+fn agent_glyph(id: &str, size: f32) -> AnyElement {
+    let s = theme::u(size);
+    match crate::acp::icon_asset(id) {
+        Some(path) => svg().path(SharedString::from(path)).flex_none().size(s).text_color(c(theme::FG)).into_any_element(),
+        None => {
+            let letter: String = crate::acp::display_name(id).chars().next().unwrap_or('?').to_uppercase().collect();
+            div()
+                .flex_none()
+                .size(s)
+                .rounded(px(4.))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(s * 0.6)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(letter)
+                .into_any_element()
+        }
+    }
+}
+
+/// A title over one dim line, for menu rows and agent cards.
+fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
+    let sub: SharedString = sub.into();
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .child(div().truncate().child(title.into()))
+        .when(!sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(sub)))
+}
+
+/// The first sentence of a description, cut to fit a menu row.
+fn short_line(s: &str) -> String {
+    let first = s.split(". ").next().unwrap_or(s).trim().trim_end_matches('.');
+    if first.chars().count() > 64 {
+        format!("{}…", first.chars().take(63).collect::<String>().trim_end())
+    } else {
+        first.to_string()
+    }
+}
+
 fn line_icon(icon: Icon) -> Div {
     div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
 }

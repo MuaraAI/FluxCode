@@ -8,7 +8,12 @@
 #[macro_use]
 mod i18n;
 mod i18n_id;
+mod acp;
+mod boot;
+mod commands;
+mod editor_cmds;
 mod agent;
+mod agent_ask;
 mod agent_ctx;
 mod complete;
 mod core;
@@ -16,6 +21,7 @@ mod diff;
 mod docs;
 mod explorer;
 mod files;
+mod flux_anim;
 mod github;
 mod panel;
 mod memory;
@@ -31,6 +37,7 @@ mod theme;
 mod ui;
 mod update;
 mod viewer;
+mod whatsnew;
 mod wintitle;
 mod workbench;
 mod workspace;
@@ -41,6 +48,7 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
+    boot::start();
     // `fluxcode [folder] [files...]`; with no
     // arguments the last session is restored (or the welcome screen shown).
     let paths: Vec<PathBuf> = std::env::args_os()
@@ -53,13 +61,24 @@ fn main() {
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();
 
-    gpui_kit::application().with_assets(AppAssets).run(move |cx| {
+    // Which agents are installed (PATH and ~/.fluxcode/agents), worked out while
+    // GPUI sets up the window system, so the agent panel never waits for it.
+    std::thread::spawn(|| {
+        let _ = acp::installed();
+    });
+    boot::mark("args");
+    let app = gpui_kit::application();
+    boot::mark("platform created");
+    app.with_assets(AppAssets).run(move |cx| {
+        boot::mark("app running");
         gpui_kit::init(cx);
+        boot::mark("gpui-kit init");
         // The saved theme is active before the first frame, so the window never flashes another one.
         let saved = settings::Settings::load();
         theme::set_ui_size(saved.ui_size);
         theme::set(&saved.theme, saved.background().map(|_| saved.bg_visibility));
         theme::apply(cx);
+        boot::mark("settings + theme");
         workbench::bind_keys(cx);
         cx.activate(true);
 
@@ -75,20 +94,26 @@ fn main() {
         if let Some(t) = options.titlebar.as_mut() {
             t.title = Some(format!("FluxCode Development ({})", update::BUILD).into());
         }
+        boot::mark("open window");
         gpui_kit::open_window(options, cx, move |window, cx| {
+            boot::mark("window created");
             cx.new(|cx| workbench::Workbench::new(root.clone(), files.clone(), window, cx))
         })
         .expect("failed to open the FluxCode window");
     });
 }
 
-/// gpui-kit's default icons plus the file-type icons the explorer uses.
+/// gpui-kit's default icons, the file-type icons the explorer uses, and the agent icons.
 struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
         if let Some(bytes) = files::FileIcons.load(path)? {
             return Ok(Some(bytes));
+        }
+        // Agent icons from the ACP registry, kept on disk (see acp::fetch_icons).
+        if path.starts_with(acp::ICON_ASSETS) {
+            return Ok(acp::load_icon(path).map(std::borrow::Cow::Owned));
         }
         gpui_kit::assets::Assets.load(path)
     }

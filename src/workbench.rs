@@ -38,7 +38,9 @@ actions!(
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
-        CheckUpdates
+        CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
+        InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
+        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew
     ]
 );
 
@@ -87,6 +89,31 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", TermComplete, Some("Terminal > Input")),
         KeyBinding::new("ctrl-c", TermInterrupt, Some("Terminal > Input")),
         KeyBinding::new("escape", TermEscape, Some("Terminal > Input")),
+        // VS Code's (Windows/Linux) keys for the commands in commands.rs.
+        KeyBinding::new("ctrl-shift-p", CommandPalette, None),
+        KeyBinding::new("f1", CommandPalette, None),
+        KeyBinding::new("ctrl-g", GoToLine, None),
+        KeyBinding::new("ctrl-shift-t", ReopenClosedTab, None),
+        KeyBinding::new("ctrl-k ctrl-w", CloseAllTabs, None),
+        KeyBinding::new("ctrl-k s", SaveAll, None),
+        KeyBinding::new("ctrl-f4", CloseTab, None),
+        KeyBinding::new("ctrl-pageup", PrevTab, None),
+        KeyBinding::new("ctrl-pagedown", NextTab, None),
+        KeyBinding::new("alt-z", ToggleWordWrap, None),
+        KeyBinding::new("ctrl-=", ZoomIn, None),
+        KeyBinding::new("ctrl-shift-=", ZoomIn, None),
+        KeyBinding::new("ctrl--", ZoomOut, None),
+        KeyBinding::new("ctrl-0", ZoomReset, None),
+        // Line editing, in the code editor only (bound after gpui-kit's, so these win:
+        // Shift+Alt+Up/Down copy a line here as in VS Code; Ctrl+Alt+Up/Down add cursors).
+        KeyBinding::new("ctrl-/", ToggleLineComment, Some("Input && mode == editor")),
+        KeyBinding::new("alt-up", MoveLineUp, Some("Input && mode == editor")),
+        KeyBinding::new("alt-down", MoveLineDown, Some("Input && mode == editor")),
+        KeyBinding::new("shift-alt-up", CopyLineUp, Some("Input && mode == editor")),
+        KeyBinding::new("shift-alt-down", CopyLineDown, Some("Input && mode == editor")),
+        KeyBinding::new("ctrl-shift-k", DeleteLine, Some("Input && mode == editor")),
+        KeyBinding::new("ctrl-enter", InsertLineBelow, Some("Input && mode == editor")),
+        KeyBinding::new("ctrl-shift-enter", InsertLineAbove, Some("Input && mode == editor")),
     ]);
 }
 
@@ -200,6 +227,10 @@ pub struct Workbench {
     pub(crate) status: SharedString,
     pub(crate) settings: crate::settings::Settings,
     pub(crate) settings_open: bool,
+    /// The "What's new" page, when it is showing (whatsnew.rs).
+    pub(crate) whats_new: Option<crate::whatsnew::Page>,
+    /// Paths of closed tabs, newest last, for Ctrl+Shift+T.
+    pub(crate) closed_tabs: Vec<PathBuf>,
     // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
@@ -258,6 +289,7 @@ pub struct Workbench {
 
 impl Workbench {
     pub fn new(root: Option<PathBuf>, open: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::boot::mark("workbench new");
         let tree = cx.new(|cx| TreeState::new(cx));
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -266,6 +298,7 @@ impl Workbench {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
         let term_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type a command (Tab completes, ↑ for history)")));
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
+        crate::boot::mark("  inputs");
         let mut subs = vec![
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
@@ -311,10 +344,14 @@ impl Workbench {
         }
         crate::agent::set_choice(&settings.agent_cli);
         let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        crate::boot::mark("  settings");
         let agent = crate::agent::AgentState::new(window, cx);
+        crate::boot::mark("  agent state");
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
         subs.push(scm_sub);
+        crate::boot::mark("  scm");
         let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
+        crate::boot::mark("  quick open");
         subs.push(quick_sub);
         // Like VS Code: re-read git state when the window comes back to the front.
         subs.push(cx.observe_window_activation(window, |this, window, cx| {
@@ -344,6 +381,8 @@ impl Workbench {
             status: SharedString::default(),
             settings,
             settings_open: false,
+            whats_new: None,
+            closed_tabs: Vec::new(),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
             pending: None,
@@ -388,6 +427,18 @@ impl Workbench {
             title_menu_end: Rc::default(),
             _subs: subs,
         };
+        crate::boot::mark("  struct");
+        // The first start of a new build opens its release notes.
+        if this.settings.last_build != crate::update::BUILD {
+            let before = std::mem::replace(&mut this.settings.last_build, crate::update::BUILD.to_string());
+            if crate::whatsnew::build_date(&before).is_some() {
+                this.whats_new = Some(crate::whatsnew::Page::after_update(&before));
+            } else if before.is_empty() && crate::settings::existed_before_start() {
+                // Updated from a build older than this page: show the newest notes.
+                this.whats_new = Some(crate::whatsnew::Page::after_update(""));
+            }
+            this.settings.save();
+        }
         let restore = root.is_none() && open.is_empty();
         if let Some(root) = root {
             this.open_folder(root, cx);
@@ -398,7 +449,9 @@ impl Workbench {
         if restore {
             this.restore_session(window, cx);
         }
+        crate::boot::mark("  folder + session");
         this.start_update_checks(cx);
+        crate::boot::mark("  update check scheduled");
         this
     }
 
@@ -456,6 +509,7 @@ impl Workbench {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.whats_new = None;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
             return;
@@ -504,10 +558,11 @@ impl Workbench {
         let file = core::FileText { text, crlf };
         let s = &self.settings;
         let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
+        let opts = crate::settings::EditorOpts::of(s);
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
-                .line_number(true)
+                .line_number(opts.line_numbers)
                 // Vertical guides show how far each block reaches; spaces show as faint dots.
                 .indent_guides(!read_only)
                 .show_whitespaces(dots && !read_only)
@@ -516,6 +571,7 @@ impl Workbench {
                 .default_value(file.text)
         });
         let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        editor.update(cx, |e, cx| opts.apply(e, window, cx));
         if read_only {
             editor.update(cx, |e, cx| e.set_readonly(true, cx));
         } else {
@@ -694,7 +750,14 @@ impl Workbench {
         if ix >= self.docs.len() {
             return;
         }
-        self.docs.remove(ix);
+        let closed = self.docs.remove(ix);
+        if !closed.read_only {
+            self.closed_tabs.retain(|p| *p != closed.path);
+            self.closed_tabs.push(closed.path);
+            if self.closed_tabs.len() > 30 {
+                self.closed_tabs.remove(0);
+            }
+        }
         self.active = match self.active {
             _ if self.docs.is_empty() => None,
             Some(a) if a > ix => Some(a - 1),
@@ -1100,8 +1163,10 @@ impl Workbench {
             }))
             .child(Self::render_menu("m-term", tr("Terminal"), |m| m.menu(tr("Toggle Terminal"), Box::new(ToggleTerminal))))
             .child(Self::render_menu("m-help", tr("Help"), |m| {
-                m.menu(tr("Next Color Theme"), Box::new(NextTheme))
+                m.menu(tr("Command Palette..."), Box::new(CommandPalette))
+                    .menu(tr("Next Color Theme"), Box::new(NextTheme))
                     .separator()
+                    .menu(tr("What's New"), Box::new(ShowWhatsNew))
                     .menu(tr("Check for Updates"), Box::new(CheckUpdates))
                     .menu(tr("About FluxCode"), Box::new(About))
             }))
@@ -1260,7 +1325,7 @@ impl Workbench {
                     })
             })
             .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
-            .child(view_item("ab-agent", Icon::new(IconName::Bot), SideView::Agent, self, cx))
+            .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child(div().flex_1())
             .child(
                 div()
@@ -1278,10 +1343,7 @@ impl Workbench {
             SideView::Search => tr("SEARCH"),
             SideView::Run => tr("RUN"),
             SideView::Scm => tr("SOURCE CONTROL"),
-            SideView::Agent => match crate::agent::agent_name() {
-                "Mura" => "MURA",
-                _ => "OPENCODE",
-            },
+            SideView::Agent => crate::agent::agent_name(),
         };
         // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (self.view, self.root.as_deref().and_then(Path::file_name)) {
@@ -1298,7 +1360,7 @@ impl Workbench {
             .when(self.view != SideView::Agent, |h| {
                 h.child(div().flex_1().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
             })
-            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_picker()).child(self.render_agent_switch(cx)).child(div().flex_1()))
+            .when(self.view == SideView::Agent, |h| h.child(self.render_agent_picker(cx)).child(self.render_agent_switch(cx)).child(div().flex_1()))
             .when(self.view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
             .when(self.view == SideView::Agent, |h| h.child(self.render_agent_tools(cx)))
             .when(self.view == SideView::Explorer && self.root.is_some(), |h| {
@@ -1426,6 +1488,9 @@ impl Workbench {
         if self.settings_open {
             return self.render_settings(window, cx);
         }
+        if let Some(page) = &self.whats_new {
+            return self.render_whats_new(page, cx);
+        }
         match self.active {
             Some(ix) => v_flex()
                 .size_full()
@@ -1476,8 +1541,9 @@ impl Workbench {
                     v_flex()
                         .items_center()
                         .gap_1()
-                        .child(div().text_size(theme::u(40.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
-                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Lightweight. Native. One process."))),
+                        .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
+                        .child(div().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
+                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
                 )
                 .child(
                     h_flex()
@@ -1707,6 +1773,13 @@ impl Focusable for Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if crate::boot::pending() {
+            crate::boot::mark("workbench render");
+            window.on_next_frame(|_, _| {
+                crate::boot::mark("first frame drawn");
+                crate::boot::flush();
+            });
+        }
         if self.status != self.status_seen {
             self.status_seen = self.status.clone();
             if !self.status.is_empty() {
@@ -1725,6 +1798,9 @@ impl Render for Workbench {
         }
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
+        }
+        if !self.agent.ask_clear.is_empty() {
+            self.apply_ask_clear(window, cx);
         }
         if self.scm.clear_message {
             self.scm.clear_message = false;
@@ -1889,6 +1965,27 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_reload_preview))
             .on_action(cx.listener(Self::on_remove_folder))
+            .on_action(cx.listener(Self::on_toggle_line_comment))
+            .on_action(cx.listener(Self::on_move_line_up))
+            .on_action(cx.listener(Self::on_move_line_down))
+            .on_action(cx.listener(Self::on_copy_line_up))
+            .on_action(cx.listener(Self::on_copy_line_down))
+            .on_action(cx.listener(Self::on_delete_line))
+            .on_action(cx.listener(Self::on_insert_line_below))
+            .on_action(cx.listener(Self::on_insert_line_above))
+            .on_action(cx.listener(Self::on_go_to_line))
+            .on_action(cx.listener(Self::on_command_palette))
+            .on_action(cx.listener(Self::on_reopen_closed_tab))
+            .on_action(cx.listener(Self::on_close_all_tabs))
+            .on_action(cx.listener(Self::on_toggle_word_wrap))
+            .on_action(cx.listener(Self::on_zoom_in))
+            .on_action(cx.listener(Self::on_zoom_out))
+            .on_action(cx.listener(Self::on_zoom_reset))
+            .on_action(cx.listener(|this, _: &ShowWhatsNew, _, cx| {
+                this.settings_open = false;
+                this.whats_new = Some(crate::whatsnew::Page::all());
+                cx.notify();
+            }))
             // Folders and files dropped anywhere (the agent panel keeps its own drops).
             .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)))
             .child(self.render_title_bar(window, cx))
@@ -2101,7 +2198,7 @@ impl Workbench {
             .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Open or close the AI agent (Ctrl+L)")).build(w, cx))
             .on_click(cx.listener(|this, _, w, cx| this.on_toggle_agent(&ToggleAgent, w, cx)))
-            .child(Icon::new(IconName::Bot).size(theme::u(13.)))
+            .child(Icon::new(gpui_kit::assets::IconName::MessageSquareCode).size(theme::u(13.)))
             .child(tr("Agent"))
             .child(
                 div()

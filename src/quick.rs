@@ -65,29 +65,78 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     Some(score * 10 - p.len() as i32)
 }
 
+/// What the box is doing, from the first character typed (as in VS Code).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Files,
+    /// ">": the Command Palette.
+    Commands,
+    /// ":": Go to Line.
+    Line,
+}
+
+pub fn mode_of(q: &str) -> Mode {
+    match q.chars().next() {
+        Some('>') => Mode::Commands,
+        Some(':') => Mode::Line,
+        _ => Mode::Files,
+    }
+}
+
 pub struct QuickOpen {
     pub open: bool,
     pub input: Entity<InputState>,
-    /// Indices into `Workbench::all_files`, best first.
+    /// Indices into `Workbench::all_files` (files) or `commands::commands()`, best first.
     pub hits: Vec<usize>,
     pub sel: usize,
+    pub mode: Mode,
 }
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type part of a file name")));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type part of a file name ( > for commands, : for a line )")));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::Change => this.quick_filter(cx),
             InputEvent::PressEnter { .. } => this.quick_accept(window, cx),
             _ => {}
         });
-        (Self { open: false, input, hits: Vec::new(), sel: 0 }, sub)
+        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files }, sub)
     }
 }
 
 impl Workbench {
     pub(crate) fn quick_filter(&mut self, cx: &mut Context<Self>) {
         let q = self.quick.input.read(cx).value().to_string();
+        self.quick.mode = mode_of(&q);
+        match self.quick.mode {
+            Mode::Commands => {
+                let query: Vec<u8> = q.trim_start_matches('>').to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+                let list = crate::commands::commands();
+                let mut scored: Vec<(i32, usize)> = list
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| {
+                        // Both the English name and the translated one match.
+                        let hay = format!("{} {}", c.label, tr(c.label)).to_lowercase();
+                        fuzzy_lower(&query, hay.as_bytes()).map(|s| (s, i))
+                    })
+                    .collect();
+                if !query.is_empty() {
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                }
+                self.quick.hits = scored.into_iter().map(|(_, i)| i).collect();
+                self.quick.sel = 0;
+                cx.notify();
+                return;
+            }
+            Mode::Line => {
+                self.quick.hits.clear();
+                self.quick.sel = 0;
+                cx.notify();
+                return;
+            }
+            Mode::Files => {}
+        }
         let files = self.all_files.clone();
         let lower = self.all_lower.clone();
         let qb: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
@@ -111,6 +160,20 @@ impl Workbench {
         }
         self.quick.open = true;
         self.quick.input.update(cx, |s, cx| s.set_value("", window, cx));
+        let h = self.quick.input.focus_handle(cx);
+        h.focus(window, cx);
+        self.quick_filter(cx);
+    }
+
+    /// Open the box with `prefix` typed (">" commands, ":" a line), caret at the end.
+    pub(crate) fn quick_open_with(&mut self, prefix: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick.open = true;
+        let p = prefix.to_string();
+        self.quick.input.update(cx, |s, cx| {
+            s.set_value(p.clone(), window, cx);
+            let end = p.len();
+            s.set_selected_range(end..end, cx);
+        });
         let h = self.quick.input.focus_handle(cx);
         h.focus(window, cx);
         self.quick_filter(cx);
@@ -146,6 +209,27 @@ impl Workbench {
     }
 
     pub(crate) fn quick_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.quick.mode {
+            Mode::Commands => {
+                let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
+                let list = crate::commands::commands();
+                self.quick_close(window, cx);
+                if let Some(c) = list.get(ix) {
+                    window.dispatch_action((c.action)(), cx);
+                }
+                return;
+            }
+            Mode::Line => {
+                let q = self.quick.input.read(cx).value().to_string();
+                if let Some((line, col)) = crate::commands::parse_line_query(&q) {
+                    self.quick.open = false;
+                    self.go_to_line_col(line, col, window, cx);
+                    cx.notify();
+                }
+                return;
+            }
+            Mode::Files => {}
+        }
         let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
         let path = PathBuf::from(&self.all_files[ix]);
         self.quick.open = false;
@@ -153,9 +237,59 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn render_quick_open(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_quick_open(&self, cx: &mut Context<Self>) -> AnyElement {
         let q = &self.quick;
         let mut list = v_flex().id("quick-list").max_h(theme::u(420.)).overflow_y_scroll().py_1();
+        match q.mode {
+            Mode::Commands => {
+                let all = crate::commands::commands();
+                if q.hits.is_empty() {
+                    list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No command matches.")));
+                }
+                for (row, &ix) in q.hits.iter().enumerate() {
+                    let Some(cmd) = all.get(ix) else { continue };
+                    let selected = row == q.sel;
+                    let make = cmd.action;
+                    list = list.child(
+                        h_flex()
+                            .id(("quick-cmd", row))
+                            .mx_1()
+                            .px_2()
+                            .h(theme::u(28.))
+                            .gap_2()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .when(selected, |d| d.bg(c(theme::SELECT)))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(tr(cmd.label)))
+                            .when(!cmd.keys.is_empty(), |h| h.child(keys_chips(cmd.keys)))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.quick_close(w, cx);
+                                w.dispatch_action(make(), cx);
+                            })),
+                    );
+                }
+                return self.quick_frame(list, cx).into_any_element();
+            }
+            Mode::Line => {
+                let qv = q.input.read(cx).value().to_string();
+                let (cur, total) = self
+                    .active
+                    .map(|ix| {
+                        let e = self.docs[ix].editor.read(cx);
+                        (e.cursor_position().line + 1, e.value().lines().count().max(1))
+                    })
+                    .unwrap_or((1, 1));
+                let text = match crate::commands::parse_line_query(&qv) {
+                    Some((l, 1)) => crate::trf!("Go to line {l}."; l => l),
+                    Some((l, col)) => crate::trf!("Go to line {l}, column {col}."; l => l, col => col),
+                    None => crate::trf!("Current line: {cur} of {total}. Type a line number to go there."; cur => cur, total => total),
+                };
+                list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_MUTED)).child(text));
+                return self.quick_frame(list, cx).into_any_element();
+            }
+            Mode::Files => {}
+        }
         if q.hits.is_empty() {
             list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No file matches. Try fewer letters.")));
         }
@@ -190,6 +324,11 @@ impl Workbench {
                     })),
             );
         }
+        self.quick_frame(list, cx).into_any_element()
+    }
+
+    fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {
+        let q = &self.quick;
         // The rest of the window dims so the eye goes to the box; a click there closes it.
         // (A real blur would re-render the whole window under it every frame; a dim layer
         // costs nothing.) The box sits centered under the title bar's search box.
@@ -229,6 +368,25 @@ impl Workbench {
                 ),
             )
     }
+}
+
+/// "Ctrl+K Ctrl+O" as key caps: one small box per key, chords spaced apart.
+pub fn keys_chips(keys: &'static str) -> Div {
+    h_flex().flex_none().gap_1().children(keys.split(' ').enumerate().map(|(i, chord)| {
+        h_flex().gap(px(2.)).when(i > 0, |h| h.ml_1()).children(chord.split('+').map(|k| {
+            div()
+                .px_1()
+                .min_w(theme::u(16.))
+                .flex()
+                .justify_center()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG))
+                .text_size(theme::u(11.))
+                .text_color(c(theme::FG_MUTED))
+                .child(k.to_string())
+        }))
+    }))
 }
 
 /// Every file in the explorer's scan, as full paths (folders left out).
