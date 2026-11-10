@@ -11,6 +11,36 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Live share works over the internet now
+@title id: Live share sekarang bisa lewat internet
+@en
+Friends outside your network can join your session, with no VPN and no server to rent.
+When you click **Start hosting**, FluxCode opens every way in it can and shows each one in
+the panel:
+
+- **Same network**: your Wi-Fi or LAN.
+- **Router port (UPnP)**: asks your router to open the port, like a game server does.
+- **Public IPv6**: when your provider gives your PC one.
+- **Relay (bore.pub)**: a free public tunnel that works behind any router. It only passes
+  bytes already encrypted with the invite code's secret.
+
+The invite code holds every address that opened, and the guest's FluxCode tries them all
+at once. Untick **Let people join over the internet** to keep a session on your network.
+@id
+Teman di luar jaringanmu bisa ikut sesi, tanpa VPN dan tanpa sewa server. Saat kamu klik
+**Mulai jadi host**, FluxCode membuka semua jalur masuk yang bisa dibuka dan menampilkan
+masing-masing di panel:
+
+- **Jaringan yang sama**: Wi-Fi atau LAN-mu.
+- **Port router (UPnP)**: meminta router membuka port, seperti server game.
+- **IPv6 publik**: kalau provider memberi PC-mu alamat IPv6.
+- **Relay (bore.pub)**: tunnel publik gratis yang tembus router apa pun. Relay hanya
+  meneruskan data yang sudah terenkripsi dengan rahasia di kode undangan.
+
+Kode undangan memuat semua alamat yang terbuka, dan FluxCode tamu mencoba semuanya sekaligus.
+Hapus centang **Izinkan bergabung lewat internet** supaya sesi hanya di jaringanmu.
+
+@release 2026-11-10
 @title en: What's new before you update
 @title id: Lihat yang baru sebelum update
 @en

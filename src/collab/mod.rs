@@ -1,7 +1,9 @@
 //! Live share: code together in real time, with the host's PC as the server.
 //!
 //! - The host shares the open folder and gets an invite code. Whoever has the code
-//!   joins straight to the host's PC (`net`): no server of ours, encrypted.
+//!   joins straight to the host's PC (`net`): no server of ours, encrypted. From
+//!   outside the host's network they come in over public IPv6, a port the router
+//!   opened (UPnP), or a free public relay that only sees ciphertext (`reach`).
 //! - Guests join into their own clone of the same repository (the open folder) or
 //!   into a new folder; files come from the host as they are opened.
 //! - Every open shared file is synced keystroke by keystroke with operational
@@ -16,6 +18,7 @@
 pub mod net;
 pub mod ot;
 pub mod proto;
+pub mod reach;
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -23,10 +26,12 @@ use crate::workbench::Workbench;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{EditorState, Input, InputState},
+    input::{EditorState, Input, InputEvent, InputState},
+    spinner::Spinner,
     v_flex, Icon, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
+use gpui_kit::assets::IconName;
 use net::{Invite, NetEvent};
 use ot::Op;
 use proto::{AiInfo, Msg, Peer};
@@ -95,11 +100,25 @@ pub struct Collab {
     pub filter_input: Entity<InputState>,
     /// Join into the open folder (the guest's own clone of the same repository).
     pub into_open_folder: bool,
+    /// Host: also open ways in from the internet (router port, IPv6, relay).
+    pub internet: bool,
+    /// Host: the probes opening those ways in, and where they stand.
+    pub probes: Option<reach::Probes>,
+    pub reach: Option<reach::Reach>,
+    /// When the invite code was last copied (the button says so for a moment), and
+    /// what was copied (the ways in can change it afterwards).
+    pub copied: Option<Instant>,
+    pub copied_code: Option<String>,
     last_cursor: (String, u32),
+    /// Re-render as the invite code or the file filter is typed.
+    _subs: Vec<Subscription>,
 }
 
 impl Collab {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
+        let join_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Paste an invite code (FLUX1-…)")));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Find a shared file")));
+        let _subs = [&join_input, &filter_input].into_iter().map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify())).collect();
         Self {
             role: None,
             invite: None,
@@ -113,10 +132,16 @@ impl Collab {
             feed: Vec::new(),
             error: None,
             connecting: false,
-            join_input: cx.new(|cx| InputState::new(window, cx).placeholder(tr("Paste an invite code (FLUX1-…)"))),
-            filter_input: cx.new(|cx| InputState::new(window, cx).placeholder(tr("Find a shared file"))),
+            join_input,
+            filter_input,
             into_open_folder: false,
+            internet: true,
+            probes: None,
+            reach: None,
+            copied: None,
+            copied_code: None,
             last_cursor: (String::new(), 0),
+            _subs,
         }
     }
 
@@ -246,12 +271,21 @@ impl Workbench {
             }
         };
         let port = server.port;
-        let mut addrs: Vec<String> = net::lan_ip().map(|ip| format!("{ip}:{port}")).into_iter().collect();
-        addrs.push(format!("127.0.0.1:{port}"));
+        let (probes, changes) = if self.collab.internet {
+            let (p, rx) = reach::start(port, server.ipv6);
+            (Some(p), Some(rx))
+        } else {
+            (None, None)
+        };
+        let view = probes.as_ref().map(|p| p.snapshot()).unwrap_or_else(|| reach::Reach::local_only(net::lan_ip()));
         let (name, github) = my_name();
         let folder = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let c = &mut self.collab;
-        c.invite = Some(Invite { a: addrs, k: base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, secret), h: name.clone(), n: folder.clone() });
+        c.invite = Some(Invite { a: view.addresses(port), k: base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, secret), h: name.clone(), n: folder.clone() });
+        c.reach = Some(view);
+        c.probes = probes;
+        c.copied = None;
+        c.copied_code = None;
         c.role = Some(Role::Host { server, guests: HashMap::new() });
         c.me = 0;
         c.host_name = name.clone();
@@ -262,7 +296,49 @@ impl Workbench {
         c.feed.clear();
         c.error = None;
         self.collab_listen(rx, window, cx);
+        if let Some(changes) = changes {
+            self.collab_watch_reach(changes, window, cx);
+        }
         cx.notify();
+    }
+
+    /// Keep the invite code and the panel in step with the ways in as they open or fail.
+    fn collab_watch_reach(&mut self, mut changes: futures::channel::mpsc::UnboundedReceiver<()>, window: &mut Window, cx: &mut Context<Self>) {
+        use futures::StreamExt;
+        cx.spawn_in(window, async move |this, cx| {
+            while changes.next().await.is_some() {
+                let alive = this.update(cx, |this, cx| {
+                    let c = &mut this.collab;
+                    let (Some(p), Some(Role::Host { server, .. })) = (&c.probes, &c.role) else { return false };
+                    let view = p.snapshot();
+                    if let Some(inv) = c.invite.as_mut() {
+                        inv.a = view.addresses(server.port);
+                    }
+                    c.reach = Some(view);
+                    cx.notify();
+                    true
+                });
+                if !matches!(alive, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn collab_copy_invite(&mut self, cx: &mut Context<Self>) {
+        let Some(code) = self.collab.invite.as_ref().map(|i| i.code()) else { return };
+        cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+        self.collab.copied = Some(Instant::now());
+        self.collab.copied_code = Some(code);
+        self.status = tr("Invite code copied").into();
+        cx.notify();
+        // Put the button's label back.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+            _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     pub(crate) fn collab_join(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -335,6 +411,9 @@ impl Workbench {
         let c = &mut self.collab;
         c.role = None;
         c.invite = None;
+        // Closes the relay and removes the router's port mapping.
+        c.probes = None;
+        c.reach = None;
         c.peers.clear();
         c.docs.clear();
         c.files.clear();
@@ -689,186 +768,420 @@ impl Workbench {
 
     pub(crate) fn render_collab(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
-        let section = |t: SharedString| div().pt_4().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(t);
-        let note = |t: SharedString| div().text_xs().text_color(c(theme::FG_DIM)).child(t);
-        let mut v = v_flex().id("collab").size_full().px_3().pb_4().overflow_y_scroll().text_sm();
+        let mut v = v_flex().id("collab").size_full().px_3().pt_3().pb_4().gap_4().overflow_y_scroll().text_sm();
         if let Some(e) = &co.error {
-            v = v.child(div().mt_2().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
+            v = v.child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .p_2()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::DANGER))
+                    .child(div().flex_none().pt(px(1.)).child(Icon::new(IconName::CircleAlert).size(theme::u(14.)).text_color(c(theme::DANGER))))
+                    .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(e.clone()))
+                    .child(Button::new("co-err-x").icon(Icon::new(IconName::Close)).xsmall().ghost().tooltip(tr("Dismiss")).on_click(cx.listener(|this, _, _, cx| {
+                        this.collab.error = None;
+                        cx.notify();
+                    }))),
+            );
         }
-        let (me, github) = my_name();
-        match &co.role {
-            None => {
-                let folder = self.root.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned());
-                v = v
-                    .child(section(tr("Host a session").into()))
-                    .child(note(match &folder {
-                        Some(f) => crate::trf!("Share {folder} with the people you invite. Your PC is the server: edits go straight between your PC and theirs, encrypted."; folder => f).into(),
-                        None => tr("Open a folder to share it.").into(),
-                    }))
-                    .when(folder.is_some(), |v| v.child(h_flex().pt_2().child(Button::new("co-host").label(tr("Start hosting")).small().primary().on_click(cx.listener(|this, _, w, cx| this.collab_host(w, cx))))))
-                    .child(section(tr("Join a session").into()))
-                    .child(Input::new(&co.join_input).small())
-                    .child(
-                        h_flex()
-                            .pt_2()
-                            .gap_2()
-                            .child(
-                                Button::new("co-into")
-                                    .label(if co.into_open_folder { tr("Into my open folder") } else { tr("Into a new folder") })
-                                    .xsmall()
-                                    .ghost()
-                                    .dropdown_caret(true)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.collab.into_open_folder = !this.collab.into_open_folder;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(div().flex_1())
-                            .child(Button::new("co-join").label(if co.connecting { tr("Connecting…") } else { tr("Join") }).small().primary().on_click(cx.listener(|this, _, w, cx| this.collab_join(w, cx)))),
-                    )
-                    .child(div().pt_1().child(note(if co.into_open_folder {
-                        tr("Your open folder should be your clone of the same repository; the host's version of each file you open replaces yours.").into()
-                    } else {
-                        tr("Files arrive from the host as you open them, into a folder of their own.").into()
-                    })))
-                    .child(div().pt_4().child(note(if github {
-                        crate::trf!("Others see you as @{name} (GitHub)."; name => me).into()
-                    } else {
-                        crate::trf!("Others see you as {name}. Sign in to GitHub in Settings so they see your GitHub name."; name => me).into()
-                    })));
-            }
-            Some(Role::Host { server, .. }) => {
-                let code = co.invite.as_ref().map(|i| i.code()).unwrap_or_default();
-                let ip = co.invite.as_ref().and_then(|i| i.a.first().cloned()).unwrap_or_default();
-                let code2 = code.clone();
-                v = v
-                    .child(section(crate::trf!("Hosting {folder}"; folder => co.folder).into()))
-                    .child(
-                        div()
-                            .p_2()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(c(theme::BORDER_STRONG))
-                            .bg(c(theme::BG_ELEVATED))
-                            .font_family("Cascadia Code")
-                            .text_xs()
-                            .text_color(c(theme::FG))
-                            .child(format!("{}…{}", &code[..code.len().min(24)], &code[code.len().saturating_sub(10)..])),
-                    )
-                    .child(
-                        h_flex()
-                            .pt_2()
-                            .gap_2()
-                            .child(Button::new("co-copy").label(tr("Copy invite code")).small().primary().on_click(cx.listener(move |this, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(code2.clone()));
-                                this.status = tr("Invite code copied").into();
-                                cx.notify();
-                            })))
-                            .child(Button::new("co-end").label(tr("End session")).small().ghost().on_click(cx.listener(|this, _, _, cx| this.collab_stop("The host ended the session.", cx)))),
-                    )
-                    .child(div().pt_2().child(note(crate::trf!("Anyone with this code can join and edit {folder}. Same network: it works as is. Over the internet: forward TCP port {port} on your router to this PC ({ip})."; folder => co.folder, port => server.port, ip => ip).into())));
-            }
-            Some(Role::Guest { addr, .. }) => {
-                v = v
-                    .child(section({
-                        let gh = co.peers.iter().any(|p| p.host && p.github);
-                        let host = if gh { format!("@{}", co.host_name) } else { co.host_name.clone() };
-                        crate::trf!("In {host}'s {folder}"; host => host, folder => co.folder).into()
-                    }))
-                    .child(note(crate::trf!("Connected to {addr}, encrypted."; addr => addr).into()))
-                    .child(h_flex().pt_2().child(Button::new("co-leave").label(tr("Leave")).small().ghost().on_click(cx.listener(|this, _, _, cx| this.collab_stop("", cx)))));
-            }
-        }
+        v = match &co.role {
+            None => v.child(self.render_collab_start(cx)),
+            Some(Role::Host { server, .. }) => v.child(self.render_collab_hosting(server.port, cx)),
+            Some(Role::Guest { addr, .. }) => v.child(self.render_collab_guest(addr.clone(), cx)),
+        };
         if co.active() {
-            // People.
-            v = v.child(section(crate::trf!("In the session ({n})"; n => co.peers.len()).into()));
-            for p in &co.peers {
-                let initial: String = p.name.chars().next().unwrap_or('?').to_uppercase().collect();
-                let place = if p.file.is_empty() { String::new() } else { format!("{}:{}", p.file, p.line) };
-                v = v.child(
-                    h_flex()
-                        .py_1()
-                        .gap_2()
-                        .child(div().flex_none().size(theme::u(22.)).rounded_full().flex().items_center().justify_center().bg(c(theme::BG_HOVER)).text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(initial))
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .child(div().truncate().text_color(c(theme::FG_STRONG)).child(if p.github { format!("@{}", p.name) } else { p.name.clone() }))
-                                        .when(p.host, |h| h.child(div().text_xs().text_color(c(theme::ACCENT_TEXT)).child(tr("host"))))
-                                        .when(p.id == co.me, |h| h.child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("you")))),
-                                )
-                                .when(!place.is_empty(), |v| v.child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(place))),
-                        ),
-                );
-            }
-            // Guest: the host's files.
+            v = v.child(self.render_collab_people());
             if !co.is_host() {
-                let q = co.filter_input.read(cx).value().to_lowercase();
-                v = v.child(section(crate::trf!("Shared files ({n})"; n => co.files.len()).into())).child(Input::new(&co.filter_input).small());
-                let hits: Vec<&String> = co.files.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(80).collect();
-                for (i, f) in hits.into_iter().enumerate() {
-                    let rel = f.clone();
-                    let (icon, tint) = crate::files::icon_for(f.rsplit('/').next().unwrap_or(f));
-                    v = v.child(
-                        h_flex()
-                            .id(("co-file", i))
-                            .h(theme::u(24.))
-                            .gap_1p5()
-                            .px_1()
-                            .rounded(px(4.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(c(theme::BG_HOVER)))
-                            .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
-                            .child(div().truncate().text_xs().text_color(c(if co.docs.contains_key(f) { theme::FG_STRONG } else { theme::FG })).child(f.clone()))
-                            .on_click(cx.listener(move |this, _, w, cx| this.collab_open(rel.clone(), w, cx))),
-                    );
-                }
+                v = v.child(self.render_collab_files(cx));
             }
-            // Activity.
-            v = v.child(section(tr("Activity").into()));
-            if co.feed.is_empty() {
-                v = v.child(note(tr("Edits show here as people make them. An edit made by an AI agent says which agent, model and effort.").into()));
-            }
-            for (i, f) in co.feed.iter().enumerate() {
-                let secs = f.at.elapsed().as_secs();
-                let ago = if secs < 60 { tr("just now").to_string() } else { crate::trf!("{m} min ago"; m => secs / 60) };
-                v = v.child(
-                    v_flex()
-                        .id(("co-feed", i))
-                        .py_1p5()
-                        .gap_0p5()
-                        .border_b_1()
-                        .border_color(c(theme::BORDER))
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(f.who.clone()))
-                                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_MUTED)).child(f.rel.clone()))
-                                .child(div().flex_none().text_xs().text_color(c(theme::GREEN)).child(format!("+{}", f.lines.0)))
-                                .child(div().flex_none().text_xs().text_color(c(theme::DANGER)).child(format!("-{}", f.lines.1))),
-                        )
-                        .when_some(f.ai.as_ref(), |v, ai| {
-                            v.child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(div().flex_none().px_1().rounded(px(3.)).bg(c(theme::ACCENT)).text_size(theme::u(10.)).font_weight(FontWeight::BOLD).text_color(c(theme::ON_ACCENT)).child("AI"))
-                                    .child(div().min_w_0().truncate().text_xs().text_color(c(theme::ACCENT_TEXT)).child(ai.line())),
-                            )
-                        })
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(div().flex_1().text_xs().text_color(c(theme::FG_DIM)).child(ago))
-                                .child(Button::new(("co-diff", i)).label(tr("Diff")).xsmall().ghost().on_click(cx.listener(move |this, _, w, cx| this.collab_show_diff(i, w, cx)))),
-                        ),
-                );
-            }
+            v = v.child(self.render_collab_activity(cx));
         }
         v.into_any_element()
+    }
+
+    /// Not in a session: host this folder, or join someone's.
+    fn render_collab_start(&self, cx: &mut Context<Self>) -> AnyElement {
+        let co = &self.collab;
+        let folder = self.root.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let (me, github) = my_name();
+        let on = co.internet;
+        let host = card()
+            .child(heading(IconName::Users, tr("Host a session")))
+            .child(body(match &folder {
+                Some(f) => crate::trf!("Share {folder}. Your PC is the server: guests connect straight to it, encrypted."; folder => f).into(),
+                None => tr("Open a folder first: the session shares it.").into(),
+            }))
+            .child(
+                h_flex()
+                    .id("co-net")
+                    .gap_2()
+                    .items_start()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .flex_none()
+                            .mt(px(2.))
+                            .size(theme::u(14.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(c(if on { theme::ACCENT } else { theme::BORDER_STRONG }))
+                            .when(on, |d| d.bg(c(theme::ACCENT)))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(on, |d| d.child(Icon::new(IconName::Check).size(theme::u(11.)).text_color(c(theme::ON_ACCENT)))),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_xs().text_color(c(theme::FG_STRONG)).child(tr("Let people join over the internet")))
+                            .child(meta(tr("Through your router, or a free relay that passes only encrypted bytes. No VPN or server.").into())),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.collab.internet = !this.collab.internet;
+                        cx.notify();
+                    })),
+            )
+            .child(Button::new("co-host").label(tr("Start hosting")).small().w_full().when(folder.is_some(), |b| b.primary()).when(folder.is_none(), |b| b.ghost()).on_click(cx.listener(|this, _, w, cx| this.collab_host(w, cx))));
+        let into_open = co.into_open_folder;
+        let pick = |id: &'static str, label: &'static str, open: bool| {
+            let on = into_open == open;
+            div()
+                .id(id)
+                .flex_1()
+                .min_w_0()
+                .py_1()
+                .rounded(px(4.))
+                .text_center()
+                .truncate()
+                .text_xs()
+                .cursor_pointer()
+                .when(on, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                .when(!on, |d| d.text_color(c(theme::FG_MUTED)).hover(|s| s.text_color(c(theme::FG))))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.collab.into_open_folder = open;
+                    cx.notify();
+                }))
+        };
+        let has_code = !co.join_input.read(cx).value().trim().is_empty();
+        let join = card()
+            .child(heading(IconName::LogIn, tr("Join a session")))
+            .child(Input::new(&co.join_input).small())
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr("Files go to")))
+                    .child(
+                        h_flex()
+                            .p_0p5()
+                            .gap_0p5()
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .bg(c(theme::BG_EDITOR))
+                            .child(pick("co-into-new", tr("A new folder"), false))
+                            .child(pick("co-into-open", tr("My open folder"), true)),
+                    ),
+            )
+            .child(meta(if into_open {
+                tr("Your open folder should be your clone of the same repository; the host's version of each file you open replaces yours.").into()
+            } else {
+                tr("Files arrive from the host as you open them, into a folder of their own.").into()
+            }))
+            .child(Button::new("co-join").label(if co.connecting { tr("Connecting…") } else { tr("Join") }).small().w_full().when(has_code, |b| b.primary()).when(!has_code, |b| b.outline()).loading(co.connecting).on_click(cx.listener(|this, _, w, cx| this.collab_join(w, cx))));
+        v_flex()
+            .gap_3()
+            .child(host)
+            .child(join)
+            .child(meta(if github {
+                crate::trf!("Others see you as @{name} (GitHub)."; name => me).into()
+            } else {
+                crate::trf!("Others see you as {name}. Sign in to GitHub in Settings so they see your GitHub name."; name => me).into()
+            }))
+            .into_any_element()
+    }
+
+    /// Hosting: the invite code, and each way in with where it stands.
+    fn render_collab_hosting(&self, port: u16, cx: &mut Context<Self>) -> AnyElement {
+        let co = &self.collab;
+        let code = co.invite.as_ref().map(|i| i.code()).unwrap_or_default();
+        let reach = co.reach.clone().unwrap_or_else(|| reach::Reach::local_only(None));
+        let copied = co.copied.is_some_and(|t| t.elapsed().as_millis() < 1800);
+        let stale = co.copied_code.as_ref().is_some_and(|c| *c != code);
+        let (sum_icon, sum_tint, sum_text): (AnyElement, theme::Tok, SharedString) = if reach.internet() {
+            (Icon::new(IconName::Globe).size(theme::u(13.)).text_color(c(theme::GREEN)).into_any_element(), theme::FG, tr("Anyone with this code can join, from anywhere.").into())
+        } else if reach.checking() {
+            (Spinner::new().icon(IconName::LoaderCircle).xsmall().color(c(theme::FG_MUTED)).into_any_element(), theme::FG_MUTED, tr("Opening ways in from the internet. The code updates as each one opens.").into())
+        } else if !co.internet {
+            (Icon::new(IconName::House).size(theme::u(13.)).text_color(c(theme::FG_MUTED)).into_any_element(), theme::FG_MUTED, tr("Only people on your network can join.").into())
+        } else if matches!(reach.ipv6, reach::State::Ready(_)) {
+            (Icon::new(IconName::Globe).size(theme::u(13.)).text_color(c(theme::WARN)).into_any_element(), theme::FG, tr("Guests with IPv6 may join over the internet; everyone else only from your network.").into())
+        } else {
+            (Icon::new(IconName::TriangleAlert).size(theme::u(13.)).text_color(c(theme::WARN)).into_any_element(), theme::FG, tr("Only people on your network can join: no way in from the internet worked (see below).").into())
+        };
+        let status = card()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_none().size(px(8.)).rounded_full().bg(c(theme::GREEN)))
+                    .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::GREEN)).child(tr("Live")))
+                    .child(Button::new("co-end").label(tr("End")).xsmall().ghost().tooltip(tr("End the session for everyone")).on_click(cx.listener(|this, _, _, cx| this.collab_stop("The host ended the session.", cx)))),
+            )
+            .child(div().truncate().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Hosting {folder}"; folder => co.folder)))
+            .child(
+                h_flex()
+                    .id("co-code")
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .bg(c(theme::BG_EDITOR))
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(c(theme::ACCENT)))
+                    .child(div().flex_1().min_w_0().truncate().font_family("Cascadia Code").text_xs().text_color(c(theme::FG)).child(code))
+                    .child(Icon::new(if copied { IconName::Check } else { IconName::Copy }).size(theme::u(13.)).text_color(c(if copied { theme::GREEN } else { theme::FG_MUTED })))
+                    .on_click(cx.listener(|this, _, _, cx| this.collab_copy_invite(cx))),
+            )
+            .child(Button::new("co-copy").label(if copied { tr("Copied") } else { tr("Copy invite code") }).small().w_full().primary().on_click(cx.listener(|this, _, _, cx| this.collab_copy_invite(cx))))
+            .when(stale, |v| {
+                v.child(
+                    h_flex()
+                        .gap_2()
+                        .items_start()
+                        .child(div().flex_none().pt(px(2.)).child(Icon::new(IconName::RefreshCw).size(theme::u(13.)).text_color(c(theme::WARN))))
+                        .child(div().flex_1().min_w_0().text_xs().text_color(c(theme::FG)).child(tr("The code changed after you copied it (a new way in opened). Copy it again before you send it."))),
+                )
+            })
+            .child(h_flex().gap_2().items_start().child(div().flex_none().pt(px(2.)).child(sum_icon)).child(div().flex_1().min_w_0().text_xs().text_color(c(sum_tint)).child(sum_text)));
+        let lan = match &reach.lan {
+            Some(ip) => reach::State::Ready(format!("{ip}:{port}")),
+            None => reach::State::No(tr("No network connection.").into()),
+        };
+        let ways = v_flex()
+            .gap_1()
+            .child(section(tr("Ways in").into(), None))
+            .child(way_row(IconName::House, tr("Same network"), &lan, None))
+            .child(way_row(IconName::Router, tr("Router port (UPnP)"), &reach.upnp, None))
+            .child(way_row(IconName::Globe, tr("Public IPv6"), &reach.ipv6, Some(tr("For guests with IPv6, when your router lets connections in."))))
+            .child(way_row(IconName::RadioTower, tr("Relay (bore.pub)"), &reach.relay, Some(tr("Works from any network."))))
+            .child(div().pt_1().child(meta(tr("The relay only passes bytes encrypted with the invite code's secret. If someone can't connect straight to you, allow FluxCode through the firewall.").into())));
+        v_flex().gap_4().child(status).child(ways).into_any_element()
+    }
+
+    /// In someone's session.
+    fn render_collab_guest(&self, addr: String, cx: &mut Context<Self>) -> AnyElement {
+        let co = &self.collab;
+        let gh = co.peers.iter().any(|p| p.host && p.github);
+        let host = if gh { format!("@{}", co.host_name) } else { co.host_name.clone() };
+        let (icon, via): (IconName, SharedString) = match path_kind(&addr) {
+            Via::Lan => (IconName::House, tr("Straight to the host over your network, encrypted.").into()),
+            Via::Relay => (IconName::RadioTower, tr("Through the bore.pub relay, encrypted end to end: the relay can't read it.").into()),
+            Via::Internet => (IconName::Globe, tr("Straight to the host over the internet, encrypted.").into()),
+        };
+        card()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_none().size(px(8.)).rounded_full().bg(c(theme::GREEN)))
+                    .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::GREEN)).child(tr("Connected")))
+                    .child(Button::new("co-leave").label(tr("Leave")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| this.collab_stop("", cx)))),
+            )
+            .child(div().truncate().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{host}'s {folder}"; host => host, folder => co.folder)))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .child(div().flex_none().pt(px(2.)).child(Icon::new(icon).size(theme::u(13.)).text_color(c(theme::FG_MUTED))))
+                    .child(v_flex().flex_1().min_w_0().child(body(via)).child(div().truncate().font_family("Cascadia Code").text_xs().text_color(c(theme::FG_DIM)).child(addr))),
+            )
+            .into_any_element()
+    }
+
+    fn render_collab_people(&self) -> AnyElement {
+        let co = &self.collab;
+        let mut v = v_flex().gap_0p5().child(section(tr("People").into(), Some(co.peers.len())));
+        for p in &co.peers {
+            let initial: String = p.name.chars().next().unwrap_or('?').to_uppercase().collect();
+            let place = if p.file.is_empty() { String::new() } else { format!("{}:{}", p.file, p.line) };
+            let pill = |t: &'static str| div().flex_none().px_1().rounded(px(3.)).border_1().border_color(c(theme::BORDER_STRONG)).text_size(theme::u(10.)).text_color(c(theme::FG_MUTED)).child(t);
+            v = v.child(
+                h_flex()
+                    .py_1()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(theme::u(24.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(c(if p.host { theme::ACCENT } else { theme::BG_HOVER }))
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(if p.host { theme::ON_ACCENT } else { theme::FG_STRONG }))
+                            .child(initial),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(div().min_w_0().truncate().text_color(c(theme::FG_STRONG)).child(if p.github { format!("@{}", p.name) } else { p.name.clone() }))
+                                    .when(p.host, |h| h.child(pill(tr("host"))))
+                                    .when(p.id == co.me, |h| h.child(pill(tr("you")))),
+                            )
+                            .child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(if place.is_empty() { tr("No file open").to_string() } else { place })),
+                    ),
+            );
+        }
+        v.into_any_element()
+    }
+
+    /// Guest: the host's files.
+    fn render_collab_files(&self, cx: &mut Context<Self>) -> AnyElement {
+        let co = &self.collab;
+        let q = co.filter_input.read(cx).value().to_lowercase();
+        let mut v = v_flex().gap_1().child(section(tr("Shared files").into(), Some(co.files.len()))).child(Input::new(&co.filter_input).small());
+        let hits: Vec<&String> = co.files.iter().filter(|f| q.is_empty() || f.to_lowercase().contains(&q)).take(80).collect();
+        for (i, f) in hits.into_iter().enumerate() {
+            let rel = f.clone();
+            let (icon, tint) = crate::files::icon_for(f.rsplit('/').next().unwrap_or(f));
+            v = v.child(
+                h_flex()
+                    .id(("co-file", i))
+                    .h(theme::u(24.))
+                    .gap_1p5()
+                    .px_1()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
+                    .child(div().truncate().text_xs().text_color(c(if co.docs.contains_key(f) { theme::FG_STRONG } else { theme::FG })).child(f.clone()))
+                    .on_click(cx.listener(move |this, _, w, cx| this.collab_open(rel.clone(), w, cx))),
+            );
+        }
+        v.into_any_element()
+    }
+
+    fn render_collab_activity(&self, cx: &mut Context<Self>) -> AnyElement {
+        let co = &self.collab;
+        let mut v = v_flex().child(section(tr("Activity").into(), None));
+        if co.feed.is_empty() {
+            v = v.child(meta(tr("Edits show here as people make them. An edit made by an AI agent says which agent, model and effort.").into()));
+        }
+        for (i, f) in co.feed.iter().enumerate() {
+            let secs = f.at.elapsed().as_secs();
+            let ago = if secs < 60 { tr("just now").to_string() } else { crate::trf!("{m} min ago"; m => secs / 60) };
+            v = v.child(
+                v_flex()
+                    .id(("co-feed", i))
+                    .py_1p5()
+                    .gap_0p5()
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(f.who.clone()))
+                            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_MUTED)).child(f.rel.clone()))
+                            .child(div().flex_none().text_xs().text_color(c(theme::GREEN)).child(format!("+{}", f.lines.0)))
+                            .child(div().flex_none().text_xs().text_color(c(theme::DANGER)).child(format!("-{}", f.lines.1))),
+                    )
+                    .when_some(f.ai.as_ref(), |v, ai| {
+                        v.child(
+                            h_flex()
+                                .gap_1()
+                                .child(div().flex_none().px_1().rounded(px(3.)).bg(c(theme::ACCENT)).text_size(theme::u(10.)).font_weight(FontWeight::BOLD).text_color(c(theme::ON_ACCENT)).child("AI"))
+                                .child(div().min_w_0().truncate().text_xs().text_color(c(theme::ACCENT_TEXT)).child(ai.line())),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().text_xs().text_color(c(theme::FG_DIM)).child(ago))
+                            .child(Button::new(("co-diff", i)).label(tr("Diff")).xsmall().ghost().on_click(cx.listener(move |this, _, w, cx| this.collab_show_diff(i, w, cx)))),
+                    ),
+            );
+        }
+        v.into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------- panel pieces
+
+fn card() -> Div {
+    v_flex().gap_2p5().p_3().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).bg(c(theme::BG_ELEVATED))
+}
+
+fn heading(icon: IconName, text: &'static str) -> Div {
+    h_flex().gap_2().child(Icon::new(icon).size(theme::u(15.)).text_color(c(theme::FG_MUTED))).child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(text))
+}
+
+fn body(t: SharedString) -> Div {
+    div().text_xs().text_color(c(theme::FG_MUTED)).child(t)
+}
+
+fn meta(t: SharedString) -> Div {
+    div().text_xs().text_color(c(theme::FG_DIM)).child(t)
+}
+
+fn section(t: SharedString, count: Option<usize>) -> Div {
+    h_flex()
+        .gap_1p5()
+        .pb_1()
+        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(t))
+        .when_some(count, |h, n| h.child(div().text_xs().text_color(c(theme::FG_DIM)).child(n.to_string())))
+}
+
+/// One way in: what it is, its address or why it isn't open, and a mark.
+fn way_row(icon: IconName, name: &'static str, st: &reach::State, hint: Option<&'static str>) -> Div {
+    let (detail, mono, mark): (SharedString, bool, AnyElement) = match st {
+        reach::State::Trying => (tr("Checking…").into(), false, Spinner::new().icon(IconName::LoaderCircle).xsmall().color(c(theme::FG_MUTED)).into_any_element()),
+        reach::State::Ready(a) => (a.clone().into(), true, Icon::new(IconName::CircleCheck).size(theme::u(14.)).text_color(c(theme::GREEN)).into_any_element()),
+        reach::State::No(why) => (why.clone().into(), false, Icon::new(IconName::Minus).size(theme::u(14.)).text_color(c(theme::FG_DIM)).into_any_element()),
+        reach::State::Off => (tr("Off: you chose same network only.").into(), false, Icon::new(IconName::Minus).size(theme::u(14.)).text_color(c(theme::FG_DIM)).into_any_element()),
+    };
+    let ready = matches!(st, reach::State::Ready(_));
+    h_flex()
+        .gap_2()
+        .items_start()
+        .py_1()
+        .child(div().flex_none().pt(px(1.)).child(Icon::new(icon).size(theme::u(14.)).text_color(c(if ready { theme::FG_STRONG } else { theme::FG_DIM }))))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(div().text_xs().text_color(c(if ready { theme::FG_STRONG } else { theme::FG_MUTED })).child(name))
+                .child(div().text_xs().text_color(c(if ready { theme::FG } else { theme::FG_DIM })).when(mono, |d| d.truncate().font_family("Cascadia Code")).child(detail))
+                .when_some(hint.filter(|_| ready), |v, h| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(h))),
+        )
+        .child(div().flex_none().pt(px(1.)).child(mark))
+}
+
+enum Via {
+    Lan,
+    Relay,
+    Internet,
+}
+
+/// How a guest reached the host, from the address it connected to.
+fn path_kind(addr: &str) -> Via {
+    if addr.starts_with(reach::RELAY_HOST) {
+        return Via::Relay;
+    }
+    match addr.parse::<std::net::SocketAddr>().map(|s| s.ip()) {
+        Ok(std::net::IpAddr::V4(ip)) if reach::is_private_v4(&ip) => Via::Lan,
+        Ok(_) => Via::Internet,
+        Err(_) => Via::Lan,
     }
 }
 
