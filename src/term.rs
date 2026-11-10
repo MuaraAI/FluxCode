@@ -1006,9 +1006,46 @@ pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     cwd.display().to_string()
 }
 
+/// A path cut from the left to at most `max` characters, keeping whole folder
+/// names where it can: `~\Documents\Project Pribadi\app` → `…\Project Pribadi\app`.
+/// The end of a path says where you are; the start is what can go.
+pub fn fit_path_left(path: &str, max: usize) -> String {
+    let n = path.chars().count();
+    if n <= max {
+        return path.to_string();
+    }
+    let max = max.max(2);
+    // Keep the longest tail that starts at a separator and still fits after "…".
+    let tail_start = path.char_indices().map(|(i, _)| i).find(|&i| path[i..].chars().count() < max).unwrap_or(path.len());
+    let tail = &path[tail_start..];
+    match tail.find(['\\', '/']) {
+        Some(k) if tail[k..].chars().count() > 1 => format!("…{}", &tail[k..]),
+        // Not even the last folder fits: its own end.
+        _ => format!("…{tail}"),
+    }
+}
+
+/// The last folder of a path as shown (`~\Documents\proj` → `proj`).
+pub fn last_folder(path: &str) -> &str {
+    path.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().filter(|s| !s.is_empty()).unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_shrink_from_the_left() {
+        let p = "~\\Documents\\Project Pribadi\\app";
+        assert_eq!(fit_path_left(p, 60), p);
+        assert_eq!(fit_path_left(p, 22), "…\\Project Pribadi\\app");
+        assert!(fit_path_left(p, 22).chars().count() <= 22);
+        assert_eq!(fit_path_left(p, 8), "…\\app");
+        assert_eq!(fit_path_left("C:\\Paper-Test-Server", 8).chars().count(), 8);
+        assert_eq!(last_folder("~\\Documents\\Project Pribadi"), "Project Pribadi");
+        assert_eq!(last_folder("C:\\"), "C:");
+        assert_eq!(last_folder("proj"), "proj");
+    }
 
     #[test]
     fn compiler_errors_link_to_the_file() {
