@@ -827,6 +827,14 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     }
 }
 
+/// The file extensions `run_command_for` knows (a test keeps the two in step).
+const RUNNABLE: &[&str] = &["py", "pyw", "js", "mjs", "cjs", "ts", "mts", "ps1", "bat", "cmd", "sh", "rs", "go", "php", "lua", "rb"];
+
+/// Can F5 run this file? Cheap enough for a render: it only looks at the extension.
+pub(crate) fn can_run(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE.contains(&e.to_ascii_lowercase().as_str()))
+}
+
 /// How to run a file, by extension (same choices as the Tauri app's Run).
 fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<String>)> {
     let p = path.to_string_lossy().into_owned();
@@ -860,4 +868,19 @@ pub(crate) fn detect_python(root: Option<&Path>) -> Option<String> {
         Some(v) if exe.contains(['\\', '/']) => format!("{text} · {v}"),
         _ => text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
+    use super::{can_run, run_command_for};
+    use std::path::Path;
+
+    #[test]
+    fn can_run_matches_run_command_for() {
+        for name in ["a.py", "A.PY", "b.pyw", "c.js", "d.mjs", "e.cjs", "f.ts", "g.mts", "h.ps1", "i.bat", "j.cmd", "k.sh", "l.rs", "m.go", "n.php", "o.lua", "p.rb", "warps.yml", "x.txt", "y.json", "noext", "z.html"] {
+            let p = Path::new(name);
+            assert_eq!(can_run(p), run_command_for(p, None).is_some(), "{name}");
+        }
+    }
 }
