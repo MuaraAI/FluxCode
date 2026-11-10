@@ -86,6 +86,11 @@ pub struct Settings {
     pub agent_access: String,
     /// Agent memory is off: nothing is recalled, saved or asked of the agent.
     pub memory_off: bool,
+    /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or
+    /// Chromium), a browser id, or "off".
+    pub agent_browser: String,
+    /// Run that browser without a window.
+    pub agent_browser_headless: bool,
     /// Launches that showed the Ctrl+L hint in the status bar (100: shortcut used).
     pub agent_hint: u8,
     /// Look for new development builds on GitHub at start and every 6 hours.
@@ -132,6 +137,8 @@ impl Default for Settings {
             agent_options: Default::default(),
             agent_access: String::new(),
             memory_off: false,
+            agent_browser: "auto".into(),
+            agent_browser_headless: false,
             agent_hint: 0,
             update_check: true,
             line_numbers: true,

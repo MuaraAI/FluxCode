@@ -10,6 +10,7 @@ mod i18n;
 mod i18n_id;
 mod acp;
 mod boot;
+mod browser;
 mod collab;
 mod commands;
 mod editor_cmds;

@@ -756,7 +756,7 @@ impl Workbench {
                 self.agent.session = None;
                 self.agent.status = Status::Starting;
                 let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
-                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
             }
             Status::Starting => {}
             _ => self.agent_start(cx),
@@ -772,10 +772,38 @@ impl Workbench {
         self.agent_write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
     }
 
+    /// MCP servers every agent session gets: the browser, when it is set up.
+    fn agent_mcp_servers(&self) -> Value {
+        let s = &self.settings;
+        Value::Array(crate::browser::mcp_server(&s.agent_browser, s.agent_browser_headless, self.root.as_deref()).into_iter().collect())
+    }
+
+    /// Set up the agents' browser tools in the background (once), when a browser is
+    /// chosen and Node.js is there; sessions after that get the browser.
+    pub(crate) fn agent_browser_setup(&mut self, cx: &mut Context<Self>) {
+        if !matches!(crate::browser::state(&self.settings.agent_browser), crate::browser::State::NotInstalled(_)) {
+            return;
+        }
+        let task = cx.background_spawn(async move { crate::browser::install() });
+        cx.spawn(async move |this, cx| {
+            let res = task.await;
+            _ = this.update(cx, |this, cx| {
+                this.status = match res {
+                    Ok(()) => crate::i18n::tr("Browser tools are ready: agents can open and use web pages from their next session.").into(),
+                    Err(e) => crate::trf!("Browser tools could not be installed: {e}"; e => e).into(),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn agent_start(&mut self, cx: &mut Context<Self>) {
         if matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy) {
             return;
         }
+        self.agent_browser_setup(cx);
         let Some(mut cmd) = agent_cmd() else {
             self.agent.status = Status::Error(if agent_id() == "mura" {
                 crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick another agent in the menu above.").into()
@@ -1000,7 +1028,7 @@ impl Workbench {
                     self.agent.loading_id = None;
                     self.agent.carry = Some(transcript(&self.agent.items));
                     let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
-                    self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+                    self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
                 }
                 _ => self.agent.status = Status::Error(m),
             }
@@ -1018,7 +1046,7 @@ impl Workbench {
                         if std::mem::take(&mut self.agent.silent_load) {
                             self.agent.carry = Some(transcript(&self.agent.items));
                         }
-                        self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }))
+                        self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }))
                     }
                 }
             }
@@ -1287,7 +1315,7 @@ impl Workbench {
             self.agent.session = None;
             self.agent.status = Status::Starting;
             let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
-            self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": [] }));
+            self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
         }
         cx.notify();
     }
@@ -2255,7 +2283,7 @@ impl Workbench {
         let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
         self.agent.loading_id = Some(id.clone());
         self.agent.status = Status::Starting;
-        self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": [] }));
+        self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
     }
 
     /// Resume a session OpenCode or Mura Harness saved: its history replays into the panel
@@ -2590,31 +2618,24 @@ impl Workbench {
         cx.notify();
     }
 
+    /// What goes with the message, one chip each. A closed chip goes away; when some
+    /// are closed, a "+" at the end brings them back.
     fn render_context_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let chips = self.agent_chips(cx);
-        chips
+        let hidden: Vec<(String, String)> = chips.iter().filter(|c| !c.3).map(|c| (c.0.clone(), c.1.clone())).collect();
+        let mut out: Vec<AnyElement> = chips
             .into_iter()
+            .filter(|c| c.3)
             .enumerate()
-            .map(|(i, (key, label, icon, on))| {
-                let toggle_key = key.clone();
-                chip_shell(SharedString::from(format!("ag-chip-{i}")), on)
-                    .child(
-                        chip_x(SharedString::from(format!("ag-chip-x-{i}")), if on { IconName::Close } else { IconName::Plus }, cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if !this.agent.off_ctx.remove(&toggle_key) {
-                                this.agent.off_ctx.insert(toggle_key.clone());
-                            }
-                            cx.notify();
-                        }))
-                        .tooltip(move |w, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(if on { crate::i18n::tr("Leave it out of the message") } else { crate::i18n::tr("Send it with the message") }).build(w, cx)
-                        }),
-                    )
+            .map(|(i, (key, label, icon, _))| {
+                let close_key = key.clone();
+                chip_shell(SharedString::from(format!("ag-chip-{i}")), true)
                     .child(
                         h_flex()
                             .id(SharedString::from(format!("ag-chip-open-{i}")))
+                            .flex_1()
                             .min_w_0()
-                            .pr_1p5()
+                            .pl_1p5()
                             .gap_1()
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::FG_STRONG)))
@@ -2623,12 +2644,51 @@ impl Workbench {
                                 cx.stop_propagation();
                                 this.agent_chip_go(&key, w, cx);
                             }))
-                            .child(icon.size(theme::u(12.)))
-                            .child(div().min_w_0().truncate().when(!on, |d| d.line_through()).child(label)),
+                            .child(icon.size(theme::u(12.)).flex_none())
+                            .child(div().min_w_0().truncate().child(label)),
+                    )
+                    .child(
+                        chip_x(SharedString::from(format!("ag-chip-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.agent.off_ctx.insert(close_key.clone());
+                            cx.notify();
+                        }))
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Leave it out of the message")).build(w, cx)),
                     )
                     .into_any_element()
             })
-            .collect()
+            .collect();
+        if !hidden.is_empty() {
+            let names = hidden.iter().map(|h| h.1.as_str()).collect::<Vec<_>>().join(", ");
+            let tip: SharedString = crate::trf!("Send again: {names}"; names => names).into();
+            let keys: Vec<String> = hidden.into_iter().map(|h| h.0).collect();
+            out.push(
+                div()
+                    .id("ag-chip-restore")
+                    .flex_none()
+                    .size(theme::u(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .cursor_pointer()
+                    .text_color(c(theme::FG_DIM))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .child(Icon::new(IconName::Plus).size(theme::u(12.)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        for k in &keys {
+                            this.agent.off_ctx.remove(k);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        out
     }
 
     fn render_slash_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -3305,18 +3365,12 @@ impl Workbench {
             let (icon, tint) = crate::files::icon_for(&name);
             let path = p.clone();
             chip_shell(SharedString::from(format!("ag-att-{i}")), true)
-                .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    if i < this.agent.attachments.len() {
-                        this.agent.attachments.remove(i);
-                    }
-                    cx.notify();
-                })))
                 .child(
                     h_flex()
                         .id(SharedString::from(format!("ag-att-open-{i}")))
+                        .flex_1()
                         .min_w_0()
-                        .pr_1p5()
+                        .pl_1p5()
                         .gap_1()
                         .cursor_pointer()
                         .hover(|s| s.text_color(c(theme::FG_STRONG)))
@@ -3327,9 +3381,16 @@ impl Workbench {
                                 this.open_file(path.clone(), w, cx);
                             }
                         }))
-                        .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)))
+                        .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none())
                         .child(div().min_w_0().truncate().child(name)),
                 )
+                .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if i < this.agent.attachments.len() {
+                        this.agent.attachments.remove(i);
+                    }
+                    cx.notify();
+                })))
                 .into_any_element()
         });
         let mut chips: Vec<AnyElement> = attachments.collect();
@@ -3349,7 +3410,7 @@ impl Workbench {
                     h.focus(w, cx);
                 }
             }))
-            .when(!chips.is_empty(), |v| v.child(h_flex().px_2().pt_2().gap_1().flex_wrap().children(chips)))
+            .when(!chips.is_empty(), |v| v.child(h_flex().px_2().pt_2().gap_1().min_w_0().overflow_hidden().children(chips)))
             .child(
                 div().px_1().pt_1().key_context("AgentInput").child(
                     Textarea::new(&a.input).appearance(false).on_paste(move |item, _, cx| {
@@ -3641,7 +3702,8 @@ impl Workbench {
                     )
                     .child(div().min_w_0().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("Turns off after 10 quiet minutes to free memory")))
                     .into_any_element(),
-            ));
+            ))
+            .child(row(crate::i18n::tr("Browser").into(), self.render_browser_setting(cx)));
         let current = agent_id();
         if crate::acp::managed(&current) {
             body = body.child(
@@ -3671,6 +3733,67 @@ impl Workbench {
             }
         }
         v_flex().size_full().child(header).child(body).into_any_element()
+    }
+
+    /// Which browser the agents drive, and where its tools stand.
+    fn render_browser_setting(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::browser::State;
+        let setting = self.settings.agent_browser.clone();
+        let state = crate::browser::state(&setting);
+        let current = match &state {
+            State::Off => "off",
+            _ => crate::browser::chosen(&setting).map(|b| b.id).unwrap_or("off"),
+        };
+        let mut choices: Vec<(&'static str, String)> = crate::browser::browsers().iter().map(|b| (b.id, b.name.to_string())).collect();
+        choices.push(("off", crate::i18n::tr("Off").to_string()));
+        let buttons = h_flex().gap_1().flex_wrap().children(choices.into_iter().map(|(id, name)| {
+            let label = if id == "chrome" { format!("{name} ({})", crate::i18n::tr("recommended")) } else { name };
+            Button::new(SharedString::from(format!("ag-opt-browser-{id}")))
+                .label(label)
+                .xsmall()
+                .when(current == id, |b| b.primary())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.agent_browser = id.to_string();
+                    this.settings.save();
+                    this.agent_browser_setup(cx);
+                    cx.notify();
+                }))
+        }));
+        let (note, install): (String, bool) = match &state {
+            State::Off => (crate::i18n::tr("Agents have no browser.").into(), false),
+            State::NoBrowser => (crate::i18n::tr("No Chrome, Brave, Edge or Chromium found on this PC.").into(), false),
+            State::NoNode(e) => (e.clone(), false),
+            State::NotInstalled(b) => (crate::trf!("{name} is found; its tools for agents ({pkg}, about 15 MB) aren't installed yet."; name => b.name, pkg => crate::browser::PACKAGE), true),
+            State::Installing(b) => (crate::trf!("Installing the tools for {name}…"; name => b.name), false),
+            State::Ready(b, v) => (crate::trf!("Agents open pages in {name} (its own profile, not yours) through {pkg} {v}. Applies from the next session."; name => b.name, pkg => crate::browser::PACKAGE, v => v), false),
+        };
+        let headless = self.settings.agent_browser_headless;
+        v_flex()
+            .gap_1()
+            .child(buttons)
+            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(note))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .when(install, |h| {
+                        h.child(Button::new("ag-opt-browser-install").label(crate::i18n::tr("Install")).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_browser_setup(cx))))
+                    })
+                    .when(current != "off", |h| {
+                        h.child(
+                            Button::new("ag-opt-browser-headless")
+                                .label(if headless { crate::i18n::tr("No window") } else { crate::i18n::tr("With a window") })
+                                .xsmall()
+                                .ghost()
+                                .tooltip(crate::i18n::tr("Show the browser while the agent uses it, or run it out of sight"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.settings.agent_browser_headless = !this.settings.agent_browser_headless;
+                                    this.settings.save();
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .into_any_element()
     }
 
     /// While an earlier message is being edited: what Enter will do, and a way out.
@@ -3995,7 +4118,10 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
 fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
     h_flex()
         .id(id)
-        .max_w(theme::u(210.))
+        // In one row with the others: it narrows (its name cut short) rather than wrap.
+        .flex_shrink(1.)
+        .min_w(theme::u(64.))
+        .max_w(theme::u(200.))
         .h(theme::u(22.))
         .gap_0p5()
         .rounded(px(4.))

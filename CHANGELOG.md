@@ -5,6 +5,27 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## A browser for the agents, and a tidier message box (10 November 2026)
+
+- Every agent session gets a browser it can drive: the Chrome, Brave, Edge or Chromium on
+  this PC (Chrome when it is there), through Google's `chrome-devtools-mcp` 1.12.0 passed
+  as an ACP `mcpServers` entry. The agent opens pages, clicks, types, fills forms, reads
+  console messages and network requests, takes screenshots (JPEG, at most 1280 px wide)
+  and accessibility snapshots, and records performance traces; 32 tools in all.
+- Light: no browser is downloaded; the tool (15 MB) is installed once into
+  `~/.fluxcode/tools/browser` with the Node.js already used for npm agents, the first time
+  an agent starts, and it runs only with an agent. The browser uses its own profile
+  (`~/.fluxcode/browser-profile`: Chrome ignores remote debugging on the default profile
+  since 136, and the agent never sees your cookies), and the tool's usage statistics to
+  Google are off.
+- Agent settings > Browser: the browsers found (Chrome marked recommended), Off, with a
+  window or without, and where the tool stands (installing, needs Node.js 20.19+, ready).
+- Tested: OpenCode opened https://example.com through it and answered "Example Domain".
+- The message box: a context chip you close goes away instead of staying struck through,
+  and a small "+" brings closed ones back. Chips stay on one line and narrow (their names
+  cut short) instead of wrapping and making the box taller; every chip has its close
+  button on the right.
+
 ## Flux documents: `.flux` opens drawn, and the README is written in it (10 November 2026)
 
 - A `.flux` file opens drawn, with Preview and Source above it. Flux is Markdown's text

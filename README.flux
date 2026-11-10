@@ -211,6 +211,15 @@ FluxCode opens it drawn, with Preview and Source above it.
   Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message
   and the answer restarts from it; the agent gets an overview of the workspace and a local
   memory you can read, edit or switch off.
+- **A browser for every agent.** FluxCode hands each agent session a browser it can
+  drive: the Chrome, Brave or Edge already on your PC (Chrome when it is there), through
+  Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+  over the Chrome DevTools Protocol. The agent opens pages, clicks and types, reads the
+  console and network requests, takes screenshots and accessibility snapshots, and records
+  performance traces. Nothing is downloaded but the 15 MB tool, installed once into
+  `~/.fluxcode/tools/browser`; the browser gets a profile of its own, never your cookies
+  or passwords, and Google's usage statistics are turned off. Agent settings > Browser
+  picks the browser, a window or none, or turns it off.
 - Source Control commits, pushes, pulls and syncs, shows a commit graph, opens pull
   requests and GitHub Actions runs through `gh`, and Remove Git undoes a `git init`.
 - After an update, a "What's new" page opens once with the notes since your last build
@@ -257,6 +266,8 @@ agent menu reads the public ACP agent list from cdn.agentclientprotocol.com, at 
 a day and only when you open the menu. Hosting a Live share session asks your router to
 open its port (UPnP) and opens a tunnel at bore.pub, unless you untick **Let people join
 over the internet**; bore.pub then sees your public IP address and encrypted bytes.
+The first time an agent starts, FluxCode installs the agents' browser tool
+(chrome-devtools-mcp) from the npm registry; Agent settings > Browser > Off skips it.
 
 ## Shortcuts
 

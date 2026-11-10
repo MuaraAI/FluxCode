@@ -384,7 +384,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Open the file", "Buka file-nya"),
     ("Go to it", "Lihat sumbernya"),
     ("Leave it out of the message", "Jangan ikut kirim"),
-    ("Send it with the message", "Ikut kirim bersama pesan"),
+    ("Send again: {names}", "Kirim lagi: {names}"),
     ("Model, effort and mode", "Model, effort dan mode"),
     ("Couldn't change the setting: {m}", "Gagal mengubah pengaturan: {m}"),
     ("{name} settings: model, effort, mode…", "Pengaturan {name}: model, effort, mode…"),
@@ -830,6 +830,33 @@ pub const ID: &[(&str, &str)] = &[
         "Tulis {name} di sebelahnya, sebagai Markdown GitHub (flowchart menjadi Mermaid)",
     ),
     ("and {n} more headings", "dan {n} judul lagi"),
+    ("Agents have no browser.", "Agent tidak punya browser."),
+    (
+        "Agents open pages in {name} (its own profile, not yours) through {pkg} {v}. Applies from the next session.",
+        "Agent membuka halaman di {name} (profil tersendiri, bukan punyamu) lewat {pkg} {v}. Berlaku mulai sesi berikutnya.",
+    ),
+    ("Browser", "Browser"),
+    (
+        "Browser tools are ready: agents can open and use web pages from their next session.",
+        "Tool browser siap: agent bisa membuka dan memakai halaman web mulai sesi berikutnya.",
+    ),
+    ("Browser tools could not be installed: {e}", "Tool browser tidak bisa dipasang: {e}"),
+    ("Install", "Pasang"),
+    ("Installing the tools for {name}…", "Memasang tool untuk {name}…"),
+    ("No Chrome, Brave, Edge or Chromium found on this PC.", "Chrome, Brave, Edge atau Chromium tidak ditemukan di PC ini."),
+    ("No window", "Tanpa jendela"),
+    ("Show the browser while the agent uses it, or run it out of sight", "Tampilkan browser selagi agent memakainya, atau jalankan tanpa terlihat"),
+    ("The browser needs Node.js 20 or newer (nodejs.org).", "Browser butuh Node.js 20 atau lebih baru (nodejs.org)."),
+    ("The browser needs Node.js 20.19 or newer; this PC has {v}.", "Browser butuh Node.js 20.19 atau lebih baru; PC ini punya {v}."),
+    ("The browser tools are already being installed.", "Tool browser sedang dipasang."),
+    ("The browser tools were installed but can't be found.", "Tool browser sudah dipasang tapi tidak ditemukan."),
+    ("With a window", "Dengan jendela"),
+    ("npm isn't on PATH (it comes with Node.js).", "npm tidak ada di PATH (ikut terpasang bersama Node.js)."),
+    ("recommended", "disarankan"),
+    (
+        "{name} is found; its tools for agents ({pkg}, about 15 MB) aren't installed yet.",
+        "{name} ditemukan; tool untuk agent ({pkg}, sekitar 15 MB) belum dipasang.",
+    ),
 ];
 
 #[cfg(test)]
