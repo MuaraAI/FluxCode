@@ -1,3 +1,5 @@
+<!-- Made from README.flux by FluxCode (fluxcode --flux-to-md README.flux README.md). Edit README.flux, not this file. -->
+
 # FluxCode
 
 A native code editor for Windows and Linux, written in Rust and drawn by the GPU.
@@ -31,8 +33,7 @@ in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code 0.
 app started from a fresh, empty profile with telemetry and update checks off and no folder
 open.*
 
-<details>
-<summary>Exact numbers, method, and what this does not measure</summary>
+<details><summary>Exact numbers, method, and what this does not measure</summary>
 
 Median, with the lowest and highest of the runs in brackets:
 
@@ -176,6 +177,26 @@ when the session ends.
   separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
   and syncing files an agent edits without them being open.
 
+## Flux documents
+
+This README is written in Flux (`README.flux`); the `README.md` GitHub shows is made from
+it. A `.flux` file is Markdown's text plus one-line blocks for what Markdown leaves to
+HTML: image width and dark-theme versions, images side by side, video, flowcharts,
+callouts, collapsible sections, columns, a table of contents and sections per language.
+FluxCode opens it drawn, with Preview and Source above it.
+
+- **Light at any size**: one pass over the text, nothing copied, and only the rows on
+  screen drawn. A 1.3-million-line document (31.8 MB, a 200,000-row table in it) opens
+  drawn in 0.3 s and shows 18.6 MB in Task Manager.
+- **Readable on GitHub**: `fluxcode --flux-to-md README.flux README.md` (or **Save as
+  Markdown** in FluxCode) writes GitHub Markdown; flowcharts become Mermaid and callouts
+  GitHub's alerts. The tests fail when the two files disagree.
+
+> [!TIP]
+> **The whole syntax**
+> [docs/flux.md](docs/flux.md) describes every block, written in Flux itself
+> ([docs/flux.flux](docs/flux.flux)).
+
 ## What else it does
 
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.
@@ -188,8 +209,9 @@ when the session ends.
   you use the panel. Model, effort, mode and permissions are buttons under the message
   box; each opens a list right above it with a search box, and the agent menu says which
   agent is on. GitHub Copilot, which offers no models over ACP, gets its model list from
-  Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message and the answer restarts from it; the agent gets an overview of
-  the workspace and a local memory you can read, edit or switch off.
+  Copilot itself and restarts with the one you pick, in the same chat. Edit a sent message
+  and the answer restarts from it; the agent gets an overview of the workspace and a local
+  memory you can read, edit or switch off.
 - Source Control commits, pushes, pulls and syncs, shows a commit graph, opens pull
   requests and GitHub Actions runs through `gh`, and Remove Git undoes a `git init`.
 - After an update, a "What's new" page opens once with the notes since your last build

@@ -116,6 +116,8 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
         &[".babelrc", ".eslintrc", ".prettierrc", ".swcrc", "composer.lock", "package-lock.json", ".jshintrc"],
     ),
     ("markdown", "Markdown", &["md", "markdown", "mdx", "mdown", "mkd"], &[]),
+    // Flux documents are Markdown with blocks of their own: Markdown's colors fit.
+    ("markdown", "Flux", &["flux"], &[]),
     (
         "python",
         "Python",
@@ -405,7 +407,9 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Agent picker: download an agent, and the spinner while it installs
     Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus,
     // Live share: the panel, and the ways in from the internet
-    Users, LogIn, House, Router, RadioTower, Link
+    Users, LogIn, House, Router, RadioTower, Link,
+    // Flux documents: tip callouts and pictures from the web
+    Lightbulb, Image
 ]);
 
 #[cfg(test)]

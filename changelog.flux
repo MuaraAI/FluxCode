@@ -11,6 +11,26 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Flux documents open drawn
+@title id: Dokumen Flux terbuka langsung ter-render
+@en
+Open a `.flux` file and it shows **drawn**: images with a size and a dark-theme version,
+images side by side, videos, **flowcharts**, callouts, collapsible sections, columns and
+a table of contents. **Source** shows the text; **Save as Markdown** writes a copy GitHub
+can show.
+
+Long documents stay light: only what is on screen is drawn, so a million lines with a
+200,000-row table opens in a third of a second.
+@id
+Buka file `.flux` dan isinya langsung tampil **ter-render**: gambar dengan ukuran dan versi
+tema gelap, gambar berdampingan, video, **flowchart**, callout, bagian yang bisa dilipat,
+kolom, dan daftar isi. **Sumber** menampilkan teksnya; **Simpan sebagai Markdown** menulis
+salinan yang bisa ditampilkan GitHub.
+
+Dokumen panjang tetap ringan: hanya yang tampil di layar yang digambar, jadi satu juta baris
+dengan tabel 200.000 baris terbuka dalam sepertiga detik.
+
+@release 2026-11-10
 @title en: Live share has its own page
 @title id: Live share punya halaman sendiri
 @en

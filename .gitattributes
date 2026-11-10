@@ -5,3 +5,8 @@
 *.desktop text eol=lf
 *.ico binary
 *.png binary
+# Flux documents (docs/flux.flux): GitHub's Linguist gives .flux to an unrelated query
+# language called FLUX; Flux documents are Markdown with blocks of their own.
+*.flux text eol=lf linguist-language=Markdown
+# Made from docs/flux.flux: collapsed in diffs.
+docs/flux.md linguist-generated=true

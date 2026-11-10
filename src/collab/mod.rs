@@ -550,6 +550,10 @@ impl Workbench {
                 self.activate(k, window, cx);
             }
         }
+        // A large Flux document's editor fills now: guests edit through it.
+        if let Some(ix) = self.docs.iter().position(|d| d.path == abs) {
+            self.flux_load_source(ix, window, cx);
+        }
         let d = self.docs.iter().find(|d| d.path == abs).ok_or_else(|| tr("That file can't be opened as text.").to_string())?;
         if d.read_only {
             return Err(tr("That file can't be shared as text.").into());

@@ -23,6 +23,7 @@ mod docs;
 mod explorer;
 mod files;
 mod flux_anim;
+mod fluxdoc;
 mod github;
 mod panel;
 mod memory;
@@ -50,6 +51,11 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
+    // `fluxcode --flux-to-md README.flux README.md [--check]`: no window.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("--flux-to-md") {
+        std::process::exit(fluxdoc::md::cli(&argv[2..]));
+    }
     boot::start();
     // `fluxcode [folder] [files...]`; with no
     // arguments the last session is restored (or the welcome screen shown).
