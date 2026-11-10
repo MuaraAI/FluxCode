@@ -5,6 +5,19 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## A Windows installer and a macOS build (10 November 2026)
+
+- Windows releases have an installer: `FluxCode-<build>-windows-x64-setup.exe`. It installs
+  for your account without admin rights in `%USERPROFILE%\.fluxcode\app` (where FluxCode
+  updates itself), adds Start Menu and Desktop shortcuts and an entry in Settings > Apps
+  with a working Uninstall, and offers to open FluxCode when it's done. The ZIP stays for a
+  portable copy (and for the built-in updater). CI installs, runs and uninstalls each
+  installer before it's published.
+- FluxCode runs on macOS 11 and newer: `FluxCode-<build>-macos-universal.dmg`, one app for
+  Apple silicon and Intel. It updates itself like the other builds. It is signed ad hoc,
+  not notarized, so the first open asks once (Privacy & Security > Open Anyway). CI opens
+  the packed app and checks it is still running 15 s later.
+
 ## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
 
 - The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
