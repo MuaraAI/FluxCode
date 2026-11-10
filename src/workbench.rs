@@ -388,6 +388,10 @@ impl Workbench {
             if window.is_window_active() && !recent {
                 this.scm_refresh(cx);
             }
+            // Back after a while: look at the remote too (quietly, at most every two minutes).
+            if window.is_window_active() {
+                this.scm_on_return(cx);
+            }
         }));
         let mut this = Self {
             root: None,
@@ -1259,7 +1263,34 @@ impl Workbench {
                 .w(px(0.))
                 .h_full()
             })
-            .child(drag("tb-drag"));
+            .child(drag("tb-drag"))
+            // The update toast was put away: a small button brings it back.
+            .children(self.update_waiting().map(|r| {
+                let tip: SharedString = crate::trf!("Update ready: {0}"; 0 => crate::update::build_time(&r.tag).unwrap_or_else(|| r.tag.clone())).into();
+                h_flex()
+                    .id("tb-update")
+                    .flex_none()
+                    .mr_2()
+                    .h(theme::u(22.))
+                    .px_2()
+                    .gap_1()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(c(theme::ACCENT).opacity(0.5))
+                    .text_color(c(theme::ACCENT))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    // Keep the press from the drag area underneath (see the Go to File box).
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.update.hidden = None;
+                        cx.notify();
+                    }))
+                    .child(Icon::new(IconName::ArrowDown).size(theme::u(12.)))
+                    .child(tr("Update"))
+            }));
         // Too narrow for a centered box: Ctrl+P still opens Go to File.
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
@@ -1373,9 +1404,24 @@ impl Workbench {
             .child(view_item("ab-search", Icon::new(IconName::Search), SideView::Search, self, cx))
             .child({
                 let n = self.scm.status.count();
+                let incoming = self.scm_has_incoming();
                 div()
                     .relative()
                     .child(view_item("ab-scm", Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
+                    // New commits on the remote: a blue dot (the count is for your own changes).
+                    .when(incoming, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .right(theme::u(6.))
+                                .top(theme::u(6.))
+                                .size(theme::u(7.))
+                                .rounded_full()
+                                .bg(c(theme::BLUE))
+                                .border_1()
+                                .border_color(c(theme::BG_TITLE)),
+                        )
+                    })
                     .when(n > 0, |d| {
                         d.child(
                             div()

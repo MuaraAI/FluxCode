@@ -224,6 +224,12 @@ FluxCode opens it drawn, with Preview and Source above it.
   picks the browser, a window or none, or turns it off.
 - Source Control commits, pushes, pulls and syncs, shows a commit graph, opens pull
   requests and GitHub Actions runs through `gh`, and Remove Git undoes a `git init`.
+- Source Control tells you when the remote has commits you don't. It runs a quiet
+  `git fetch` every five minutes (and when you come back to the window), never asking
+  for a password, and an Incoming section at the top lists the new commits: title and
+  author, then the files each one changed, and a file's diff in the Output panel. Pull
+  brings them in, or put them aside until more arrive. A blue dot on the Source Control
+  icon says they are there.
 - After an update, a "What's new" page opens once with the notes since your last build
   (from [`changelog.flux`](changelog.flux), in the interface language). Help > What's New
   opens it again.
