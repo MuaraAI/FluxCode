@@ -34,6 +34,7 @@ mod preview_ui;
 mod proc;
 mod quick;
 mod scm;
+mod scm_incoming;
 mod search;
 mod settings;
 mod term;

@@ -420,7 +420,18 @@ impl Workbench {
         .detach();
     }
 
-    /// The card in the bottom-right corner: new build, download progress, or what failed.
+    /// A new build was found and its toast was put away: the title bar keeps a small
+    /// Update button (like Zed's and Chrome's) so it isn't lost.
+    pub(crate) fn update_waiting(&self) -> Option<&Release> {
+        match &self.update.phase {
+            Phase::Available(r) if self.update.hidden.as_deref() == Some(r.tag.as_str()) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The toast in the bottom-right corner: new build, download progress, or what failed.
+    /// Short on purpose: one title, one line about the build, one about what changed,
+    /// and the actions. The full notes are behind What's new.
     pub(crate) fn render_update(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.update;
         let rel = match &u.phase {
@@ -436,25 +447,29 @@ impl Workbench {
         };
         let tag: SharedString = rel.map(|r| r.tag.clone()).unwrap_or_default().into();
         let close = matches!(u.phase, Phase::Available(_) | Phase::Failed(..));
+        let failed = matches!(u.phase, Phase::Failed(..));
+        let title = match &u.phase {
+            Phase::Downloading(_) => tr("Downloading the update"),
+            Phase::Installing(_) => tr("Installing…"),
+            Phase::Failed(..) => tr("The update did not finish"),
+            _ => tr("Update ready"),
+        };
         let head = h_flex()
             .gap_2()
             .items_center()
-            .child(Icon::new(IconName::ArrowDown).size(theme::u(14.)).text_color(c(theme::ACCENT)))
             .child(
-                div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(match &u.phase {
-                    Phase::Downloading(_) => tr("Downloading the new build"),
-                    Phase::Installing(_) => tr("Installing…"),
-                    Phase::Failed(..) => tr("The update did not finish"),
-                    _ => tr("A new build is ready"),
-                }),
+                Icon::new(if failed { IconName::TriangleAlert } else { IconName::ArrowDown })
+                    .size(theme::u(14.))
+                    .text_color(c(if failed { theme::DANGER } else { theme::FG_MUTED })),
             )
+            .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
             .when(close, |h| {
                 h.child(
                     Button::new("upd-close")
                         .icon(IconName::Close)
                         .ghost()
                         .xsmall()
-                        .tooltip(tr("Later"))
+                        .tooltip(tr("Later (the Update button stays in the title bar)"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             match &this.update.phase {
                                 Phase::Available(r) => this.update.hidden = Some(r.tag.clone()),
@@ -464,16 +479,24 @@ impl Workbench {
                         })),
                 )
             });
-        let mut body = v_flex().gap_1().text_xs();
+        // Lines under the title line up with its text, not with the icon.
+        let mut body = v_flex().pl(theme::u(22.)).gap_0p5().text_xs().min_w_0();
         if !tag.is_empty() {
-            body = body
-                .child(div().text_color(c(theme::FG)).child(tag.clone()))
-                .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("Installed: {0}"; 0 => BUILD)));
+            let full: SharedString = crate::trf!("{0}\nInstalled: {1}"; 0 => &tag, 1 => BUILD).into();
+            let when = build_time(&tag).map(|t| crate::trf!("Build from {0}"; 0 => t)).unwrap_or_else(|| tag.to_string());
+            body = body.child(
+                div()
+                    .id("upd-build")
+                    .truncate()
+                    .text_color(c(theme::FG_DIM))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
+                    .child(when),
+            );
         }
         match &u.phase {
             Phase::Available(r) => {
-                for line in highlights(&r.notes, 3) {
-                    body = body.child(h_flex().gap_1p5().items_start().child(div().text_color(c(theme::FG_DIM)).child("·")).child(div().flex_1().min_w_0().text_color(c(theme::FG)).child(line)));
+                if let Some(line) = highlights(&r.notes, 1).into_iter().next() {
+                    body = body.child(div().text_color(c(theme::FG)).line_clamp(2).child(line));
                 }
             }
             Phase::Downloading(r) => {
@@ -483,7 +506,7 @@ impl Workbench {
                     .child(
                         div()
                             .mt_1()
-                            .h(px(4.))
+                            .h(px(3.))
                             .w_full()
                             .rounded(px(2.))
                             .bg(c(theme::BG_HOVER))
@@ -495,7 +518,7 @@ impl Workbench {
                 body = body.child(div().text_color(c(theme::FG_DIM)).child(tr("FluxCode restarts on its own in a moment. Your open files and folders come back.")));
             }
             Phase::Failed(_, e) => {
-                body = body.child(div().text_color(c(theme::FG)).child(e.clone()));
+                body = body.child(div().text_color(c(theme::FG)).line_clamp(3).child(e.clone()));
             }
             Phase::Idle => {}
         }
@@ -504,11 +527,13 @@ impl Workbench {
         let actions = match &u.phase {
             Phase::Available(_) | Phase::Failed(Some(_), _) => Some(
                 h_flex()
+                    .pl(theme::u(22.))
                     .pt_1()
-                    .gap_2()
+                    .gap_1()
+                    .flex_wrap()
                     .child(
                         Button::new("upd-go")
-                            .label(if matches!(u.phase, Phase::Failed(..)) { tr("Try again") } else { tr("Update and restart") })
+                            .label(if failed { tr("Try again") } else { tr("Update and restart") })
                             .primary()
                             .xsmall()
                             .on_click(cx.listener(|this, _, _, cx| this.update_start(cx))),
@@ -529,15 +554,16 @@ impl Workbench {
             .id("update-card")
             .absolute()
             .right(px(12.))
-            .w(theme::u(340.))
-            .max_w(relative(0.9))
-            .p_3()
-            .gap_2()
-            .rounded(px(8.))
+            .w(theme::u(300.))
+            .max_w(relative(0.92))
+            .px_3()
+            .py_2p5()
+            .gap_1()
+            .rounded(px(6.))
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
             .bg(c(theme::BG_ELEVATED))
-            .shadow_lg()
+            .shadow_md()
             .occlude()
             .child(head)
             .child(body)
@@ -552,10 +578,26 @@ impl Workbench {
     }
 }
 
+/// `BuildDev-2026-11-10-16-49-52` → `2026-11-10 16:49` (when the build was made, UTC).
+pub fn build_time(tag: &str) -> Option<String> {
+    let rest = tag.strip_prefix("BuildDev-")?;
+    let p: Vec<&str> = rest.split('-').collect();
+    if p.len() < 5 || !p.iter().all(|x| x.chars().all(|ch| ch.is_ascii_digit())) {
+        return None;
+    }
+    Some(format!("{}-{}-{} {}:{}", p[0], p[1], p[2], p[3], p[4]))
+}
+
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `test` attribute.
-    use super::{highlights, newest, ASSET_SUFFIX, BUILD};
+    use super::{build_time, highlights, newest, ASSET_SUFFIX, BUILD};
+
+    #[test]
+    fn build_time_reads_the_tag() {
+        assert_eq!(build_time("BuildDev-2026-11-10-16-49-52").as_deref(), Some("2026-11-10 16:49"));
+        assert_eq!(build_time("gpui-v0.9.1-dev"), None);
+    }
 
     #[test]
     fn picks_the_newest_newer_build_with_this_platforms_file() {

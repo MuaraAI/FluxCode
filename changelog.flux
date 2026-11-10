@@ -11,6 +11,26 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: See new commits before you pull
+@title id: Lihat commit baru sebelum pull
+@en
+**Source Control** now checks the remote every few minutes. When it has commits you
+don't, an **Incoming** section lists them: open one to see the files it changed, and a file
+to see its diff. **Pull** brings them in. A blue dot on the Source Control icon tells you
+there is something new.
+
+The update notice is smaller, and if you close it, an **Update** button waits in the title bar.
+This page now shows the **build** each change came in.
+@id
+**Source Control** sekarang mengecek remote setiap beberapa menit. Kalau ada commit yang
+belum kamu punya, bagian **Masuk** menampilkannya: buka satu commit untuk melihat file yang
+diubah, lalu buka file untuk melihat diff-nya. **Pull** menariknya. Titik biru di ikon Source
+Control menandakan ada yang baru.
+
+Notifikasi update lebih kecil, dan kalau ditutup, tombol **Update** tetap ada di title bar.
+Halaman ini sekarang menampilkan **build** tempat setiap perubahan masuk.
+
+@release 2026-11-10
 @title en: Agents can use a browser
 @title id: Agent bisa memakai browser
 @en

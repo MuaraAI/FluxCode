@@ -118,6 +118,23 @@ pub struct Scm {
     pub clear_message: bool,
     /// When the last refresh started (focus changes refresh at most every 2 s).
     pub last_refresh: Option<std::time::Instant>,
+    /// The upstream's commits this checkout doesn't have yet, newest first.
+    pub incoming: Vec<Commit>,
+    /// The upstream's head when `incoming` was read.
+    pub incoming_head: Option<String>,
+    /// "Not now" was chosen at this upstream head: hidden until it moves.
+    pub incoming_dismissed: Option<String>,
+    /// The Incoming section is open (its header folds it like the others).
+    pub incoming_shown: bool,
+    /// The incoming commit opened to its files.
+    pub incoming_open: Option<String>,
+    /// Hash → (letter, path) of the files it changed, read when opened.
+    pub incoming_files: HashMap<String, Vec<(char, String)>>,
+    /// A background fetch is running.
+    pub fetching: bool,
+    /// The background fetch loop has been started.
+    pub fetch_loop: bool,
+    pub last_fetch: Option<std::time::Instant>,
 }
 
 impl Scm {
@@ -150,6 +167,15 @@ impl Scm {
                 dirty_dirs: Rc::default(),
                 clear_message: false,
                 last_refresh: None,
+                incoming: Vec::new(),
+                incoming_head: None,
+                incoming_dismissed: None,
+                incoming_shown: true,
+                incoming_open: None,
+                incoming_files: HashMap::new(),
+                fetching: false,
+                fetch_loop: false,
+                last_fetch: None,
             },
             sub,
         )
@@ -282,11 +308,13 @@ struct Snapshot {
     repo: Option<PathBuf>,
     status: RepoStatus,
     log: Option<Vec<Commit>>,
+    /// Commits on the upstream and not here, and the upstream's head (only when behind).
+    incoming: (Vec<Commit>, Option<String>),
 }
 
 fn snapshot(dir: &Path, with_log: bool) -> Snapshot {
     let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"])).ok().map(|s| PathBuf::from(s.trim().replace('/', "\\")));
-    let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None } };
+    let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None, incoming: Default::default() } };
     let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"])).map(|s| parse_status(&s)).unwrap_or_default();
     let log = with_log.then(|| {
         run_step(
@@ -296,7 +324,8 @@ fn snapshot(dir: &Path, with_log: bool) -> Snapshot {
         .map(|s| parse_log(&s))
         .unwrap_or_default()
     });
-    Snapshot { repo: Some(repo), status, log }
+    let incoming = if status.behind > 0 { crate::scm_incoming::incoming(&repo) } else { Default::default() };
+    Snapshot { repo: Some(repo), status, log, incoming }
 }
 
 /// Rows drawn per section. Thousands of rows (each with its buttons) made the
@@ -356,6 +385,17 @@ impl Workbench {
                 if let Some(log) = snap.log {
                     s.log = log;
                 }
+                let (incoming, head) = snap.incoming;
+                if head != s.incoming_head {
+                    s.incoming_open = None;
+                    s.incoming_files.clear();
+                }
+                s.incoming = incoming;
+                s.incoming_head = head;
+                if s.repo.is_some() && s.status.upstream.is_some() {
+                    this.scm_start_fetching(cx);
+                }
+                let s = &mut this.scm;
                 if s.again {
                     s.again = false;
                     this.scm_refresh(cx);
@@ -787,6 +827,9 @@ impl Workbench {
                             }))),
                     ),
             );
+        }
+        if let Some(card) = self.render_scm_incoming(cx) {
+            body = body.child(card);
         }
         body = body.child(
             v_flex()

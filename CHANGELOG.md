@@ -5,6 +5,29 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Incoming commits in Source Control, and a smaller update notice (10 November 2026)
+
+- Source Control fetches quietly every five minutes while a repository with an upstream is
+  open, and when the window comes back after two minutes away. The fetch never prompts
+  (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`); a failed one leaves things as they
+  were.
+- When the branch is behind, an Incoming section at the top of the panel lists the commits
+  (`git log HEAD..@{u}`, at most 50), drawn like the Graph with hollow dots. A commit opens
+  to the files it changed (`git show --name-status`, read only when opened), and a file
+  opens its diff in the Output panel. Pull runs `git pull` (with `--autostash` when you
+  have changes); the close button hides the section until the upstream moves. A blue dot
+  on the Source Control icon shows there is something to pull.
+- The update notice is shorter: "Update ready", when the build was made, one line on what
+  changed, and the two buttons. The build names are in its tooltip. Closing it leaves a
+  small Update button in the title bar instead of losing the update until the next start.
+- What's new names the build each release came in (`BuildDev-...` on every card, "installed
+  now" on the ones in this build), instead of a date that several releases share. build.rs
+  works it out from git: the commit that added the release to changelog.flux, then the first
+  build tag containing it; CI now checks out the full history (3.7 MB) for this. The header
+  lists the installed build and the one before it, and leaves out "Before" when the old
+  build didn't record itself (it used to say "Before this you ran ."). The page is centered
+  and fits narrow windows.
+
 ## A browser for the agents, and a tidier message box (10 November 2026)
 
 - Every agent session gets a browser it can drive: the Chrome, Brave, Edge or Chromium on

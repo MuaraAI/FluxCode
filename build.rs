@@ -9,6 +9,12 @@
 //! On Windows the FluxCode icon becomes resource ID 1 (GPUI uses it for the window
 //! and taskbar) and the build ID goes into the version info Explorer shows. The .rc
 //! file is written into OUT_DIR because MinGW windres breaks on spaces in paths.
+//!
+//! The What's new page names the build each release came in. Git knows: the commit that
+//! added a release's `@title en:` line to changelog.flux, then the first `BuildDev-*`
+//! tag that contains it. A release no tag contains yet came in the build being made.
+//! The answers go into OUT_DIR/release_builds.rs; without git or tags they're empty
+//! and the page shows dates only.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -21,6 +27,7 @@ fn main() {
         _ => utc_now(),
     };
     println!("cargo:rustc-env=FLUXCODE_BUILD={build}");
+    release_builds(&build);
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -61,6 +68,39 @@ END
     let rc_path = out.join("fluxcode.rc");
     std::fs::write(&rc_path, rc).expect("write rc");
     embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional().expect("embed resources");
+}
+
+/// Write `RELEASE_BUILDS: &[(title, build)]` for the releases in changelog.flux.
+fn release_builds(this_build: &str) {
+    println!("cargo:rerun-if-changed=changelog.flux");
+    let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let git = |args: &[&str]| -> Option<String> {
+        let o = std::process::Command::new("git").args(args).current_dir(&manifest).output().ok()?;
+        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let mut rows = String::new();
+    // Only when this is a checkout with build tags (CI fetches them; so does a clone).
+    let tagged = git(&["tag", "-l", "BuildDev-*"]).is_some_and(|t| !t.trim().is_empty());
+    let text = std::fs::read_to_string(manifest.join("changelog.flux")).unwrap_or_default();
+    for line in text.lines() {
+        let Some(title) = line.trim_end().strip_prefix("@title en:").map(str::trim) else { continue };
+        if title.is_empty() || title == "..." || !tagged {
+            continue;
+        }
+        let pick = format!("-S@title en: {title}");
+        let Some(first) = git(&["log", "--format=%H", "--reverse", &pick, "--", "changelog.flux"]).and_then(|s| s.lines().next().map(str::to_string)) else {
+            // Not committed yet: it comes with the build being made.
+            rows.push_str(&format!("    ({title:?}, {this_build:?}),\n"));
+            continue;
+        };
+        let mut tags: Vec<String> = git(&["tag", "--contains", &first, "--list", "BuildDev-*"]).unwrap_or_default().lines().map(str::to_string).collect();
+        tags.sort();
+        let build = tags.into_iter().next().unwrap_or_else(|| this_build.to_string());
+        rows.push_str(&format!("    ({title:?}, {build:?}),\n"));
+    }
+    let src = format!("/// (release title, the build it came in), from git; see build.rs.\npub const RELEASE_BUILDS: &[(&str, &str)] = &[\n{rows}];\n");
+    std::fs::write(out.join("release_builds.rs"), src).expect("write release_builds.rs");
 }
 
 /// `BuildDev-` followed by six dash-separated numbers of the right widths.
