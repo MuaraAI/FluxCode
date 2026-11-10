@@ -452,6 +452,7 @@ impl Workbench {
         crate::boot::mark("  folder + session");
         this.start_update_checks(cx);
         crate::boot::mark("  update check scheduled");
+        crate::memtrim::watch(window, cx);
         this
     }
 

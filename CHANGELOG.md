@@ -5,6 +5,27 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Less memory: 72 MB reserved, about 1 MB in Task Manager when idle (10 November 2026)
+
+| | Before | After |
+| --- | --- | --- |
+| Memory reserved (commit) | 121 MB | 72 MB |
+| Task Manager, idle | 53 MB | 1 MB (5 MB after a click) |
+| Zed 1.27 on the same PC | 153 MB reserved, 69 MB in Task Manager | |
+
+Measured on one Windows 11 PC, fresh profile, 9 s after launch, 3 runs each.
+
+- FluxCode's own code was about 1 MB of it; the rest was GPUI's DirectX renderer. It now
+  builds with a copy of `gpui-fast-windows` (`vendor/gpui-fast-windows`, see its
+  FLUXCODE.md) that makes the two window-sized path textures, one of them 4x
+  multisampled, only while frames draw paths, and keeps two swap-chain buffers instead
+  of three.
+- 6 s after start, and after the window has been in the background for 15 s, FluxCode
+  hands the memory it isn't using back to Windows (`EmptyWorkingSet`; on Linux the
+  allocator's free pages). The pages come back, a few milliseconds' worth, when used.
+- `FLUXCODE_STARTUP_LOG` now writes the working set and private memory at each start-up
+  step, and once more 5 s after the first frame.
+
 ## New look, any ACP agent with one click, agents that ask, and VS Code's keys (10 November 2026)
 
 | | Before | After |

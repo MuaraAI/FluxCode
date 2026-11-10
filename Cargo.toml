@@ -55,3 +55,8 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# GPUI's Windows renderer with two memory changes (vendor/gpui-fast-windows/FLUXCODE.md):
+# path textures made only while frames draw paths, and two swap-chain buffers.
+[patch.crates-io]
+gpui-fast-windows = { path = "vendor/gpui-fast-windows" }

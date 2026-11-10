@@ -11,6 +11,30 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Less memory: 72 MB reserved, about 1 MB in Task Manager when idle
+@title id: Memori lebih kecil: 72 MB dipesan, sekitar 1 MB di Task Manager saat idle
+@en
+FluxCode now **reserves 72 MB instead of 121 MB**, and once idle Task Manager shows about
+**1 MB** (about 5 MB after a click). On the same PC Zed 1.27 reserves 153 MB and shows 69 MB.
+
+- The window-sized textures GPUI keeps for drawing curved shapes (one of them 4x
+  multisampled) are now made only while something curved is on screen, and the window
+  keeps two frame buffers instead of three.
+- 6 s after start, and after 15 s in the background, FluxCode hands the memory it isn't
+  using back to Windows. It comes back, a few milliseconds' worth, when needed.
+@id
+FluxCode sekarang **memesan 72 MB, bukan 121 MB**, dan saat idle Task Manager menunjukkan
+sekitar **1 MB** (sekitar 5 MB setelah satu klik). Di PC yang sama Zed 1.27 memesan 153 MB
+dan menunjukkan 69 MB.
+
+- Tekstur seukuran jendela yang disiapkan GPUI untuk menggambar bentuk lengkung (salah
+  satunya 4x multisample) sekarang hanya dibuat saat ada bentuk lengkung di layar, dan
+  jendela memakai dua frame buffer, bukan tiga.
+- 6 detik setelah dibuka, dan setelah 15 detik di belakang jendela lain, FluxCode
+  mengembalikan memori yang tidak dipakai ke Windows. Memorinya kembali saat dibutuhkan,
+  hanya beberapa milidetik.
+
+@release 2026-11-10
 @title en: A calmer look, any ACP agent in one click, agents that ask, and VS Code's shortcuts
 @title id: Tampilan lebih tenang, semua agent ACP sekali klik, agent yang bisa bertanya, dan shortcut VS Code
 @en
