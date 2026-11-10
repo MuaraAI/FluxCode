@@ -1,0 +1,22 @@
+{
+  "id": "cmake",
+  "name": "C/C++ (CMake, Make)",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Systems",
+  "icon": "cpu",
+  "summary": "Configure and build CMake projects in a build folder, or run make; errors open the file at the line.",
+  "about": "For folders with `CMakeLists.txt` or a `Makefile`.\n\n- **Build** configures `build/` the first time and then builds it with every core (`cmake --build build -j`).\n- **Configure** runs CMake's configure step again (after adding files, say).\n- **Make** runs `make -j` where there is a Makefile and no CMake.\n- A compiler error like `src/main.cpp:12:5: error:` opens the file at that line.",
+  "detect": [{ "file": "CMakeLists.txt" }, { "file": "Makefile" }],
+  "root": ["CMakeLists.txt", "Makefile"],
+  "tasks": [
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "cmake -S . -B build && cmake --build build -j", "when": "CMakeLists.txt", "primary": true },
+    { "id": "configure", "label": "Configure", "icon": "settings", "run": "cmake -S . -B build", "when": "CMakeLists.txt" },
+    { "id": "make", "label": "Make", "icon": "hammer", "run": "make -j", "when": "Makefile", "unless": "CMakeLists.txt", "primary": true },
+    { "id": "clean", "label": "Clean", "icon": "trash", "run": "cmake --build build --target clean", "when": "CMakeLists.txt" }
+  ],
+  "needs": [
+    { "cmd": "cmake", "label": "CMake", "winget": "Kitware.CMake", "url": "https://cmake.org/download/", "when": "CMakeLists.txt" }
+  ],
+  "agent": "C/C++ project: configure with `cmake -S . -B build`, build with `cmake --build build`."
+}

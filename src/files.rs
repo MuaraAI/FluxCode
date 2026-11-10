@@ -409,7 +409,10 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Live share: the panel, and the ways in from the internet
     Users, LogIn, House, Router, RadioTower, Link,
     // Flux documents: tip callouts and pictures from the web
-    Lightbulb, Image
+    Lightbulb, Image,
+    // Extensions: the view, their icons and their tasks
+    Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
+    Sparkles, FolderPlus
 ]);
 
 #[cfg(test)]

@@ -5,6 +5,44 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Extensions, FluxCompile, OpenCode 2 and a theme picker (10 November 2026)
+
+- An Extensions view (`Ctrl+Shift+X`, a new activity bar icon): 11 built-in extensions as
+  small JSON manifests (`extensions/*.json`), with a search box and All / Installed / This
+  folder, a page per extension (what it needs and whether it is found, its tasks, the
+  folder's projects, a new-project form), and Install from file for more. Installed ids are
+  kept in the settings; the HTML preview is one of them and installed by default.
+- Paper plugins: Build, Build & deploy, Deploy last build, Start server (in the Terminal),
+  Test, Clean, Run server when the project uses run-paper, Add Gradle wrapper. Projects are
+  named after their plugin (the plugin.yml in the built jar); deploy writes
+  `<Name>-<version>.jar` and removes older jars of the same plugin by the name inside them.
+  New plugin writes a Gradle project for the server's Paper version (26.x: `paper-api:26.x.build.+`
+  on Java 25, as Paper's docs say; 1.21.x: `-R0.1-SNAPSHOT` on Java 21).
+- Bedrock add-ons: Check manifests, Deploy to Minecraft (the GDK build's
+  `%APPDATA%\Minecraft Bedrock` folders or the Store build's), Pack `.mcaddon`/`.mcpack`
+  (FluxCode's own ZIP writer), New add-on with fresh UUIDs.
+- Gradle, Maven, Node.js (every package.json script, the package manager from the lock
+  file), Rust, Python (the project's venv), Go, C/C++ (CMake, Make) and .NET tasks.
+- FluxCompile runs Java builds with the JDK the project asks for (on JAVA_HOME and PATH),
+  Gradle's local build cache unless the project turns it off, and the project's own
+  parallel and configuration-cache settings. It doesn't force those two: Gradle's docs and
+  28 large plugins' builds show that forcing them breaks some projects. Gradle's task lines
+  fold into one line, the end says what was built (name, version, size, time, path), and a
+  deploy suggests `paperweight-mappings-namespace: mojang` when the jar lacks it.
+- Compiler errors from javac, kotlinc, rustc, gcc/clang, MSBuild, Gradle and Maven are red
+  and open the file at the line.
+- The agent's workspace overview says, for each project an installed extension is for,
+  what it is, the commands that build it, the JDK and test server (Paper) or the packs
+  (Bedrock), and the extension's notes.
+- OpenCode 2 replaces OpenCode in the agent list: the ACP registry's `opencode-v2` build
+  from opencode.ai, installed by FluxCode and checked against its SHA-256. An `opencode`
+  choice and its options move to it. Measured here, both start a session in about 1.8 s
+  and use about the same memory (they are the same OpenCode 2.2.x); OpenCode 2 skips the
+  npm `cmd.exe` launcher and always matches the registry's version.
+- The status bar's theme name opens a list of the four themes, each drawn as a small editor
+  in its colors, with the current one checked.
+- The welcome page fits a narrow editor area and scrolls when the window is short.
+
 ## Incoming commits in Source Control, and a smaller update notice (10 November 2026)
 
 - Source Control fetches quietly every five minutes while a repository with an upstream is

@@ -1,0 +1,21 @@
+{
+  "id": "node",
+  "name": "Node.js",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Web",
+  "icon": "braces",
+  "summary": "Every script in package.json as a button, with npm, pnpm, yarn or bun picked from the lock file.",
+  "about": "For folders with a `package.json`.\n\n- Each script becomes a task (`dev`, `build`, `test`, ...). `dev`, `start`, `serve`, `preview` and `watch` scripts run in the Terminal, since they keep running.\n- The package manager comes from the lock file: `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, else npm.\n- **Install** shows up while `node_modules` is missing.\n- **Type-check** runs `tsc --noEmit` when there is a `tsconfig.json`.",
+  "detect": [{ "file": "package.json" }],
+  "root": ["package.json"],
+  "tasks": [
+    { "id": "install", "label": "Install", "icon": "download", "run": "{npm} install", "unless": "node_modules", "primary": true },
+    { "id": "scripts", "label": "Scripts", "native": "npm.scripts" },
+    { "id": "tsc", "label": "Type-check", "icon": "circle-check", "run": "npx --yes tsc --noEmit -p .", "when": "tsconfig.json" }
+  ],
+  "needs": [
+    { "cmd": "node", "label": "Node.js", "winget": "OpenJS.NodeJS.LTS", "url": "https://nodejs.org/" }
+  ],
+  "agent": "Node project: scripts in package.json; use the package manager its lock file belongs to. FluxCode runs long-running scripts (dev servers, watchers) in its Terminal."
+}

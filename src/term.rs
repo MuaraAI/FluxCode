@@ -479,17 +479,42 @@ pub fn parse_frame(text: &str) -> Option<(String, u32, Option<String>)> {
 
 /// `C:\x\app.py:12: UserWarning: ...` → (path, line).
 pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
-    let t = text.trim_start();
-    for ext in [".py:", ".pyw:"] {
-        if let Some(i) = t.to_ascii_lowercase().find(ext) {
-            let path = &t[..i + ext.len() - 1];
-            let digits: String = t[i + ext.len()..].chars().take_while(char::is_ascii_digit).collect();
-            if let Ok(line) = digits.parse() {
-                return Some((path.to_string(), line));
+    let mut t = text.trim_start();
+    // rustc's `--> src/main.rs:3:5`, kotlinc's `e: file:///C:/x/Y.kt:12:5 ...`, Maven's `[ERROR] /C:/x/Y.java:[12,5]`.
+    for prefix in ["--> ", "e: ", "w: ", "[ERROR] ", "[WARNING] "] {
+        t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
+    }
+    t = t.strip_prefix("file:///").unwrap_or(t);
+    let lower = t.to_ascii_lowercase();
+    // The earliest `<file>.<ext>:<line>` (or MSBuild's `<file>.cs(<line>,<col>)`).
+    let exts = [
+        ".py:", ".pyw:", ".java:", ".kt:", ".kts:", ".rs:", ".go:", ".c:", ".h:", ".cc:", ".cpp:", ".cxx:", ".hpp:", ".cs:", ".fs:", ".ts:", ".tsx:", ".js:", ".jsx:", ".mjs:", ".cjs:",
+        ".vue:", ".svelte:", ".gradle:", ".json:", ".yml:", ".yaml:", ".cs(", ".fs(", ".vb(",
+    ];
+    let mut best: Option<(usize, usize)> = None;
+    for ext in exts {
+        let mut from = 0;
+        while let Some(k) = lower[from..].find(ext) {
+            let i = from + k;
+            let after = &t[i + ext.len()..];
+            let after = after.strip_prefix('[').unwrap_or(after);
+            if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                if best.is_none_or(|(b, _)| i < b) {
+                    best = Some((i, ext.len()));
+                }
+                break;
             }
+            from = i + 1;
         }
     }
-    None
+    let (i, n) = best?;
+    let path = &t[..i + n - 1];
+    let after = &t[i + n..];
+    let digits: String = after.strip_prefix('[').unwrap_or(after).chars().take_while(char::is_ascii_digit).collect();
+    let line = digits.parse().ok()?;
+    // A Maven path starts with `/C:/`.
+    let path = if path.len() > 3 && path.starts_with('/') && path.as_bytes()[2] == b':' { &path[1..] } else { path };
+    Some((path.to_string(), line))
 }
 
 /// The kind of one finished (or growing) output line. `prev` is the kind of the
@@ -521,6 +546,30 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
         return LineKind::Err;
     }
     let lower = t.to_ascii_lowercase();
+    // Build tools: Gradle, Maven, javac, kotlinc, rustc, gcc/clang, MSBuild.
+    if t.starts_with("> Task ") || (t.starts_with("[INFO] ") && !t.contains("BUILD")) {
+        return LineKind::Dim;
+    }
+    // rustc points at the place: `--> src/main.rs:3:5` (a link).
+    if t.starts_with("--> ") && parse_path_line(t).is_some() {
+        return LineKind::Warn;
+    }
+    if t.starts_with("BUILD SUCCESSFUL") || t.starts_with("[INFO] BUILD SUCCESS") || t.starts_with("Build succeeded") || t.starts_with("Finished `") {
+        return LineKind::Success;
+    }
+    if t.starts_with("FAILURE:")
+        || t.starts_with("BUILD FAILED")
+        || t.starts_with("[ERROR]")
+        || t.starts_with("[INFO] BUILD FAILURE")
+        || t.starts_with("e: ")
+        || lower.starts_with("error[e")
+        || (lower.contains(": error") && parse_path_line(t).is_some())
+    {
+        return LineKind::Err;
+    }
+    if t.starts_with("[WARNING]") || t.starts_with("w: ") || (lower.contains(": warning") && parse_path_line(t).is_some()) {
+        return LineKind::Warn;
+    }
     if lower.starts_with("error:")
         || lower.starts_with("fatal:")
         || lower.starts_with("npm err!")
@@ -931,6 +980,22 @@ pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiler_errors_link_to_the_file() {
+        let p = |s: &str| parse_path_line(s);
+        assert_eq!(p("C:\\x\\src\\Main.java:12: error: ';' expected"), Some(("C:\\x\\src\\Main.java".into(), 12)));
+        assert_eq!(p("e: file:///C:/x/Main.kt:7:3 Unresolved reference"), Some(("C:/x/Main.kt".into(), 7)));
+        assert_eq!(p("  --> src/main.rs:3:5"), Some(("src/main.rs".into(), 3)));
+        assert_eq!(p("src/a.cpp:40:9: error: expected ';'"), Some(("src/a.cpp".into(), 40)));
+        assert_eq!(p("Program.cs(12,5): error CS1002: ; expected"), Some(("Program.cs".into(), 12)));
+        assert_eq!(p("[ERROR] /C:/x/App.java:[8,1] class, interface expected"), Some(("C:/x/App.java".into(), 8)));
+        assert_eq!(p("Downloading https://repo.maven.apache.org/x.json"), None);
+        assert_eq!(classify("C:\\x\\Main.java:12: error: ';' expected", true, None), LineKind::Err);
+        assert_eq!(classify("BUILD SUCCESSFUL in 3s", false, None), LineKind::Success);
+        assert_eq!(classify("FAILURE: Build failed with an exception.", true, None), LineKind::Err);
+        assert_eq!(classify("> Task :compileJava", false, None), LineKind::Dim);
+    }
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("fluxterm-{}", std::process::id()));

@@ -320,7 +320,7 @@ impl Workbench {
             rows.push(get(k.id.to_string(), k.name.to_string(), k.by.into(), &avail));
         }
         let more: SharedString = tr("More in the ACP registry").into();
-        for e in reg.iter().filter(|e| crate::acp::known(&e.id).is_none() && !installed.iter().any(|i| *i == e.id) && e.method().is_some()) {
+        for e in reg.iter().filter(|e| crate::acp::known(&e.id).is_none() && !crate::acp::hidden(&e.id) && !installed.iter().any(|i| *i == e.id) && e.method().is_some()) {
             rows.push(get(e.id.clone(), e.name.clone(), first_sentence(&e.description).into(), &more));
         }
         rows

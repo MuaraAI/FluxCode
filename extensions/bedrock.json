@@ -1,0 +1,19 @@
+{
+  "id": "bedrock",
+  "name": "Bedrock Add-ons",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Minecraft",
+  "icon": "box",
+  "summary": "Check Minecraft Bedrock pack manifests, pack .mcpack and .mcaddon files, and load your packs in the game while you work.",
+  "about": "For behavior and resource packs (a folder with `manifest.json`). Packs side by side, like `MyAddon/BP` and `MyAddon/RP`, are one add-on.\n\n- **Check manifests** looks at every manifest: format version, UUIDs (valid, and none used twice), versions, module types, script entry files, and dependencies between the packs.\n- **Deploy to Minecraft** copies the packs into the game's `development_behavior_packs` and `development_resource_packs`, so a world with them uses your current files; reopen the world to see a change. FluxCode finds the folder of the current Windows build (`%APPDATA%\\Minecraft Bedrock`) and of the older Store build.\n- **Pack** writes `dist/<name>.mcaddon` (or `.mcpack` for one pack), ready to share; double-click it to import. Packing is done by FluxCode itself, in milliseconds.\n- **New add-on** writes a behavior pack and a resource pack that depend on each other, with fresh UUIDs and a `/function hello` to try.\n\nScript API packs with a `package.json` also get their npm scripts (install the Node.js extension).",
+  "detect": [{ "file": "manifest.json", "contains": ["\"format_version\"", "\"modules\"", "\"header\""] }],
+  "group_siblings": true,
+  "tasks": [
+    { "id": "check", "label": "Check manifests", "icon": "circle-check", "native": "bedrock.validate" },
+    { "id": "deploy", "label": "Deploy to Minecraft", "icon": "upload", "native": "bedrock.deploy", "primary": true },
+    { "id": "pack", "label": "Pack .mcaddon", "icon": "package", "native": "bedrock.pack" }
+  ],
+  "templates": ["bedrock"],
+  "agent": "Bedrock add-ons are a behavior pack (BP: entities, items, blocks, loot tables, recipes, functions, scripts) and a resource pack (RP: textures, models, sounds, UI, texts). Each manifest.json has a header uuid and module uuids that must be unique; BP and RP list each other in dependencies. Version arrays are [major, minor, patch]. Script API code (@minecraft/server) is an ES module named by the script module's entry. Identifiers are namespaced (`myaddon:thing`). FluxCode's Deploy copies the packs into the game's development pack folders; the user reopens the world to see changes."
+}

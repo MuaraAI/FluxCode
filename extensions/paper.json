@@ -1,0 +1,35 @@
+{
+  "id": "paper",
+  "name": "Paper Plugins",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Minecraft",
+  "icon": "pickaxe",
+  "summary": "Build Paper plugins for Minecraft Java, copy them into your test server and start it, all from the Run view.",
+  "about": "For plugin projects with a `plugin.yml` or `paper-plugin.yml` (Gradle or Maven).\n\n- **Build** runs the Gradle wrapper (or Maven) with the build cache and parallel builds on, and the Gradle daemon kept warm, so a second build takes seconds. Tests are skipped; **Test** runs them.\n- **The right JDK:** the build runs with the Java version the project asks for (a Gradle toolchain or Maven `release`), found in the usual install folders, Gradle's downloads, or a `tools/jdk-*` folder next to the project. No more Gradle downloading a second JDK.\n- **Build & deploy** copies the new jar into the test server's `plugins` folder and removes the older build of the same plugin. The server is found by going up from the project (keep the source inside the server's folder, like `server/plugin-dev/projects/MyPlugin`) or in the workspace.\n- **Start server** runs the server in the Terminal, so you can type commands there (`stop` to stop it).\n- **New plugin** writes a Gradle project for the server's version: Paper 26.x gets `paper-api:26.x.build.+` on Java 25, as Paper's docs say, and 1.21.x the `-R0.1-SNAPSHOT` scheme on Java 21. The Gradle wrapper is added from Gradle's repository, so Gradle doesn't need installing.",
+  "detect": [
+    { "file": "src/main/resources/plugin.yml", "contains": ["main:"] },
+    { "file": "src/main/resources/paper-plugin.yml" }
+  ],
+  "root": ["settings.gradle.kts|settings.gradle", "pom.xml", "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle"],
+  "replaces": ["java-gradle", "java-maven"],
+  "tasks": [
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "{gradle} build -x test {fluxcompile}", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true, "primary": true },
+    { "id": "deploy", "label": "Build & deploy", "icon": "upload", "run": "{gradle} build -x test {fluxcompile}", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true, "then": "paper.deploy" },
+    { "id": "build-mvn", "label": "Build", "icon": "hammer", "run": "{mvn} -q -T 1C -DskipTests package", "when": "pom.xml", "unless": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true, "primary": true },
+    { "id": "deploy-mvn", "label": "Build & deploy", "icon": "upload", "run": "{mvn} -q -T 1C -DskipTests package", "when": "pom.xml", "unless": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true, "then": "paper.deploy" },
+    { "id": "runserver", "label": "Run server (run-paper)", "icon": "server", "run": "{gradle} runServer {fluxcompile}", "uses": "run-paper", "java": true, "terminal": true },
+    { "id": "copy", "label": "Deploy last build", "icon": "upload", "native": "paper.deploy" },
+    { "id": "server", "label": "Start server", "icon": "server", "native": "paper.server" },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "{gradle} test {fluxcompile}", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true },
+    { "id": "clean", "label": "Clean", "icon": "trash", "run": "{gradle} clean --console=plain", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "java": true },
+    { "id": "wrapper", "label": "Add Gradle wrapper", "icon": "download", "native": "gradle.wrapper", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "unless": "gradlew|gradlew.bat" }
+  ],
+  "needs": [
+    { "cmd": "java", "label": "Java (JDK)", "winget": "EclipseAdoptium.Temurin.25.JDK", "url": "https://adoptium.net/" },
+    { "cmd": "gradle", "label": "Gradle (or the wrapper: Add Gradle wrapper)", "url": "https://gradle.org/install/", "when": "build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle", "unless": "gradlew|gradlew.bat" },
+    { "cmd": "mvn", "label": "Maven", "url": "https://maven.apache.org/download.cgi", "when": "pom.xml", "unless": "mvnw|mvnw.cmd|build.gradle.kts|build.gradle|settings.gradle.kts|settings.gradle" }
+  ],
+  "templates": ["paper"],
+  "agent": "Paper is a Minecraft Java server; plugins use the Bukkit/Paper API from paper-api (compileOnly). The entry class extends JavaPlugin and is named in plugin.yml `main`; commands and permissions are declared in plugin.yml. Never touch the world or entities off the main thread (use the scheduler; Folia needs its region schedulers). Prefer Adventure components (`Component.text`) for chat. Build with the Gradle wrapper; the jar lands in build/libs and must be copied into the server's plugins folder while the server is stopped."
+}

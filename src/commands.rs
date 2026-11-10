@@ -56,6 +56,7 @@ pub fn commands() -> Vec<Command> {
         cmd!("Search: Find in Files", "Ctrl+Shift+F", FindInFiles),
         cmd!("View: Show Source Control", "Ctrl+Shift+G", ScmShow),
         cmd!("View: Show Run", "Ctrl+Shift+D", ShowRun),
+        cmd!("View: Show Extensions", "Ctrl+Shift+X", ShowExtensions),
         cmd!("View: Toggle Panel", "Ctrl+J", TogglePanel),
         cmd!("View: Toggle Terminal", "Ctrl+`", ToggleTerminal),
         cmd!("View: Show Output", "Ctrl+Shift+U", ShowOutput),

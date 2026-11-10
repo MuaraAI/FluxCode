@@ -313,7 +313,7 @@ pub fn agent_id() -> String {
     if !c.is_empty() && c != "auto" {
         return c;
     }
-    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode".into())
+    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode-v2".into())
 }
 
 /// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
@@ -388,7 +388,7 @@ fn agent_cmd() -> Option<std::process::Command> {
 /// Mura and OpenCode list their saved sessions (`<cli> session list`); others don't.
 fn sessions_cmd() -> Option<std::process::Command> {
     let id = agent_id();
-    if id != "mura" && id != "opencode" {
+    if id != "mura" && !crate::acp::is_opencode(&id) {
         return None;
     }
     let mut l = crate::acp::locate(&id)?;
@@ -1439,7 +1439,7 @@ impl Workbench {
     }
 
     pub(crate) fn on_agent_use_opencode(&mut self, _: &crate::workbench::AgentUseOpenCode, w: &mut Window, cx: &mut Context<Self>) {
-        self.agent_use("opencode", w, cx);
+        self.agent_use("opencode-v2", w, cx);
     }
 
     pub(crate) fn on_agent_use_mura(&mut self, _: &crate::workbench::AgentUseMura, w: &mut Window, cx: &mut Context<Self>) {
@@ -2126,7 +2126,11 @@ impl Workbench {
                         python: self.python_version.as_deref(),
                     };
                     self.agent.ws_sig = crate::ws_context::signature(&inputs);
-                    blocks.push(json!({ "type": "text", "text": crate::ws_context::overview(&inputs) }));
+                    let mut text = crate::ws_context::overview(&inputs);
+                    if let Some(notes) = self.ext_agent_notes() {
+                        text.push_str(&notes);
+                    }
+                    blocks.push(json!({ "type": "text", "text": text }));
                 }
                 "file" => {
                     if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
@@ -2331,7 +2335,7 @@ impl Workbench {
         };
         let harness = agent_name();
         cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
-        if harness == "OpenCode" {
+        if crate::acp::is_opencode(&agent_id()) {
             // A private server that exits with the command, instead of starting OpenCode's
             // background service (which would stay resident after FluxCode closes).
             cmd.arg("--standalone");
@@ -3719,7 +3723,7 @@ impl Workbench {
                 ),
             );
         }
-        if name == "OpenCode" {
+        if crate::acp::is_opencode(&agent_id()) {
             if let Some(cfg) = opencode_config_file() {
                 body = body.child(
                     h_flex().px_3().pt_1().child(
