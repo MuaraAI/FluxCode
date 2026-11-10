@@ -11,6 +11,25 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Agents can use a browser
+@title id: Agent bisa memakai browser
+@en
+Agents can now **open web pages** in the Chrome, Brave or Edge on your PC: click, type,
+read the console and network, and take screenshots. It uses its own profile, so your
+cookies and passwords stay yours. Choose the browser in **Agent settings > Browser**.
+
+The message box is tidier: a context chip you close goes away (a **+** brings it back),
+and the chips stay on one line.
+@id
+Agent sekarang bisa **membuka halaman web** di Chrome, Brave atau Edge di PC-mu: klik,
+mengetik, membaca console dan jaringan, serta mengambil screenshot. Browser memakai profil
+tersendiri, jadi cookie dan password-mu tetap aman. Pilih browsernya di **Pengaturan agent >
+Browser**.
+
+Kotak pesan lebih rapi: chip konteks yang ditutup langsung hilang (tombol **+**
+mengembalikannya), dan chip tetap dalam satu baris.
+
+@release 2026-11-10
 @title en: Flux documents open drawn
 @title id: Dokumen Flux terbuka langsung ter-render
 @en
