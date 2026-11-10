@@ -1,11 +1,40 @@
 //! Bottom panel: Terminal (one command at a time, like the Tauri app's Flux
 //! Terminal) and Output (Run File).
 //!
-//! Every command gets a block: the prompt line, its output (colored by what each
-//! line means, see `term::classify`), and a status line with exit code and time.
-//! A Python error ends the block with a card: what went wrong, at which file and
-//! line (click to jump there; the line is also underlined in the editor), a hint
-//! in plain words and, when there is an obvious fix, a button that runs it.
+//! The Terminal reads like any terminal: plain output in the editor's mono font,
+//! each command echoed as the prompt it was typed at (`folder ❯ dir`), and the live
+//! prompt as the line right after the output (it never sits in a bar of its own, and
+//! the log shrinks so it is never cut off). A click anywhere in the terminal puts
+//! the caret there. A quick success ends silently (the next prompt says it's done);
+//! a failure, a stop or a wait of a second or more gets one short end line, failures
+//! in red. A Python error adds what went wrong, where (click to jump; the line is
+//! underlined in the editor), a hint in plain words and, when there is an obvious
+//! fix, a button that runs it. Output keeps its header band per run.
+//!
+//! What other terminals taught this one (one line each):
+//! - Windows Terminal: the prompt is the last line of the output; nothing pinned below.
+//! - VS Code terminal + shell integration: exit status as a small mark, not a banner.
+//! - iTerm2: marks per command but output stays plain text; click to focus anywhere.
+//! - macOS Terminal: calm defaults, one font, no chrome inside the scrollback.
+//! - GNOME Console: a beginner-friendly terminal is a plain one with good contrast.
+//! - Warp (classic prompt mode): the command line separates blocks; no extra header.
+//! - JetBrains terminal (2025 rework): keep real terminal behaviour, add light hints.
+//! - Zed terminal: the editor's mono font and theme colours, nothing invented.
+//! - Ghostty: native, quiet, fast; no decoration that animates.
+//! - Hyper: the cwd before `❯` is enough of a prompt.
+//! - Alacritty, Kitty, WezTerm: no visual noise; output is the content.
+//! - Tabby, Wave, Fig, Termius: friendly empty state that says what to type.
+//! - Konsole, Tilix, Terminator, Cmder, ConEmu, MobaXterm, PuTTY: what to avoid
+//!   (toolbars and bars around the prompt).
+//! - Blink Shell, Termux: narrow screens show only the folder name.
+//! - Starship, Powerlevel10k, Oh My Posh: shorten the path from the left (`…\proj`).
+//! - Fish, Nushell: plain-words hints and typo help without leaving the prompt.
+//! - GitHub Codespaces, Replit, CodeSandbox, StackBlitz, Glitch: an IDE terminal
+//!   looks like a terminal, not a chat.
+//! - GitHub Actions, Vercel, Netlify, Railway, Render, Fly.io, Heroku logs: duration
+//!   only where it helps, failures in red with the reason line.
+//! - Docker Desktop logs, Xcode console, Android Studio, Fleet, Nova, Sublime Merge,
+//!   Tower, Raycast: dim the noise, keep the error readable.
 
 use crate::i18n::tr;
 use crate::proc::{self, python};
@@ -89,6 +118,7 @@ impl Workbench {
 
     fn set_term_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let chars = text.chars().count() as u32;
+        self.term_typed = !text.is_empty();
         self.term_input.update(cx, |s, cx| {
             s.set_value(text.to_string(), window, cx);
             s.set_cursor_position(Position::new(0, chars), window, cx);
@@ -99,6 +129,7 @@ impl Workbench {
     pub(crate) fn terminal_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let line = self.term_input.read(cx).value().to_string();
         self.term_input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.term_typed = false;
         self.term_hist_ix = None;
         if let Some(id) = self.term_proc.filter(|id| self.procs.is_running(*id)) {
             // Echo into the program's own prompt line ("Name: " + what was typed).
@@ -337,13 +368,17 @@ impl Workbench {
             }
         }
         let output = lines[from..].iter().filter(|l| !l.text.trim().is_empty()).count();
+        let spent = run.as_ref().map(|r| r.started.elapsed());
+        // In the terminal a quick success needs no end line: the next prompt says it's done.
+        // A failure, a stop, or a wait of a second or more gets one.
+        let quiet = terminal && code == Some(0) && error.is_none() && spent.is_some_and(|d| d < std::time::Duration::from_secs(1));
         match (&error, &run) {
             (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
             // A little air between a long output and its outcome.
-            _ if output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
+            _ if !quiet && output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
             _ => {}
         }
-        let took = run.as_ref().map(|r| term::elapsed(r.started.elapsed())).unwrap_or_default();
+        let took = spent.map(term::elapsed).unwrap_or_default();
         let (text, ok) = match code {
             Some(0) => (tr("Finished").to_string(), true),
             Some(c) => (crate::trf!("Failed (exit code {c})"; c => c), false),
@@ -352,7 +387,9 @@ impl Workbench {
         let mut status = Line::new(&text, LineKind::Status);
         status.err = !ok;
         status.meta = took.into();
-        lines.push(status);
+        if !quiet {
+            lines.push(status);
+        }
         if let Some(r) = reason {
             // "C:\long\path\Main.java:12: error: ..." reads as "Main.java:12: error: ...";
             // the link keeps the full path.
@@ -448,6 +485,7 @@ impl Workbench {
 
     /// Click on a traceback frame or a card's file:line.
     fn open_link(&mut self, path: &str, line: u32, terminal: bool, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         let p = PathBuf::from(path);
         let base = if terminal {
             self.term_run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.term_cwd.clone())
@@ -489,8 +527,19 @@ impl Workbench {
         let hang = theme::u(12.) + px(m.em * 2.);
         // One callout across several fixed-height rows: a tinted full-width band with a red edge.
         let card = |row: Stateful<Div>, inner: Div| {
-            row.child(inner.flex_1().min_w_0().h_full().items_center().px_3().gap_2().bg(c(theme::BG_ELEVATED)).border_l_2().border_color(c(theme::DANGER)))
-                .into_any_element()
+            row.child(
+                inner
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .px_3()
+                    .gap_2()
+                    .when(!terminal, |d| d.bg(c(theme::BG_ELEVATED)))
+                    .border_l_2()
+                    .border_color(c(theme::DANGER)),
+            )
+            .into_any_element()
         };
         let link = |label: SharedString, path: SharedString, line: u32, cx: &mut Context<Self>| {
             div()
@@ -503,11 +552,30 @@ impl Workbench {
         };
         match l.kind {
             LineKind::Blank => base.into_any_element(),
-            // The block header: what ran, where, and how it ended.
+            // Terminal: the command echoed as the prompt it was typed at (`folder ❯ dir`),
+            // drawn exactly like the live prompt row, so a block starts where a prompt is.
+            LineKind::Cmd if terminal => {
+                let place: SharedString = prompt_place(&l.meta, self.panel_size.get().0).into();
+                let full = l.meta.clone();
+                base.child(
+                    div()
+                        .id(("wd", i))
+                        .flex_none()
+                        .font_family(UI_FONT)
+                        .text_xs()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(place)
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
+                )
+                .child(text(&"❯".into(), theme::ACCENT_TEXT).flex_none())
+                .child(text(&l.text, theme::FG_STRONG).min_w_0().truncate())
+                .into_any_element()
+            }
+            // Output: the block header: what ran, where, and how it ended.
             LineKind::Cmd => {
-                let lines = if terminal { &self.term_lines } else { &self.out_lines };
+                let lines = &self.out_lines;
                 let (status, last) = block_status(lines, ix);
-                let live = if terminal { self.term_run.is_some() } else { self.out_run.is_some() };
+                let live = self.out_run.is_some();
                 let badge = match status {
                     Some(s) => {
                         let stopped = s.err && s.text.as_ref() == tr("Stopped");
@@ -561,9 +629,23 @@ impl Workbench {
                     (false, false) => crate::trf!("in {0}"; 0 => l.meta).into(),
                     (false, true) => format!("· {}", l.meta).into(),
                 };
+                // In the terminal a success only ends a long block (the header already says
+                // it), so it stays quiet; a failure reads the same as in Output.
+                let quiet = terminal && !l.err;
                 base.font_family(UI_FONT)
-                    .child(Icon::new(icon).size(theme::u(14.)).text_color(c(col)))
-                    .child(div().font_weight(FontWeight::MEDIUM).text_color(c(if l.err && !stopped { theme::DANGER } else { theme::FG_STRONG })).child(l.text.clone()))
+                    .child(Icon::new(icon).size(theme::u(if quiet { 12. } else { 14. })).text_color(c(col)))
+                    .child(
+                        div()
+                            .when(!quiet, |d| d.font_weight(FontWeight::MEDIUM))
+                            .text_color(c(if l.err && !stopped {
+                                theme::DANGER
+                            } else if quiet {
+                                theme::FG_MUTED
+                            } else {
+                                theme::FG_STRONG
+                            }))
+                            .child(l.text.clone()),
+                    )
                     .when(!took.is_empty(), |h| h.child(text(&took, theme::FG_MUTED)))
                     .into_any_element()
             }
@@ -844,7 +926,16 @@ impl Workbench {
         // The list is a whole number of rows tall, so the top row is never cut in half.
         let gap = 4.;
         let row = f32::from(m.row);
-        let fit = if height > gap + row { ((height - gap) / row).floor() * row } else { 0. };
+        // Terminal: the prompt is the line right after the output, with the same gap a
+        // finished command leaves above the next one. The log gets what is left and never
+        // more than it needs, so a short log has its prompt right under it and a long one
+        // scrolls above a prompt that stays in view.
+        let measured = height > 0.;
+        let air = terminal && count > 0 && height > gap + row * 3.;
+        let prompt_rows = if !terminal { 0. } else if air { 2. } else { 1. };
+        let room = height - gap - prompt_rows * row;
+        let fit = if room > 0. { (room / row).floor() * row } else { 0. };
+        let n_rows = rows.len();
         let list = uniform_list(
             "panel-lines",
             rows.len(),
@@ -863,20 +954,35 @@ impl Workbench {
         )
         .track_scroll(&scroll)
         .w_full()
-        .map(|l| if fit > 0. { l.h(px(fit)) } else { l.h_full() })
+        .map(|l| {
+            if terminal {
+                let all = n_rows as f32 * row;
+                l.flex_none().h(px(if measured { fit.min(all) } else { all.min(8. * row) }))
+            } else if fit > 0. {
+                l.h(px(fit))
+            } else {
+                l.h_full()
+            }
+        })
         .font_family(self.settings.font_family.clone())
         .font_weight(FontWeight::NORMAL)
         .text_size(font_size);
         let probe = {
             let cell = self.panel_size.clone();
             let id = cx.entity_id();
+            let bottom = scroll.clone();
             canvas(
                 move |bounds, _, cx| {
                     let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
                     let old = cell.get();
                     if (old.0 - size.0).abs() > 0.5 || (old.1 - size.1).abs() > 0.5 {
                         cell.set(size);
-                        cx.defer(move |cx| cx.notify(id));
+                        // After this frame: the rows are re-wrapped to the new width first.
+                        let bottom = bottom.clone();
+                        cx.defer(move |cx| {
+                            bottom.scroll_to_bottom();
+                            cx.notify(id);
+                        });
                     }
                 },
                 |_, _, _, _| {},
@@ -884,7 +990,17 @@ impl Workbench {
             .absolute()
             .size_full()
         };
-        let list = div().relative().flex_1().min_h_0().pt(px(gap)).child(probe).child(list);
+        // Panel width last frame (0 before the first one): what fits on the prompt line.
+        let narrow = width > 0. && width < 480.;
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .pt(px(gap))
+            .child(probe)
+            .child(list)
+            .when(terminal, |d| d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(font_size, narrow, m)));
 
         let empty = count == 0;
         let hint = |line: &'static str| div().min_w_0().child(line);
@@ -894,51 +1010,114 @@ impl Workbench {
             .border_t_1()
             .border_color(c(theme::BORDER))
             .child(header)
-            .when(empty, |v| {
-                v.child(
-                    v_flex()
-                        .px_3()
-                        .py_1()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(c(theme::FG_DIM))
-                        .when(terminal, |v| {
-                            v.child(hint(tr("Run any command, for example  py app.py  or  pip install -r requirements.txt")))
-                                .child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you")))
-                        })
-                        .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
-                )
-            })
-            .child(list)
-            .when(terminal, |v| {
-                let busy = self.term_running();
-                let venv = self.root.as_deref().and_then(|r| {
-                    [".venv", "venv", "env"].into_iter().find(|v| r.join(v).join(if cfg!(windows) { "Scripts" } else { "bin" }).is_dir())
-                });
-                v.child(
-                    h_flex()
-                        .px_3()
-                        .h(theme::u(30.))
+            .child(
+                v_flex()
+                    .id("panel-body")
+                    .flex_1()
+                    .min_h_0()
+                    .when(empty, |v| {
+                        // Plain words first, then the extras; a short panel clips the extras.
+                        v.child(
+                            v_flex()
+                                .flex_shrink(1.)
+                                .min_h_0()
+                                .overflow_hidden()
+                                .px_3()
+                                .py_2()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .when(terminal, |v| {
+                                    v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command after the ❯ and press Enter to run it.")))
+                                        .child(hint(tr("For example:  dir  lists the files here,  cd folder  goes into a folder,  py app.py  runs a Python file.")))
+                                        .when(!narrow, |v| v.child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you"))))
+                                })
+                                .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
+                        )
+                    })
+                    .child(body)
+                    // A click anywhere in the terminal puts the caret at the prompt (links stop
+                    // the click first, see `open_link`).
+                    .when(terminal, |v| {
+                        v.cursor_text().on_click(cx.listener(|this, _, window, cx| {
+                            let h = this.term_input.focus_handle(cx);
+                            h.focus(window, cx);
+                        }))
+                    }),
+            )
+    }
+
+    /// The prompt: the line after the output, drawn like the command lines above it
+    /// (`folder ❯ ` then what you type, mono like the log). While a command runs it is
+    /// the program's input line instead. A hint in plain words shows only on an empty
+    /// terminal or while a program runs.
+    fn render_prompt(&self, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
+        let busy = self.term_running();
+        let short = term::short_cwd(&self.term_cwd, self.root.as_deref());
+        let place: SharedString = prompt_place(&short, self.panel_size.get().0).into();
+        let full: SharedString = self.term_cwd.display().to_string().into();
+        let placeholder = match (busy, narrow) {
+            (false, false) => tr("Type a command, then press Enter"),
+            (false, true) => tr("Type a command"),
+            (true, false) => tr("Running. Type here if the program asks for something"),
+            (true, true) => tr("Running"),
+        };
+        let hint = !self.term_typed && (busy || self.term_lines.is_empty());
+        h_flex()
+            .h(m.row)
+            .w_full()
+            .flex_none()
+            .px_3()
+            .gap_2()
+            .whitespace_nowrap()
+            .font_family(self.settings.font_family.clone())
+            .text_size(font_size)
+            .when(!busy, |h| {
+                h.child(
+                    div()
+                        .id("t-cwd")
                         .flex_none()
-                        .gap_2()
-                        .border_t_1()
-                        .border_color(c(theme::BORDER))
-                        .font_family(self.settings.font_family.clone())
-                        .text_size(font_size)
-                        .when(busy, |h| {
-                            h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(theme::BLUE)))
-                                .child(div().flex_none().font_family(UI_FONT).text_color(c(theme::BLUE)).child(tr("running · input")))
-                        })
-                        .when(!busy, |h| {
-                            h.when_some(venv, |h, v| {
-                                h.child(div().flex_none().px_1().rounded(px(3.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::GREEN)).child(format!("({v})")))
-                            })
-                            .child(div().min_w_0().max_w(relative(0.4)).truncate().text_color(c(theme::FG_DIM)).child(term::short_cwd(&self.term_cwd, self.root.as_deref())))
-                        })
-                        .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).font_weight(FontWeight::BOLD).child("❯"))
-                        .child(div().flex_1().min_w_0().key_context("Terminal").child(Input::new(&self.term_input).appearance(false).small())),
+                        .font_family(UI_FONT)
+                        .text_xs()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(place)
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
                 )
+                .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).child("❯"))
             })
+            .child(
+                // The input pads its text by 8px: pulled back so typed text starts where a
+                // command starts on the lines above.
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h(m.row)
+                    .flex()
+                    .items_center()
+                    .ml(px(-8.))
+                    .key_context("Terminal")
+                    .child(Input::new(&self.term_input).appearance(false).with_size(px(f32::from(font_size) / 0.875)))
+                    .when(hint, |d| {
+                        // Drawn over the empty input; it takes no clicks, so the input still gets focus.
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .left_0()
+                                .right_0()
+                                .pl(px(8.))
+                                .flex()
+                                .items_center()
+                                .font_family(UI_FONT)
+                                .text_sm()
+                                .text_color(c(theme::FG_DIM))
+                                .overflow_hidden()
+                                .child(placeholder),
+                        )
+                    }),
+            )
     }
 }
 
@@ -955,6 +1134,17 @@ struct Cols {
 struct Metrics {
     row: Pixels,
     em: f32,
+}
+
+/// The folder part of a prompt for a panel `width` px wide (0 = not measured yet):
+/// about a quarter of the row, cut from the left; only the folder's name when narrow.
+fn prompt_place(short: &str, width: f32) -> String {
+    if width <= 0. {
+        return term::fit_path_left(short, 40);
+    }
+    let narrow = width < 480.;
+    let budget = ((width * if narrow { 0.4 } else { 0.34 }) / (f32::from(theme::u(12.)) * 0.5)) as usize;
+    if narrow { term::fit_path_left(term::last_folder(short), budget.max(6)) } else { term::fit_path_left(short, budget.max(10)) }
 }
 
 /// What GPUI calls the platform's interface font (Segoe UI on Windows).
