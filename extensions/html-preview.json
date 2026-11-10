@@ -1,0 +1,16 @@
+{
+  "id": "html-preview",
+  "name": "HTML Preview",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Web",
+  "icon": "globe",
+  "default": true,
+  "summary": "See an HTML page or a Markdown file next to the editor, updated as you type.",
+  "about": "Opens the preview beside the editor for the active HTML or Markdown file (**Ctrl+K V**). The page reloads when you save, and links to CSS, scripts and images next to the file work, since it is served from its folder.\n\nIn a folder with an `index.html`, the Run view gets a **Preview index.html** button.",
+  "detect": [{ "file": "index.html" }],
+  "tasks": [
+    { "id": "preview", "label": "Preview index.html", "icon": "eye", "native": "preview.open", "primary": true }
+  ],
+  "agent": "The user can preview HTML in FluxCode (Ctrl+K V); after changing a page, tell them to look at the preview instead of opening a browser."
+}

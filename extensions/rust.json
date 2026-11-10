@@ -1,0 +1,24 @@
+{
+  "id": "rust",
+  "name": "Rust",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Systems",
+  "icon": "cpu",
+  "summary": "Check, build, run, test and lint Cargo projects; compiler errors open the file at the line.",
+  "about": "For folders with a `Cargo.toml` (the workspace's top one when there are several crates).\n\n- **Check** is the fast one (`cargo check`): no code is generated.\n- **Run** runs in the Terminal so the program can read input.\n- **Build release** builds optimized.\n- A compiler error's `--> src/main.rs:3:5` line opens that file at that line.",
+  "detect": [{ "file": "Cargo.toml" }],
+  "root": ["Cargo.lock", "Cargo.toml"],
+  "tasks": [
+    { "id": "check", "label": "Check", "icon": "circle-check", "run": "cargo check --color never", "primary": true },
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "cargo build --color never" },
+    { "id": "run", "label": "Run", "icon": "play", "run": "cargo run", "terminal": true },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "cargo test --color never" },
+    { "id": "clippy", "label": "Clippy", "icon": "sparkles", "run": "cargo clippy --color never" },
+    { "id": "release", "label": "Build release", "icon": "package", "run": "cargo build --release --color never" }
+  ],
+  "needs": [
+    { "cmd": "cargo", "label": "Rust (rustup)", "winget": "Rustlang.Rustup", "url": "https://rustup.rs/" }
+  ],
+  "agent": "Rust project: build with cargo; `cargo check` is the fastest way to see errors."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "java-gradle",
+  "name": "Gradle",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Java",
+  "icon": "coffee",
+  "summary": "Build, test and run Java and Kotlin projects with Gradle, using the JDK each project asks for.",
+  "about": "For folders with `build.gradle.kts` or `build.gradle` (Paper plugins have their own extension).\n\n- **Build** runs the wrapper with the build cache and parallel builds on; the Gradle daemon stays warm between builds.\n- **Run** runs the `application` plugin's `run` task, in the Terminal so the program can read input.\n- The build runs with the JDK version the project's toolchain asks for, when one is installed.\n- No wrapper? **Add Gradle wrapper** fetches it (about 60 KB) from Gradle's repository for the current release.",
+  "detect": [{ "file": "settings.gradle.kts" }, { "file": "settings.gradle" }, { "file": "build.gradle.kts" }, { "file": "build.gradle" }],
+  "root": ["settings.gradle.kts|settings.gradle", "build.gradle.kts|build.gradle"],
+  "tasks": [
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "{gradle} build -x test {fluxcompile}", "java": true, "primary": true },
+    { "id": "run", "label": "Run", "icon": "play", "run": "{gradle} run {fluxcompile}", "java": true, "terminal": true },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "{gradle} test {fluxcompile}", "java": true },
+    { "id": "clean", "label": "Clean", "icon": "trash", "run": "{gradle} clean --console=plain", "java": true },
+    { "id": "wrapper", "label": "Add Gradle wrapper", "icon": "download", "native": "gradle.wrapper", "unless": "gradlew|gradlew.bat" }
+  ],
+  "needs": [
+    { "cmd": "java", "label": "Java (JDK)", "winget": "EclipseAdoptium.Temurin.25.JDK", "url": "https://adoptium.net/" },
+    { "cmd": "gradle", "label": "Gradle (or the wrapper: Add Gradle wrapper)", "url": "https://gradle.org/install/", "unless": "gradlew|gradlew.bat" }
+  ],
+  "agent": "Gradle project: prefer the wrapper (gradlew); with the Kotlin DSL the build is build.gradle.kts. Sources are in src/main/java or src/main/kotlin, tests in src/test. Output jars land in build/libs."
+}

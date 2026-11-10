@@ -11,6 +11,26 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-10
+@title en: Extensions, and Minecraft plugins built in one click
+@title id: Ekstensi, dan plugin Minecraft di-build sekali klik
+@en
+The new **Extensions** view (**Ctrl+Shift+X**) adds what your projects need: Paper
+plugins, Bedrock add-ons, Gradle, Maven, Node.js, Rust, Python, Go, C/C++ and .NET. Install
+one and the **Run** view gets its buttons: Build, Build & deploy, Start server, Pack, and
+more. Paper plugins build with the Java version the project asks for, deploy under their own
+name, and replace their older copy in the server's plugins folder.
+
+The agent list has **OpenCode 2**, and the theme name in the status bar now opens the themes.
+@id
+View **Ekstensi** yang baru (**Ctrl+Shift+X**) menambahkan apa yang dibutuhkan proyekmu:
+plugin Paper, add-on Bedrock, Gradle, Maven, Node.js, Rust, Python, Go, C/C++ dan .NET.
+Pasang satu, dan view **Run** mendapat tombolnya: Build, Build & deploy, Nyalakan server,
+Pack, dan lainnya. Plugin Paper di-build dengan versi Java yang diminta proyeknya, dideploy
+dengan namanya sendiri, dan menggantikan salinan lamanya di folder plugins server.
+
+Daftar agent sekarang punya **OpenCode 2**, dan nama tema di status bar bisa diklik untuk memilih tema.
+
+@release 2026-11-10
 @title en: See new commits before you pull
 @title id: Lihat commit baru sebelum pull
 @en

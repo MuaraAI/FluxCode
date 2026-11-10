@@ -177,6 +177,41 @@ when the session ends.
   separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
   and syncing files an agent edits without them being open.
 
+## Extensions and FluxCompile
+
+The Extensions view (`Ctrl+Shift+X`) lists what FluxCode can build, run, pack and preview:
+Paper plugins, Bedrock add-ons, Gradle, Maven, Node.js, Rust, Python, Go, C/C++ (CMake
+and Make), .NET and the HTML preview. An extension is one small JSON file: the files that
+mark its projects, the tasks it adds, the tools it needs (with a winget id to install
+them) and notes for the AI agent. Nothing runs until you click a task, so installing one
+costs a few KB. More can be installed from an `extension.json` file.
+
+Once an extension is installed, the Run view lists the folder's projects with their tasks,
+and the agent is told what each project is and how it builds.
+
+- **Paper plugins (Minecraft Java).** Build, Build & deploy, Start server, Test, Clean. The
+  project's name is its plugin's name, read from the `plugin.yml` inside the built jar. Deploy
+  copies the jar into the test server's `plugins` folder as `<Name>-<version>.jar` and
+  removes older builds of the same plugin (found by the name inside each jar). The server is
+  the folder above the plugin with a `plugins` folder and a `paper-*.jar`. New plugin writes
+  a Gradle project for that server's version, with the Gradle wrapper.
+- **Bedrock add-ons.** Check manifests (UUIDs, versions, module types, script entries,
+  dependencies between the packs), Deploy to Minecraft (into the game's development pack
+  folders) and Pack `.mcaddon`, which FluxCode zips itself. New add-on writes a behavior
+  and a resource pack that depend on each other.
+- **FluxCompile** is how FluxCode runs a Java build. It uses the JDK the project asks for
+  (a Gradle toolchain or Maven `release`, found in the usual install folders or a
+  `tools/jdk-*` folder next to the project), Gradle's local build cache unless the project
+  turns it off, and the project's own settings for parallel builds and the configuration
+  cache. It folds Gradle's task lines into one progress line and ends with what was built.
+  A compiler error opens the file at its line. Forcing the configuration cache or parallel
+  builds from outside can break a build, so FluxCompile doesn't; we checked how 28 large
+  plugins (LuckPerms, EssentialsX, WorldEdit, Geyser, ViaVersion and others) build before
+  choosing.
+- Measured on a multi-module Paper plugin (55 Gradle tasks, a 609 KB jar): the first
+  build took 14.6 s (40 tasks run, 15 from the cache), a build with nothing changed 1.9 s
+  with Gradle's daemon warm.
+
 ## Flux documents
 
 This README is written in Flux (`README.flux`); the `README.md` GitHub shows is made from
@@ -203,7 +238,7 @@ FluxCode opens it drawn, with Preview and Source above it.
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.
 - Multi-root workspaces: drag a folder onto the window to add it or switch to it.
 - The agent panel (`Ctrl+L`) runs any agent in the [ACP registry](https://agentclientprotocol.com),
-  such as OpenCode, Claude Agent, Codex, Gemini CLI, GitHub Copilot or MuaraAI's Mura. An
+  such as OpenCode 2, Claude Agent, Codex, Gemini CLI, GitHub Copilot or MuaraAI's Mura. An
   agent that isn't on your PC has a download button in the agent menu (with the agent's own
   icon from the registry); FluxCode puts it in
   `~/.fluxcode/agents` (npm packages too, not in your global npm) and starts it only while
@@ -233,6 +268,11 @@ FluxCode opens it drawn, with Preview and Source above it.
 - After an update, a "What's new" page opens once with the notes since your last build
   (from [`changelog.flux`](changelog.flux), in the interface language). Help > What's New
   opens it again.
+- OpenCode 2 is the registry's native OpenCode build from opencode.ai, which FluxCode
+  installs and checks against its SHA-256. A copy of OpenCode on your PATH is no longer
+  used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
+- The color theme's name in the status bar opens the four themes, each shown as a small
+  editor in its colors.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 
 ## FluxCode, Zed and VS Code
@@ -249,7 +289,7 @@ All three are good editors made for different people. This is where each stands 
 | Telemetry | none | on by default, can be turned off | on by default in Microsoft's build, can be turned off |
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
-| Extensions | none | yes | the largest catalog |
+| Extensions | 11 built in (build, run, deploy and pack tasks, as manifests), more from a file | yes | the largest catalog |
 | AI agent | any ACP agent, three access levels, per-turn changes with undo, local memory | its own agent and ACP agents | GitHub Copilot and extensions |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
 | Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
@@ -276,6 +316,9 @@ open its port (UPnP) and opens a tunnel at bore.pub, unless you untick **Let peo
 over the internet**; bore.pub then sees your public IP address and encrypted bytes.
 The first time an agent starts, FluxCode installs the agents' browser tool
 (chrome-devtools-mcp) from the npm registry; Agent settings > Browser > Off skips it.
+Extensions download nothing by themselves: Add Gradle wrapper asks services.gradle.org for
+the current version and fetches the wrapper from Gradle's GitHub repository, and an
+Install button on an extension's page runs `winget` in the Terminal, only when you click.
 
 ## Shortcuts
 
@@ -301,7 +344,7 @@ keys, and Settings > Keyboard shortcuts shows the same list.
 | Word wrap | `Alt+Z` |
 | Editor font bigger / smaller / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 | Side bar / Panel / Terminal | `Ctrl+B` / `Ctrl+J` / ``Ctrl+` `` |
-| Explorer / Source Control / Run | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` |
+| Explorer / Source Control / Run / Extensions | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` / `Ctrl+Shift+X` |
 | Run file / Stop | `F5` / `Shift+F5` |
 | Agent panel | `Ctrl+L` |
 | Settings / Next theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |

@@ -41,7 +41,7 @@ actions!(
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
         InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
-        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew
+        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions
     ]
 );
 
@@ -58,6 +58,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-e", ShowExplorer, None),
         KeyBinding::new("ctrl-shift-f", FindInFiles, None),
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
+        KeyBinding::new("ctrl-shift-x", ShowExtensions, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
@@ -134,6 +135,7 @@ pub(crate) enum SideView {
     Run,
     Scm,
     Agent,
+    Extensions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -300,6 +302,9 @@ pub struct Workbench {
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
+    pub(crate) ext: crate::ext::Ext,
+    /// The status bar's color theme list is open.
+    pub(crate) theme_menu: bool,
     pub(crate) quick: crate::quick::QuickOpen,
     /// Every file of the open folder (from the explorer's scan), for Go to File.
     pub(crate) all_files: Rc<Vec<String>>,
@@ -376,6 +381,7 @@ impl Workbench {
         let agent = crate::agent::AgentState::new(window, cx);
         crate::boot::mark("  agent state");
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
+        let ext = crate::ext::Ext::new(window, cx);
         subs.push(scm_sub);
         crate::boot::mark("  scm");
         let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
@@ -449,6 +455,8 @@ impl Workbench {
             python_version: None,
             agent,
             scm,
+            ext,
+            theme_menu: false,
             quick,
             all_files: Rc::default(),
             all_lower: Rc::default(),
@@ -536,6 +544,8 @@ impl Workbench {
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
+                // Which extensions the folder's projects use (and their tasks).
+                this.ext_scan(cx);
                 cx.notify();
             });
         })
@@ -543,6 +553,8 @@ impl Workbench {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A file opened from anywhere takes the editor area back from an extension's page.
+        self.ext.page = None;
         self.whats_new = None;
         self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
@@ -999,6 +1011,12 @@ impl Workbench {
         self.show_view(SideView::Run, cx);
     }
 
+    fn on_show_extensions(&mut self, _: &ShowExtensions, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_view(SideView::Extensions, cx);
+        let h = self.ext.query.focus_handle(cx);
+        h.focus(window, cx);
+    }
+
     fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_right {
             self.agent_open = true;
@@ -1084,6 +1102,7 @@ impl Workbench {
                     self.term_scroll.scroll_to_bottom();
                 } else if Some(id) == self.out_proc {
                     push_text(&mut self.out_lines, &text, err);
+                    self.ext_fold();
                     self.out_scroll.scroll_to_bottom();
                 } else if self.agent.owns(id) {
                     self.agent_on_output(&text, err, cx);
@@ -1444,6 +1463,7 @@ impl Workbench {
                     })
             })
             .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
+            .child(view_item("ab-ext", Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child({
                 let live = self.collab.active();
@@ -1478,6 +1498,7 @@ impl Workbench {
             SideView::Explorer => tr("EXPLORER"),
             SideView::Search => tr("SEARCH"),
             SideView::Run => tr("RUN"),
+            SideView::Extensions => tr("EXTENSIONS"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
         };
@@ -1508,6 +1529,7 @@ impl Workbench {
             SideView::Explorer => self.render_explorer(window, cx),
             SideView::Search => self.render_search(cx),
             SideView::Run => self.render_run_view(cx),
+            SideView::Extensions => self.render_ext_view(cx),
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
@@ -1523,10 +1545,17 @@ impl Workbench {
 
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let file = self.active.map(|a| self.docs[a].name.to_string());
+        let projects = self.render_ext_run(cx);
         v_flex()
+            .id("run-view")
+            .size_full()
+            .overflow_y_scroll()
             .p_3()
             .gap_3()
             .text_sm()
+            .when_some(projects, |v, p| {
+                v.child(p).child(div().h(px(1.)).bg(c(theme::BORDER))).child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("This file")))
+            })
             .child(match &file {
                 Some(f) => self
                     .action_button("run-file", crate::trf!("Run {f}"; f => f), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
@@ -1540,7 +1569,7 @@ impl Workbench {
                 div()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
-                    .child("F5 runs the active file (Python, Node, PowerShell, batch, Rust via cargo). Output appears in the Output panel. Breakpoint debugging is not in FluxCode yet."),
+                    .child(tr("F5 runs the active file (Python, Node, PowerShell, batch, Rust via cargo). Output appears in the Output panel. Projects get their build, test and deploy buttons above from their extension (Ctrl+Shift+X).")),
             )
             .into_any_element()
     }
@@ -1627,6 +1656,9 @@ impl Workbench {
         if self.collab.page {
             return self.render_collab_page(cx);
         }
+        if let Some(id) = self.ext.page.clone() {
+            return self.render_ext_page(&id, cx);
+        }
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
         }
@@ -1678,36 +1710,57 @@ impl Workbench {
                         .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx)),
                 ))
                 .into_any_element(),
+            // The welcome page: one column, at most 320 wide, that narrows with the editor
+            // area and scrolls when the window is short (nothing is cut off at the sides).
             None => v_flex()
+                .id("welcome")
                 .size_full()
-                .items_center()
-                .justify_center()
-                .gap_5()
+                .overflow_y_scroll()
                 .bg(theme::editor_wash())
                 .child(
+                    // flex_none: taller than the window it grows (and scrolls) instead of
+                    // shrinking and spilling over the top.
                     v_flex()
+                        .flex_none()
+                        .w_full()
+                        .min_h(relative(1.))
+                        .px_4()
+                        .py_6()
                         .items_center()
-                        .gap_1()
-                        .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
-                        .child(div().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
-                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
-                        .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .pt_2()
-                        .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
+                        .justify_center()
+                        .gap_5()
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .max_w(theme::u(420.))
+                                .items_center()
+                                .gap_1()
+                                .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
+                                .child(div().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
+                                .child(div().w_full().text_center().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .justify_center()
+                                .gap_2()
+                                .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
+                                .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                        )
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .max_w(theme::u(320.))
+                                .gap_2()
+                                .pt_2()
+                                .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
                         .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
                         .child(shortcut(tr("Run file"), "F5"))
                         .child(shortcut(tr("AI agent"), "Ctrl+L"))
                         .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
-                        .child(shortcut(tr("Settings"), "Ctrl+,")),
+                                .child(shortcut(tr("Extensions"), "Ctrl+Shift+X"))
+                                .child(shortcut(tr("Settings"), "Ctrl+,")),
+                        ),
                 )
                 .into_any_element(),
         }
@@ -1810,7 +1863,7 @@ impl Workbench {
             .when(!pos.is_empty(), |h| {
                 h.child(seg(pos.into())).when(!is_image, |h| h.child(seg(crlf.into())).child(seg("UTF-8".into()))).child(seg(lang.into()))
             })
-            .child(seg(theme::palette().name.into()).pr_3())
+            .child(self.render_theme_button(cx))
     }
 }
 
@@ -1826,12 +1879,14 @@ pub(crate) fn tool_button(
 
 fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
     h_flex()
-        .w(theme::u(320.))
+        .w_full()
         .gap_2()
         .text_sm()
-        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
+        // The label gives way in a narrow editor area; the keys keep their size.
+        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
         .children(keys.split(['+', ' ']).map(|k| {
             div()
+                .flex_none()
                 .px_2()
                 .rounded(px(3.))
                 .text_xs()
@@ -1896,7 +1951,7 @@ pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, err: bool) {
         l.kind = crate::term::classify(&l.text, l.err, prev);
         l.link = match l.kind {
             LineKind::Frame => crate::term::parse_frame(&l.text).map(|(p, n, _)| (p.into(), n)),
-            LineKind::Warn => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
+            LineKind::Warn | LineKind::Err => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
             _ => None,
         };
         if !last_piece {
@@ -2101,6 +2156,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_show_explorer))
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_show_run))
+            .on_action(cx.listener(Self::on_show_extensions))
             .on_action(cx.listener(Self::on_show_agent))
             .on_action(cx.listener(Self::on_show_settings))
             .on_action(cx.listener(Self::on_about))
@@ -2148,6 +2204,7 @@ impl Render for Workbench {
             .when(self.quick.open, |v| v.child(self.render_quick_open(cx)))
             .children(self.render_drop_ask(cx))
             .children(self.render_update(cx))
+            .children(self.render_theme_menu(cx))
     }
 }
 

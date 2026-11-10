@@ -365,6 +365,7 @@ impl Workbench {
             self.term_scroll.scroll_to_bottom();
         } else {
             self.out_scroll.scroll_to_bottom();
+            self.ext_after_run(code, cx);
         }
     }
 
@@ -427,7 +428,7 @@ impl Workbench {
         let base = if terminal {
             self.term_run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.term_cwd.clone())
         } else {
-            self.out_run.as_ref().map(|r| r.cwd.clone()).or_else(|| self.root.clone()).unwrap_or_default()
+            self.out_run.as_ref().map(|r| r.cwd.clone()).or_else(|| self.ext.last_cwd.clone()).or_else(|| self.root.clone()).unwrap_or_default()
         };
         let full = if p.is_absolute() { p } else { base.join(p) };
         self.open_location(full, line, 0, window, cx);
@@ -502,9 +503,13 @@ impl Workbench {
                     .into_any_element()
             }
             // Traceback frames and `file.py:12:` warnings: the whole line opens the file there.
-            LineKind::Frame | LineKind::Warn if l.link.is_some() => {
+            LineKind::Frame | LineKind::Warn | LineKind::Err if l.link.is_some() => {
                 let (path, line) = l.link.clone().unwrap_or_default();
-                let col = if l.kind == LineKind::Warn { theme::WARN } else { theme::FG_MUTED };
+                let col = match l.kind {
+                    LineKind::Warn => theme::WARN,
+                    LineKind::Err => theme::DANGER,
+                    _ => theme::FG_MUTED,
+                };
                 base.child(
                     div()
                         .id(("lk", i))

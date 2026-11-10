@@ -70,7 +70,8 @@ pub struct Settings {
     /// OpenCode docks on the right of the editor (like a chat beside the code)
     /// instead of in the left side bar.
     pub agent_right: bool,
-    /// Which agent harness the panel runs: "auto" (Mura when installed), "opencode" or "mura".
+    /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id
+    /// ("opencode-v2", "mura", ...).
     pub agent_cli: String,
     /// Turn the agent process off after this many idle minutes (0 = never). It
     /// resumes the same session on the next message.
@@ -91,6 +92,8 @@ pub struct Settings {
     pub agent_browser: String,
     /// Run that browser without a window.
     pub agent_browser_headless: bool,
+    /// Installed extensions (ids; `ext::catalog` has them all).
+    pub extensions: Vec<String>,
     /// Launches that showed the Ctrl+L hint in the status bar (100: shortcut used).
     pub agent_hint: u8,
     /// Look for new development builds on GitHub at start and every 6 hours.
@@ -139,6 +142,7 @@ impl Default for Settings {
             memory_off: false,
             agent_browser: "auto".into(),
             agent_browser_headless: false,
+            extensions: crate::ext::default_installed(),
             agent_hint: 0,
             update_check: true,
             line_numbers: true,
@@ -161,6 +165,18 @@ impl Settings {
             // 0.9: whitespace dots are off by default (they cluttered long lines);
             // Settings → Whitespace dots turns them back on.
             s.show_whitespace = false;
+        }
+        if s.agent_cli == "opencode" {
+            // OpenCode became OpenCode 2 (the registry's native build): keep its choices.
+            s.agent_cli = "opencode-v2".into();
+            s.agent_options = std::mem::take(&mut s.agent_options)
+                .into_iter()
+                .map(|(k, v)| match k.strip_prefix("opencode:") {
+                    Some(rest) => (format!("opencode-v2:{rest}"), v),
+                    None => (k, v),
+                })
+                .collect();
+            s.save();
         }
         if s.rev < SETTINGS_REV {
             s.rev = SETTINGS_REV;
