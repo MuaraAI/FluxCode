@@ -161,18 +161,23 @@ shows each one, its address, or why it isn't open:
 | Same network | anyone on the host's Wi-Fi or LAN | nothing (Windows asks once to let FluxCode through its firewall) |
 | Router port (UPnP) | anyone on the internet | a router with UPnP on, like the ones game servers open ports on; not possible when the provider shares one public address between customers (carrier-grade NAT), which the panel detects and says |
 | Public IPv6 | guests with IPv6 | an IPv6 address from the provider, and a router that lets connections in |
-| Relay ([bore.pub](https://github.com/ekzhang/bore)) | anyone on the internet | nothing: it works behind any router and carrier-grade NAT |
+| Relay (MuaraAI) | anyone on the internet | nothing: it works behind any router and carrier-grade NAT |
 
 The invite code carries every address that opened. The guest tries them all at once, the
-same network first, and uses the first host that proves it holds the code's secret. The
-relay is a free public TCP tunnel: it passes bytes that are already encrypted, so it can
-see that two PCs are talking, but not what they send. It costs a little speed (each
-keystroke travels to bore.pub and back). Unticking **Let people join over the internet**
-before hosting keeps the session on the network only. The router's port is closed again
-when the session ends.
+same network first, and uses the first host that proves it holds the code's secret.
+The relay is a TCP tunnel run by MuaraAI: it passes bytes that are already encrypted, so
+it can see that two PCs are talking, but not what they send. It costs a little speed (each
+keystroke travels to `live.muaraai.com` and back). When MuaraAI's relay cannot be reached,
+FluxCode falls back to the public [bore.pub](https://github.com/ekzhang/bore) tunnel.
+Unticking **Let people join over the internet** before hosting keeps the session on the
+network only. The router's port is closed again when the session ends.
+
+Running your own relay is one command on a VPS: see [`relay/README.md`](relay/README.md).
 
 - Only files someone has open travel, so a large project (a game, a Laravel or Android
   project) costs no more than the files being worked on. Files over 16 MB are not shared.
+  Environment files, private keys, and build folders like `node_modules` or `target` are
+  never shared, even if a guest asks for them by name.
 - Not yet: other people's carets drawn inside the editor (the panel shows their line),
   separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
   and syncing files an agent edits without them being open.
@@ -272,8 +277,10 @@ out only when you start it: the agent you run, `git`, GitHub when you sign in, a
 build's `changelog.flux` when you click What's new on the update card. The
 agent menu reads the public ACP agent list from cdn.agentclientprotocol.com, at most once
 a day and only when you open the menu. Hosting a Live share session asks your router to
-open its port (UPnP) and opens a tunnel at bore.pub, unless you untick **Let people join
-over the internet**; bore.pub then sees your public IP address and encrypted bytes.
+open its port (UPnP) and opens a tunnel at `live.muaraai.com`, unless you untick **Let
+people join over the internet**; the relay then sees your public IP address and encrypted
+bytes. If `live.muaraai.com` cannot be reached, FluxCode falls back to the public bore.pub
+tunnel, which sees the same two things.
 The first time an agent starts, FluxCode installs the agents' browser tool
 (chrome-devtools-mcp) from the npm registry; Agent settings > Browser > Off skips it.
 

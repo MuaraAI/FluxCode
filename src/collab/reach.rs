@@ -57,11 +57,6 @@ fn endpoints_from(get: &dyn Fn(&str) -> Option<String>, baked: Option<&'static s
     out
 }
 
-/// The name to show in messages: our relay when this build can use it.
-pub fn relay_host_label() -> String {
-    endpoints().first().map(|e| e.host.clone()).unwrap_or_else(|| FALLBACK_RELAY_HOST.to_string())
-}
-
 /// Is `addr` (`host:port`) one of the relays we hand out?
 pub fn is_relay_addr(addr: &str) -> bool {
     let Some((host, _)) = addr.rsplit_once(':') else { return false };
@@ -771,6 +766,31 @@ mod tests {
                 let _ = c.shutdown(std::net::Shutdown::Both);
             }
         });
+        let _ = srv.kill();
+    }
+
+    /// A wrong secret must fail with a readable error, not a panic or a hang.
+    /// Needs `bore` on PATH (or at /tmp/bore): `cargo test wrong_secret_is_refused -- --ignored --test-threads=1`.
+    #[test]
+    #[ignore]
+    fn wrong_secret_is_refused() {
+        let bore = [std::path::PathBuf::from("/tmp/bore"), std::path::PathBuf::from("bore")]
+            .into_iter()
+            .find(|p| p.exists() || p.components().count() == 1)
+            .unwrap();
+        let mut srv = std::process::Command::new(&bore)
+            .args(["server", "--secret", "right", "--min-port", "29820", "--max-port", "29830", "--bind-addr", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start bore server");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        let ep = super::RelayEndpoint { host: "127.0.0.1".into(), port: 7835, secret: Some("wrong".into()) };
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let ctl = std::sync::Mutex::new(None);
+        let err = super::relay_open(&ep, 1, &stop, &ctl, &|_| {}).expect_err("wrong secret must not open a tunnel");
+        assert!(!err.is_empty(), "the error is shown to the host, so it must say something");
         let _ = srv.kill();
     }
 }
