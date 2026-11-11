@@ -2079,6 +2079,7 @@ impl Workbench {
     /// Open what the agent changed in a file as a unified diff, in a tab.
     fn agent_show_diff(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ch) = self.agent.changes.get(ix) else { return };
+        let target = ch.path.clone();
         let after = std::fs::read_to_string(&ch.path).unwrap_or_default();
         let rel = self.rel_display(&ch.path.to_string_lossy()).replace('\\', "/");
         let text = crate::diff::unified(&rel, ch.before.as_deref().unwrap_or(""), &after);
@@ -2089,7 +2090,10 @@ impl Workbench {
             if let Some(i) = self.docs.iter().position(|d| d.path == file) {
                 self.close(i, window, cx);
             }
-            self.open_file(file, window, cx);
+            self.open_file(file.clone(), window, cx);
+            if let Some(d) = self.docs.iter_mut().find(|d| d.path == file).and_then(|d| d.diff.as_mut()) {
+                d.target = Some(target);
+            }
         }
     }
 
@@ -2999,7 +3003,7 @@ impl Workbench {
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.agent.user_nav = Some(std::time::Instant::now());
-                                this.open_file(path.clone(), w, cx)
+                                this.agent_show_diff(i, w, cx)
                             }))
                             .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(theme::tint(tint)))
                             .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
@@ -3023,9 +3027,12 @@ impl Workbench {
                             .cursor_pointer()
                             .text_color(c(theme::FG_DIM))
                             .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Show the diff")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, w, cx| this.agent_show_diff(i, w, cx)))
-                            .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.))),
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.agent.user_nav = Some(std::time::Instant::now());
+                                this.open_file(path.clone(), w, cx)
+                            }))
+                            .child(Icon::new(IconName::FileText).size(theme::u(13.))),
                     )
                     .child(
                         div()
