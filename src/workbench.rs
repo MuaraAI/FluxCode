@@ -13,7 +13,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
-    menu::{DropdownMenu, PopupMenu},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
     tree::TreeState,
     v_flex, Icon, IconName, Sizable, TitleBar,
@@ -41,7 +41,7 @@ actions!(
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
         InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
-        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew
+        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions
     ]
 );
 
@@ -58,6 +58,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-e", ShowExplorer, None),
         KeyBinding::new("ctrl-shift-f", FindInFiles, None),
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
+        KeyBinding::new("ctrl-shift-x", ShowExtensions, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
@@ -134,6 +135,7 @@ pub(crate) enum SideView {
     Run,
     Scm,
     Agent,
+    Extensions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -191,6 +193,8 @@ pub(crate) struct Doc {
     /// A large Flux document opens drawn with its editor still empty (the text lives in
     /// `flux`); the editor fills the first time Source is shown.
     pub flux_lazy: bool,
+    /// A `.diff` / `.patch` file: drawn with colored lines (diff_view.rs).
+    pub diff: Option<crate::diff_view::DiffDoc>,
 }
 
 impl Doc {
@@ -233,6 +237,8 @@ pub struct Workbench {
     pub(crate) drop_focus: FocusHandle,
     /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
     pub(crate) smooth: Option<SmoothScroll>,
+    /// The welcome page's width as last drawn: too narrow for its text, it shows the logo alone.
+    welcome_w: std::rc::Rc<std::cell::Cell<f32>>,
     /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
@@ -247,6 +253,8 @@ pub struct Workbench {
     /// Widths of the side bar and that dock (logical px), and which edge is being
     /// dragged: 0 none, 1 side bar, 2 dock.
     pub(crate) agent_width: f32,
+    /// The agent chat fills the window (the editor steps aside until it is turned off).
+    pub(crate) agent_full: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) resizing: u8,
     pub(crate) focus: FocusHandle,
@@ -262,6 +270,9 @@ pub struct Workbench {
     // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
+    /// The tab the explorer last showed (its folders opened, scrolled into view): it
+    /// follows the active tab whenever it is on screen.
+    pub(crate) revealed: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
     // search
@@ -278,6 +289,8 @@ pub struct Workbench {
     pub(crate) term_lines: Vec<Line>,
     pub(crate) term_cwd: PathBuf,
     pub(crate) term_input: Entity<InputState>,
+    /// The prompt has text in it (the panel draws its own placeholder in the UI font).
+    pub(crate) term_typed: bool,
     pub(crate) term_proc: Option<u32>,
     pub(crate) term_history: Vec<String>,
     pub(crate) term_scroll: UniformListScrollHandle,
@@ -285,10 +298,14 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) term_run: Option<crate::panel::RunInfo>,
-    /// Wrapped rows of the terminal and output panels, and the panel's measured width.
+    /// Wrapped rows of the terminal and output panels, and the size of the panel's log (last frame).
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
-    pub(crate) panel_width: Rc<std::cell::Cell<f32>>,
+    pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
+    /// The panel log's left edge in window pixels (last frame): where a row's text starts.
+    pub(crate) panel_left: Rc<std::cell::Cell<f32>>,
+    /// Text selected in the terminal or output log with the mouse.
+    pub(crate) panel_sel: Option<crate::panel::PanelSel>,
     /// Size of the image viewer area (measured last frame), to fit pictures exactly.
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
@@ -300,6 +317,9 @@ pub struct Workbench {
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
+    pub(crate) ext: crate::ext::Ext,
+    /// The status bar's color theme list is open.
+    pub(crate) theme_menu: bool,
     pub(crate) quick: crate::quick::QuickOpen,
     /// Every file of the open folder (from the explorer's scan), for Go to File.
     pub(crate) all_files: Rc<Vec<String>>,
@@ -324,7 +344,8 @@ impl Workbench {
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
-        let term_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type a command (Tab completes, ↑ for history)")));
+        // No placeholder of its own: the panel draws one in the UI font (see `render_panel`).
+        let term_input = cx.new(|cx| InputState::new(window, cx));
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
         crate::boot::mark("  inputs");
         let mut subs = vec![
@@ -339,8 +360,17 @@ impl Workbench {
                 }
             }),
             cx.subscribe_in(&term_input, window, |this, _, ev: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = ev {
-                    this.terminal_enter(window, cx);
+                match ev {
+                    InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
+                    // Redraw only when the placeholder should appear or go.
+                    InputEvent::Change => {
+                        let typed = !this.term_input.read(cx).value().is_empty();
+                        if typed != this.term_typed {
+                            this.term_typed = typed;
+                            cx.notify();
+                        }
+                    }
+                    _ => {}
                 }
             }),
         ];
@@ -376,6 +406,7 @@ impl Workbench {
         let agent = crate::agent::AgentState::new(window, cx);
         crate::boot::mark("  agent state");
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
+        let ext = crate::ext::Ext::new(window, cx);
         subs.push(scm_sub);
         crate::boot::mark("  scm");
         let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
@@ -398,6 +429,7 @@ impl Workbench {
             workspace: Default::default(),
             drop_focus: cx.focus_handle(),
             smooth: None,
+            welcome_w: std::rc::Rc::new(std::cell::Cell::new(f32::MAX)),
             status_seen: SharedString::default(),
             tree,
             dirs: Rc::default(),
@@ -407,6 +439,7 @@ impl Workbench {
             sidebar_open: true,
             agent_open: false,
             agent_width: 380.,
+            agent_full: false,
             sidebar_width: 260.,
             resizing: 0,
             focus,
@@ -418,6 +451,7 @@ impl Workbench {
             collab: crate::collab::Collab::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
+            revealed: RefCell::new(None),
             pending: None,
             name_input,
             search_input,
@@ -432,6 +466,7 @@ impl Workbench {
             term_lines: Vec::new(),
             term_cwd,
             term_input,
+            term_typed: false,
             term_proc: None,
             term_history: Vec::new(),
             term_scroll: UniformListScrollHandle::new(),
@@ -441,7 +476,9 @@ impl Workbench {
             term_run: None,
             term_wrap: Default::default(),
             out_wrap: Default::default(),
-            panel_width: Rc::default(),
+            panel_size: Rc::default(),
+            panel_left: Rc::default(),
+            panel_sel: None,
             image_box: Rc::default(),
             out_run: None,
             term_hist_ix: None,
@@ -449,6 +486,8 @@ impl Workbench {
             python_version: None,
             agent,
             scm,
+            ext,
+            theme_menu: false,
             quick,
             all_files: Rc::default(),
             all_lower: Rc::default(),
@@ -533,9 +572,13 @@ impl Workbench {
             let all = crate::quick::file_list(flat, &dirs);
             _ = tree.update(cx, |state, cx| state.set_items(items, cx));
             _ = this.update(cx, |this, cx| {
+                // New items: show the active file again.
+                *this.revealed.borrow_mut() = None;
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
+                // Which extensions the folder's projects use (and their tasks).
+                this.ext_scan(cx);
                 cx.notify();
             });
         })
@@ -543,6 +586,8 @@ impl Workbench {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A file opened from anywhere takes the editor area back from an extension's page.
+        self.ext.page = None;
         self.whats_new = None;
         self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
@@ -598,6 +643,7 @@ impl Workbench {
             (true, false) => (text.clone(), text),
             _ => (String::new(), text),
         };
+        let diff = (crate::diff_view::is_diff(lang) && !large).then(|| crate::diff_view::parse(&text));
         let file = core::FileText { text, crlf };
         let s = &self.settings;
         let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
@@ -677,7 +723,7 @@ impl Workbench {
             })
             .detach();
         }
-        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy });
+        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy, diff });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }
@@ -705,6 +751,7 @@ impl Workbench {
             flux: None,
             flux_source: false,
             flux_lazy: false,
+            diff: None,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -817,7 +864,11 @@ impl Workbench {
 
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = Some(ix);
-        let handle = self.docs[ix].editor.focus_handle(cx);
+        // A tab that shows no text editor (an image, a drawn Flux document, a diff)
+        // takes the workbench's focus: focusing its hidden editor would leave the keys
+        // with nowhere to go, so Ctrl+W and the other shortcuts stopped working there.
+        let d = &self.docs[ix];
+        let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) { self.focus.clone() } else { d.editor.focus_handle(cx) };
         handle.focus(window, cx);
         cx.notify();
     }
@@ -999,6 +1050,12 @@ impl Workbench {
         self.show_view(SideView::Run, cx);
     }
 
+    fn on_show_extensions(&mut self, _: &ShowExtensions, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_view(SideView::Extensions, cx);
+        let h = self.ext.query.focus_handle(cx);
+        h.focus(window, cx);
+    }
+
     fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_right {
             self.agent_open = true;
@@ -1084,6 +1141,7 @@ impl Workbench {
                     self.term_scroll.scroll_to_bottom();
                 } else if Some(id) == self.out_proc {
                     push_text(&mut self.out_lines, &text, err);
+                    self.ext_fold();
                     self.out_scroll.scroll_to_bottom();
                 } else if self.agent.owns(id) {
                     self.agent_on_output(&text, err, cx);
@@ -1335,24 +1393,40 @@ impl Workbench {
                 })
                 .child(Icon::new(icon).small())
         };
-        h_flex()
-            .id("title-bar")
-            .relative()
-            .w_full()
-            .h(theme::u(34.))
-            .flex_none()
-            .bg(c(theme::BG_TITLE))
-            .border_b_1()
-            .border_color(c(theme::BORDER))
-            .child(row)
-            .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
-            .child(
-                ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
-                    .on_click(|_, w, _| w.zoom_window()),
-            )
-            .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
-            .child(center_layer)
-            .into_any_element()
+        // Start button (Run file) - like VS Code's run button
+                let start_btn = div()
+                    .id("tb-start")
+                    .w(px(46.))
+                    .h_full()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .child(Icon::new(IconName::Play).small())
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Run File (F5)")).build(w, cx))
+                    .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)));
+
+                h_flex()
+                    .id("title-bar")
+                    .relative()
+                    .w_full()
+                    .h(theme::u(34.))
+                    .flex_none()
+                    .bg(c(theme::BG_TITLE))
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .child(row)
+                    .child(start_btn)
+                    .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
+                    .child(
+                        ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
+                            .on_click(|_, w, _| w.zoom_window()),
+                    )
+                    .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+                    .child(center_layer)
+                    .into_any_element()
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1444,6 +1518,7 @@ impl Workbench {
                     })
             })
             .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
+            .child(view_item("ab-ext", Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child({
                 let live = self.collab.active();
@@ -1478,6 +1553,7 @@ impl Workbench {
             SideView::Explorer => tr("EXPLORER"),
             SideView::Search => tr("SEARCH"),
             SideView::Run => tr("RUN"),
+            SideView::Extensions => tr("EXTENSIONS"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
         };
@@ -1508,6 +1584,7 @@ impl Workbench {
             SideView::Explorer => self.render_explorer(window, cx),
             SideView::Search => self.render_search(cx),
             SideView::Run => self.render_run_view(cx),
+            SideView::Extensions => self.render_ext_view(cx),
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
@@ -1521,28 +1598,87 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// The Run view: the folder's projects (see `render_ext_run`), then the active file
+    /// when F5 can run it. With neither, it says why and what to do.
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let file = self.active.map(|a| self.docs[a].name.to_string());
-        v_flex()
-            .p_3()
-            .gap_3()
-            .text_sm()
-            .child(match &file {
-                Some(f) => self
-                    .action_button("run-file", crate::trf!("Run {f}"; f => f), ui::Kind::Primary, cx, |this, w, cx| this.on_run_file(&RunFile, w, cx))
-                    .into_any_element(),
-                None => div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Open a file to run it.")).into_any_element(),
-            })
-            .when(self.out_proc.is_some(), |v| {
-                v.child(self.action_button("stop-run", tr("Stop"), ui::Kind::Danger, cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child("F5 runs the active file (Python, Node, PowerShell, batch, Rust via cargo). Output appears in the Output panel. Breakpoint debugging is not in FluxCode yet."),
-            )
-            .into_any_element()
+        let doc = self.active.map(|a| &self.docs[a]);
+        let runnable = doc.filter(|d| crate::panel::can_run(&d.path));
+        // One accent in the view: the main task of the project you're in, else the
+        // active file when F5 runs it, else the first project's main task.
+        let (lead, holds_file) = self.ext_lead();
+        let file_leads = runnable.is_some() && !holds_file;
+        let projects = self.render_ext_run(if file_leads { None } else { lead }, cx);
+        let has_projects = projects.is_some();
+        // Something runs in the Output panel that isn't a project task: the file.
+        let file_running = self.out_proc.is_some() && self.ext.running.is_none();
+        let mut v = v_flex().id("run-view").size_full().overflow_y_scroll().px_3().pt_1().pb_4().gap(theme::u(20.)).when_some(projects, |v, p| v.child(p));
+        if let Some(d) = runnable {
+            let label: SharedString = crate::trf!("Run {f}"; f => d.name).into();
+            let tip: SharedString = crate::trf!("Run {f} (F5)"; f => d.name).into();
+            let run = |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.on_run_file(&RunFile, w, cx);
+            let body = if !file_leads {
+                crate::ext::view::run_row("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, tip)
+                    .on_click(cx.listener(move |this, _, w, cx| run(this, w, cx)))
+                    .when(file_running, |r| r.child(self.run_stop("run-file-stop", 20., cx)))
+                    .when(!file_running, |r| r.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child("F5")))
+                    .into_any_element()
+            } else {
+                h_flex()
+                    .w_full()
+                    .gap_1p5()
+                    .child(crate::ext::view::run_main_button("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, true, tip).on_click(cx.listener(move |this, _, w, cx| run(this, w, cx))))
+                    .when(file_running, |h| h.child(self.run_stop("run-file-stop", 30., cx)))
+                    .into_any_element()
+            };
+            v = v.child(
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .when(has_projects, |b| {
+                        b.child(div().h(px(1.)).bg(c(theme::BORDER))).child(div().px_2().pt_3().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(tr("This file")))
+                    })
+                    .child(body),
+            );
+        } else if !has_projects {
+            let (title, text): (SharedString, SharedString) = match (doc, &self.root) {
+                (Some(d), _) => (
+                    crate::trf!("{f} can't be run"; f => d.name).into(),
+                    tr("F5 runs Python, JavaScript, TypeScript, PowerShell, batch, shell, Rust and Go files. Build tasks for a project come from its extension.").into(),
+                ),
+                (None, None) => (tr("Nothing to run yet").into(), tr("Open a project folder to get its build tasks here, or open a script and press F5.").into()),
+                (None, Some(_)) if self.ext.scanning => (tr("Looking for projects…").into(), tr("Build tasks show up here for each project an extension knows.").into()),
+                (None, Some(_)) => (tr("Nothing to run yet").into(), tr("No project here has an installed extension. Open a script and press F5, or find an extension for your project.").into()),
+            };
+            let button = if self.root.is_none() {
+                self.action_button("run-open-folder", tr("Open folder"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)).into_any_element()
+            } else {
+                self.action_button("run-browse-ext", tr("Browse extensions"), ui::Kind::Plain, cx, |this, _, cx| this.show_view(SideView::Extensions, cx)).into_any_element()
+            };
+            v = v.child(
+                v_flex()
+                    .w_full()
+                    .px_2()
+                    .pt_2()
+                    .gap_1()
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
+                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(text))
+                    .child(h_flex().pt_2().child(button)),
+            );
+        }
+        if file_running && runnable.is_none() {
+            // The file that runs is no longer the active one: it and Stop stay in view.
+            let what = self.out_run.as_ref().map(|r| r.command.clone()).unwrap_or_default();
+            v = v.child(
+                crate::ext::view::run_row("run-file-bg".into(), gpui_kit::assets::IconName::Play, crate::trf!("Running {what}"; what => what).into(), true, tr("Show the output").into())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.panel_open = true;
+                        this.panel_tab = PanelTab::Output;
+                        cx.notify();
+                    }))
+                    .child(self.run_stop("run-file-bg-stop", 20., cx)),
+            );
+        }
+        v.into_any_element()
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1594,8 +1730,64 @@ impl Workbench {
                                 this.close(ix, window, cx);
                             })),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.agent.user_nav = Some(std::time::Instant::now());
+                        this.activate(ix, window, cx)
+                    }))
+                    .context_menu({
+                        let weak = cx.entity().downgrade();
+                        let path = d.path.clone();
+                        let rel = self.rel_display(&d.path.to_string_lossy());
+                        move |menu, _, _| {
+                            let item = |label: &'static str, f: Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>| {
+                                let weak = weak.clone();
+                                PopupMenuItem::new(tr(label)).on_click(move |_, w, cx| {
+                                    _ = weak.update(cx, |this, cx| f(this, w, cx));
+                                })
+                            };
+                            let (full, rel) = (path.to_string_lossy().into_owned(), rel.clone());
+                            let reveal = path.clone();
+                            menu.item(item("Close", Box::new(move |this, w, cx| this.close(ix, w, cx))))
+                                .item(item("Close Others", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i != ix && !d.dirty))))
+                                .item(item("Close to the Right", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i > ix && !d.dirty))))
+                                .item(item("Close Saved", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
+                                .item(item("Close All", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
+                                .separator()
+                                .item(item("Copy Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone())))))
+                                .item(item("Copy Relative Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(rel.replace('\\', "/"))))))
+                                .separator()
+                                .item(item("Reveal in File Explorer", Box::new(move |_, _, cx| cx.reveal_path(&reveal))))
+                                .item(item("Go to File...", Box::new(|_, w, cx| w.dispatch_action(Box::new(QuickOpenFile), cx))))
+                        }
+                    })
             }))
+    }
+
+    /// Close every tab `keep_out` picks, keeping the active one active when it stays.
+    /// Tabs with unsaved changes are never closed this way (they would lose the edits).
+    pub(crate) fn close_tabs_where(&mut self, window: &mut Window, cx: &mut Context<Self>, close: impl Fn(usize, &Doc) -> bool) {
+        let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
+        let doomed: Vec<usize> = self.docs.iter().enumerate().filter(|(i, d)| close(*i, d)).map(|(i, _)| i).collect();
+        for &i in doomed.iter().rev() {
+            let closed = self.docs.remove(i);
+            if !closed.read_only {
+                self.closed_tabs.retain(|p| *p != closed.path);
+                self.closed_tabs.push(closed.path);
+            }
+        }
+        let n = self.closed_tabs.len();
+        if n > 30 {
+            self.closed_tabs.drain(..n - 30);
+        }
+        self.active = active.and_then(|p| self.docs.iter().position(|d| d.path == p)).or((!self.docs.is_empty()).then(|| self.docs.len() - 1));
+        match self.active {
+            Some(a) => self.activate(a, window, cx),
+            None => {
+                self.focus.focus(window, cx);
+                cx.notify();
+            }
+        }
+        self.save_session(cx);
     }
 
     /// The active file's path below the tabs: folder › folder › file.
@@ -1627,6 +1819,9 @@ impl Workbench {
         if self.collab.page {
             return self.render_collab_page(cx);
         }
+        if let Some(id) = self.ext.page.clone() {
+            return self.render_ext_page(&id, cx);
+        }
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
         }
@@ -1637,6 +1832,7 @@ impl Workbench {
                 .child(self.render_tabs(cx))
                 .child(self.render_breadcrumbs(ix))
                 .when(self.docs[ix].image.is_some(), |v| v.child(div().flex_1().min_h_0().child(self.render_image(ix, window, cx))))
+                .when(self.docs[ix].diff.as_ref().is_some_and(|d| !d.source), |v| v.child(div().flex_1().min_h_0().child(self.render_diff_doc(ix, cx))))
                 .when_some(self.docs[ix].banner.clone(), |v, b| {
                     v.child(
                         h_flex()
@@ -1662,7 +1858,7 @@ impl Workbench {
                     });
                     v.child(div().flex_1().min_h_0().child(view))
                 })
-                .when(self.docs[ix].image.is_none() && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
+                .when(self.docs[ix].image.is_none() && !self.docs[ix].diff.as_ref().is_some_and(|d| !d.source) && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
                     div()
                         .flex_1()
                         .min_h_0()
@@ -1675,42 +1871,103 @@ impl Workbench {
                                 .font_family(self.settings.font_family.clone())
                                 .text_size(px(self.settings.font_size)),
                         )
-                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx)),
+                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx))
+                        // A file comes in with a short fade (once per switch; nothing runs after).
+                        .with_animation(SharedString::from(format!("doc-in-{}", self.docs[ix].path.display())), Animation::new(std::time::Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(0.4 + 0.6 * t)),
                 ))
                 .into_any_element(),
-            None => v_flex()
+            // The welcome page: one column, at most 320 wide, that narrows with the editor
+            // area and scrolls when the window is short (nothing is cut off at the sides).
+            // A strip too narrow for a line of text (a wide agent panel beside it): the logo
+            // alone, rather than words broken letter by letter.
+            None if self.welcome_w.get() < 230. => div()
+                .relative()
                 .size_full()
+                .flex()
                 .items_center()
                 .justify_center()
-                .gap_5()
+                .overflow_hidden()
                 .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
+                .when(self.welcome_w.get() >= 84., |d| d.child(ui::meander(48., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))))
+                .into_any_element(),
+            None => v_flex()
+                .id("welcome")
+                .relative()
+                .size_full()
+                .overflow_y_scroll()
+                .bg(theme::editor_wash())
+                .child(self.welcome_probe(cx))
                 .child(
+                    // flex_none: taller than the window it grows (and scrolls) instead of
+                    // shrinking and spilling over the top.
                     v_flex()
+                        .flex_none()
+                        .w_full()
+                        .min_h(relative(1.))
+                        .px_4()
+                        .py_6()
                         .items_center()
-                        .gap_1()
-                        .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
-                        .child(div().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
-                        .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
-                        .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .pt_2()
-                        .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
+                        .justify_center()
+                        .gap_5()
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .max_w(theme::u(420.))
+                                .items_center()
+                                .gap_1()
+                                .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
+                                // One word: cut short in a very narrow editor area, never broken letter by letter.
+                                .child(div().max_w_full().truncate().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
+                                .child(div().w_full().text_center().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .justify_center()
+                                .gap_2()
+                                .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
+                                .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                        )
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .max_w(theme::u(320.))
+                                .gap_2()
+                                .pt_2()
+                                .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
                         .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
                         .child(shortcut(tr("Run file"), "F5"))
                         .child(shortcut(tr("AI agent"), "Ctrl+L"))
                         .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
-                        .child(shortcut(tr("Settings"), "Ctrl+,")),
+                                .child(shortcut(tr("Extensions"), "Ctrl+Shift+X"))
+                                .child(shortcut(tr("Settings"), "Ctrl+,")),
+                        ),
                 )
                 .into_any_element(),
         }
+    }
+
+    /// Measures the welcome page as it is drawn, and redraws it when its width crosses
+    /// what the text needs.
+    fn welcome_probe(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let cell = self.welcome_w.clone();
+        let eid = cx.entity_id();
+        canvas(
+            move |b, _, cx| {
+                let w = f32::from(b.size.width);
+                let was = cell.replace(w);
+                let side = |v: f32| (v < 84., v < 230.);
+                if side(was) != side(w) {
+                    cx.defer(move |cx| cx.notify(eid));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1810,8 +2067,44 @@ impl Workbench {
             .when(!pos.is_empty(), |h| {
                 h.child(seg(pos.into())).when(!is_image, |h| h.child(seg(crlf.into())).child(seg("UTF-8".into()))).child(seg(lang.into()))
             })
-            .child(seg(theme::palette().name.into()).pr_3())
+            .child(self.render_theme_button(cx))
     }
+}
+
+/// Widths of the side bar and the right dock in a window `total` wide, so that all three
+/// columns always fit and the editor keeps room to work: the dock and side bar keep the
+/// widths the user dragged them to while there is room, then give way (side bar first,
+/// down to its minimum, then the dock), and in a very narrow window share what is left.
+/// Nothing is ever pushed out past the window's edge.
+pub(crate) fn fit_columns(total: f32, side: Option<f32>, agent: Option<f32>) -> (f32, f32) {
+    const BAR: f32 = 40. + 8.; // activity bar and the two drag handles
+    const EDITOR: f32 = 320.;
+    const SIDE_MIN: f32 = 170.;
+    const AGENT_MIN: f32 = 260.;
+    let room = (total - BAR - EDITOR).max(0.);
+    let (mut s, mut a) = (side.unwrap_or(0.), agent.unwrap_or(0.));
+    if s + a > room {
+        // The side bar gives way first.
+        if side.is_some() {
+            s = (room - a).max(SIDE_MIN).min(s);
+        }
+        if s + a > room && agent.is_some() {
+            a = (room - s).max(AGENT_MIN).min(a);
+        }
+        // Still too wide (a small window): split what there is, editor included.
+        if s + a > room {
+            let all = (total - BAR).max(0.);
+            let parts = 1. + side.is_some() as u8 as f32 + agent.is_some() as u8 as f32;
+            let each = all / parts;
+            if side.is_some() {
+                s = s.min(each);
+            }
+            if agent.is_some() {
+                a = a.min(each);
+            }
+        }
+    }
+    (s, a)
 }
 
 pub(crate) fn tool_button(
@@ -1826,12 +2119,14 @@ pub(crate) fn tool_button(
 
 fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
     h_flex()
-        .w(theme::u(320.))
+        .w_full()
         .gap_2()
         .text_sm()
-        .child(div().flex_1().text_color(c(theme::FG_MUTED)).child(label))
+        // The label gives way in a narrow editor area; the keys keep their size.
+        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
         .children(keys.split(['+', ' ']).map(|k| {
             div()
+                .flex_none()
                 .px_2()
                 .rounded(px(3.))
                 .text_xs()
@@ -1896,7 +2191,7 @@ pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, err: bool) {
         l.kind = crate::term::classify(&l.text, l.err, prev);
         l.link = match l.kind {
             LineKind::Frame => crate::term::parse_frame(&l.text).map(|(p, n, _)| (p.into(), n)),
-            LineKind::Warn => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
+            LineKind::Warn | LineKind::Err => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
             _ => None,
         };
         if !last_piece {
@@ -1943,6 +2238,9 @@ impl Render for Workbench {
                 .detach();
             }
         }
+        if !self.agent.follow_q.is_empty() {
+            self.apply_agent_follow(window, cx);
+        }
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
@@ -1964,6 +2262,11 @@ impl Render for Workbench {
             None => self.render_editor_area(window, cx),
         };
         let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
+        let (side_w, agent_w) = fit_columns(
+            f32::from(window.viewport_size().width),
+            self.sidebar_open.then_some(self.sidebar_width),
+            (self.settings.agent_right && self.agent_open && !self.agent_full).then_some(self.agent_width),
+        );
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(clip(editor_view)))
@@ -1993,7 +2296,7 @@ impl Render for Workbench {
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(div().w(px(self.sidebar_width)).flex_none().h_full().overflow_hidden().child(self.render_side_bar(window, cx)))
+                .child(div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(self.render_side_bar(window, cx)))
                 .child(handle("sidebar-resize", 1, self, cx))
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel))
                 .into_any_element()
@@ -2004,14 +2307,17 @@ impl Render for Workbench {
         };
         // The right dock is a fixed-width column (dragged by its left edge), so it always
         // fits in the window: the editor side gives up the space, never the dock.
-        let center: AnyElement = if self.settings.agent_right && self.agent_open {
+        let center: AnyElement = if self.settings.agent_right && self.agent_open && self.agent_full {
+            // Full width: the chat in a readable column in the middle of the window.
+            div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)).into_any_element()
+        } else if self.settings.agent_right && self.agent_open {
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
                 .child(handle("agent-resize", 2, self, cx))
-                .child(div().w(px(self.agent_width)).flex_none().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)))
+                .child(div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)))
                 .into_any_element()
         } else {
             center
@@ -2101,6 +2407,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_show_explorer))
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_show_run))
+            .on_action(cx.listener(Self::on_show_extensions))
             .on_action(cx.listener(Self::on_show_agent))
             .on_action(cx.listener(Self::on_show_settings))
             .on_action(cx.listener(Self::on_about))
@@ -2148,7 +2455,32 @@ impl Render for Workbench {
             .when(self.quick.open, |v| v.child(self.render_quick_open(cx)))
             .children(self.render_drop_ask(cx))
             .children(self.render_update(cx))
+            .children(self.render_theme_menu(cx))
+            .children(self.render_agent_settings(window, cx))
+            .child(selection_guard())
     }
+}
+
+/// Text selection starts on text. The window's selection layer begins one on every left
+/// press, wherever it lands, and anchors it to the nearest text: a click on a menu row, a
+/// modal or a button over the chat then selected chat text once the view changed under
+/// the pointer (switching agents, opening a dialog). A press that isn't on selectable
+/// text now starts nothing; it still clears the old selection, as before.
+///
+/// Painted last, so its bubble handler runs before the layer's.
+fn selection_guard() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| {
+            window.on_mouse_event(|ev: &MouseDownEvent, phase, window, cx| {
+                if phase.bubble() && ev.button == MouseButton::Left && !gpui_kit::base::TextSelection::is_selectable_at(ev.position, window, cx) {
+                    gpui_kit::component::GlobalState::suppress_text_selection(cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .size(px(0.))
 }
 
 /// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.
@@ -2172,13 +2504,11 @@ impl Workbench {
     /// After a language change: the text set once at creation (input placeholders).
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
-        self.term_input.update(cx, |s, cx| s.set_placeholder(tr("Type a command (Tab completes, ↑ for history)"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
         let name = crate::agent::agent_name();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
-        self.agent.memory_input.update(cx, |s, cx| s.set_placeholder(tr("Remember something about this project…"), window, cx));
         cx.notify();
     }
 }
@@ -2187,6 +2517,8 @@ impl Workbench {
 #[derive(Clone)]
 pub(crate) enum ScrollTarget {
     Editor(Entity<EditorState>),
+    // Plain scroll views (the chat used it before it became a virtual list).
+    #[allow(dead_code)]
     Handle(u64, ScrollHandle),
 }
 
@@ -2237,6 +2569,9 @@ pub(crate) struct SmoothScroll {
     prev: Option<Point<Pixels>>,
     stuck: u8,
     last: std::time::Instant,
+    /// Heading for the bottom of a scroll area: the target moves down with content
+    /// that arrives during the glide (a streaming answer), so the glide lands on it.
+    bottom: bool,
 }
 
 impl Workbench {
@@ -2276,12 +2611,20 @@ impl Workbench {
             None => target.offset(cx),
         };
         let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        let bottom = match &target {
+            ScrollTarget::Handle(_, h) => d.y < px(0.) && to.y <= -h.max_offset().y + px(1.),
+            ScrollTarget::Editor(_) => false,
+        };
         match self.smooth.as_mut().filter(|s| s.target.key() == key) {
             Some(s) => {
                 s.to = to;
                 s.stuck = 0;
+                s.bottom = bottom;
             }
-            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now() }),
+            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now(), bottom }),
+        }
+        if key == crate::agent::CHAT_SCROLL_KEY {
+            self.agent.follow = bottom;
         }
         if !running {
             self.smooth_next_frame(window, cx);
@@ -2297,9 +2640,18 @@ impl Workbench {
         // only allowed while drawing and would panic from an event handler).
     }
 
+    /// A wheel glide is moving this scroll area right now.
+    #[allow(dead_code)]
+    pub(crate) fn smooth_running(&self, key: u64) -> bool {
+        self.smooth.as_ref().is_some_and(|s| s.target.key() == key)
+    }
+
     fn smooth_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(s) = self.smooth.as_mut() else { return };
         let target = s.target.clone();
+        if let (true, ScrollTarget::Handle(_, h)) = (s.bottom, &target) {
+            s.to.y = -h.max_offset().y;
+        }
         let cur = target.offset(cx);
         let now = std::time::Instant::now();
         let dt = (now - s.last).as_secs_f32().min(0.05);
@@ -2377,5 +2729,26 @@ impl Workbench {
             },
         )
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::fit_columns;
+
+    #[test]
+    fn columns_always_fit() {
+        // Wide: as dragged.
+        assert_eq!(fit_columns(1900., Some(260.), Some(380.)), (260., 380.));
+        // Medium: the side bar gives way first.
+        let (s, a) = fit_columns(1000., Some(300.), Some(380.));
+        assert_eq!(a, 380.);
+        assert!(s >= 170. && 48. + s + a + 320. <= 1000.01, "{s} {a}");
+        // Narrow: everything fits in the window.
+        for w in [500., 640., 800.] {
+            let (s, a) = fit_columns(w, Some(260.), Some(380.));
+            assert!(48. + s + a <= w, "{w}: {s} {a}");
+        }
+        assert_eq!(fit_columns(1200., None, None), (0., 0.));
     }
 }

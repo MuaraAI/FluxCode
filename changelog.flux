@@ -42,6 +42,103 @@ lewat path Windows yang mencoba keluar dari folder berbagi.
 `docs/flux.id.md`), dengan bahasa Inggris lebih dulu karena itu yang dibutuhkan pembaca
 pertama kali. Tautan di atas README berpindah antara keduanya.
 
+@release 2026-11-11
+@title en: The agent asks before it acts
+@title id: Agent bertanya sebelum bertindak
+@en
+Before the agent **runs a command** or changes a file, a card in the chat shows exactly what it
+wants to do and it **waits for your answer**. The taskbar button flashes while FluxCode is in
+the background. **Full access** is one switch in the agent's new **settings dialog** (the gear
+in the panel's title row).
+
+The message box fits a **narrow panel**, the model list **lines up** in columns, and free
+models say so under Usage. Text in the **terminal can be selected and copied**, and clicking a
+menu over the chat no longer selects its text.
+@id
+Sebelum agent **menjalankan perintah** atau mengubah file, kartu di chat menunjukkan persis apa
+yang mau dilakukan dan agent **menunggu jawabanmu**. Tombol taskbar berkedip saat FluxCode di
+belakang. **Akses penuh** cukup satu switch di **dialog pengaturan** agent yang baru (gear di
+baris judul panel).
+
+Kotak pesan muat di **panel sempit**, daftar model **rapi** dalam kolom, dan model gratis
+ditandai di Usage. Teks di **terminal bisa diblok dan disalin**, dan klik menu di atas chat
+tidak lagi memblok teksnya.
+
+@release 2026-11-10
+@title en: A calmer chat, an effort slider you can drag
+@title id: Chat lebih tenang, slider effort yang bisa digeser
+@en
+Scroll up while the agent answers and the chat **stays where you put it**; scroll back down
+and it follows again. Opened thoughts stay on the timeline, and every step's time lines up.
+
+**Drag** the effort slider, see each model's **token limits**, and spot **free** models at a
+glance. Attached images show a **preview**, and a long row of attachments scrolls sideways.
+@id
+Scroll ke atas saat agent menjawab dan chat **tetap di posisimu**; scroll ke bawah lagi dan
+chat kembali mengikuti. Thought yang dibuka tetap di garis langkah, dan waktu tiap langkah
+sejajar.
+
+**Geser** slider effort, lihat **batas token** tiap model, dan kenali model **gratis** sekilas.
+Gambar yang dilampirkan punya **preview**, dan deretan lampiran yang panjang bisa digeser ke
+samping.
+
+@release 2026-11-10
+@title en: Watch the agent work, step by step
+@title id: Lihat agent bekerja, langkah demi langkah
+@en
+What the agent does now reads as one line of steps: **thinking**, **reading** a file,
+**editing**, **running** a command, **searching**. The step in progress moves; when it ends it
+says what it did and how long it took.
+
+The **Run** view, the **Output** panel and **Live share** are redesigned: one main button per
+project, clearer build results, and two simple choices to host or join a session.
+@id
+Apa yang dikerjakan agent sekarang terbaca sebagai satu garis langkah: **berpikir**,
+**membaca** file, **mengedit**, **menjalankan** perintah, **mencari**. Langkah yang sedang
+berjalan bergerak; begitu selesai, ia menyebut apa yang dikerjakan dan berapa lama.
+
+View **Run**, panel **Output** dan **Live share** didesain ulang: satu tombol utama per proyek,
+hasil build yang lebih jelas, dan dua pilihan sederhana untuk host atau gabung ke sesi.
+
+@release 2026-11-10
+@title en: See your usage, and pick effort with a slider
+@title id: Lihat pemakaianmu, dan atur effort dengan slider
+@en
+The agent panel shows how full the chat's context is under the message box. Click it (or
+the gauge button) to see your plan's limits, when they reset, and what this session cost,
+without typing `/usage`.
+
+Effort is now a **slider** that starts at **medium**, and Claude's models are grouped by
+generation with their price, newest first. When the agent searches the web, you see what it
+searched and the sources it found.
+@id
+Panel agent menampilkan seberapa penuh konteks chat di bawah kotak pesan. Klik (atau tombol
+gauge) untuk melihat limit paketmu, kapan reset, dan biaya sesi ini, tanpa mengetik `/usage`.
+
+Effort sekarang berupa **slider** yang mulai dari **medium**, dan model Claude dikelompokkan
+per generasi beserta harganya, dari yang terbaru. Saat agent mencari di web, kamu bisa melihat
+apa yang dicari dan sumber yang ditemukan.
+
+@release 2026-11-10
+@title en: Extensions, and Minecraft plugins built in one click
+@title id: Ekstensi, dan plugin Minecraft di-build sekali klik
+@en
+The new **Extensions** view (**Ctrl+Shift+X**) adds what your projects need: Paper
+plugins, Bedrock add-ons, Gradle, Maven, Node.js, Rust, Python, Go, C/C++ and .NET. Install
+one and the **Run** view gets its buttons: Build, Build & deploy, Start server, Pack, and
+more. Paper plugins build with the Java version the project asks for, deploy under their own
+name, and replace their older copy in the server's plugins folder.
+
+The agent list has **OpenCode 2**, and the theme name in the status bar now opens the themes.
+@id
+View **Ekstensi** yang baru (**Ctrl+Shift+X**) menambahkan apa yang dibutuhkan proyekmu:
+plugin Paper, add-on Bedrock, Gradle, Maven, Node.js, Rust, Python, Go, C/C++ dan .NET.
+Pasang satu, dan view **Run** mendapat tombolnya: Build, Build & deploy, Nyalakan server,
+Pack, dan lainnya. Plugin Paper di-build dengan versi Java yang diminta proyeknya, dideploy
+dengan namanya sendiri, dan menggantikan salinan lamanya di folder plugins server.
+
+Daftar agent sekarang punya **OpenCode 2**, dan nama tema di status bar bisa diklik untuk memilih tema.
+
 @release 2026-11-10
 @title en: See new commits before you pull
 @title id: Lihat commit baru sebelum pull

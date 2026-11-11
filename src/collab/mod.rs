@@ -124,6 +124,8 @@ pub struct Collab {
     /// what was copied (the ways in can change it afterwards).
     pub copied: Option<Instant>,
     pub copied_code: Option<String>,
+    /// Host: the ways in show their addresses and reasons in full.
+    pub ways_open: bool,
     /// The Live share page is showing in the editor area.
     pub page: bool,
     last_cursor: (String, u32),
@@ -166,6 +168,7 @@ impl Collab {
             reach: None,
             copied: None,
             copied_code: None,
+            ways_open: false,
             page: false,
             last_cursor: (String::new(), 0),
             // Host-wide ceiling for open requests: 40 a second, burst 120. Per-guest

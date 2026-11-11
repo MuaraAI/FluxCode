@@ -70,7 +70,15 @@ pub struct Settings {
     /// OpenCode docks on the right of the editor (like a chat beside the code)
     /// instead of in the left side bar.
     pub agent_right: bool,
-    /// Which agent harness the panel runs: "auto" (Mura when installed), "opencode" or "mura".
+    /// When the agent edits a file, the editor opens it and shows the change being
+    /// typed in, line by line, with the view following it.
+    pub agent_follow_edits: bool,
+    /// Extra Claude / OpenCode sign-ins (agent/worktree.rs), and the one each uses
+    /// (family → account name; none: the default sign-in).
+    pub agent_accounts: Vec<crate::agent::worktree::Account>,
+    pub agent_account: std::collections::HashMap<String, String>,
+    /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id
+    /// ("opencode-v2", "mura", ...).
     pub agent_cli: String,
     /// Turn the agent process off after this many idle minutes (0 = never). It
     /// resumes the same session on the next message.
@@ -84,13 +92,17 @@ pub struct Settings {
     /// What the agent may do without asking: "read" (read only), "write" (read and
     /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
     pub agent_access: String,
-    /// Agent memory is off: nothing is recalled, saved or asked of the agent.
-    pub memory_off: bool,
+    /// The level Full access falls back to when it is switched off: "read" or "write".
+    pub agent_access_off: String,
+    /// A permission request flashes the taskbar button while FluxCode is in the background.
+    pub agent_notify: bool,
     /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or
     /// Chromium), a browser id, or "off".
     pub agent_browser: String,
     /// Run that browser without a window.
     pub agent_browser_headless: bool,
+    /// Installed extensions (ids; `ext::catalog` has them all).
+    pub extensions: Vec<String>,
     /// Launches that showed the Ctrl+L hint in the status bar (100: shortcut used).
     pub agent_hint: u8,
     /// Look for new development builds on GitHub at start and every 6 hours.
@@ -131,14 +143,19 @@ impl Default for Settings {
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
             agent_right: true,
+            agent_follow_edits: true,
+            agent_accounts: Vec::new(),
+            agent_account: Default::default(),
             agent_cli: "auto".into(),
             agent_idle_min: 10,
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
-            memory_off: false,
+            agent_access_off: "write".into(),
+            agent_notify: true,
             agent_browser: "auto".into(),
             agent_browser_headless: false,
+            extensions: crate::ext::default_installed(),
             agent_hint: 0,
             update_check: true,
             line_numbers: true,
@@ -162,6 +179,18 @@ impl Settings {
             // Settings → Whitespace dots turns them back on.
             s.show_whitespace = false;
         }
+        if s.agent_cli == "opencode" {
+            // OpenCode became OpenCode 2 (the registry's native build): keep its choices.
+            s.agent_cli = "opencode-v2".into();
+            s.agent_options = std::mem::take(&mut s.agent_options)
+                .into_iter()
+                .map(|(k, v)| match k.strip_prefix("opencode:") {
+                    Some(rest) => (format!("opencode-v2:{rest}"), v),
+                    None => (k, v),
+                })
+                .collect();
+            s.save();
+        }
         if s.rev < SETTINGS_REV {
             s.rev = SETTINGS_REV;
             s.save();
@@ -178,6 +207,11 @@ impl Settings {
             _ if self.agent_auto_approve => "full",
             _ => "write",
         }
+    }
+
+    /// What Full access switches back to: read only, or edits with commands asking.
+    pub fn access_off(&self) -> &'static str {
+        if self.agent_access_off == "read" { "read" } else { "write" }
     }
 
     /// The background image, if one is set and the file is still there.
@@ -611,6 +645,11 @@ impl Workbench {
                 tr("Agent panel on the right"),
                 tr("Dock the agent chat beside the editor instead of in the side bar. The arrow button in its header does the same.").into(),
                 toggle("ar", s.agent_right, |w| w.settings.agent_right = !w.settings.agent_right),
+            ))
+            .child(row(
+                tr("Follow the agent's edits"),
+                tr("When the agent changes a file, it opens in the editor and the change is typed in line by line while the view follows it. Takes under a second and never slows the agent.").into(),
+                toggle("follow", s.agent_follow_edits, |w| w.settings.agent_follow_edits = !w.settings.agent_follow_edits),
             ))
             .child(row(tr("GitHub"), tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), self.render_github(cx)))
             .child(section(tr("Agent instructions (soul files)")))

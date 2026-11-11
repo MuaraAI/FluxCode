@@ -25,6 +25,178 @@ page, and installed copies offer it on their own. Newest first.
 - The relay's own setup, from the VPS to the DNS record, is documented in
   [`relay/README.md`](relay/README.md).
 
+## The agent asks before it acts, settings in a dialog (11 November 2026)
+
+- When the agent wants to run a command or change a file, a card in the chat says what it
+  wants to do, with the exact command, and the agent waits for Allow once, Always allow or
+  Reject. The panel opens if it was hidden, and the taskbar button flashes while FluxCode is
+  in the background. Two requests at once are shown one after the other; none is lost.
+- Full access is a switch: on, every request is answered yes; off, the agent asks. What the
+  agent's own config denies stays denied either way.
+- The agent's settings open as a dialog from the gear in the panel's title row (model,
+  permissions, session, browser, agent), so the chat stays where it was.
+- The message box fits a narrow panel: the model's name is cut first, labels turn into
+  icons, Send never leaves the box. The context meter is a small ring with the share.
+- The model list lines up: context and output limits sit in right-aligned columns.
+- Usage says when the model is free (OpenCode Zen): no plan limits to show.
+- Clicking a menu, a dialog or a button over the chat no longer selects chat text.
+- Terminal and Output text can be selected with the mouse (double click: a word, triple
+  click: a line) and copied with Ctrl+C or the Copy button. Error cards are a quiet red
+  band, without the colored edge.
+
+## A Windows installer and a macOS build (10 November 2026)
+
+- Windows releases have an installer: `FluxCode-<build>-windows-x64-setup.exe`. It installs
+  for your account without admin rights in `%USERPROFILE%\.fluxcode\app` (where FluxCode
+  updates itself), adds Start Menu and Desktop shortcuts and an entry in Settings > Apps
+  with a working Uninstall, and offers to open FluxCode when it's done. The ZIP stays for a
+  portable copy (and for the built-in updater). CI installs, runs and uninstalls each
+  installer before it's published.
+- FluxCode runs on macOS 11 and newer: `FluxCode-<build>-macos-universal.dmg`, one app for
+  Apple silicon and Intel. It updates itself like the other builds. It is signed ad hoc,
+  not notarized, so the first open asks once (Privacy & Security > Open Anyway). CI opens
+  the packed app and checks it is still running 15 s later.
+
+## The terminal reads like a normal terminal (10 November 2026)
+
+- The Terminal tab has no separate input bar any more: the prompt (`folder ❯ `) is the
+  line right after the output, like Windows Terminal or VS Code. A click anywhere in the
+  terminal puts the caret at the prompt (links to errors still open the file).
+- Each command stays in the scrollback as the prompt it was typed at, in the same style,
+  so it is clear where one command starts. A quick success ends quietly; a failure, a
+  stop or a command that took a second or more gets one short line, failures in red.
+- The folder in the prompt is cut from the left (`…\Project\app`, the whole path on
+  hover), only the folder's name on a narrow panel. Typed text is the log's mono font
+  and size; the hint ("Type a command, then press Enter") is a plain sentence and only
+  shows on an empty terminal or while a program waits for input.
+- The prompt is never cut off at the bottom: the log shrinks above it, and a resized
+  panel stays scrolled to the newest lines.
+
+## A calmer chat while the agent answers; effort you can drag; models with their limits (10 November 2026)
+
+- Scrolling up while an answer streams keeps the view where you put it; scrolling back to
+  the bottom (or sending a message) follows the answer again. A wheel glide toward the
+  bottom lands on the newest line even as it grows.
+- An opened thought sits inside its step, so the rail runs on beside it to the next step.
+  Thoughts are no longer in italics. The time of every step lines up in one column on the
+  right, whether the step opens or not.
+- Agents that send web tools by their bare name (OpenCode's `websearch`, `webfetch`) show
+  "Searched the web" and "Fetched a page" instead of "Done websearch".
+- Headings in answers are a step or two above the body text (a `#` was twice its size),
+  and paragraphs sit a little closer.
+- FluxCode's own memory is gone: the "Used 1 note from memory" lines, the Memory view and
+  button, `/remember` and `/memory`, and the note asking the agent to save facts. Agents
+  keep their own memory.
+- Effort: press on the rail and drag; the handle follows the pointer, names the level under
+  it, and settles on the nearest level when let go. The handle is an upright bar with a gap
+  in the rail and stops at each level; Default (the agent decides) shows an empty rail, and
+  Reset goes back to it. The labels sit under their stops.
+- The model menu shows each model's context window and its longest answer ("200K context ·
+  32K out") and marks free models Free, read from the model list OpenCode keeps on the PC
+  (`~/.cache/opencode/models.json`); nothing is fetched. Claude's models get the same line
+  after their price.
+- Attached images show a thumbnail in their chip and a bigger preview on hover. When the
+  chips don't fit, the row scrolls sideways (a mouse wheel moves it too) instead of cutting
+  every name to two letters.
+- The welcome page in a very narrow editor area shows the logo alone instead of words
+  broken letter by letter.
+
+## The taskbar shows the new icon; lighter debug builds (10 November 2026)
+
+- After an update or a reinstall, Windows kept showing the old blue icon on the taskbar
+  and in Start, because the shell caches a shortcut's icon by the exe's path. The updater
+  now tells the shell the exe changed (and again on the first start after an update), and
+  the installer refreshes the icon cache.
+- Debug builds keep line numbers for FluxCode's own code and no debug info for the
+  dependencies: the local build cache went from 48 GB to 2.5 GB. Release builds are
+  unchanged.
+
+## The agent's steps as one timeline; Run view, Output and Live share redesigned (10 November 2026)
+
+- The agent's thoughts and tool calls (read, edit, run, search, fetch, delete, move) are
+  steps on one rail, joined to the steps around them. A running step has its icon in the
+  accent and a thin sweep under it; when it ends, the label cross-fades from "Reading" to
+  "Read" and the time it took appears; new steps slide in once (160 ms). Only running steps
+  animate, so an idle chat draws nothing.
+- Run view: each project has a compact header and one full-width main action (Build),
+  with the other tasks as quiet rows and rarely used ones under More; a running task shows
+  a spinner and Stop. Extensions not installed yet are one line under Suggested extensions.
+  "This file" shows only when F5 can run the file (no more "Run warps.yml").
+- An extension's page: the title shares its line with Install or Uninstall and a close
+  button (they wrap under it when narrow), one meta line, and each project as one row with
+  its main task and a menu for the rest.
+- Output and Terminal: log text in the editor font at a readable size and normal weight
+  with a 1.6 line height; each command is one header band (what ran, where, status, time);
+  the end says "Finished in 1.8s" or "Failed (exit code 1)" with a result line (what was
+  built) or the reason (the first compiler error, clickable); Gradle's housekeeping lines
+  are dimmed; wrapped lines indent by two characters; the top row is never cut in half at
+  the bottom; the Python version shows only for Python runs.
+- Live share: a short header, two choices side by side (Host this folder, Join with a
+  code) that stack when narrow, the invite code first with one Copy button while hosting,
+  people as a compact list with their file and line, the ways in as one line each with
+  details behind a toggle, and errors as a banner that says what to do.
+
+## The agent panel: effort slider, priced models, usage panel, web searches (10 November 2026)
+
+- The model menu (and the other menus above the message box) gets exactly the room between
+  the panel's top and the box, measured as it is drawn: it no longer runs over the panel's
+  header in a short window.
+- Effort is a slider of the agent's levels with a line on what each costs. New sessions
+  start at medium (good results with fewer tokens) unless a level was picked before.
+- Claude Agent's models are grouped by generation, newest first (Claude 5.5, Claude 5,
+  Claude 4), each with its price per million tokens from Anthropic's model table: Opus 5.5
+  $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50, Fable 5.1 $10 / $50, Opus 5 and
+  4.x $5 / $25, Sonnet 4.6 $3 / $15, Haiku 4.5 $1 / $5.
+- A usage panel (the gauge button, the context meter under the message box, or typing
+  `/usage`): the plan's limits from the agent's own `/usage` (run quietly, no tokens), when
+  each resets (live from the agent's `usage_update`), the context window from `/context`,
+  the session's cost and tokens, and what uses the limits most. Request usage credits asks
+  for confirmation, runs `/usage-credits` and shows its answer; limits themselves reset on
+  their own.
+- Web searches and page reads are cards: the query, then the sources with their site, each
+  opening in the browser; a thin line sweeps while it searches and the rows ease in once
+  when results arrive. The agent's own tool-list lookups (ToolSearch) no longer show as rows.
+- The message box's model, mode and permission buttons give way in a narrow panel instead
+  of pushing Send out of the box; "Default (recommended)" shows as "Default".
+
+## Extensions, FluxCompile, OpenCode 2 and a theme picker (10 November 2026)
+
+- An Extensions view (`Ctrl+Shift+X`, a new activity bar icon): 11 built-in extensions as
+  small JSON manifests (`extensions/*.json`), with a search box and All / Installed / This
+  folder, a page per extension (what it needs and whether it is found, its tasks, the
+  folder's projects, a new-project form), and Install from file for more. Installed ids are
+  kept in the settings; the HTML preview is one of them and installed by default.
+- Paper plugins: Build, Build & deploy, Deploy last build, Start server (in the Terminal),
+  Test, Clean, Run server when the project uses run-paper, Add Gradle wrapper. Projects are
+  named after their plugin (the plugin.yml in the built jar); deploy writes
+  `<Name>-<version>.jar` and removes older jars of the same plugin by the name inside them.
+  New plugin writes a Gradle project for the server's Paper version (26.x: `paper-api:26.x.build.+`
+  on Java 25, as Paper's docs say; 1.21.x: `-R0.1-SNAPSHOT` on Java 21).
+- Bedrock add-ons: Check manifests, Deploy to Minecraft (the GDK build's
+  `%APPDATA%\Minecraft Bedrock` folders or the Store build's), Pack `.mcaddon`/`.mcpack`
+  (FluxCode's own ZIP writer), New add-on with fresh UUIDs.
+- Gradle, Maven, Node.js (every package.json script, the package manager from the lock
+  file), Rust, Python (the project's venv), Go, C/C++ (CMake, Make) and .NET tasks.
+- FluxCompile runs Java builds with the JDK the project asks for (on JAVA_HOME and PATH),
+  Gradle's local build cache unless the project turns it off, and the project's own
+  parallel and configuration-cache settings. It doesn't force those two: Gradle's docs and
+  28 large plugins' builds show that forcing them breaks some projects. Gradle's task lines
+  fold into one line, the end says what was built (name, version, size, time, path), and a
+  deploy suggests `paperweight-mappings-namespace: mojang` when the jar lacks it.
+- Compiler errors from javac, kotlinc, rustc, gcc/clang, MSBuild, Gradle and Maven are red
+  and open the file at the line.
+- The agent's workspace overview says, for each project an installed extension is for,
+  what it is, the commands that build it, the JDK and test server (Paper) or the packs
+  (Bedrock), and the extension's notes.
+- OpenCode 2 replaces OpenCode in the agent list: the ACP registry's `opencode-v2` build
+  from opencode.ai, installed by FluxCode and checked against its SHA-256. An `opencode`
+  choice and its options move to it. Measured here, both start a session in about 1.8 s
+  and use about the same memory (they are the same OpenCode 2.2.x); OpenCode 2 skips the
+  npm `cmd.exe` launcher and always matches the registry's version.
+- The status bar's theme name opens a list of the four themes, each drawn as a small editor
+  in its colors, with the current one checked.
+- The welcome page fits a narrow editor area and scrolls when the window is short.
+
 ## Incoming commits in Source Control, and a smaller update notice (10 November 2026)
 
 - Source Control fetches quietly every five minutes while a repository with an upstream is

@@ -1,0 +1,22 @@
+{
+  "id": "java-maven",
+  "name": "Maven",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Java",
+  "icon": "coffee",
+  "summary": "Package, test and clean Maven projects, with one build thread per core and the JDK the pom asks for.",
+  "about": "For folders with a `pom.xml`. Uses the Maven wrapper (`mvnw`) when the project has one.\n\n- **Package** builds without tests (`-DskipTests`), one thread per core (`-T 1C`).\n- **Test** and **Clean** do what they say.\n- The build runs with the Java version in `maven.compiler.release` (or `release`, `java.version`) when it is installed.",
+  "detect": [{ "file": "pom.xml", "contains": ["<project"] }],
+  "root": ["pom.xml"],
+  "tasks": [
+    { "id": "package", "label": "Package", "icon": "hammer", "run": "{mvn} -T 1C -DskipTests package", "java": true, "primary": true },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "{mvn} -T 1C test", "java": true },
+    { "id": "clean", "label": "Clean", "icon": "trash", "run": "{mvn} clean", "java": true }
+  ],
+  "needs": [
+    { "cmd": "java", "label": "Java (JDK)", "winget": "EclipseAdoptium.Temurin.25.JDK", "url": "https://adoptium.net/" },
+    { "cmd": "mvn", "label": "Maven", "url": "https://maven.apache.org/download.cgi", "unless": "mvnw|mvnw.cmd" }
+  ],
+  "agent": "Maven project: dependencies and plugins in pom.xml; sources in src/main/java, tests in src/test/java; the jar lands in target/."
+}

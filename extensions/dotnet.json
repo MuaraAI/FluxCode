@@ -1,0 +1,21 @@
+{
+  "id": "dotnet",
+  "name": ".NET",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "C#",
+  "icon": "hexagon",
+  "summary": "Build, run and test C# and F# projects and solutions with the dotnet CLI.",
+  "about": "For folders with a `.sln`, `.csproj` or `.fsproj`. **Run** runs in the Terminal so console apps can read input. Errors like `Program.cs(12,5): error CS1002` are shown in red.",
+  "detect": [{ "file": "*.sln" }, { "file": "*.slnx" }, { "file": "*.csproj" }, { "file": "*.fsproj" }],
+  "root": ["*.sln|*.slnx", "*.csproj|*.fsproj"],
+  "tasks": [
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "dotnet build --nologo", "primary": true },
+    { "id": "run", "label": "Run", "icon": "play", "run": "dotnet run", "unless": "*.sln|*.slnx", "terminal": true },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "dotnet test --nologo" }
+  ],
+  "needs": [
+    { "cmd": "dotnet", "label": ".NET SDK", "winget": "Microsoft.DotNet.SDK.9", "url": "https://dotnet.microsoft.com/download" }
+  ],
+  "agent": ".NET project: build with `dotnet build`, run with `dotnet run` in the project folder."
+}

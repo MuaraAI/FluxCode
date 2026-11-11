@@ -114,9 +114,63 @@ pub fn unified(name: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// The steps from `old` to `new` as a person would type them: removed lines go in one
+/// step per block, added lines appear one per step, top to bottom. Each step is the
+/// whole text at that point and the line being worked on (for the cursor). At most
+/// `max` steps (evenly picked); the last step is always `new` itself. Empty if the
+/// file is too large to diff or nothing changed.
+pub fn typing_frames(old: &str, new: &str, max: usize) -> Vec<(String, u32)> {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let Some(o) = ops(&a, &b) else { return Vec::new() };
+    // A step ends after each added line and after each block of removed lines.
+    let mut cuts: Vec<usize> = Vec::new();
+    for (k, x) in o.iter().enumerate() {
+        let next_del = o.get(k + 1).is_some_and(|y| y.0 == Op::Del);
+        if x.0 == Op::Add || (x.0 == Op::Del && !next_del) {
+            cuts.push(k + 1);
+        }
+    }
+    if cuts.is_empty() {
+        return Vec::new();
+    }
+    let picked: Vec<usize> = if cuts.len() <= max.max(1) {
+        cuts
+    } else {
+        let n = max.max(1);
+        (1..=n).map(|s| cuts[(s * cuts.len()).div_ceil(n) - 1]).collect()
+    };
+    let last = picked.len() - 1;
+    picked
+        .into_iter()
+        .enumerate()
+        .map(|(s, k)| {
+            // Lines before the cut are the new file's, from the cut on still the old one's.
+            let done: Vec<&str> = o[..k].iter().filter(|x| x.0 != Op::Del).map(|x| b[x.2]).collect();
+            let line = done.len().saturating_sub(1) as u32;
+            if s == last {
+                return (new.to_string(), line);
+            }
+            let rest = o[k..].iter().filter(|x| x.0 != Op::Add).map(|x| a[x.1]);
+            (done.iter().copied().chain(rest).collect::<Vec<_>>().join("\n"), line)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{counts, unified};
+    use super::{counts, typing_frames, unified};
+
+    #[test]
+    fn typing_goes_line_by_line() {
+        let f = typing_frames("a\nb\nc\n", "a\nB\nx\nc\n", 10);
+        let texts: Vec<&str> = f.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(texts, vec!["a\nc", "a\nB\nc", "a\nB\nx\nc\n"]);
+        assert_eq!(f[2].1, 2);
+        assert_eq!(typing_frames("a\n", "a\n", 10).len(), 0);
+        let many = typing_frames("", &"l\n".repeat(100), 8);
+        assert_eq!(many.len(), 8);
+        assert_eq!(many[7].0, "l\n".repeat(100));
+    }
 
     #[test]
     fn counts_and_unified() {

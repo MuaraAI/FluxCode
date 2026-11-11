@@ -1,0 +1,23 @@
+{
+  "id": "python",
+  "name": "Python",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Python",
+  "icon": "terminal",
+  "summary": "Run the project's main file, its tests and its requirements with the project's own virtual environment.",
+  "about": "For folders with `pyproject.toml`, `requirements.txt` or a `main.py`.\n\n- Uses `.venv`, `venv` or `env` in the project when there is one, else the `py` launcher.\n- **Run main.py** / **Run app.py** run in the Terminal, so the program can read input.\n- **Install requirements** and **Make a venv** show up when they make sense.\n- **Test** runs pytest.",
+  "detect": [{ "file": "pyproject.toml" }, { "file": "requirements.txt" }, { "file": "main.py" }],
+  "root": ["pyproject.toml", "requirements.txt"],
+  "tasks": [
+    { "id": "main", "label": "Run main.py", "icon": "play", "run": "{python} -u main.py", "when": "main.py", "terminal": true, "primary": true },
+    { "id": "app", "label": "Run app.py", "icon": "play", "run": "{python} -u app.py", "when": "app.py", "unless": "main.py", "terminal": true, "primary": true },
+    { "id": "venv", "label": "Make a venv", "icon": "folder-plus", "run": "{python} -m venv .venv", "unless": ".venv|venv|env" },
+    { "id": "req", "label": "Install requirements", "icon": "download", "run": "{python} -m pip install -r requirements.txt", "when": "requirements.txt" },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "{python} -m pytest -q", "when": "tests|pytest.ini|pyproject.toml" }
+  ],
+  "needs": [
+    { "cmd": "python", "label": "Python", "winget": "Python.Python.3.13", "url": "https://www.python.org/downloads/" }
+  ],
+  "agent": "Python project: FluxCode runs it with the project's virtual environment when there is one."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "go",
+  "name": "Go",
+  "version": "1.0.0",
+  "publisher": "FluxCode",
+  "category": "Systems",
+  "icon": "cpu",
+  "summary": "Build, run, test and vet Go modules.",
+  "about": "For folders with a `go.mod`. **Build** and **Test** cover every package (`./...`); **Run** runs the module's main package in the Terminal.",
+  "detect": [{ "file": "go.mod" }],
+  "root": ["go.work", "go.mod"],
+  "tasks": [
+    { "id": "build", "label": "Build", "icon": "hammer", "run": "go build ./...", "primary": true },
+    { "id": "run", "label": "Run", "icon": "play", "run": "go run .", "terminal": true },
+    { "id": "test", "label": "Test", "icon": "flask-conical", "run": "go test ./..." },
+    { "id": "vet", "label": "Vet", "icon": "circle-check", "run": "go vet ./..." }
+  ],
+  "needs": [
+    { "cmd": "go", "label": "Go", "winget": "GoLang.Go", "url": "https://go.dev/dl/" }
+  ],
+  "agent": "Go module: `go build ./...` and `go test ./...` from the module root."
+}

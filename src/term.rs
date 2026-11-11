@@ -34,6 +34,9 @@ pub enum LineKind {
     Fixed,
     /// The end of a command: exit status and time.
     Status,
+    /// The outcome under a status line: what a build produced (FluxCompile's jar
+    /// line), or, with `err`, the line that says why the command failed.
+    Result,
     /// `@@ -5,3 +5,4 @@` in a diff.
     Hunk,
     /// Error card rows (see `PyError`).
@@ -479,17 +482,42 @@ pub fn parse_frame(text: &str) -> Option<(String, u32, Option<String>)> {
 
 /// `C:\x\app.py:12: UserWarning: ...` → (path, line).
 pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
-    let t = text.trim_start();
-    for ext in [".py:", ".pyw:"] {
-        if let Some(i) = t.to_ascii_lowercase().find(ext) {
-            let path = &t[..i + ext.len() - 1];
-            let digits: String = t[i + ext.len()..].chars().take_while(char::is_ascii_digit).collect();
-            if let Ok(line) = digits.parse() {
-                return Some((path.to_string(), line));
+    let mut t = text.trim_start();
+    // rustc's `--> src/main.rs:3:5`, kotlinc's `e: file:///C:/x/Y.kt:12:5 ...`, Maven's `[ERROR] /C:/x/Y.java:[12,5]`.
+    for prefix in ["--> ", "e: ", "w: ", "[ERROR] ", "[WARNING] "] {
+        t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
+    }
+    t = t.strip_prefix("file:///").unwrap_or(t);
+    let lower = t.to_ascii_lowercase();
+    // The earliest `<file>.<ext>:<line>` (or MSBuild's `<file>.cs(<line>,<col>)`).
+    let exts = [
+        ".py:", ".pyw:", ".java:", ".kt:", ".kts:", ".rs:", ".go:", ".c:", ".h:", ".cc:", ".cpp:", ".cxx:", ".hpp:", ".cs:", ".fs:", ".ts:", ".tsx:", ".js:", ".jsx:", ".mjs:", ".cjs:",
+        ".vue:", ".svelte:", ".gradle:", ".json:", ".yml:", ".yaml:", ".cs(", ".fs(", ".vb(",
+    ];
+    let mut best: Option<(usize, usize)> = None;
+    for ext in exts {
+        let mut from = 0;
+        while let Some(k) = lower[from..].find(ext) {
+            let i = from + k;
+            let after = &t[i + ext.len()..];
+            let after = after.strip_prefix('[').unwrap_or(after);
+            if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                if best.is_none_or(|(b, _)| i < b) {
+                    best = Some((i, ext.len()));
+                }
+                break;
             }
+            from = i + 1;
         }
     }
-    None
+    let (i, n) = best?;
+    let path = &t[..i + n - 1];
+    let after = &t[i + n..];
+    let digits: String = after.strip_prefix('[').unwrap_or(after).chars().take_while(char::is_ascii_digit).collect();
+    let line = digits.parse().ok()?;
+    // A Maven path starts with `/C:/`.
+    let path = if path.len() > 3 && path.starts_with('/') && path.as_bytes()[2] == b':' { &path[1..] } else { path };
+    Some((path.to_string(), line))
 }
 
 /// The kind of one finished (or growing) output line. `prev` is the kind of the
@@ -521,10 +549,54 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
         return LineKind::Err;
     }
     let lower = t.to_ascii_lowercase();
+    // Build tools: Gradle, Maven, javac, kotlinc, rustc, gcc/clang, MSBuild.
+    if t.starts_with("> Task ") || (t.starts_with("[INFO] ") && !t.contains("BUILD")) {
+        return LineKind::Dim;
+    }
+    // Gradle's housekeeping around a build: true, but not what happened.
+    const GRADLE_NOISE: &[&str] = &[
+        "Consider enabling configuration cache",
+        "Deprecated Gradle features were used",
+        "You can use '--warning-mode all'",
+        "For more on this, please refer to",
+        "Starting a Gradle Daemon",
+        "To honour the JVM settings",
+        "Reusing configuration cache",
+        "Configuration cache entry",
+        "Calculating task graph",
+        "* Try:",
+        "> Run with --",
+        "> Get more help at",
+    ];
+    if GRADLE_NOISE.iter().any(|p| t.starts_with(p)) || (t.contains(" actionable task") && t.contains(": ")) {
+        return LineKind::Dim;
+    }
+    // rustc points at the place: `--> src/main.rs:3:5` (a link).
+    if t.starts_with("--> ") && parse_path_line(t).is_some() {
+        return LineKind::Warn;
+    }
+    if t.starts_with("BUILD SUCCESSFUL") || t.starts_with("[INFO] BUILD SUCCESS") || t.starts_with("Build succeeded") || t.starts_with("Finished `") {
+        return LineKind::Success;
+    }
+    if t.starts_with("FAILURE:")
+        || t.starts_with("BUILD FAILED")
+        || t.starts_with("[ERROR]")
+        || t.starts_with("[INFO] BUILD FAILURE")
+        || t.starts_with("e: ")
+        || lower.starts_with("error[e")
+        || (lower.contains(": error") && parse_path_line(t).is_some())
+    {
+        return LineKind::Err;
+    }
+    if t.starts_with("[WARNING]") || t.starts_with("w: ") || (lower.contains(": warning") && parse_path_line(t).is_some()) {
+        return LineKind::Warn;
+    }
     if lower.starts_with("error:")
         || lower.starts_with("fatal:")
         || lower.starts_with("npm err!")
         || lower.contains("is not recognized as an internal or external command")
+        // cmd.exe's second line of the same message.
+        || (prev == Some(LineKind::Err) && lower.starts_with("operable program or batch file"))
         || lower.starts_with("the system cannot find")
         || lower.contains(": can't open file '")
     {
@@ -812,22 +884,26 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
 }
 
 /// Break a long message into rows for the card (the panel list has fixed-height rows).
-pub fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut cur = String::new();
-    for word in text.split(' ') {
-        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
-            rows.push(std::mem::take(&mut cur));
-        }
-        if !cur.is_empty() {
-            cur.push(' ');
-        }
-        cur.push_str(word);
-    }
-    if !cur.is_empty() || rows.is_empty() {
-        rows.push(cur);
-    }
-    rows
+/// The line that says why a failed command failed, shown under its status line:
+/// the first compiler error with a file:line, else what Gradle says went wrong,
+/// else the last specific error line. `None` when the output doesn't say, or when
+/// the reason is already one of the last lines above the status.
+pub fn failure_reason(lines: &[(&str, LineKind)]) -> Option<String> {
+    let generic = |t: &str| {
+        let t = t.trim_start();
+        t.starts_with("BUILD FAILED") || t.starts_with("FAILURE:") || t.starts_with("[INFO] BUILD FAILURE") || t.starts_with("[ERROR] BUILD") || t.starts_with("Traceback")
+    };
+    let found = lines
+        .iter()
+        .position(|(t, k)| *k == LineKind::Err && parse_path_line(t).is_some())
+        .or_else(|| {
+            let i = lines.iter().position(|(t, _)| t.trim_start().starts_with("* What went wrong"))?;
+            lines[i + 1..].iter().position(|(t, _)| !t.trim().is_empty()).map(|j| i + 1 + j)
+        })
+        .or_else(|| lines.iter().rposition(|(t, k)| *k == LineKind::Err && !t.trim().is_empty() && !generic(t)))?;
+    let shown = lines.iter().rposition(|(t, k)| !t.trim().is_empty() && *k != LineKind::Blank).unwrap_or(0);
+    // Already in plain sight right above: saying it again is noise.
+    (found + 3 <= shown).then(|| lines[found].0.trim().to_string())
 }
 
 /// The user's home folder, lower-cased, for shortening paths to `~`.
@@ -878,22 +954,26 @@ pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
 /// Split a line into rows of at most `cols` characters, breaking after a space,
 /// `\` or `/` when one is near the end, so paths wrap at a folder boundary.
 /// Returns byte ranges.
-pub fn wrap_ranges(s: &str, cols: usize) -> Vec<(usize, usize)> {
-    let cols = cols.max(8);
+/// `hang` is how many fewer fit on the rows after the first (they are indented).
+pub fn wrap_ranges(s: &str, first: usize, hang: usize) -> Vec<(usize, usize)> {
+    let first = first.max(8);
+    let rest = first.saturating_sub(hang).max(8);
     let idx: Vec<usize> = s.char_indices().map(|(i, _)| i).chain(std::iter::once(s.len())).collect();
     let n = idx.len() - 1;
-    if n <= cols {
+    if n <= first {
         return vec![(0, s.len())];
     }
     let mut out = Vec::new();
     let mut start = 0; // char index
+    let mut cols = first;
     while n - start > cols {
         let hard = start + cols;
         let chars: Vec<char> = s[idx[start]..idx[hard]].chars().collect();
-        let soft = chars.iter().rposition(|c| matches!(c, ' ' | '\\' | '/' | ',')).filter(|p| *p >= cols / 2).map(|p| start + p + 1);
+        let soft = chars.iter().rposition(|c| matches!(c, ' ' | '\\' | '/' | ',' | '-' | '_')).filter(|p| *p >= cols / 3).map(|p| start + p + 1);
         let end = soft.unwrap_or(hard);
         out.push((idx[start], idx[end]));
         start = end;
+        cols = rest;
     }
     out.push((idx[start], s.len()));
     out
@@ -928,9 +1008,62 @@ pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     cwd.display().to_string()
 }
 
+/// A path cut from the left to at most `max` characters, keeping whole folder
+/// names where it can: `~\Documents\Project Pribadi\app` → `…\Project Pribadi\app`.
+/// The end of a path says where you are; the start is what can go.
+pub fn fit_path_left(path: &str, max: usize) -> String {
+    let n = path.chars().count();
+    if n <= max {
+        return path.to_string();
+    }
+    let max = max.max(2);
+    // Keep the longest tail that starts at a separator and still fits after "…".
+    let tail_start = path.char_indices().map(|(i, _)| i).find(|&i| path[i..].chars().count() < max).unwrap_or(path.len());
+    let tail = &path[tail_start..];
+    match tail.find(['\\', '/']) {
+        Some(k) if tail[k..].chars().count() > 1 => format!("…{}", &tail[k..]),
+        // Not even the last folder fits: its own end.
+        _ => format!("…{tail}"),
+    }
+}
+
+/// The last folder of a path as shown (`~\Documents\proj` → `proj`).
+pub fn last_folder(path: &str) -> &str {
+    path.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().filter(|s| !s.is_empty()).unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_shrink_from_the_left() {
+        let p = "~\\Documents\\Project Pribadi\\app";
+        assert_eq!(fit_path_left(p, 60), p);
+        assert_eq!(fit_path_left(p, 22), "…\\Project Pribadi\\app");
+        assert!(fit_path_left(p, 22).chars().count() <= 22);
+        assert_eq!(fit_path_left(p, 8), "…\\app");
+        assert_eq!(fit_path_left("C:\\Paper-Test-Server", 8).chars().count(), 8);
+        assert_eq!(last_folder("~\\Documents\\Project Pribadi"), "Project Pribadi");
+        assert_eq!(last_folder("C:\\"), "C:");
+        assert_eq!(last_folder("proj"), "proj");
+    }
+
+    #[test]
+    fn compiler_errors_link_to_the_file() {
+        let p = |s: &str| parse_path_line(s);
+        assert_eq!(p("C:\\x\\src\\Main.java:12: error: ';' expected"), Some(("C:\\x\\src\\Main.java".into(), 12)));
+        assert_eq!(p("e: file:///C:/x/Main.kt:7:3 Unresolved reference"), Some(("C:/x/Main.kt".into(), 7)));
+        assert_eq!(p("  --> src/main.rs:3:5"), Some(("src/main.rs".into(), 3)));
+        assert_eq!(p("src/a.cpp:40:9: error: expected ';'"), Some(("src/a.cpp".into(), 40)));
+        assert_eq!(p("Program.cs(12,5): error CS1002: ; expected"), Some(("Program.cs".into(), 12)));
+        assert_eq!(p("[ERROR] /C:/x/App.java:[8,1] class, interface expected"), Some(("C:/x/App.java".into(), 8)));
+        assert_eq!(p("Downloading https://repo.maven.apache.org/x.json"), None);
+        assert_eq!(classify("C:\\x\\Main.java:12: error: ';' expected", true, None), LineKind::Err);
+        assert_eq!(classify("BUILD SUCCESSFUL in 3s", false, None), LineKind::Success);
+        assert_eq!(classify("FAILURE: Build failed with an exception.", true, None), LineKind::Err);
+        assert_eq!(classify("> Task :compileJava", false, None), LineKind::Dim);
+    }
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("fluxterm-{}", std::process::id()));
@@ -1041,12 +1174,49 @@ mod tests {
     #[test]
     fn wraps_at_folder_boundaries() {
         let s = "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages";
-        let rows = wrap_ranges(s, 30);
+        let rows = wrap_ranges(s, 30, 0);
         assert!(rows.len() > 1);
         assert!(rows.iter().all(|(a, b)| s[*a..*b].chars().count() <= 30));
         assert_eq!(rows.iter().map(|(a, b)| &s[*a..*b]).collect::<String>(), s);
         assert!(s[rows[0].0..rows[0].1].ends_with('\\'));
-        assert_eq!(wrap_ranges("short", 30), vec![(0, 5)]);
+        assert_eq!(wrap_ranges("short", 30, 2), vec![(0, 5)]);
+        // A jar name breaks at its dash, not one letter before the end.
+        let jar = "build\\main\\libs\\KiwEssentials-0.1.0-SNAPSHOT.jar";
+        let rows = wrap_ranges(jar, 46, 2);
+        assert!(rows.iter().all(|(a, b)| b - a > 3));
+    }
+
+    #[test]
+    fn gradle_housekeeping_is_dim() {
+        assert_eq!(classify("55 actionable tasks: 21 executed, 1 from cache, 33 up-to-date", false, None), LineKind::Dim);
+        assert_eq!(classify("1 actionable task: 1 executed", false, None), LineKind::Dim);
+        assert_eq!(classify("Consider enabling configuration cache to speed up this build: https://docs.gradle.org/x", false, None), LineKind::Dim);
+        assert_eq!(classify("> Run with --stacktrace option to get the stack trace.", true, None), LineKind::Dim);
+        assert_eq!(classify("> Compilation failed; see the compiler error output for details.", true, None), LineKind::Normal);
+        assert_eq!(classify("BUILD SUCCESSFUL in 2s", false, None), LineKind::Success);
+    }
+
+    #[test]
+    fn says_why_a_build_failed() {
+        let k = |t: &'static str| (t, classify(t, true, None));
+        let javac = [
+            k("C:\\p\\src\\Main.java:12: error: ';' expected"),
+            k("        foo()"),
+            k("1 error"),
+            k(""),
+            k("FAILURE: Build failed with an exception."),
+            k("* What went wrong:"),
+            k("Execution failed for task ':compileJava'."),
+            k("BUILD FAILED in 2s"),
+        ];
+        assert_eq!(failure_reason(&javac).as_deref(), Some("C:\\p\\src\\Main.java:12: error: ';' expected"));
+        let gradle = [k("FAILURE: Build failed with an exception."), k(""), k("* What went wrong:"), k("Could not resolve all files."), k(""), k("* Try:"), k("> Run with --info"), k("BUILD FAILED in 1s")];
+        assert_eq!(failure_reason(&gradle).as_deref(), Some("Could not resolve all files."));
+        // The only line is right above the status already.
+        assert_eq!(failure_reason(&[k("'foo' is not recognized as an internal or external command,")]), None);
+        // Both lines of cmd's message read as the error.
+        assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Err)), LineKind::Err);
+        assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Normal)), LineKind::Normal);
     }
 
     #[test]

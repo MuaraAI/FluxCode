@@ -38,7 +38,10 @@ pub struct Known {
 /// registry agent shows under "More agents".
 pub const KNOWN: &[Known] = &[
     Known { id: "mura", name: "Mura", by: "MuaraAI", path: &[("mura", &["acp"])] },
-    Known { id: "opencode", name: "OpenCode", by: "open source", path: &[("opencode", &["acp"])] },
+    // OpenCode 2: the registry's native build from opencode.ai, installed by FluxCode
+    // (checked against its SHA-256), not an npm copy on PATH, whose launcher starts a
+    // Node.js process in front of the agent.
+    Known { id: "opencode-v2", name: "OpenCode 2", by: "Anomaly · open source", path: &[] },
     Known { id: "claude-acp", name: "Claude Agent", by: "Anthropic", path: &[("claude-agent-acp", &[]), ("claude-code-acp", &[])] },
     Known { id: "codex-acp", name: "Codex", by: "OpenAI", path: &[("codex-acp", &[])] },
     Known { id: "gemini", name: "Gemini CLI", by: "Google", path: &[("gemini", &["--acp"])] },
@@ -69,7 +72,7 @@ pub fn instruction_files(id: &str) -> &'static [Place] {
     use Place::*;
     match id {
         "mura" => &[Project("MURA.md"), Project("AGENTS.md")],
-        "opencode" => &[Home(".config/opencode/AGENTS.md"), Project("AGENTS.md")],
+        "opencode" | "opencode-v2" => &[Home(".config/opencode/AGENTS.md"), Project("AGENTS.md")],
         "claude-acp" => &[Home(".claude/CLAUDE.md"), Project("CLAUDE.md")],
         "codex-acp" => &[Home(".codex/AGENTS.md"), Project("AGENTS.md")],
         "gemini" => &[Home(".gemini/GEMINI.md"), Project("GEMINI.md")],
@@ -335,6 +338,10 @@ fn find(id: &str) -> Option<Launch> {
     if id == "opencode" {
         return crate::agent::find_opencode().map(|cmd| Launch { cmd, args: vec!["acp".into()], ..Default::default() });
     }
+    if id == "opencode-v2" {
+        // Only FluxCode's own install (the launch file above): see KNOWN.
+        return None;
+    }
     k.path.iter().find_map(|(exe, args)| which(exe).map(|cmd| Launch { cmd, args: args.iter().map(|a| a.to_string()).collect(), ..Default::default() }))
 }
 
@@ -506,6 +513,16 @@ pub fn refresh_registry() -> Result<(), String> {
 }
 
 /// An agent's display name: the known list, then the registry, then the id itself.
+/// OpenCode, either entry (both run the same program and share its config and sessions).
+pub fn is_opencode(id: &str) -> bool {
+    id == "opencode" || id == "opencode-v2"
+}
+
+/// Ids the picker doesn't offer: the older OpenCode entry, same program as OpenCode 2.
+pub fn hidden(id: &str) -> bool {
+    id == "opencode"
+}
+
 pub fn display_name(id: &str) -> String {
     if let Some(k) = known(id) {
         return k.name.to_string();
@@ -1024,7 +1041,9 @@ mod tests {
         let json = r#"{"agents":[{"id":"kilo","name":"Kilo","version":"7","distribution":{
             "npx":{"package":"@kilocode/cli@7","args":["acp"]},
             "binary":{"windows-x86_64":{"archive":"https://x/kilo.zip","cmd":"./kilo.exe","args":["acp"],"sha256":"AB"},
-                      "linux-x86_64":{"archive":"https://x/kilo.tar.gz","cmd":"./kilo","args":["acp"]}}}},
+                      "linux-x86_64":{"archive":"https://x/kilo.tar.gz","cmd":"./kilo","args":["acp"]},
+                      "darwin-aarch64":{"archive":"https://x/kilo-arm.tar.gz","cmd":"./kilo","args":["acp"]},
+                      "darwin-x86_64":{"archive":"https://x/kilo-x64.tar.gz","cmd":"./kilo","args":["acp"]}}}},
             {"id":"gem","name":"Gemini","version":"1","distribution":{"npx":{"package":"@google/gemini-cli@1","args":["--acp"]}}}]}"#;
         let list = parse_registry(json);
         assert_eq!(list.len(), 2);

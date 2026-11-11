@@ -409,7 +409,14 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     // Live share: the panel, and the ways in from the internet
     Users, LogIn, House, Router, RadioTower, Link,
     // Flux documents: tip callouts and pictures from the web
-    Lightbulb, Image
+    Lightbulb, Image,
+    // Extensions: the view, their icons and their tasks
+    Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
+    Sparkles, FolderPlus,
+    // Agent panel: usage (and a free model's mark), the settings dialog, permission requests
+    Gauge, BadgeCheck, ShieldCheck, Timer, FilePen, Wrench,
+    // Agent panel: a folded group of steps, its own worktree, more than one account
+    ListCollapse, GitFork, GitMerge, UserPlus
 ]);
 
 #[cfg(test)]

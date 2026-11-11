@@ -11,6 +11,11 @@ use gpui_kit::*;
 
 impl Workbench {
     pub(crate) fn on_toggle_preview(&mut self, _: &TogglePreview, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ext_installed("html-preview") {
+            self.status = tr("The preview is the HTML Preview extension: install it to use it").into();
+            self.ext_open_page("html-preview", cx);
+            return;
+        }
         #[cfg(feature = "embedded-preview")]
         if self.preview.take().is_some() {
             cx.notify();

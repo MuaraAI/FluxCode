@@ -5,14 +5,12 @@
 use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
-use crate::memory;
 use crate::theme::{self, c};
 use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    menu::DropdownMenu,
     switch::Switch,
     text::TextView,
     v_flex, Icon, IconName, Selectable, Sizable,
@@ -39,9 +37,20 @@ enum Req {
     LoadSession,
     Prompt,
     SetOption,
+    /// A command run quietly for the usage panel (`/usage`, `/context`): its reply
+    /// goes there, not into the chat.
+    Probe,
 }
 
+mod activity;
+mod follow;
+mod tidy;
+pub(crate) mod worktree;
+mod catalog;
 mod menu;
+mod settings_modal;
+mod usage;
+mod web;
 pub(crate) use menu::Menu;
 
 /// Stands for the older ACP session modes (`modes`, `session/set_mode`) among the config options.
@@ -103,12 +112,10 @@ pub enum Item {
     Tool { id: String, title: String, status: String, kind: String },
     Plan(Vec<(String, String)>),
     Note(String, bool),
-    /// A fact the agent asked to keep (saved to memory).
-    Saved(String),
-    /// This many memory notes went with the message.
-    MemoryUsed(usize),
     /// The chat continues with another harness from here (a branch, not a new chat).
     Branch(String),
+    /// A web search or a page read, with its sources.
+    Web(web::Web),
 }
 
 /// A message typed while the agent was busy (or not running yet), with its attachments.
@@ -121,6 +128,10 @@ pub struct Permission {
     rpc_id: Value,
     title: String,
     options: Vec<(String, String, String)>, // (id, name, kind)
+    /// ACP's tool kind: execute, edit, read, fetch, ...
+    kind: String,
+    /// The command or path, when the title doesn't already show it.
+    detail: Option<String>,
 }
 
 /// One saved conversation (user and agent messages only), in `agent-history.json`.
@@ -135,6 +146,8 @@ pub struct Chat {
 }
 
 const HISTORY_FILE: &str = "agent-history.json";
+/// How far back a tool's update is looked for (an agent runs a few tools at a time).
+const RECENT: usize = 4096;
 const HISTORY_MAX: usize = 50;
 
 fn now_ms() -> u64 {
@@ -177,6 +190,8 @@ pub struct Change {
     /// Lines added and removed so far (counted when an edit finishes).
     pub added: usize,
     pub removed: usize,
+    /// The counts are known (the edit finished): until then the card shows a dot, not "+0 -0".
+    pub counted: bool,
 }
 
 pub struct AgentState {
@@ -193,17 +208,55 @@ pub struct AgentState {
     steer: bool,
     /// Files attached to the message being typed.
     pub attachments: Vec<PathBuf>,
+    /// The row of attachment and context chips above the message, when it is wider than the box.
+    chips_scroll: ScrollHandle,
     /// Thinking blocks the user expanded.
     open_thoughts: HashSet<usize>,
     /// The agent accepts image blocks (ACP promptCapabilities.image).
     can_image: bool,
     pub items: Vec<Item>,
     permission: Option<Permission>,
+    /// Requests that came while one was on screen (an agent running two tools at once):
+    /// each is shown in turn, none is dropped.
+    perm_queue: std::collections::VecDeque<Permission>,
     pub changes: Vec<Change>,
     /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
+    /// Files the agent finished editing, for the editor to follow (follow.rs).
+    pub follow_q: Vec<PathBuf>,
+    /// The files each edit tool touched, so its "done" update (which often names no
+    /// file) still gets its lines counted.
+    tool_paths: HashMap<String, Vec<PathBuf>>,
+    /// When the user last picked a tab or file themselves: the editor doesn't jump to the
+    /// agent's edits for a moment after (follow.rs).
+    pub(crate) user_nav: Option<std::time::Instant>,
+    /// The replay on screen: its file and final text; the counter stops older ones.
+    pub replay: Option<(PathBuf, String)>,
+    pub replay_gen: u64,
+    /// The Changes card shows only its header.
+    changes_folded: bool,
+    /// Groups of steps the user opened (by the index of their first item).
+    open_groups: HashSet<usize>,
+    /// The chat's own git worktree, when it has one (worktree.rs).
+    pub worktree: Option<worktree::Worktree>,
+    pub worktree_busy: bool,
     pub(crate) input: Entity<TextareaState>,
-    scroll: ScrollHandle,
+    /// The chat log as a virtual list: only the messages on screen are laid out, so a
+    /// chat of a million items costs a frame what one of twenty does. It follows the
+    /// newest text (tail mode) until the reader scrolls up, and again once they scroll
+    /// back to the bottom.
+    pub(crate) list: ListState,
+    /// What the list was last told (see `agent_sync_list`).
+    list_seen: std::cell::RefCell<ListSeen>,
+    /// The first item in the list. Older ones are not rendered at all: while the reader
+    /// follows the newest text they leave on their own, and "Show earlier" pages them
+    /// back in, PAGE at a time.
+    view_start: std::cell::Cell<usize>,
+    /// Items whose height changed by a click (a thought or a group opened).
+    remeasure: std::cell::RefCell<Vec<std::ops::Range<usize>>>,
+    /// The chat keeps the newest text in view: off once the reader scrolls up, on again
+    /// when they scroll back to the bottom or send a message.
+    pub(crate) follow: bool,
     /// Saved chats, newest first.
     pub history: Vec<Chat>,
     /// The chat on screen, once it has been saved.
@@ -226,15 +279,10 @@ pub struct AgentState {
     pending_load: Option<String>,
     /// Replaying this session's history right now.
     loading_id: Option<String>,
-    pub show_memory: bool,
-    pub(crate) memory_input: Entity<InputState>,
-    /// Memory trails sent with the current turn (reinforced on Keep, weakened on Undo).
-    turn_memories: Vec<String>,
-    /// The REMEMBER instruction went out in this session.
+    /// The language note went out in this session.
     hinted: bool,
     /// Signature of the workspace overview the agent has (0: none yet this session).
     ws_sig: u64,
-    pub memories: Vec<memory::Trail>,
     /// `/command` list while a `/` is being typed: (matches, selected row).
     pub slash: Option<(Vec<SlashCmd>, usize)>,
     /// Commands the agent announced for this session.
@@ -272,8 +320,29 @@ pub struct AgentState {
     pub menu: menu::MenuState,
     /// A command-line setting changed while the agent answered: restart it after the turn.
     relaunch: bool,
+    /// Usage and limits: live numbers and the usage panel.
+    pub usage: usage::UsageState,
+    /// Web searches whose every source is shown.
+    pub web_open: HashSet<String>,
+    /// When each step (tool call, thought) started and how long it took.
+    pub times: activity::Times,
+    /// The thought being written now (its key in `times`).
+    open_thought: Option<String>,
+    /// Where the effort slider's handle was before the last change (it slides from there).
+    pub effort_from: std::cell::Cell<Option<f32>>,
+    /// The effort handle is held: where it is on the rail (0..1).
+    pub effort_drag: std::cell::Cell<Option<f32>>,
+    /// Bumped on each pick, so the handle glides even onto the level it was on.
+    pub effort_gen: std::cell::Cell<u32>,
+    /// The panel's top and the message box's top, in window pixels, as last drawn:
+    /// the menus above the box get exactly the room between them.
+    pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    /// The message box's width as last drawn: below `NARROW` the bottom row compacts.
+    pub compose_w: std::rc::Rc<std::cell::Cell<f32>>,
+    /// The settings dialog's open section, and its focus (for Esc and Tab).
+    pub settings_tab: settings_modal::Tab,
+    pub settings_focus: FocusHandle,
     _sub: Subscription,
-    _sub2: Subscription,
     /// Redraws the removal page as its two name boxes change.
     _sub_un: Vec<Subscription>,
 }
@@ -313,7 +382,7 @@ pub fn agent_id() -> String {
     if !c.is_empty() && c != "auto" {
         return c;
     }
-    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode".into())
+    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode-v2".into())
 }
 
 /// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
@@ -322,17 +391,15 @@ pub struct SlashCmd {
     pub name: String,
     pub desc: String,
     pub builtin: bool,
-    /// Needs text after the name (`/remember <fact>`): Enter fills it in instead of sending.
+    /// Needs text after the name: Enter fills it in instead of sending.
     pub takes_input: bool,
 }
 
 fn builtin_commands() -> Vec<SlashCmd> {
     let c = |name: &str, desc: &str, takes_input: bool| SlashCmd { name: name.into(), desc: desc.into(), builtin: true, takes_input };
     vec![
-        c("remember", crate::i18n::tr("Save a fact about this project to memory"), true),
         c("new", crate::i18n::tr("Start a new chat"), false),
         c("history", crate::i18n::tr("Saved chats and agent sessions for this folder"), false),
-        c("memory", crate::i18n::tr("What the agent remembers"), false),
         c("stop", crate::i18n::tr("Turn the agent off"), false),
     ]
 }
@@ -388,7 +455,7 @@ fn agent_cmd() -> Option<std::process::Command> {
 /// Mura and OpenCode list their saved sessions (`<cli> session list`); others don't.
 fn sessions_cmd() -> Option<std::process::Command> {
     let id = agent_id();
-    if id != "mura" && id != "opencode" {
+    if id != "mura" && !crate::acp::is_opencode(&id) {
         return None;
     }
     let mut l = crate::acp::locate(&id)?;
@@ -412,24 +479,10 @@ impl AgentState {
             InputEvent::Change => this.agent_update_mention(cx),
             _ => {}
         });
-        let memory_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Remember something about this project…")));
         let uninstall_inputs = [
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type the name"))),
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type it again"))),
         ];
-        let sub2 = cx.subscribe_in(&memory_input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = ev {
-                let text = this.agent.memory_input.read(cx).value().to_string();
-                this.agent.memory_input.update(cx, |s, cx| s.set_value("", window, cx));
-                this.agent_remember(&text, cx);
-            }
-        });
-        // Memory evaporates once per start, off the UI thread (same rule as `ant_memory.py decay`).
-        if !crate::settings::Settings::load().memory_off {
-            std::thread::spawn(|| {
-                let _ = memory::Store::default().decay();
-            });
-        }
         Self {
             status: Status::Off,
             proc_id: None,
@@ -441,14 +494,33 @@ impl AgentState {
             queue: Vec::new(),
             steer: false,
             attachments: Vec::new(),
+            chips_scroll: ScrollHandle::new(),
             open_thoughts: HashSet::new(),
             can_image: false,
             items: Vec::new(),
             permission: None,
+            perm_queue: Default::default(),
             changes: Vec::new(),
             reloads: Vec::new(),
+            follow_q: Vec::new(),
+            tool_paths: HashMap::new(),
+            user_nav: None,
+            replay: None,
+            replay_gen: 0,
+            changes_folded: false,
+            open_groups: HashSet::new(),
+            worktree: None,
+            worktree_busy: false,
             input,
-            scroll: ScrollHandle::new(),
+            list: {
+                let l = ListState::new(0, ListAlignment::Top, px(600.));
+                l.set_follow_mode(FollowMode::Tail);
+                l
+            },
+            list_seen: Default::default(),
+            view_start: Default::default(),
+            remeasure: Default::default(),
+            follow: true,
             history: crate::settings::load_json(HISTORY_FILE),
             chat_id: None,
             show_history: false,
@@ -461,12 +533,8 @@ impl AgentState {
             can_load: false,
             pending_load: None,
             loading_id: None,
-            show_memory: false,
-            memory_input,
-            turn_memories: Vec::new(),
             hinted: false,
             ws_sig: 0,
-            memories: Vec::new(),
             slash: None,
             commands: Vec::new(),
             config: Vec::new(),
@@ -480,6 +548,17 @@ impl AgentState {
             install_err: None,
             menu: menu::MenuState::new(window, cx),
             relaunch: false,
+            usage: Default::default(),
+            web_open: HashSet::new(),
+            times: Default::default(),
+            open_thought: None,
+            effort_from: std::cell::Cell::new(None),
+            effort_drag: std::cell::Cell::new(None),
+            effort_gen: std::cell::Cell::new(0),
+            geom: std::rc::Rc::new(std::cell::Cell::new((0., 0.))),
+            compose_w: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            settings_tab: Default::default(),
+            settings_focus: cx.focus_handle(),
             ask: None,
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
             ask_clear: Vec::new(),
@@ -488,7 +567,6 @@ impl AgentState {
             _sub_un: uninstall_inputs.iter().map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify())).collect(),
             uninstall_inputs,
             _sub: sub,
-            _sub2: sub2,
         }
     }
 
@@ -688,25 +766,46 @@ impl Workbench {
     }
 
     pub(crate) fn agent_set_access(&mut self, level: &str, cx: &mut Context<Self>) {
+        if level != "full" {
+            self.settings.agent_access_off = level.into();
+        }
         self.settings.agent_access = level.into();
         self.settings.save();
+        // A request waiting now is answered by the new level when it covers it.
+        if level == "full" {
+            while let Some(p) = &self.agent.permission {
+                let Some(oid) = p.options.iter().find(|o| o.2.starts_with("allow_once")).or_else(|| p.options.iter().find(|o| o.2.starts_with("allow"))).map(|o| o.0.clone()) else { break };
+                self.agent_answer_permission(Some(oid), cx);
+            }
+        }
         cx.notify();
     }
 
-    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, _: &mut Window, cx: &mut Context<Self>) {
-        self.agent_open_options(cx);
+    /// The Full access switch: on, or back to the level it was switched on from.
+    pub(crate) fn agent_toggle_full(&mut self, on: bool, cx: &mut Context<Self>) {
+        let level = if on { "full" } else { self.settings.access_off() };
+        self.agent_set_access(level, cx);
     }
 
-    fn agent_open_options(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_open_options(window, cx);
+    }
+
+    /// The agent's settings: a dialog over the window, so the chat stays where it was.
+    pub(crate) fn agent_open_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.show_options = true;
-        self.agent.show_memory = false;
-        self.agent.show_history = false;
-        if self.settings.agent_right {
-            self.agent_open = true;
-        } else {
-            self.view = crate::workbench::SideView::Agent;
-            self.sidebar_open = true;
-        }
+        self.agent.menu.open = None;
+        self.agent.usage.open = false;
+        gpui_kit::base::TextSelection::clear(window, cx);
+        let h = self.agent.settings_focus.clone();
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn agent_close_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent.show_options = false;
+        let h = self.agent.input.focus_handle(cx);
+        h.focus(window, cx);
         cx.notify();
     }
 
@@ -737,11 +836,14 @@ impl Workbench {
     fn agent_send_edit(&mut self, ix: usize, text: String, cx: &mut Context<Self>) {
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.items.truncate(ix);
+        self.agent.open_thoughts.retain(|k| *k < ix);
+        self.agent.open_groups.retain(|k| *k < ix);
         self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
         self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
         self.agent.queue = vec![Queued { text, files }];
         self.agent.changes.clear();
         self.agent.permission = None;
+        self.agent.perm_queue.clear();
         self.agent.resume_id = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
@@ -755,13 +857,14 @@ impl Workbench {
                 }
                 self.agent.session = None;
                 self.agent.status = Status::Starting;
-                let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                let cwd = self.agent_cwd();
                 self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
             }
             Status::Starting => {}
             _ => self.agent_start(cx),
         }
-        self.agent.scroll.scroll_to_bottom();
+        self.agent.follow = true;
+        self.agent_to_end();
         cx.notify();
     }
 
@@ -816,10 +919,15 @@ impl Workbench {
         cmd.args(self.agent_flag_args());
         cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
         crate::github::apply_env(&mut cmd);
+        // Another account: the CLI reads its sign-in from that account's folder.
+        if let Some(a) = self.agent_account() {
+            let (k, v) = worktree::account_env(&a);
+            cmd.env(k, v);
+        }
         self.agent.status = Status::Starting;
         self.agent.buf.clear();
         self.agent.log_tail.clear();
-        match self.procs.spawn(cmd, self.root.clone().as_deref()) {
+        match self.procs.spawn(cmd, Some(self.agent_cwd().as_path())) {
             Ok(id) => {
                 self.agent.proc_id = Some(id);
                 self.agent_request(
@@ -846,6 +954,7 @@ impl Workbench {
         self.agent.session = None;
         self.agent.pending.clear();
         self.agent.permission = None;
+        self.agent.perm_queue.clear();
         self.agent.ask = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
@@ -861,25 +970,15 @@ impl Workbench {
         self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
         self.agent.mention = None;
         self.agent.slash = None;
-        if let Some(fact) = text.strip_prefix("/remember ").or_else(|| text.strip_prefix("/ingat ")) {
-            self.agent_remember(fact, cx);
-            return;
-        }
         match text.as_str() {
             "/new" => return self.agent_new_chat(cx),
             "/history" => {
                 self.agent.show_history = true;
-                self.agent.show_memory = false;
-                self.agent_load_remote_list(cx);
-                return cx.notify();
-            }
-            "/memory" => {
-                self.agent.show_memory = true;
-                self.agent.show_history = false;
-                self.agent_refresh_memories();
+                        self.agent_load_remote_list(cx);
                 return cx.notify();
             }
             "/stop" => return self.agent_set_on(false, cx),
+            "/usage" | "/context" if self.agent_has_usage() => return self.agent_usage_open(cx),
             _ => {}
         }
         if let Some(ix) = self.agent.editing.take() {
@@ -887,7 +986,8 @@ impl Workbench {
         }
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.queue.push(Queued { text, files });
-        self.agent.scroll.scroll_to_bottom();
+        self.agent.follow = true;
+        self.agent_to_end();
         match (&self.agent.status, &self.agent.session) {
             (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
             // Still answering: the message waits in the queue (Send now interrupts).
@@ -944,15 +1044,32 @@ impl Workbench {
         }
         prompt.push(json!({ "type": "text", "text": text.clone() }));
         prompt.extend(self.agent_attachment_blocks(&files));
-        prompt.extend(self.agent_context_blocks(&text, cx));
+        prompt.extend(self.agent_context_blocks(cx));
         self.agent.status = Status::Busy;
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
+    }
+
+    /// The thought being written ended (something else came, or the turn did).
+    fn agent_close_thought(&mut self) {
+        if let Some(k) = self.agent.open_thought.take() {
+            if let Some((start, end @ None)) = self.agent.times.get_mut(&k) {
+                *end = Some(start.elapsed());
+            }
+        }
+    }
+
+    /// Run one of the agent's own commands without showing it in the chat.
+    fn agent_send_probe(&mut self, command: &str) {
+        let Some(session) = self.agent.session.clone() else { return };
+        self.agent.status = Status::Busy;
+        self.agent_request(Req::Probe, "session/prompt", json!({ "sessionId": session, "prompt": [{ "type": "text", "text": command }] }));
     }
 
     fn agent_cancel(&mut self, cx: &mut Context<Self>) {
         if let (Status::Busy, Some(s)) = (&self.agent.status, self.agent.session.clone()) {
             self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
-            if let Some(p) = self.agent.permission.take() {
+            let waiting: Vec<Permission> = self.agent.permission.take().into_iter().chain(self.agent.perm_queue.drain(..)).collect();
+            for p in waiting {
                 self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": { "outcome": "cancelled" } } }));
             }
             if self.agent.ask.is_some() {
@@ -981,7 +1098,7 @@ impl Workbench {
                 self.agent_on_message(msg, cx);
             }
         }
-        self.agent.scroll.scroll_to_bottom();
+        self.agent_follow();
     }
 
     pub(crate) fn agent_on_exit(&mut self, cx: &mut Context<Self>) {
@@ -1023,11 +1140,17 @@ impl Workbench {
                     self.agent.status = Status::Ready;
                 }
                 Req::SetOption => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
+                Req::Probe => {
+                    self.agent.status = Status::Ready;
+                    self.agent_probe_done(Some(m), cx);
+                    self.agent_flush_queue(cx);
+                    self.agent_probe_next(cx);
+                }
                 Req::LoadSession if self.agent.silent_load => {
                     self.agent.silent_load = false;
                     self.agent.loading_id = None;
                     self.agent.carry = Some(transcript(&self.agent.items));
-                    let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                    let cwd = self.agent_cwd();
                     self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
                 }
                 _ => self.agent.status = Status::Error(m),
@@ -1039,7 +1162,7 @@ impl Workbench {
             Req::Initialize => {
                 self.agent.can_load = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
                 self.agent.can_image = result.pointer("/agentCapabilities/promptCapabilities/image").and_then(Value::as_bool).unwrap_or(false);
-                let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                let cwd = self.agent_cwd();
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
                     _ => {
@@ -1078,20 +1201,41 @@ impl Workbench {
                 for (id, v) in wanted {
                     self.agent_set_option(&id, v, false, cx);
                 }
+                // Effort starts at medium: good results with fewer tokens. A level the
+                // user picked once is kept instead (above).
+                let effort = self
+                    .agent
+                    .config
+                    .iter()
+                    .find(|o| o.category == "thought_level")
+                    .filter(|o| !self.settings.agent_options.contains_key(&format!("{harness}:{}", o.id)) && o.current != "medium" && o.choices.iter().any(|c| c.0 == "medium"))
+                    .map(|o| o.id.clone());
+                if let Some(id) = effort {
+                    self.agent_set_option(&id, "medium".into(), false, cx);
+                }
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(cx);
                 self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
             }
             Req::SetOption => self.agent_take_config(&result),
+            Req::Probe => {
+                self.agent.status = Status::Ready;
+                self.agent_probe_done(None, cx);
+                self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
+            }
             Req::Prompt => {
+                self.agent_close_thought();
+                self.agent_recount();
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
                 if stop != "end_turn" && !quiet {
                     self.agent.items.push(Item::Note(stop.replace('_', " "), false));
                 }
                 self.agent.permission = None;
+                self.agent.perm_queue.clear();
                 self.agent.status = Status::Ready;
-                self.agent_take_remembers();
                 self.agent.save_chat();
                 self.agent_schedule_idle(cx);
                 self.refresh_tree(cx);
@@ -1099,6 +1243,7 @@ impl Workbench {
                     return self.agent_relaunch(cx);
                 }
                 self.agent_flush_queue(cx);
+                self.agent_probe_next(cx);
             }
         }
     }
@@ -1131,16 +1276,59 @@ impl Workbench {
                 .unwrap_or_default();
             return;
         }
+        if u.get("sessionUpdate").and_then(Value::as_str) == Some("usage_update") {
+            self.agent.usage.live.get_or_insert_with(Default::default).take(u);
+            return;
+        }
+        // A quiet command's reply goes to the usage panel.
+        if let Some((_, buf)) = self.agent.usage.probe.as_mut() {
+            if u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk") {
+                buf.push_str(u.pointer("/content/text").and_then(Value::as_str).unwrap_or(""));
+            }
+            return;
+        }
         if self.agent.silent_load {
             return;
         }
         let text = |u: &Value| u.pointer("/content/text").and_then(Value::as_str).unwrap_or("").to_string();
         let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+        let kind_now = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
+        if kind_now != "agent_thought_chunk" {
+            self.agent_close_thought();
+        }
+        match kind_now {
+            "tool_call" => {
+                if let Some(id) = s(u, "toolCallId") {
+                    self.agent.times.entry(id).or_insert((std::time::Instant::now(), None));
+                }
+            }
+            "tool_call_update" if matches!(s(u, "status").as_deref(), Some("completed" | "failed")) => {
+                if let Some((start, end @ None)) = s(u, "toolCallId").and_then(|id| self.agent.times.get_mut(&id)) {
+                    *end = Some(start.elapsed());
+                }
+            }
+            _ => {}
+        }
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
             "agent_message_chunk" => self.agent.append(false, &text(u)),
             // Only while an old session replays; live prompts are shown when sent.
             "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
-            "agent_thought_chunk" => self.agent.append(true, &text(u)),
+            "agent_thought_chunk" => {
+                self.agent.append(true, &text(u));
+                let key = format!("think-{}", self.agent.items.len().saturating_sub(1));
+                self.agent.times.entry(key.clone()).or_insert((std::time::Instant::now(), None));
+                self.agent.open_thought = Some(key);
+            }
+            "tool_call" if web::hidden_tool(u) => {}
+            "tool_call" if web::is_web(u) => self.agent.items.push(Item::Web(web::Web::new(u))),
+            // Updates go to recent items: the search stops RECENT items back, so a tool
+            // update costs the same in a chat of any length.
+            "tool_call_update" if self.agent.items.iter().rev().take(RECENT).any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
+                let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                if let Some(Item::Web(w)) = self.agent.items.iter_mut().rev().take(RECENT).find(|i| matches!(i, Item::Web(w) if w.id == id)) {
+                    w.take(u);
+                }
+            }
             "tool_call" => {
                 let kind = s(u, "kind").unwrap_or_else(|| "other".into());
                 let status = s(u, "status").unwrap_or_else(|| "pending".into());
@@ -1154,13 +1342,13 @@ impl Workbench {
             }
             "tool_call_update" => {
                 let id = s(u, "toolCallId").unwrap_or_default();
-                let known = self.agent.items.iter().rev().find_map(|i| match i {
+                let known = self.agent.items.iter().rev().take(RECENT).find_map(|i| match i {
                     Item::Tool { id: tid, kind, .. } if *tid == id => Some(kind.clone()),
                     _ => None,
                 });
                 let kind = s(u, "kind").or(known).unwrap_or_default();
                 self.agent_track_edit(u, &kind, s(u, "status").as_deref() == Some("completed"));
-                for item in self.agent.items.iter_mut().rev() {
+                for item in self.agent.items.iter_mut().rev().take(RECENT) {
                     if let Item::Tool { id: tid, title, status, kind } = item {
                         if *tid == id {
                             if let Some(k) = s(u, "kind") {
@@ -1241,7 +1429,30 @@ impl Workbench {
                         return;
                     }
                 }
-                self.agent.permission = Some(Permission { rpc_id: id.clone(), title, options });
+                // What exactly runs: the command or the path, when the agent says it.
+                let detail = ["/toolCall/rawInput/command", "/toolCall/rawInput/cmd", "/toolCall/rawInput/filePath", "/toolCall/rawInput/file_path", "/toolCall/rawInput/path", "/toolCall/locations/0/path"]
+                    .iter()
+                    .find_map(|p| params.pointer(p).and_then(Value::as_str))
+                    .filter(|d| !d.trim().is_empty() && !title.contains(d.trim()))
+                    .map(str::to_string);
+                let req = Permission { rpc_id: id.clone(), title, options, kind: kind.to_string(), detail };
+                if self.agent.permission.is_some() {
+                    self.agent.perm_queue.push_back(req);
+                } else {
+                    self.agent.permission = Some(req);
+                }
+                // The agent waits for this: make sure it is seen.
+                if self.settings.agent_right {
+                    self.agent_open = true;
+                } else if !(self.sidebar_open && self.view == SideView::Agent) {
+                    self.view = SideView::Agent;
+                    self.sidebar_open = true;
+                }
+                self.agent.follow = true;
+                self.agent_to_end();
+                if self.settings.agent_notify {
+                    crate::wintitle::flash_attention();
+                }
                 cx.notify();
             }
             ("elicitation/create", _) => self.agent_on_elicitation(id.clone(), &params, cx),
@@ -1278,11 +1489,13 @@ impl Workbench {
                 let r = core::write_text(&p, &content, crlf);
                 if r.is_ok() {
                     if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
                     }
                     if let Some(ch) = self.agent.changes.iter_mut().find(|ch| ch.path == p) {
                         (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
+                        ch.counted = true;
                     }
+                    self.agent_follow_edit(p.clone());
                     if self.docs.iter().any(|d| d.path == p) {
                         self.agent.reloads.push(p);
                     }
@@ -1308,22 +1521,34 @@ impl Workbench {
     fn agent_new_chat(&mut self, cx: &mut Context<Self>) {
         self.agent.save_chat();
         self.agent.items.clear();
+        self.agent_fresh_view();
         self.agent.chat_id = None;
         self.agent.carry = None;
         self.agent.show_history = false;
         if self.agent.status == Status::Ready && self.agent.proc_id.is_some() {
             self.agent.session = None;
             self.agent.status = Status::Starting;
-            let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+            let cwd = self.agent_cwd();
             self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
         }
         cx.notify();
+    }
+
+    /// A chat starts clean: what was opened, timed or changed belonged to the last one
+    /// (its changes count as kept, as with Keep all).
+    fn agent_fresh_view(&mut self) {
+        self.agent.open_thoughts.clear();
+        self.agent.open_groups.clear();
+        self.agent.times.clear();
+        self.agent.changes.clear();
+        self.agent.changes_folded = false;
     }
 
     /// Reopen a saved chat. OpenCode can't resume the old session, so the next
     /// message carries the earlier ones as context.
     fn agent_open_chat(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(chat) = self.agent.history.iter().find(|c| c.id == id).cloned() else { return };
+        self.agent_fresh_view();
         if self.agent.chat_id != Some(id) {
             self.agent.save_chat();
         }
@@ -1345,7 +1570,8 @@ impl Workbench {
         self.agent.carry = Some(earlier);
         self.agent.chat_id = Some(id);
         self.agent.show_history = false;
-        self.agent.scroll.scroll_to_bottom();
+        self.agent.follow = true;
+        self.agent_to_end();
         cx.notify();
     }
 
@@ -1401,12 +1627,15 @@ impl Workbench {
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
                     .child(self.render_agent_tools(cx))
+                    .child(self.render_agent_more(cx))
                     .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
                     })),
             )
-            .child(div().flex_1().min_h_0().child(self.render_agent(window, cx)))
+            .children(self.render_worktree_strip(cx))
+            // Filling the window, the chat keeps a readable width in the middle.
+            .child(h_flex().flex_1().min_h_0().justify_center().child(div().h_full().w_full().when(self.agent_full && self.settings.agent_right, |d| d.max_w(theme::u(860.))).child(self.render_agent(window, cx))))
             .into_any_element()
     }
 
@@ -1416,6 +1645,8 @@ impl Workbench {
             return;
         }
         let old = agent_name();
+        // The chat under the pointer changes: nothing in it stays selected.
+        gpui_kit::base::TextSelection::clear(window, cx);
         self.agent.save_chat();
         self.agent_stop(cx);
         self.agent.install_err = None;
@@ -1431,6 +1662,8 @@ impl Workbench {
         self.agent.resume_id = None;
         self.agent.relaunch = false;
         self.agent.config.clear();
+        // The context and limits were the old agent's.
+        self.agent.usage = Default::default();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
@@ -1439,7 +1672,7 @@ impl Workbench {
     }
 
     pub(crate) fn on_agent_use_opencode(&mut self, _: &crate::workbench::AgentUseOpenCode, w: &mut Window, cx: &mut Context<Self>) {
-        self.agent_use("opencode", w, cx);
+        self.agent_use("opencode-v2", w, cx);
     }
 
     pub(crate) fn on_agent_use_mura(&mut self, _: &crate::workbench::AgentUseMura, w: &mut Window, cx: &mut Context<Self>) {
@@ -1614,21 +1847,24 @@ impl Workbench {
         let right = self.settings.agent_right;
         h_flex()
             .gap_px()
-            .child(
-                Button::new("ag-memory-btn")
-                    .icon(Icon::new(gpui_kit::assets::IconName::Brain))
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if self.agent.show_memory { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Memory: what the agent remembers") })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.agent.show_memory = !this.agent.show_memory;
-                        this.agent.show_history = false;
-                        if this.agent.show_memory {
-                            this.agent_refresh_memories();
-                        }
-                        cx.notify();
-                    })),
-            )
+            .when(self.agent_has_usage(), |h| {
+                h.child(
+                    Button::new("ag-usage-btn")
+                        .icon(Icon::new(gpui_kit::assets::IconName::Gauge))
+                        .xsmall()
+                        .ghost()
+                        .selected(self.agent.usage.open)
+                        .tooltip(if self.agent_model_free().is_some() { crate::i18n::tr("Usage: context (free model, no limits)") } else { crate::i18n::tr("Usage: limits, context and cost") })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.agent.usage.open {
+                                this.agent.usage.open = false;
+                                cx.notify();
+                            } else {
+                                this.agent_usage_open(cx);
+                            }
+                        })),
+                )
+            })
             .child(
                 Button::new("ag-history-btn")
                     .icon(if self.agent.show_history { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::MessageSquareCode) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
@@ -1637,21 +1873,27 @@ impl Workbench {
                     .tooltip(if self.agent.show_history { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Saved chats") })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_history = !this.agent.show_history;
-                        this.agent.show_memory = false;
                         if this.agent.show_history {
                             this.agent_load_remote_list(cx);
                         }
                         cx.notify();
                     })),
             )
-            .child(
-                Button::new("ag-dock")
-                    .icon(if right { IconName::PanelLeft } else { IconName::PanelRight })
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if right { crate::i18n::tr("Move to the left side bar") } else { crate::i18n::tr("Move to the right side") })
-                    .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
-            )
+            .when(right, |h| {
+                let full = self.agent_full;
+                h.child(
+                    Button::new("ag-full")
+                        .icon(if full { IconName::Minimize } else { IconName::Maximize })
+                        .xsmall()
+                        .ghost()
+                        .selected(full)
+                        .tooltip(if full { crate::i18n::tr("Back beside the editor") } else { crate::i18n::tr("Fill the window") })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.agent_full = !this.agent_full;
+                            cx.notify();
+                        })),
+                )
+            })
     }
 
     fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1725,6 +1967,7 @@ impl Workbench {
             };
             self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": outcome } }));
         }
+        self.agent.permission = self.agent.perm_queue.pop_front();
         cx.notify();
     }
 
@@ -1751,45 +1994,64 @@ impl Workbench {
         if !matches!(kind, "edit" | "delete" | "move") && !has_diff {
             return;
         }
+        let cwd = self.agent_cwd();
+        let temp = std::env::temp_dir();
+        let scratch = |p: &Path| p.starts_with(&temp) && !cwd.starts_with(&temp);
         let abs = |p: &str| -> PathBuf {
             let p = PathBuf::from(p);
-            if p.is_absolute() { p } else { self.root.clone().unwrap_or_default().join(p) }
+            if p.is_absolute() { p } else { cwd.join(p) }
         };
         let mut touched: Vec<PathBuf> = Vec::new();
         for c in u.get("content").and_then(Value::as_array).into_iter().flatten() {
             if c.get("type").and_then(Value::as_str) != Some("diff") {
                 continue;
             }
-            let Some(p) = c.get("path").and_then(Value::as_str).map(abs) else { continue };
+            let Some(p) = c.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                let before = c.get("oldText").and_then(Value::as_str).map(String::from);
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                let before = before_edit(std::fs::read_to_string(&p).ok(), c.get("oldText").and_then(Value::as_str), c.get("newText").and_then(Value::as_str).unwrap_or(""));
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
             }
             touched.push(p);
         }
         for l in u.get("locations").and_then(Value::as_array).into_iter().flatten() {
-            let Some(p) = l.get("path").and_then(Value::as_str).map(abs) else { continue };
+            let Some(p) = l.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
                 if done {
                     continue; // too late to know how it looked before
                 }
                 let before = std::fs::read_to_string(&p).ok();
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
             }
             touched.push(p);
         }
+        let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("").to_string();
         if !done {
+            let known = self.agent.tool_paths.entry(id).or_default();
+            for p in touched {
+                if !known.contains(&p) {
+                    known.push(p);
+                }
+            }
             return;
+        }
+        for p in self.agent.tool_paths.remove(&id).unwrap_or_default() {
+            if !touched.contains(&p) {
+                touched.push(p);
+            }
         }
         for p in touched {
             let after = std::fs::read_to_string(&p).unwrap_or_default();
             if let Some(ix) = self.agent.changes.iter().position(|ch| ch.path == p) {
                 let ch = &mut self.agent.changes[ix];
                 (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
+                ch.counted = true;
                 // Looked at but not changed: not a change.
                 if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
                     self.agent.changes.remove(ix);
                 }
+            }
+            if self.agent.changes.iter().any(|ch| ch.path == p) {
+                self.agent_follow_edit(p.clone());
             }
             if self.docs.iter().any(|d| d.path == p) && !self.agent.reloads.contains(&p) {
                 self.agent.reloads.push(p);
@@ -1797,9 +2059,27 @@ impl Workbench {
         }
     }
 
+    /// Count every changed file's lines again from the disk (end of a turn).
+    fn agent_recount(&mut self) {
+        self.agent.tool_paths.clear();
+        self.agent.changes.retain_mut(|ch| {
+            let after = std::fs::read_to_string(&ch.path).ok();
+            (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
+            ch.counted = true;
+            match (&ch.before, &after) {
+                // Made and removed again (a scratch file): nothing changed.
+                (None, None) => false,
+                // Read but not changed after all.
+                (Some(_), Some(_)) => ch.added > 0 || ch.removed > 0,
+                _ => true,
+            }
+        });
+    }
+
     /// Open what the agent changed in a file as a unified diff, in a tab.
     fn agent_show_diff(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ch) = self.agent.changes.get(ix) else { return };
+        let target = ch.path.clone();
         let after = std::fs::read_to_string(&ch.path).unwrap_or_default();
         let rel = self.rel_display(&ch.path.to_string_lossy()).replace('\\', "/");
         let text = crate::diff::unified(&rel, ch.before.as_deref().unwrap_or(""), &after);
@@ -1810,7 +2090,10 @@ impl Workbench {
             if let Some(i) = self.docs.iter().position(|d| d.path == file) {
                 self.close(i, window, cx);
             }
-            self.open_file(file, window, cx);
+            self.open_file(file.clone(), window, cx);
+            if let Some(d) = self.docs.iter_mut().find(|d| d.path == file).and_then(|d| d.diff.as_mut()) {
+                d.target = Some(target);
+            }
         }
     }
 
@@ -1819,10 +2102,6 @@ impl Workbench {
             return;
         }
         let ch = self.agent.changes.remove(ix);
-        let store = memory::Store::default();
-        for id in std::mem::take(&mut self.agent.turn_memories) {
-            let _ = store.fail(&id);
-        }
         let r = match &ch.before {
             Some(b) => std::fs::write(&ch.path, b).map_err(|e| e.to_string()),
             None => core::delete_path(&ch.path),
@@ -2103,9 +2382,9 @@ impl Workbench {
         None
     }
 
-    /// Context blocks for a prompt: the chips that are on, memory, and the
-    /// one-time note that lets the agent save facts with `REMEMBER:`.
-    fn agent_context_blocks(&mut self, text: &str, cx: &mut Context<Self>) -> Vec<Value> {
+    /// Context blocks for a prompt: the chips that are on, read-only mode, and a
+    /// one-time note on the language to answer in.
+    fn agent_context_blocks(&mut self, cx: &mut Context<Self>) -> Vec<Value> {
         let chips = self.agent_chips(cx);
         let mut blocks = Vec::new();
         let resource = |path: &Path, body: String| {
@@ -2126,7 +2405,19 @@ impl Workbench {
                         python: self.python_version.as_deref(),
                     };
                     self.agent.ws_sig = crate::ws_context::signature(&inputs);
-                    blocks.push(json!({ "type": "text", "text": crate::ws_context::overview(&inputs) }));
+                    let mut text = crate::ws_context::overview(&inputs);
+                    if let Some(w) = &self.agent.worktree {
+                        text.push_str(&format!(
+                            "\nYou work in a git worktree of this repository: {} (branch {}). Your working directory is there; \
+                             read and edit the files in it, not in the main folder (the user merges the branch when the work is done).\n",
+                            w.path.display(),
+                            w.branch
+                        ));
+                    }
+                    if let Some(notes) = self.ext_agent_notes() {
+                        text.push_str(&notes);
+                    }
+                    blocks.push(json!({ "type": "text", "text": text }));
                 }
                 "file" => {
                     if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
@@ -2185,22 +2476,6 @@ impl Workbench {
                 _ => {}
             }
         }
-        // Memory: the few trails that match this question (P = tau * eta^2).
-        let file = self.active.map(|ix| self.docs[ix].name.to_string()).unwrap_or_default();
-        let trails = if self.settings.memory_off {
-            Vec::new()
-        } else {
-            memory::Store::default().recall(&format!("{text} {file}"), 4, Some(&self.memory_scope()))
-        };
-        self.agent.turn_memories = trails.iter().map(|t| t.id.clone()).collect();
-        if !trails.is_empty() {
-            let list: Vec<String> = trails.iter().map(|t| format!("- {}", t.content)).collect();
-            blocks.push(json!({ "type": "text", "text": format!(
-                "Notes from earlier sessions (FluxCode memory, may be outdated; ignore them if they don't fit):\n{}",
-                list.join("\n")
-            ) }));
-            self.agent.items.push(Item::MemoryUsed(trails.len()));
-        }
         if self.settings.access() == "read" {
             blocks.push(json!({ "type": "text", "text":
                 "FluxCode is in read-only mode for this message: read files and explain, but do not edit files or run commands \
@@ -2208,79 +2483,21 @@ impl Workbench {
         }
         if !self.agent.hinted {
             self.agent.hinted = true;
-            // FluxCode keeps the memory natively; the agent's own memory skill would start
-            // a Python process for the same store, so it is asked not to.
             let lang = if crate::i18n::is_id() {
                 "FluxCode's interface is in Indonesian: when the user's language is unclear, answer in Indonesian. "
             } else {
                 "FluxCode's interface is in English. "
             };
-            let text = if self.settings.memory_off {
-                "FluxCode note: answer in the language the user writes in. Memory is switched off for now: don't run a \
-                 memory skill or ant_memory.py."
-            } else {
-                "FluxCode note: answer in the language the user writes in. FluxCode keeps the project memory itself (relevant \
-                 notes come with the message), so don't run a memory skill or ant_memory.py. When you learn a lasting fact about \
-                 this project (how to run, test or deploy it, a convention, a decision), end your reply with one line \
-                 `REMEMBER: <fact>`; FluxCode saves it and hides the line."
-            };
+            let text = "FluxCode note: answer in the language the user writes in.";
             blocks.push(json!({ "type": "text", "text": format!("{lang}{text}") }));
         }
         blocks
     }
 
-    pub(crate) fn memory_scope(&self) -> String {
-        let name = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-        format!("project:{name}")
-    }
-
-    /// `REMEMBER:` lines at the end of the last answer go to memory and out of the text.
-    fn agent_take_remembers(&mut self) {
-        if self.settings.memory_off {
-            return;
-        }
-        let Some(ix) = self.agent.items.iter().rposition(|i| matches!(i, Item::Text(_))) else { return };
-        let Item::Text(t) = &self.agent.items[ix] else { return };
-        let (kept, facts) = memory::take_remember_lines(t);
-        if facts.is_empty() {
-            return;
-        }
-        self.agent.items[ix] = Item::Text(kept);
-        let store = memory::Store::default();
-        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
-        for f in facts {
-            if store.add(&f, &tags).is_ok() {
-                self.agent.items.push(Item::Saved(f));
-            }
-        }
-    }
-
-    /// Save a fact the user typed (`/remember ...` or the Memory view).
-    pub(crate) fn agent_remember(&mut self, text: &str, cx: &mut Context<Self>) {
-        let tags = vec!["fluxcode".to_string(), self.memory_scope()];
-        match memory::Store::default().add(text, &tags) {
-            Ok(_) => {
-                self.agent.items.push(Item::Saved(text.trim().to_string()));
-                self.agent_refresh_memories();
-            }
-            Err(e) => self.agent.items.push(Item::Note(e, true)),
-        }
-        cx.notify();
-    }
-
-    fn agent_refresh_memories(&mut self) {
-        let scope = self.memory_scope();
-        self.agent.memories = memory::Store::default()
-            .list()
-            .into_iter()
-            .filter(|t| t.tags.iter().any(|x| *x == scope) || !t.tags.iter().any(|x| x.starts_with("project:")))
-            .collect();
-    }
-
     // ------------------------------------------------------------ OpenCode / Mura sessions
 
     fn agent_load_session(&mut self, id: String) {
-        let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+        let cwd = self.agent_cwd();
         self.agent.loading_id = Some(id.clone());
         self.agent.status = Status::Starting;
         self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
@@ -2331,7 +2548,7 @@ impl Workbench {
         };
         let harness = agent_name();
         cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
-        if harness == "OpenCode" {
+        if crate::acp::is_opencode(&agent_id()) {
             // A private server that exits with the command, instead of starting OpenCode's
             // background service (which would stay resident after FluxCode closes).
             cmd.arg("--standalone");
@@ -2379,139 +2596,6 @@ impl Workbench {
     }
 
     // ------------------------------------------------------------ render
-
-    /// The memory view: what the agent remembers for this project and for all
-    /// projects, each note with how strong it is and how often it helped.
-    fn render_memory(&self, cx: &mut Context<Self>) -> AnyElement {
-        let a = &self.agent;
-        let off = self.settings.memory_off;
-        let weak = cx.entity().downgrade();
-        let header = h_flex()
-            .px_3()
-            .pb_2()
-            .gap_2()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Memory")))
-            .when(!off && !a.memories.is_empty(), |h| h.child(div().text_xs().text_color(c(theme::FG_DIM)).child(a.memories.len().to_string())))
-            .child(div().flex_1())
-            .child(
-                Switch::new("ag-mem-on")
-                    .checked(!off)
-                    .small()
-                    .tooltip(if off { crate::i18n::tr("Memory is off. Click to turn it on") } else { crate::i18n::tr("Memory is on. Click to turn it off") })
-                    .on_click(move |on, _, cx| {
-                        let on = *on;
-                        _ = weak.update(cx, |this, cx| {
-                            this.settings.memory_off = !on;
-                            this.settings.save();
-                            this.agent_refresh_memories();
-                            cx.notify();
-                        });
-                    }),
-            );
-        let mut list = v_flex().id("ag-memory").flex_1().min_h_0().px_2().overflow_y_scroll();
-        if off {
-            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr(
-                "Memory is off: nothing is read or saved, and the agent gets no notes. Your notes stay in the file.",
-            )));
-        } else if a.memories.is_empty() {
-            list = list.child(div().px_1().py_2().text_xs().text_color(c(theme::FG_DIM)).child(
-                crate::i18n::tr("Nothing saved yet. The agent saves lasting facts here by itself, or type one above. Notes fade when unused and grow stronger when they help."),
-            ));
-        }
-        if !off {
-            let (here, everywhere): (Vec<(usize, &memory::Trail)>, Vec<(usize, &memory::Trail)>) =
-                a.memories.iter().enumerate().partition(|(_, t)| t.tags.iter().any(|x| x.starts_with("project:")));
-            for (title, group) in [(crate::i18n::tr("This project"), here), (crate::i18n::tr("All projects"), everywhere)] {
-                if group.is_empty() {
-                    continue;
-                }
-                list = list.child(div().px_1().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title));
-                for (i, t) in group {
-                    let id = t.id.clone();
-                    // A word instead of the raw strength (tau): fades below 0.4, strong from 1.
-                    let (strength, tone) = match t.tau {
-                        x if x >= 1.0 => (crate::i18n::tr("Strong"), theme::GREEN),
-                        x if x >= 0.4 => (crate::i18n::tr("Normal"), theme::FG_DIM),
-                        _ => (crate::i18n::tr("Fading"), theme::WARN),
-                    };
-                    let used = if t.success == 0 { crate::i18n::tr("not used yet").to_string() } else { crate::trf!("used {n}×"; n => t.success) };
-                    list = list.child(
-                        h_flex()
-                            .id(("ag-mem", i))
-                            .items_start()
-                            .gap_2()
-                            .px_2()
-                            .py_1p5()
-                            .rounded(px(4.))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_0p5()
-                                    .child(div().text_sm().text_color(c(theme::FG)).child(t.content.clone()))
-                                    .child(
-                                        h_flex()
-                                            .gap_1p5()
-                                            .text_xs()
-                                            .text_color(c(theme::FG_DIM))
-                                            .child(div().flex_none().size(px(6.)).rounded_full().bg(c(tone)))
-                                            .child(strength)
-                                            .child("·")
-                                            .child(used),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("ag-mem-del", i))
-                                    .flex_none()
-                                    .size(theme::u(22.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(4.))
-                                    .cursor_pointer()
-                                    .text_color(c(theme::FG_DIM))
-                                    .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Forget (moves it to the archive)")).build(w, cx))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let _ = memory::Store::default().forget(&id);
-                                        this.agent_refresh_memories();
-                                        cx.notify();
-                                    }))
-                                    .child(Icon::new(IconName::Close).size(theme::u(12.))),
-                            ),
-                    );
-                }
-            }
-        }
-        // The file, short: the home folder as ~, the full path in the tooltip.
-        let full = memory::dir().join("trails.json");
-        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
-        let shown = full.display().to_string();
-        let shown = if !home.is_empty() && shown.starts_with(&home) { format!("~{}", &shown[home.len()..]) } else { shown };
-        let full_s: SharedString = full.display().to_string().into();
-        v_flex()
-            .size_full()
-            .child(header)
-            .when(!off, |v| v.child(div().px_3().pb_1().child(Input::new(&a.memory_input).small())))
-            .child(list)
-            .child(
-                h_flex()
-                    .id("ag-mem-file")
-                    .px_3()
-                    .py_2()
-                    .gap_1()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .border_t_1()
-                    .border_color(c(theme::BORDER))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full_s.clone()).build(w, cx))
-                    .child(div().flex_none().child(crate::i18n::tr("File:")))
-                    .child(div().min_w_0().truncate().child(shown)),
-            )
-            .into_any_element()
-    }
 
     fn render_remote_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
@@ -2567,6 +2651,9 @@ impl Workbench {
 
     /// "Working…" / "Starting…" for the input box's bottom row (nothing while idle).
     fn agent_status_line(&self) -> Option<(theme::Tok, String)> {
+        if self.agent.permission.is_some() {
+            return Some((theme::WARN, crate::i18n::tr("Waiting for you").into()));
+        }
         match &self.agent.status {
             Status::Busy => Some((theme::BLUE, crate::i18n::tr("Working…").into())),
             Status::Starting if self.agent.loading_id.is_some() => Some((theme::FG_MUTED, crate::i18n::tr("Opening the session…").into())),
@@ -2794,11 +2881,33 @@ impl Workbench {
 
     pub(crate) fn render_agent(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let body = self.render_agent_body(window, cx);
-        // The agent menu opens under the panel title, inside the panel.
-        match self.render_agent_menu(true, window, cx) {
-            Some(m) => div().relative().size_full().child(body).child(div().absolute().top_1().left_2().right_2().child(m)).into_any_element(),
-            None => body,
-        }
+        let geom = self.agent.geom.clone();
+        let id = cx.entity_id();
+        // The panel's top, for the room the menus get (see `geom`).
+        let probe = canvas(
+            move |b, _, cx| {
+                let y = f32::from(b.origin.y);
+                let (top, box_top) = geom.get();
+                if (top - y).abs() > 0.5 {
+                    geom.set((y, box_top));
+                    cx.defer(move |cx| cx.notify(id));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size(px(0.));
+        div()
+            .relative()
+            .size_full()
+            .child(body)
+            .child(probe)
+            // The agent menu opens under the panel title, inside the panel.
+            .children(self.render_agent_menu(true, window, cx).map(|m| div().absolute().top_1().left_2().right_2().child(m)))
+            .children(self.render_usage_modal(cx))
+            .into_any_element()
     }
 
     fn render_agent_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2815,291 +2924,53 @@ impl Workbench {
         // The working / starting state is shown in the input box's bottom row.
         let _ = (dot, label);
         let header = div();
-        if a.show_memory {
-            return v_flex().size_full().child(self.render_memory(cx)).into_any_element();
-        }
         if a.show_history {
             return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
-        }
-        if a.show_options {
-            return self.render_options(cx);
         }
         if let Some(id) = &a.uninstall {
             return self.render_uninstall(id, cx);
         }
 
-        let name = agent_name();
-        let mut log = v_flex().id("ag-log").size_full().px_3().pb_3().gap_2().overflow_y_scroll().track_scroll(&a.scroll);
-        if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
-            log = log.child(self.render_agent_welcome(on, cx));
-        }
-        if let Status::Error(e) = &a.status {
-            log = log.child(div().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
-        }
-        // The agent's name heads each answer, like a chat: after every user message.
-        let speaker = |who: &str, icon: Icon| {
-            h_flex()
-                .pt_1()
-                .gap_1p5()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(c(theme::FG_MUTED))
-                .child(icon.size(theme::u(13.)))
-                .child(who.to_string())
+        self.agent_sync_list();
+        let error = match &a.status {
+            Status::Error(e) => Some(div().mx_3().mb_2().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone())),
+            _ => None,
         };
-        let mut after_user = true;
-        for (i, item) in a.items.iter().enumerate() {
-            if matches!(item, Item::Branch(_)) {
-                after_user = true;
-            }
-            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Saved(_) | Item::MemoryUsed(_) | Item::Branch(_));
-            if starts_answer {
-                log = log.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
-                after_user = false;
-            }
-            log = log.child(match item {
-                Item::User(t) => {
-                    after_user = true;
-                    let group = SharedString::from(format!("ag-user-{i}"));
-                    let editing = a.editing == Some(i);
-                    v_flex()
-                        .items_end()
-                        .gap_1()
-                        .pt_1()
-                        .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User)))
-                        .child(
-                            h_flex()
-                                .group(group.clone())
-                                .w_full()
-                                .justify_end()
-                                .items_center()
-                                .gap_1()
-                                // Edit sits left of the bubble, dim until pointed at.
-                                .child(
-                                    div()
-                                        .id(("ag-edit", i))
-                                        .flex_none()
-                                        .size(theme::u(22.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(4.))
-                                        .cursor_pointer()
-                                        .text_color(c(theme::FG_DIM))
-                                        .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
-                                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
-                                        .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
-                                        .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
-                                )
-                                .child(
-                            div()
-                                .max_w(relative(0.88))
-                                .px_2p5()
-                                .py_1p5()
-                                .rounded(px(8.))
-                                .bg(c(theme::BG_ELEVATED))
-                                .border_1()
-                                .border_color(c(theme::BORDER_STRONG))
-                                .text_sm()
-                                .text_color(c(theme::FG_STRONG))
-                                .child(t.clone()),
-                                ),
-                        )
-                        .into_any_element()
-                }
-                Item::Text(t) => TextView::markdown(("ag-md", i), t.clone())
-                    .text_sm()
-                    .code_block_actions(|block, _, _| {
-                        let (copy, insert) = (block.code().to_string(), block.code().to_string());
-                        // A solid strip so the buttons never sit on top of the code.
-                        h_flex()
-                            .gap_px()
-                            .p_px()
-                            .rounded(px(4.))
-                            .bg(c(theme::BG_ELEVATED))
-                            .border_1()
-                            .border_color(c(theme::BORDER))
-                            .child(
-                                Button::new("cb-copy")
-                                    .icon(IconName::Copy)
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(tr("Copy"))
-                                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
-                            )
-                            .child(
-                                Button::new("cb-insert")
-                                    .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
-                                    .on_click(move |_, w, cx| {
-                                        if let Ok(mut p) = PENDING_INSERT.lock() {
-                                            *p = Some(insert.clone());
-                                        }
-                                        w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
-                                    }),
-                            )
-                    })
-                    .into_any_element(),
-                Item::Thought(t) => {
-                    let open = a.open_thoughts.contains(&i);
-                    let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
-                    v_flex()
-                        .id(("ag-thought", i))
-                        .gap_1()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(c(theme::FG_DIM))
-                        .child(
-                            h_flex()
-                                .gap_1p5()
-                                .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(tr("Thinking")))
-                                .when(!open, |h| h.child(div().flex_1().min_w_0().truncate().italic().child(last)))
-                                .when(open, |h| h.child(div().flex_1()))
-                                .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).flex_none()),
-                        )
-                        .when(open, |v| v.child(div().pl(theme::u(18.)).italic().child(t.clone())))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.agent.open_thoughts.remove(&i) {
-                                this.agent.open_thoughts.insert(i);
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }
-                Item::Branch(t) => h_flex()
-                    .py_1()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
-                    .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
-                    .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
-                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
-                    .into_any_element(),
-                Item::Tool { title, status, kind, .. } => {
-                    let (state_icon, col): (Icon, theme::Tok) = match status.as_str() {
-                        "completed" => (Icon::new(IconName::CircleCheck), theme::GREEN),
-                        "failed" => (Icon::new(IconName::CircleX), theme::DANGER),
-                        "in_progress" => (Icon::new(IconName::LoaderCircle), theme::BLUE),
-                        _ => (Icon::new(IconName::Dash), theme::FG_DIM),
-                    };
-                    let kind_icon: Icon = match kind.as_str() {
-                        "read" => Icon::new(IconName::FileText),
-                        "edit" => Icon::new(gpui_kit::assets::IconName::Pencil),
-                        "delete" => Icon::new(IconName::Delete),
-                        "move" => Icon::new(IconName::ArrowRight),
-                        "search" => Icon::new(IconName::Search),
-                        "execute" => Icon::new(IconName::SquareTerminal),
-                        "fetch" => Icon::new(IconName::Globe),
-                        "think" => Icon::new(gpui_kit::assets::IconName::Brain),
-                        _ => Icon::new(IconName::Settings2),
-                    };
-                    h_flex()
-                        .gap_2()
-                        .px_2()
-                        .h(theme::u(24.))
-                        .rounded(px(4.))
-                        .bg(c(theme::BG_ELEVATED))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .text_xs()
-                        .child(kind_icon.size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(title.clone()))
-                        .child(state_icon.size(theme::u(13.)).text_color(c(col)))
-                        .into_any_element()
-                }
-                Item::Plan(entries) => v_flex()
-                    .gap_1()
-                    .p_2()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(c(theme::BORDER))
-                    .text_xs()
-                    .children(entries.iter().map(|(t, st)| {
-                        let (icon, col) = match st.as_str() {
-                            "completed" => (IconName::CircleCheck, theme::GREEN),
-                            "in_progress" => (IconName::LoaderCircle, theme::BLUE),
-                            _ => (IconName::Dash, theme::FG_DIM),
-                        };
-                        h_flex()
-                            .gap_1p5()
-                            .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
-                            .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
-                    }))
-                    .into_any_element(),
-                // Notes: the icon sits in a box one text line tall, so it centers on the first line.
-                Item::Note(t, err) => h_flex()
-                    .items_start()
-                    .gap_1p5()
-                    .text_xs()
-                    .line_height(theme::u(18.))
-                    .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
-                    .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
-                    .child(div().flex_1().min_w_0().child(t.clone()))
-                    .into_any_element(),
-                // Memory stays out of the way: one dim line, the full note in its tooltip and in the Memory view.
-                Item::Saved(t) => {
-                    let full: SharedString = t.clone().into();
-                    memory_line(("ag-mem-saved", i), crate::i18n::tr("Saved to memory"), t.clone())
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.agent.show_memory = true;
-                            this.agent_refresh_memories();
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                }
-                Item::MemoryUsed(n) => memory_line(
-                    ("ag-mem-used", i),
-                    if *n == 1 { crate::i18n::tr("Used 1 note from memory") } else { "" },
-                    if *n == 1 { String::new() } else { crate::trf!("Used {n} notes from memory"; n => n) },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.agent.show_memory = true;
-                    this.agent_refresh_memories();
-                    cx.notify();
-                }))
-                .into_any_element(),
-            });
-        }
-
-        let permission = a.permission.as_ref().map(|p| {
+        let log: AnyElement = if a.items.is_empty() {
             v_flex()
-                .m_3()
-                .p_2()
-                .gap_2()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(theme::ACCENT))
-                .bg(c(theme::BG_ELEVATED))
-                .text_xs()
-                .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("Allow: {0}?"; 0 => p.title)))
-                .child(h_flex().gap_1().flex_wrap().children(p.options.iter().enumerate().map(|(i, (oid, name, kind))| {
-                    let oid = oid.clone();
-                    // One loud choice (allow once); the lasting ones and reject stay quiet.
-                    let label: String = match kind.as_str() {
-                        "allow_once" => crate::i18n::tr("Allow once").into(),
-                        "allow_always" => crate::i18n::tr("Always allow").into(),
-                        "reject_once" => crate::i18n::tr("Reject").into(),
-                        "reject_always" => crate::i18n::tr("Always reject").into(),
-                        _ => name.clone(),
-                    };
-                    let b = Button::new(("perm", i)).label(label).xsmall();
-                    let b = match kind.as_str() {
-                        "allow_once" => b.primary(),
-                        k if k.starts_with("reject") => b.ghost(),
-                        _ => b,
-                    };
-                    b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
-                })))
-        });
-
+                .id("ag-log")
+                .size_full()
+                .px_3()
+                .pb_3()
+                .overflow_y_scroll()
+                .children(error.is_none().then(|| self.render_agent_welcome(on, cx)))
+                .children(error)
+                .into_any_element()
+        } else {
+            v_flex()
+                .size_full()
+                .children(error)
+                .child(
+                    list(
+                        a.list.clone(),
+                        cx.processor(|this, ix: usize, window, cx| {
+                            let start = this.agent.view_start.get();
+                            match (start > 0, ix) {
+                                (true, 0) => this.render_agent_pager(start, cx),
+                                (pager, _) => this.render_agent_item(start + ix - pager as usize, window, cx),
+                            }
+                        }),
+                    )
+                    .flex_1()
+                    .min_h_0(),
+                )
+                .into_any_element()
+        };
+        let permission = a.permission.as_ref().map(|p| self.render_permission(p, cx));
+        
         // What the agent changed this turn, like a worktree: each file with its
         // lines added / removed, a diff, and undo.
+        let folded = a.changes_folded;
         let changes = (!a.changes.is_empty()).then(|| {
             let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
             let files = if a.changes.len() == 1 { crate::i18n::tr("1 file").to_string() } else { crate::trf!("{n} files"; n => a.changes.len()) };
@@ -3130,13 +3001,20 @@ impl Workbench {
                             .min_w_0()
                             .gap_1p5()
                             .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx)))
-                            .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
-                            .child(div().flex_none().text_color(c(theme::FG)).child(name))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.agent.user_nav = Some(std::time::Instant::now());
+                                this.agent_show_diff(i, w, cx)
+                            }))
+                            .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(theme::tint(tint)))
+                            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
                             .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
-                            .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
+                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
                     )
-                    .child(counts(ch.added, ch.removed))
+                    .child(if ch.counted {
+                        counts(ch.added, ch.removed).into_any_element()
+                    } else {
+                        div().flex_none().text_color(c(theme::FG_DIM)).child("…").into_any_element()
+                    })
                     .child(
                         div()
                             .id(("ag-ch-diff", i))
@@ -3149,9 +3027,12 @@ impl Workbench {
                             .cursor_pointer()
                             .text_color(c(theme::FG_DIM))
                             .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Show the diff")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, w, cx| this.agent_show_diff(i, w, cx)))
-                            .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.))),
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.agent.user_nav = Some(std::time::Instant::now());
+                                this.open_file(path.clone(), w, cx)
+                            }))
+                            .child(Icon::new(IconName::FileText).size(theme::u(13.))),
                     )
                     .child(
                         div()
@@ -3184,13 +3065,27 @@ impl Workbench {
                         .px_2()
                         .h(theme::u(30.))
                         .gap_2()
-                        .border_b_1()
+                        .when(!folded, |h| h.border_b_1())
                         .border_color(c(theme::BORDER))
-                        .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
-                        .child(div().flex_none().text_color(c(theme::FG_DIM)).child(files))
-                        .child(counts(add, del))
-                        .child(div().flex_1())
+                        .child(
+                            h_flex()
+                                .id("ag-ch-fold")
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .gap_2()
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.agent.changes_folded = !this.agent.changes_folded;
+                                    cx.notify();
+                                }))
+                                .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).flex_none().size(theme::u(12.)).text_color(c(theme::FG_DIM)))
+                                .child(Icon::new(gpui_kit::assets::IconName::FileDiff).flex_none().size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
+                                .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
+                                .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(files))
+                                .child(counts(add, del))
+                                .child(div().flex_1()),
+                        )
                         .child(change_btn("ag-undo-all", gpui_kit::assets::IconName::Undo2, crate::i18n::tr("Undo all")).on_click(cx.listener(|this, _, _, cx| {
                             for i in (0..this.agent.changes.len()).rev() {
                                 this.agent_undo(i, cx);
@@ -3198,11 +3093,10 @@ impl Workbench {
                         })))
                         .child(change_btn("ag-keep-all", IconName::Check, tr("Keep all")).on_click(cx.listener(|this, _, _, cx| {
                             this.agent.changes.clear();
-                            this.agent_reinforce_turn();
                             cx.notify();
                         }))),
                 )
-                .child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows))
+                .when(!folded, |v| v.child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows)))
         });
 
         v_flex()
@@ -3221,8 +3115,7 @@ impl Workbench {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .child(log)
-                    .child(self.smooth_scroll_layer(crate::workbench::ScrollTarget::Handle(CHAT_SCROLL_KEY, a.scroll.clone()), cx)),
+                    .child(log),
             )
             .children(self.render_agent_ask(cx))
             .when_some(permission, |v, p| v.child(p))
@@ -3233,6 +3126,240 @@ impl Workbench {
             .children(self.render_mention_popup(cx))
             .child(self.render_composer(window, cx))
             .into_any_element()
+    }
+
+
+    /// One chat item, for the virtual list: the speaker line when an answer starts, the
+    /// group line above a run of steps, then the item (or nothing, folded in a group).
+    fn render_agent_item(&mut self, i: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let Some(item) = a.items.get(i) else { return div().into_any_element() };
+        let name = agent_name();
+        let speaker = |who: &str, icon: Icon| {
+            h_flex()
+                .pt_1()
+                .gap_1p5()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(icon.size(theme::u(13.)))
+                .child(who.to_string())
+        };
+        let busy = a.status == Status::Busy;
+        let run_of = |k: usize| self.agent_run_of(k);
+        // The group header sits above the first step of a group, so the rail joins them.
+        let joined_up = |k: usize| is_step(k.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(k).is_some_and(|r| r.0 == k);
+        let last_item = i + 1 == a.items.len();
+        // Rows get the list's width: relative widths inside (the user bubble) are of the panel.
+        let mut col = v_flex().w_full().min_w_0().px_3().pt_2().when(last_item, |v| v.pb_3());
+        // An answer starts after the user's message (or a branch), notes aside.
+        let answer = !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
+        let prev = a.items[..i].iter().rev().find(|x| !matches!(x, Item::Note(..)));
+        if answer && matches!(prev, None | Some(Item::User(_) | Item::Branch(_))) {
+            col = col.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
+        }
+        let top = a.view_start.get();
+        if let Some((first, last)) = run_of(i) {
+            let head = first.max(top);
+            let open = a.open_groups.contains(&first);
+            // While the agent works on the last group, its newest step stays in view.
+            let live_tail = busy && last + 1 == a.items.len();
+            if i == head {
+                let members = &a.items[first..=last];
+                let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
+                let tools = members.len() - thoughts;
+                let total: std::time::Duration = (first..=last)
+                    .filter_map(|k| {
+                        let key = match &a.items[k] {
+                            Item::Tool { id, .. } => id.clone(),
+                            _ => format!("think-{k}"),
+                        };
+                        a.times.get(&key).and_then(|t| t.1)
+                    })
+                    .sum();
+                col = col.child(self.render_step_group(activity::Group {
+                    first,
+                    last,
+                    thoughts,
+                    tools,
+                    running: live_tail,
+                    open,
+                    total: (!total.is_zero()).then_some(total),
+                    joined_down: open || live_tail,
+                }, cx));
+            }
+            if !open && !(live_tail && i == last) {
+                return if i == head { col.into_any_element() } else { div().into_any_element() };
+            }
+        }
+    col.child(match item {
+            Item::User(t) => {
+                let group = SharedString::from(format!("ag-user-{i}"));
+                let editing = a.editing == Some(i);
+                v_flex()
+                    .items_end()
+                    .gap_1()
+                    .pt_1()
+                    .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User)))
+                    .child(
+                        h_flex()
+                            .group(group.clone())
+                            .w_full()
+                            .justify_end()
+                            .items_center()
+                            .gap_1()
+                            // Edit sits left of the bubble, dim until pointed at.
+                            .child(
+                                div()
+                                    .id(("ag-edit", i))
+                                    .flex_none()
+                                    .size(theme::u(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .text_color(c(theme::FG_DIM))
+                                    .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
+                                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
+                                    .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
+                                    .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
+                            )
+                            .child(
+                        div()
+                            .max_w(relative(0.88))
+                            .px_2p5()
+                            .py_1p5()
+                            .rounded(px(8.))
+                            .bg(c(theme::BG_ELEVATED))
+                            .border_1()
+                            .border_color(c(theme::BORDER_STRONG))
+                            .text_sm()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(t.clone()),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            Item::Text(t) => TextView::markdown(("ag-md", i), tidy::answer(t).into_owned())
+                .text_sm()
+                .style(chat_text_style())
+                .code_block_actions(|block, _, _| {
+                    let (copy, insert) = (block.code().to_string(), block.code().to_string());
+                    // A solid strip so the buttons never sit on top of the code.
+                    h_flex()
+                        .gap_px()
+                        .p_px()
+                        .rounded(px(4.))
+                        .bg(c(theme::BG_ELEVATED))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .child(
+                            Button::new("cb-copy")
+                                .icon(IconName::Copy)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Copy"))
+                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                        )
+                        .child(
+                            Button::new("cb-insert")
+                                .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
+                                .on_click(move |_, w, cx| {
+                                    if let Ok(mut p) = PENDING_INSERT.lock() {
+                                        *p = Some(insert.clone());
+                                    }
+                                    w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
+                                }),
+                        )
+                })
+                .into_any_element(),
+            Item::Thought(t) => {
+                let open = a.open_thoughts.contains(&i);
+                let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+                let step = activity::Step {
+                    key: format!("think-{i}"),
+                    kind: "think",
+                    title: "",
+                    status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
+                    joined_up: joined_up(i),
+                    joined_down: is_step(a.items.get(i + 1)),
+                    live: a.status == Status::Busy,
+                    note: (!open).then_some(last),
+                    open,
+                    detail: open.then(|| tidy::thought(t)),
+                };
+                let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
+                    if !this.agent.open_thoughts.remove(&i) {
+                        this.agent.open_thoughts.insert(i);
+                    }
+                    this.agent.remeasure.borrow_mut().push(i..i + 1);
+                    cx.notify();
+                });
+                self.render_step(step, Some(toggle), cx)
+            }
+            Item::Branch(t) => h_flex()
+                .py_1()
+                .gap_2()
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
+                .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
+                .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
+                .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
+                .into_any_element(),
+            Item::Web(w) => self.render_web_item(i, w, cx),
+            Item::Tool { id, title, status, kind } => self.render_step(
+                activity::Step {
+                    key: id.clone(),
+                    kind,
+                    title,
+                    status,
+                    joined_up: joined_up(i),
+                    joined_down: is_step(a.items.get(i + 1)),
+                    live: a.status == Status::Busy,
+                    note: None,
+                    open: false,
+                    detail: None,
+                },
+                None,
+                cx,
+            ),
+            Item::Plan(entries) => v_flex()
+                .gap_1()
+                .p_2()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(c(theme::BORDER))
+                .text_xs()
+                .children(entries.iter().map(|(t, st)| {
+                    let (icon, col) = match st.as_str() {
+                        "completed" => (IconName::CircleCheck, theme::GREEN),
+                        "in_progress" => (IconName::LoaderCircle, theme::BLUE),
+                        _ => (IconName::Dash, theme::FG_DIM),
+                    };
+                    h_flex()
+                        .gap_1p5()
+                        .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
+                        .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
+                }))
+                .into_any_element(),
+            // Notes: the icon sits in a box one text line tall, so it centers on the first line.
+            Item::Note(t, err) => h_flex()
+                .items_start()
+                .gap_1p5()
+                .text_xs()
+                .line_height(theme::u(18.))
+                .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
+                .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
+                .child(div().flex_1().min_w_0().child(t.clone()))
+                .into_any_element(),
+        })
+    .into_any_element()
     }
 
     /// Add files to the next message (button, drop or paste). Folders become @mentions.
@@ -3364,6 +3491,14 @@ impl Workbench {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let (icon, tint) = crate::files::icon_for(&name);
             let path = p.clone();
+            let image = crate::files::is_image(p) && !name.to_lowercase().ends_with(".svg");
+            let name_tip: SharedString = crate::trf!("{name} · click to open"; name => name.clone()).into();
+            let preview = p.clone();
+            let lead = if image {
+                img(p.clone()).flex_none().size(theme::u(16.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element()
+            } else {
+                Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none().into_any_element()
+            };
             chip_shell(SharedString::from(format!("ag-att-{i}")), true)
                 .child(
                     h_flex()
@@ -3374,14 +3509,27 @@ impl Workbench {
                         .gap_1()
                         .cursor_pointer()
                         .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                        .tooltip(move |w, cx| {
+                            if image {
+                                let (p, label) = (preview.clone(), name_tip.clone());
+                                gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
+                                    v_flex()
+                                        .gap_1()
+                                        .child(img(p.clone()).max_w(px(260.)).max_h(px(200.)).rounded(px(4.)).object_fit(ObjectFit::Contain))
+                                        .child(div().text_xs().child(label.clone()))
+                                })
+                                .build(w, cx)
+                            } else {
+                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx)
+                            }
+                        })
                         .on_click(cx.listener(move |this, _, w, cx| {
                             cx.stop_propagation();
                             if path.is_file() {
                                 this.open_file(path.clone(), w, cx);
                             }
                         }))
-                        .child(Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none())
+                        .child(lead)
                         .child(div().min_w_0().truncate().child(name)),
                 )
                 .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
@@ -3396,8 +3544,40 @@ impl Workbench {
         let mut chips: Vec<AnyElement> = attachments.collect();
         chips.extend(self.render_context_chips(cx));
         let menu = self.render_agent_menu(false, window, cx);
+        let geom = self.agent.geom.clone();
+        let width = self.agent.compose_w.clone();
+        let eid = cx.entity_id();
+        // The box's top (the menus above it get the room up to the panel's top) and its
+        // width (a narrow box compacts its bottom row), as drawn.
+        let box_probe = canvas(
+            move |b, _, cx| {
+                let y = f32::from(b.origin.y);
+                let w = f32::from(b.size.width);
+                let (top, box_top) = geom.get();
+                let moved = (box_top - y).abs() > 0.5;
+                let resized = (width.get() - w).abs() > 0.5;
+                if moved {
+                    geom.set((top, y));
+                }
+                if resized {
+                    width.set(w);
+                }
+                if moved || resized {
+                    cx.defer(move |cx| cx.notify(eid));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        let w = a.compose_w.get();
+        // Below NARROW the labels on the right turn into icons, below TIGHT the share
+        // beside the context ring goes too.
+        let narrow = w > 0. && w < NARROW;
+        let tight = w > 0. && w < TIGHT;
         let boxed = v_flex()
             .id("ag-composer")
+            .relative()
             .rounded(px(8.))
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
@@ -3410,7 +3590,33 @@ impl Workbench {
                     h.focus(w, cx);
                 }
             }))
-            .when(!chips.is_empty(), |v| v.child(h_flex().px_2().pt_2().gap_1().min_w_0().overflow_hidden().children(chips)))
+            .when(!chips.is_empty(), |v| {
+                let h = a.chips_scroll.clone();
+                v.child(
+                    h_flex()
+                        .id("ag-chips")
+                        .gap_1()
+                        .mx_2()
+                        .mt_2()
+                        .min_w_0()
+                        .overflow_x_scroll()
+                        .track_scroll(&a.chips_scroll)
+                        // A wheel turned over the row moves it left and right.
+                        .on_scroll(move |ev: &ScrollEvent, _, cx| {
+                            let d = ev.delta.pixel_delta(px(24.));
+                            if d.x != px(0.) || d.y == px(0.) {
+                                return;
+                            }
+                            let (off, max) = (h.offset(), h.max_offset());
+                            if max.x <= px(0.) {
+                                return;
+                            }
+                            h.set_offset(point((off.x + d.y).clamp(-max.x, px(0.)), off.y));
+                            cx.stop_propagation();
+                        })
+                        .children(chips),
+                )
+            })
             .child(
                 div().px_1().pt_1().key_context("AgentInput").child(
                     Textarea::new(&a.input).appearance(false).on_paste(move |item, _, cx| {
@@ -3447,10 +3653,11 @@ impl Workbench {
             )
             .child(
                 h_flex()
-                    .h(theme::u(34.))
+                    .h(theme::u(36.))
                     .px_1p5()
                     .gap_0p5()
                     .items_center()
+                    .min_w_0()
                     .child(
                         icon_btn("ag-attach", Icon::new(gpui_kit::assets::IconName::Paperclip), tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
                             .on_click(cx.listener(|this, _, w, cx| {
@@ -3474,23 +3681,34 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, cx)))
-                    .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, cx)))
-                    .child(self.render_access_menu(cx))
+                    // The model and mode take what is left of the row; the model's name is
+                    // what gives way (cut at its end), after the labels on the right have
+                    // turned into icons. Send never leaves the box.
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w_0()
-                            .justify_end()
-                            .gap_1p5()
-                            .px_1()
-                            .overflow_hidden()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
-                            .when_some(self.agent_status_line(), |h, (dot, label)| {
-                                h.child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot))).child(div().min_w_0().truncate().child(label))
-                            }),
+                            .gap_0p5()
+                            // The mode (ask / accept edits / bypass / plan) is in the header's "more" menu.
+                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, narrow, cx))),
                     )
+                    .when_some(self.agent_status_line(), |h, (dot, label)| {
+                        let tip: SharedString = label.clone().into();
+                        h.child(
+                            h_flex()
+                                .id("ag-status")
+                                .flex_none()
+                                .px_1()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(c(if dot == theme::WARN { theme::WARN } else { theme::FG_DIM }))
+                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                                .child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot)))
+                                .when(!narrow, |h| h.child(div().whitespace_nowrap().child(label))),
+                        )
+                    })
+                    .child(self.render_access_menu(narrow, cx))
+                    .children(self.render_context_meter(tight, cx))
                     .child(if busy && !has_text {
                         // A solid square in the accent: the one action while the agent works.
                         send_btn("ag-stop", true, tr("Stop the answer"))
@@ -3515,224 +3733,8 @@ impl Workbench {
             .relative()
             .mx_3()
             .mb_3()
-            .child(boxed)
+            .child(boxed.child(box_probe))
             .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(m)))
-    }
-
-    /// The harness's own settings for this session, compact enough to see at once:
-    /// one row per setting (label left, control right, wrapping in a narrow panel).
-    /// Few choices are a row of buttons; long lists (models) are one dropdown, free
-    /// models grouped first. Nothing here runs until a choice is made.
-    fn render_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let a = &self.agent;
-        let name = agent_name();
-        let weak = cx.entity().downgrade();
-        let header = h_flex()
-            .px_3()
-            .h(theme::u(32.))
-            .gap_2()
-            .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} settings"; name => name)))
-            .child(Button::new("ag-opt-back").label(crate::i18n::tr("Back to the chat")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
-                this.agent.show_options = false;
-                cx.notify();
-            })));
-        // label | control, the control column wraps on its own when the panel is narrow
-        let row = |label: SharedString, control: AnyElement| {
-            h_flex()
-                .px_3()
-                .py_1p5()
-                .gap_3()
-                .items_start()
-                .child(div().w(theme::u(64.)).flex_none().pt_0p5().text_xs().text_color(c(theme::FG_MUTED)).child(label))
-                .child(div().flex_1().min_w_0().child(control))
-                .into_any_element()
-        };
-        let buttons = |opt: &ConfigOpt| {
-            let mut choices = opt.choices.clone();
-            if opt.category == "thought_level" {
-                choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
-            }
-            h_flex()
-                .gap_1()
-                .flex_wrap()
-                .children(choices.into_iter().map(|(v, n, _)| {
-                    let id = opt.id.clone();
-                    let on = opt.current == v;
-                    Button::new(SharedString::from(format!("ag-opt-{id}-{v}")))
-                        .label(n)
-                        .xsmall()
-                        .when(on, |b| b.primary())
-                        .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
-                }))
-                .into_any_element()
-        };
-        let dropdown = |opt: &ConfigOpt| {
-            let current = opt.current_name().rsplit('/').next().unwrap_or("").to_string();
-            let groups: Vec<(String, Vec<(String, String)>)> = if opt.category == "model" {
-                model_groups(&opt.choices)
-            } else {
-                vec![(String::new(), opt.choices.iter().map(|c| (c.0.clone(), c.1.clone())).collect())]
-            };
-            let (id, cur, weak) = (opt.id.clone(), opt.current.clone(), weak.clone());
-            Button::new(SharedString::from(format!("ag-opt-{}", opt.id)))
-                .label(current)
-                .xsmall()
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut m: gpui_kit::component::menu::PopupMenu, _, _| {
-                    m = m.min_w(px(240.)).max_h(px(380.)).scrollable(true);
-                    for (gi, (group, models)) in groups.iter().enumerate() {
-                        if gi > 0 {
-                            m = m.separator();
-                        }
-                        let title = match group.as_str() {
-                            "free" => crate::i18n::tr("Free (OpenCode Zen)").to_string(),
-                            g => g.to_string(),
-                        };
-                        if !title.is_empty() {
-                            m = m.item(gpui_kit::component::menu::PopupMenuItem::label(title));
-                        }
-                        for (v, n) in models {
-                            let (id, v, weak) = (id.clone(), v.clone(), weak.clone());
-                            m = m.item(gpui_kit::component::menu::PopupMenuItem::new(n.clone()).checked(*v == cur).on_click(move |_, _, cx| {
-                                _ = weak.update(cx, |this, cx| this.agent_set_option(&id, v.clone(), true, cx));
-                            }));
-                        }
-                    }
-                    m
-                })
-                .into_any_element()
-        };
-        let mut body = v_flex().id("ag-options").flex_1().min_h_0().pt_1().pb_2().overflow_y_scroll();
-        if self.agent_config_view().is_empty() {
-            let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
-            body = body.child(
-                v_flex()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(c(theme::FG_MUTED))
-                    .child(if on {
-                        crate::trf!("{name} is starting. Its models and settings show here in a moment."; name => name)
-                    } else {
-                        crate::trf!("{name} lists its models and settings once it is on."; name => name)
-                    })
-                    .when(!on, |v| {
-                        v.child(h_flex().child(Button::new("ag-opt-on").label(crate::trf!("Turn {name} on"; name => name)).xsmall().primary().on_click(cx.listener(|this, _, _, cx| this.agent_set_on(true, cx)))))
-                    }),
-            );
-        }
-        // Mode first (it changes what the agent does), then model, then effort, then the rest.
-        let order = |o: &ConfigOpt| match o.category.as_str() {
-            "mode" => 0,
-            "model" => 1,
-            "thought_level" => 2,
-            _ => 3,
-        };
-        let view = self.agent_config_view();
-        let mut opts: Vec<&ConfigOpt> = view.iter().collect();
-        opts.sort_by_key(|o| order(o));
-        for o in opts {
-            let label: SharedString = match o.category.as_str() {
-                "mode" => crate::i18n::tr("Mode").into(),
-                "model" => crate::i18n::tr("Model").into(),
-                "thought_level" => crate::i18n::tr("Effort").into(),
-                _ => o.name.clone().into(),
-            };
-            let control = if o.category == "model" || o.choices.len() > 6 {
-                dropdown(o)
-            } else if o.category == "mode" {
-                // The chosen mode's description in one dim line (the full text in its tooltip).
-                let desc = o.choices.iter().find(|c| c.0 == o.current).map(|c| c.2.clone()).unwrap_or_default();
-                let full: SharedString = desc.clone().into();
-                v_flex()
-                    .gap_1()
-                    .child(buttons(o))
-                    .when(!desc.is_empty(), |v| {
-                        v.child(
-                            div()
-                                .id("ag-opt-mode-desc")
-                                .truncate()
-                                .text_xs()
-                                .text_color(c(theme::FG_DIM))
-                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx))
-                                .child(desc),
-                        )
-                    })
-                    .into_any_element()
-            } else {
-                buttons(o)
-            };
-            body = body.child(row(label, control));
-        }
-        // FluxCode's own side of the agent.
-        let s = &self.settings;
-        let access = s.access().to_string();
-        body = body
-            .child(div().mx_3().my_1().h(px(1.)).bg(c(theme::BORDER)))
-            .child(row(
-                crate::i18n::tr("Access").into(),
-                h_flex()
-                    .gap_1()
-                    .flex_wrap()
-                    .children([("read", crate::i18n::tr("Read only")), ("write", crate::i18n::tr("Read & write")), ("full", crate::i18n::tr("Full access"))].into_iter().map(|(id, n)| {
-                        Button::new(SharedString::from(format!("ag-opt-access-{id}")))
-                            .label(n)
-                            .xsmall()
-                            .when(access == id, |b| b.primary())
-                            .on_click(cx.listener(move |this, _, _, cx| this.agent_set_access(id, cx)))
-                    }))
-                    .into_any_element(),
-            ))
-            .child(row(
-                crate::i18n::tr("Idle").into(),
-                h_flex()
-                    .items_start()
-                    .gap_2()
-                    .child(
-                        Button::new("ag-opt-idle")
-                            .label(if s.agent_idle_min > 0 { crate::i18n::tr("On") } else { crate::i18n::tr("Off") })
-                            .xsmall()
-                            .when(s.agent_idle_min > 0, |b| b.primary())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.settings.agent_idle_min = if this.settings.agent_idle_min == 0 { 10 } else { 0 };
-                                this.settings.save();
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().min_w_0().text_xs().text_color(c(theme::FG_DIM)).child(crate::i18n::tr("Turns off after 10 quiet minutes to free memory")))
-                    .into_any_element(),
-            ))
-            .child(row(crate::i18n::tr("Browser").into(), self.render_browser_setting(cx)));
-        let current = agent_id();
-        if crate::acp::managed(&current) {
-            body = body.child(
-                h_flex().px_3().pt_2().child(
-                    Button::new("ag-opt-remove")
-                        .label(crate::trf!("Remove {name}…"; name => name))
-                        .xsmall()
-                        .ghost()
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            this.agent.show_options = false;
-                            this.agent_ask_uninstall(&current, w, cx);
-                        })),
-                ),
-            );
-        }
-        if name == "OpenCode" {
-            if let Some(cfg) = opencode_config_file() {
-                body = body.child(
-                    h_flex().px_3().pt_1().child(
-                        Button::new("ag-opt-cfg")
-                            .label(crate::i18n::tr("Open OpenCode's config file"))
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(cfg.clone(), w, cx))),
-                    ),
-                );
-            }
-        }
-        v_flex().size_full().child(header).child(body).into_any_element()
     }
 
     /// Which browser the agents drive, and where its tools stand.
@@ -3817,20 +3819,139 @@ impl Workbench {
         )
     }
 
-    /// The memories used in this turn helped (the user kept the changes).
-    fn agent_reinforce_turn(&mut self) {
-        let store = memory::Store::default();
-        for id in std::mem::take(&mut self.agent.turn_memories) {
-            let _ = store.reinforce(&id);
-        }
+    /// The agent is waiting for a yes or no: what it wants to do, in its own words and
+    /// (for a command or a file) exactly, then the choices. The one warm-colored card in
+    /// the panel, since nothing moves until it is answered.
+    fn render_permission(&self, p: &Permission, cx: &mut Context<Self>) -> AnyElement {
+        let name = agent_name();
+        let lu = gpui_kit::assets::IconName::ShieldAlert;
+        let what: &'static str = match p.kind.as_str() {
+            "execute" => "Run a command",
+            "edit" => "Change a file",
+            "delete" => "Delete a file",
+            "move" => "Move or rename a file",
+            "read" | "search" => "Read files",
+            "fetch" => "Open a web page",
+            _ => "Use a tool",
+        };
+        let (kind_icon, mono) = match p.kind.as_str() {
+            "execute" => (gpui_kit::assets::IconName::SquareTerminal, true),
+            "edit" | "delete" | "move" => (gpui_kit::assets::IconName::FilePen, true),
+            "read" | "search" => (gpui_kit::assets::IconName::FolderOpen, true),
+            "fetch" => (gpui_kit::assets::IconName::Globe, false),
+            _ => (gpui_kit::assets::IconName::Wrench, false),
+        };
+        let exact = p.detail.clone();
+        let mut options: Vec<(usize, String, String, String)> = p.options.iter().enumerate().map(|(i, (o, n, k))| (i, o.clone(), n.clone(), k.clone())).collect();
+        // Allow once first (the default answer), then the lasting allow, then the rejects.
+        options.sort_by_key(|o| match o.3.as_str() {
+            "allow_once" => 0,
+            "allow_always" => 1,
+            "reject_once" => 2,
+            _ => 3,
+        });
+        let buttons = options.into_iter().map(|(i, oid, label, kind)| {
+            let label: String = match kind.as_str() {
+                "allow_once" => tr("Allow once").into(),
+                "allow_always" => tr("Always allow").into(),
+                "reject_once" => tr("Reject").into(),
+                "reject_always" => tr("Always reject").into(),
+                _ => label,
+            };
+            let b = Button::new(("perm", i)).label(label).small();
+            let b = match kind.as_str() {
+                "allow_once" => b.primary(),
+                k if k.starts_with("reject") => b.ghost(),
+                _ => b,
+            };
+            b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
+        });
+        v_flex()
+            .id("ag-permission")
+            .mx_3()
+            .mb_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c(theme::WARN).opacity(0.55))
+            .bg(c(theme::BG_ELEVATED))
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt_2p5()
+                    .gap_2()
+                    .child(Icon::new(lu).size(theme::u(15.)).text_color(c(theme::WARN)).flex_none())
+                    .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} is waiting for you"; name => name)))
+                    .child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(match self.agent.perm_queue.len() {
+                        0 => tr("Paused").to_string(),
+                        n => crate::trf!("Paused · {n} more after this"; n => n),
+                    })),
+            )
+            .child(
+                v_flex()
+                    .px_3()
+                    .pt_2()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(Icon::new(kind_icon).size(theme::u(13.)).flex_none())
+                            .child(div().min_w_0().child(tr(what))),
+                    )
+                    .child(div().text_sm().text_color(c(theme::FG)).child(p.title.clone()))
+                    .when_some(exact, |v, d| {
+                        v.child(
+                            div()
+                                .id("ag-perm-exact")
+                                .px_2()
+                                .py_1p5()
+                                .rounded(px(5.))
+                                .bg(c(theme::BG_EDITOR))
+                                .border_1()
+                                .border_color(c(theme::BORDER))
+                                .text_xs()
+                                .text_color(c(theme::FG_STRONG))
+                                .when(mono, |d| d.font_family("Cascadia Code"))
+                                .max_h(theme::u(96.))
+                                .overflow_y_scroll()
+                                .child(d),
+                        )
+                    }),
+            )
+            .child(h_flex().px_3().pt_2p5().gap_1p5().flex_wrap().children(buttons))
+            .child(
+                h_flex()
+                    .mt_2p5()
+                    .px_2()
+                    .py_1()
+                    .gap_1()
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(
+                        Button::new("ag-perm-full")
+                            .icon(Icon::new(gpui_kit::assets::IconName::ShieldCheck))
+                            .label(tr("Turn on full access"))
+                            .xsmall()
+                            .ghost()
+                            .flex_none()
+                            .tooltip(tr("Allows this request and every next one: commands and any file on this PC, without asking. Switch it off in the agent's settings."))
+                            .on_click(cx.listener(|this, _, _, cx| this.agent_toggle_full(true, cx))),
+                    )
+
+            )
+            .into_any_element()
     }
 }
 
 /// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
 impl Workbench {
-    /// The composer's model button: the model's short name (and effort, when set),
-    /// opening the model menu above the message box.
-    fn render_model_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The composer's model chip: the model's short name, then the effort when one is
+    /// set. The name is what gets cut when the box is narrow.
+    fn render_model_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let current = m.current_name();
         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
         // "Free" is said by the group in the menu; here it only takes room.
@@ -3840,13 +3961,22 @@ impl Workbench {
         if m.current == crate::acp::FLAG_DEFAULT && m.id.starts_with(FLAG_PREFIX) {
             short = tr("Model").to_string();
         }
-        if let Some(e) = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default") {
-            short = format!("{short} · {}", e.current_name());
+        // "Default (recommended)": the menu says why; the chip only needs the name.
+        if let Some(s) = short.strip_suffix(" (recommended)") {
+            short = s.to_string();
         }
-        if short.chars().count() > 22 {
-            short = format!("{}…", short.chars().take(21).collect::<String>());
-        }
-        menu_button("ag-model-btn", short, self.agent.menu.open == Some(Menu::Model), tr("Model"))
+        let effort = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default").map(|e| e.current_name().to_string());
+        let tip: SharedString = match &effort {
+            Some(e) => crate::trf!("Model: {m} · effort {e}"; m => current, e => e).into(),
+            None => crate::trf!("Model: {m}"; m => current).into(),
+        };
+        chip_button("ag-model-btn", self.agent.menu.open == Some(Menu::Model), tip)
+            // The one chip that shrinks: everything else keeps its size.
+            .flex_shrink(1.)
+            .min_w(theme::u(48.))
+            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(short))
+            .when_some(effort.filter(|_| !narrow), |h, e| h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(e)))
+            .child(chevron())
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Model, w, cx)
@@ -3854,29 +3984,22 @@ impl Workbench {
     }
 
     /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
-    fn render_mode_menu(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut label = m.current_name().to_string();
-        if label.chars().count() > 12 {
-            label = format!("{}…", label.chars().take(11).collect::<String>());
-        }
-        menu_button("ag-mode-btn", label, self.agent.menu.open == Some(Menu::Mode), tr("Mode"))
-            .on_click(cx.listener(|this, _, w, cx| {
-                cx.stop_propagation();
-                this.agent_menu_toggle(Menu::Mode, w, cx)
-            }))
-    }
-
-    /// What the agent may do without asking: its icon, opening the permission menu.
-    fn render_access_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// What the agent may do without asking: an icon, and its name when there's room.
+    /// Full access is the one shown in the warning color, so it is never on unnoticed.
+    fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.settings.access().to_string();
         let (icon, label) = menu::ACCESS.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
-        Button::new("ag-access")
-            .icon(Icon::new(icon))
-            .ghost()
-            .xsmall()
+        let short = match level.as_str() {
+            "read" => tr("Read only"),
+            "full" => tr("Full access"),
+            _ => tr("Asks first"),
+        };
+        let full = level == "full";
+        let tip: SharedString = crate::trf!("Permissions: {level}"; level => tr(label)).into();
+        chip_button("ag-access", self.agent.menu.open == Some(Menu::Access), tip)
             .flex_none()
-            .selected(self.agent.menu.open == Some(Menu::Access))
-            .tooltip(crate::trf!("Permissions: {level}"; level => tr(label)))
+            .child(Icon::new(icon).size(theme::u(13.)).flex_none().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })))
+            .when(!narrow, |h| h.child(div().whitespace_nowrap().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })).child(short)))
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Access, w, cx)
@@ -4048,8 +4171,36 @@ fn agent_glyph(id: &str, size: f32) -> AnyElement {
 
 /// A title over one dim line, for menu rows and agent cards.
 /// A composer button that opens one of the menus: its label and a caret.
-fn menu_button(id: &'static str, label: String, open: bool, tip: &'static str) -> Button {
-    Button::new(id).label(label).ghost().xsmall().flex_none().dropdown_caret(true).selected(open).tooltip(tip)
+/// A thought or a tool call: the rows that share the activity rail.
+fn is_step(item: Option<&Item>) -> bool {
+    matches!(item, Some(Item::Thought(_) | Item::Tool { .. }))
+}
+
+/// Below this width the composer's bottom row shows icons instead of labels.
+const NARROW: f32 = 500.;
+const TIGHT: f32 = 360.;
+
+/// A chip in the composer's bottom row that opens a menu: 24 px tall like the icon
+/// buttons beside it, its text cut to fit, highlighted while its menu is open.
+fn chip_button(id: &'static str, open: bool, tip: SharedString) -> Stateful<Div> {
+    h_flex()
+        .id(id)
+        .h(theme::u(24.))
+        .min_w_0()
+        .px_1p5()
+        .gap_1()
+        .rounded(px(5.))
+        .overflow_hidden()
+        .cursor_pointer()
+        .text_xs()
+        .when(open, |d| d.bg(c(theme::BG_HOVER)))
+        .hover(|s| s.bg(c(theme::BG_HOVER)))
+        .active(|s| s.opacity(0.85))
+        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+}
+
+fn chevron() -> Icon {
+    Icon::new(IconName::ChevronDown).size(theme::u(12.)).flex_none().text_color(c(theme::FG_DIM))
 }
 
 fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
@@ -4063,22 +4214,6 @@ fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div
 
 fn line_icon(icon: Icon) -> Div {
     div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
-}
-
-/// One dim, single-line row about memory: brain icon, a label, then the note cut to fit.
-fn memory_line(id: impl Into<ElementId>, label: &'static str, rest: String) -> Stateful<Div> {
-    h_flex()
-        .id(id)
-        .h(theme::u(20.))
-        .gap_1p5()
-        .min_w_0()
-        .cursor_pointer()
-        .text_xs()
-        .text_color(c(theme::FG_DIM))
-        .hover(|s| s.text_color(c(theme::FG_MUTED)))
-        .child(Icon::new(gpui_kit::assets::IconName::Brain).size(theme::u(12.)).flex_none())
-        .when(!label.is_empty(), |h| h.child(div().flex_none().child(label)))
-        .when(!rest.is_empty(), |h| h.child(div().flex_1().min_w_0().truncate().child(rest)))
 }
 
 /// The composer's icon buttons: one 24 px square each, icon centered.
@@ -4118,9 +4253,8 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
 fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
     h_flex()
         .id(id)
-        // In one row with the others: it narrows (its name cut short) rather than wrap.
-        .flex_shrink(1.)
-        .min_w(theme::u(64.))
+        // In one row with the others, which scrolls sideways when they don't fit.
+        .flex_none()
         .max_w(theme::u(200.))
         .h(theme::u(22.))
         .gap_0p5()
@@ -4167,7 +4301,228 @@ fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Sta
 }
 
 /// Smooth-scroll key of the chat log (editors use their entity id).
-const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
+pub(crate) const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
+
+/// Answers read like a chat, not a document: headings a step or two above the 14 px
+/// body (the default makes a `#` twice the body size), and paragraphs a little closer.
+fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
+    gpui_kit::component::text::TextViewStyle::default().paragraph_gap(rems(0.6)).heading_font_size(|level, _| match level {
+        1 => px(17.),
+        2 => px(16.),
+        3 => px(15.),
+        _ => px(14.),
+    })
+}
+
+impl Workbench {
+    /// The list follows the newest text by itself (tail mode) while the reader is at the
+    /// bottom; nothing to do per update.
+    fn agent_follow(&self) {}
+
+    /// Jump to the newest message and follow it again (a message was sent).
+    pub(crate) fn agent_to_end(&self) {
+        self.agent.list.set_follow_mode(FollowMode::Tail);
+        self.agent.list.scroll_to_end();
+    }
+
+    /// Tell the list what changed since the last frame. Streaming only ever changes the
+    /// last few items, so only those are compared (by size, not by content); a chat that
+    /// was replaced or cut short starts over. Costs the same for any length of chat.
+    fn agent_sync_list(&self) {
+        let a = &self.agent;
+        let items = &a.items;
+        let n = items.len();
+        let busy = a.status == Status::Busy;
+        let mut seen = a.list_seen.borrow_mut();
+        let ptr = items.as_ptr() as usize;
+        const TAIL: usize = 16;
+        let tail: Vec<u64> = items[n.saturating_sub(TAIL)..].iter().map(item_size_sig).collect();
+        let replaced = n < seen.len || (ptr != seen.ptr && seen.len > 0 && n > 0 && items.first().map(item_size_sig) != Some(seen.first));
+        // The window: a chat opened (or cut short) shows its newest items; while the
+        // reader follows the bottom, the oldest leave once PAGE more have come in.
+        let mut start = a.view_start.get().min(n);
+        if replaced || seen.len == 0 {
+            start = n.saturating_sub(WINDOW);
+        } else if a.list.is_following_tail() && n - start > WINDOW + PAGE {
+            start = n - WINDOW;
+        }
+        a.view_start.set(start);
+        let pager = (start > 0) as usize;
+        let row = |abs: usize| abs.saturating_sub(start) + pager;
+        let rows = n - start + pager;
+        let mut from = usize::MAX;
+        if replaced || start != seen.start || seen.len == 0 {
+            a.list.reset(rows);
+            if replaced {
+                seen.run_start.clear();
+                seen.run_end.clear();
+                from = 0;
+            } else {
+                from = seen.len.saturating_sub(2);
+            }
+            if start < seen.start && !replaced {
+                // Paged back: the item that was on top stays where the reader had it.
+                a.list.scroll_to(ListOffset { item_ix: row(seen.start), offset_in_item: px(0.) });
+            } else if a.list.is_following_tail() || replaced {
+                a.list.scroll_to_end();
+            }
+        } else {
+            if n > seen.len {
+                let old_rows = row(seen.len);
+                a.list.splice(old_rows..old_rows, n - seen.len);
+                // The old last item(s) lose the bottom padding or fold into a group.
+                from = seen.len.saturating_sub(2);
+            }
+            // The first of the last items whose size changed.
+            let base = n.saturating_sub(TAIL);
+            for (k, sig) in tail.iter().enumerate() {
+                let ix = base + k;
+                let old = ix.checked_sub(seen.len.saturating_sub(seen.tail.len())).and_then(|o| seen.tail.get(o));
+                if ix < seen.len && old != Some(sig) {
+                    from = from.min(ix);
+                    break;
+                }
+            }
+            // Working / done changes what the last group shows.
+            if busy != seen.busy {
+                from = from.min(n.saturating_sub(TAIL));
+            }
+            let upto = seen.len.min(n);
+            if from < upto {
+                a.list.remeasure_items(row(from.max(start))..row(upto));
+            }
+            for r in a.remeasure.borrow_mut().drain(..) {
+                let (lo, hi) = (r.start.max(start).min(n), r.end.min(n));
+                if lo < hi {
+                    a.list.remeasure_items(row(lo)..row(hi));
+                }
+            }
+        }
+        a.remeasure.borrow_mut().clear();
+        // Step runs, kept up to date from the first changed item only.
+        let from = from.min(seen.run_start.len()).min(n);
+        seen.run_start.truncate(from);
+        seen.run_end.retain(|&f, _| f < from);
+        if let Some(&f) = from.checked_sub(1).and_then(|k| seen.run_start.get(k)).filter(|f| **f != usize::MAX) {
+            seen.run_end.insert(f, from - 1);
+        }
+        for i in from..n {
+            let first = if !is_step(items.get(i)) {
+                usize::MAX
+            } else if i > 0 && is_step(items.get(i - 1)) {
+                seen.run_start[i - 1]
+            } else {
+                i
+            };
+            seen.run_start.push(first);
+            if first != usize::MAX {
+                seen.run_end.insert(first, i);
+            }
+        }
+        seen.len = n;
+        seen.start = start;
+        seen.ptr = ptr;
+        seen.first = items.first().map(item_size_sig).unwrap_or(0);
+        seen.tail = tail;
+        seen.busy = busy;
+    }
+
+    /// The row above the window: how many earlier items are not shown, and a button that
+    /// brings back PAGE more (the reader stays where they were).
+    fn render_agent_pager(&mut self, start: usize, cx: &mut Context<Self>) -> AnyElement {
+        let more = start.min(PAGE);
+        h_flex()
+            .w_full()
+            .px_3()
+            .pt_2()
+            .justify_center()
+            .child(
+                h_flex()
+                    .id("ag-pager")
+                    .px_3()
+                    .h(theme::u(26.))
+                    .gap_1p5()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .child(Icon::new(IconName::ChevronUp).size(theme::u(12.)))
+                    .child(crate::trf!("Show {n} earlier"; n => more))
+                    .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("· {n} hidden"; n => start)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // Reading back: stop following the newest text until the reader
+                        // returns to the bottom.
+                        this.agent.list.pause_following_tail();
+                        this.agent.view_start.set(this.agent.view_start.get().saturating_sub(PAGE));
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// The run of two or more steps `i` belongs to: (first, last).
+    fn agent_run_of(&self, i: usize) -> Option<(usize, usize)> {
+        let seen = self.agent.list_seen.borrow();
+        let f = *seen.run_start.get(i)?;
+        let l = *seen.run_end.get(&f)?;
+        (f != usize::MAX && l > f).then_some((f, l))
+    }
+}
+
+/// Items in the list while the reader follows the newest text, and how many more come
+/// in before the oldest leave (and each "Show earlier" step).
+const WINDOW: usize = 40;
+const PAGE: usize = 20;
+
+/// The file as it was before an edit tool ran, from what is on disk now and the tool's
+/// diff. Agents send the diff of the edit (Claude: just the replaced snippet), and the
+/// update can come before or after the file is written: if the new text is there and the
+/// old is not, the edit already ran and is undone here; else the disk is the "before".
+fn before_edit(disk: Option<String>, old: Option<&str>, new: &str) -> Option<String> {
+    let d = disk?;
+    match old {
+        // A new file this tool wrote.
+        None if d == new => None,
+        Some(o) if !new.is_empty() && !o.is_empty() && d.contains(new) && !d.contains(o) => Some(d.replacen(new, o, 1)),
+        _ => Some(d),
+    }
+}
+
+/// What the virtual list was told last frame.
+#[derive(Default)]
+pub(crate) struct ListSeen {
+    len: usize,
+    /// The window's first item.
+    start: usize,
+    ptr: usize,
+    first: u64,
+    busy: bool,
+    /// Size signatures of the last items.
+    tail: Vec<u64>,
+    /// For each item, the first item of its step run (usize::MAX: not a step); and each
+    /// run's last item, by its first.
+    run_start: Vec<usize>,
+    run_end: HashMap<usize, usize>,
+}
+
+/// Changes when an item's height can: its kind and the lengths of what it shows.
+fn item_size_sig(item: &Item) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(item).hash(&mut h);
+    match item {
+        Item::User(t) | Item::Text(t) | Item::Thought(t) | Item::Branch(t) => t.len().hash(&mut h),
+        Item::Note(t, e) => (t.len(), *e).hash(&mut h),
+        Item::Tool { title, status, kind, .. } => (title.len(), status, kind).hash(&mut h),
+        Item::Plan(e) => (e.len(), e.iter().filter(|x| x.1 == "completed").count()).hash(&mut h),
+        Item::Web(w) => (w.results.len(), &w.status, w.query.len()).hash(&mut h),
+    }
+    h.finish()
+}
 
 /// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
 fn opencode_config_file() -> Option<PathBuf> {
@@ -4183,6 +4538,18 @@ static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(
 #[cfg(test)]
 mod tests {
     use super::model_groups;
+
+    #[test]
+    fn before_an_edit() {
+        use super::before_edit;
+        // Not written yet: the disk is the "before".
+        assert_eq!(before_edit(Some("a\nold\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
+        // Already written: the snippet is undone.
+        assert_eq!(before_edit(Some("a\nnew\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
+        // A new file.
+        assert_eq!(before_edit(Some("x".into()), None, "x"), None);
+        assert_eq!(before_edit(None, None, "x"), None);
+    }
 
     #[test]
     fn groups_free_models_first() {

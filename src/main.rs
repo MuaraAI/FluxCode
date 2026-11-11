@@ -20,14 +20,15 @@ mod agent_ctx;
 mod complete;
 mod core;
 mod diff;
+mod diff_view;
 mod docs;
 mod explorer;
+mod ext;
 mod files;
 mod flux_anim;
 mod fluxdoc;
 mod github;
 mod panel;
-mod memory;
 mod memtrim;
 mod preview;
 mod preview_ui;
@@ -39,6 +40,7 @@ mod search;
 mod settings;
 mod term;
 mod theme;
+mod theme_menu;
 mod ui;
 mod update;
 mod viewer;
@@ -82,6 +84,9 @@ fn main() {
     app.with_assets(AppAssets).run(move |cx| {
         boot::mark("app running");
         gpui_kit::init(cx);
+        // The pointer stays visible while typing: hiding it on every key (Tab, shortcuts)
+        // made it blink away and back in the editor.
+        cx.set_cursor_hide_mode(CursorHideMode::Never);
         boot::mark("gpui-kit init");
         // The saved theme is active before the first frame, so the window never flashes another one.
         let saved = settings::Settings::load();

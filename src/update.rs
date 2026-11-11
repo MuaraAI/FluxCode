@@ -34,8 +34,20 @@ const FIRST: Duration = Duration::from_secs(4);
 
 #[cfg(windows)]
 const ASSET_SUFFIX: &str = "windows-x64.zip";
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+const ASSET_SUFFIX: &str = "macos-universal.tar.gz";
+#[cfg(not(any(windows, target_os = "macos")))]
 const ASSET_SUFFIX: &str = "linux-x64.tar.gz";
+
+/// The executable alone, xz-compressed: about 30% smaller than the archive above. A
+/// release that has it is updated from it; the archive stays in every release for the
+/// copies of FluxCode made before this file existed (they only know the archive).
+#[cfg(windows)]
+const XZ_SUFFIX: &str = "windows-x64.update.xz";
+#[cfg(target_os = "macos")]
+const XZ_SUFFIX: &str = "macos-universal.update.xz";
+#[cfg(not(any(windows, target_os = "macos")))]
+const XZ_SUFFIX: &str = "linux-x64.update.xz";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
@@ -114,7 +126,9 @@ fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
             if !tag.starts_with("BuildDev-") || tag <= current {
                 return None;
             }
-            let asset = r["assets"].as_array()?.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(ASSET_SUFFIX)))?;
+            let assets = r["assets"].as_array()?;
+            let named = |suffix: &str| assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(suffix)));
+            let asset = named(XZ_SUFFIX).or_else(|| named(ASSET_SUFFIX))?;
             Some(Release {
                 tag: tag.to_string(),
                 notes: r["body"].as_str().unwrap_or_default().to_string(),
@@ -184,7 +198,29 @@ fn plain(s: &str) -> String {
 }
 
 fn download_path(r: &Release) -> PathBuf {
-    std::env::temp_dir().join(format!("FluxCode-{}-{ASSET_SUFFIX}", r.tag))
+    let suffix = if r.url.ends_with(XZ_SUFFIX) { XZ_SUFFIX } else { ASSET_SUFFIX };
+    std::env::temp_dir().join(format!("FluxCode-{}-{suffix}", r.tag))
+}
+
+/// The executable from an `.update.xz` download (the format checks its own CRC).
+fn unpack_xz(archive: &Path) -> Result<Vec<u8>, String> {
+    let f = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    lzma_rs::xz_decompress(&mut std::io::BufReader::new(f), &mut out).map_err(|e| format!("the download is damaged ({e})"))?;
+    Ok(out)
+}
+
+/// An executable for this system, by its first bytes: nothing else is ever put in place
+/// of the running one.
+fn looks_like_exe(b: &[u8]) -> bool {
+    if cfg!(windows) {
+        b.starts_with(b"MZ")
+    } else if cfg!(target_os = "macos") {
+        // Universal (fat) or a single 64-bit Mach-O.
+        b.starts_with(&[0xca, 0xfe, 0xba, 0xbe]) || b.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+    } else {
+        b.starts_with(b"\x7fELF")
+    }
 }
 
 fn download(r: &Release, to: &Path) -> Result<(), String> {
@@ -231,12 +267,13 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    // The archive holds one folder with the `fluxcode` binary in it.
+    // The archive holds one folder with the `fluxcode` binary in it (on macOS, inside
+    // FluxCode.app).
     let found = std::fs::read_dir(&dir)
         .map_err(|e| e.to_string())?
         .flatten()
         .map(|e| e.path())
-        .flat_map(|p| [p.join("fluxcode"), p])
+        .flat_map(|p| [p.join("FluxCode.app/Contents/MacOS/fluxcode"), p.join("fluxcode"), p])
         .find(|p| p.is_file() && p.file_name().is_some_and(|n| n == "fluxcode"))
         .ok_or("fluxcode is missing from the download")?;
     let bytes = std::fs::read(found).map_err(|e| e.to_string());
@@ -252,7 +289,10 @@ fn sibling(exe: &Path, ext: &str) -> PathBuf {
 /// Put the downloaded build in place of the running executable.
 fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let bytes = unpack(archive)?;
+    let bytes = if archive.to_string_lossy().ends_with(".xz") { unpack_xz(archive)? } else { unpack(archive)? };
+    if bytes.len() < 1 << 20 || !looks_like_exe(&bytes) {
+        return Err("the download is not a FluxCode executable".into());
+    }
     let new = sibling(&exe, "new");
     let old = sibling(&exe, "old");
     std::fs::write(&new, &bytes).map_err(|e| match e.kind() {
@@ -271,6 +311,15 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
         return Err(e.to_string());
     }
     let _ = std::fs::remove_file(archive);
+    // macOS: the app's signature covers its executable; sign the bundle again (ad hoc,
+    // as it was made) so it still verifies with the new one.
+    #[cfg(target_os = "macos")]
+    if let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) {
+        // The old binary would be sealed in with it (a running one can be unlinked here).
+        let _ = std::fs::remove_file(&old);
+        let _ = std::process::Command::new("/usr/bin/codesign").args(["--force", "--deep", "--sign", "-"]).arg(app).output();
+    }
+    refresh_icon(&exe);
     // Settings > Apps shows the build that is installed.
     #[cfg(windows)]
     {
@@ -286,9 +335,38 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
 /// Remove what the last update left behind.
 pub fn cleanup() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(sibling(&exe, "old"));
+        if std::fs::remove_file(sibling(&exe, "old")).is_ok() {
+            // First start after an update: in case the shell drew the taskbar from its cache
+            // before the restart, tell it again.
+            refresh_icon(&exe);
+        }
         let _ = std::fs::remove_file(sibling(&exe, "new"));
     }
+}
+
+/// Tell Windows the exe changed. The taskbar and Start Menu take the icon of the shortcut
+/// that points at the exe, and the shell caches it by path: an update that brings a new
+/// icon kept showing the old one until the cache was rebuilt.
+fn refresh_icon(exe: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHChangeNotify(event: i32, flags: u32, item1: *const std::ffi::c_void, item2: *const std::ffi::c_void);
+        }
+        const SHCNE_UPDATEITEM: i32 = 0x0000_2000;
+        const SHCNE_ASSOCCHANGED: i32 = 0x0800_0000;
+        const SHCNF_IDLIST: u32 = 0x0000;
+        const SHCNF_PATHW: u32 = 0x0005;
+        let path: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+        unsafe {
+            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, path.as_ptr().cast(), std::ptr::null());
+            // Makes Explorer drop its icon cache, the same as `ie4uinit -show`.
+            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        }
+    }
+    let _ = exe;
 }
 
 impl Workbench {
@@ -591,7 +669,47 @@ pub fn build_time(tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that brings in gpui's own `test` attribute.
-    use super::{build_time, highlights, newest, ASSET_SUFFIX, BUILD};
+    use super::{build_time, highlights, newest, ASSET_SUFFIX, BUILD, XZ_SUFFIX};
+
+    #[test]
+    fn prefers_the_xz_file_and_reads_it() {
+        let list: serde_json::Value = serde_json::from_str(
+            &r#"[{ "tag_name": "BuildDev-2999-01-01-00-00-00", "draft": false, "body": "", "html_url": "p",
+                  "assets": [{ "name": "a-OLD", "browser_download_url": "old", "size": 9 },
+                             { "name": "a-NEW", "browser_download_url": "new", "size": 5 }] }]"#
+                .replace("OLD", ASSET_SUFFIX)
+                .replace("NEW", XZ_SUFFIX),
+        )
+        .unwrap();
+        let r = newest(&list, BUILD).unwrap();
+        assert_eq!((r.url.as_str(), r.size), ("new", 5));
+        // A release without the xz file: the archive, as before.
+        let old: serde_json::Value = serde_json::from_str(
+            &r#"[{ "tag_name": "BuildDev-2999-01-01-00-00-00", "draft": false, "assets": [{ "name": "a-OLD", "browser_download_url": "old", "size": 9 }] }]"#.replace("OLD", ASSET_SUFFIX),
+        )
+        .unwrap();
+        assert_eq!(newest(&old, BUILD).unwrap().url, "old");
+        let dir = std::env::temp_dir().join(format!("fx-xz-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("t.update.xz");
+        // An xz file as CI makes it: Python's lzma, preset 9 extreme, CRC64.
+        const PY: [u8; 84] = [
+            0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x04, 0xe6, 0xd6, 0xb4, 0x46, 0x02, 0x00, 0x21, 0x01, 0x1c, 0x00, 0x00, 0x00, 0x10, 0xcf, 0x58, 0xcc, 0xe0, 0x01, 0xc1, 0x00,
+            0x12, 0x5d, 0x00, 0x23, 0x1b, 0x0a, 0xa7, 0xb6, 0x1f, 0x53, 0x09, 0xdb, 0x20, 0x7c, 0xa6, 0x60, 0x59, 0x09, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x9c, 0x56, 0x6a, 0x82,
+            0x1a, 0x6d, 0x51, 0x92, 0x00, 0x01, 0x2e, 0xc2, 0x03, 0x00, 0x00, 0x00, 0xce, 0xa4, 0x93, 0x7f, 0xb1, 0xc4, 0x67, 0xfb, 0x02, 0x00, 0x00, 0x00, 0x00, 0x04, 0x59, 0x5a,
+        ];
+        std::fs::write(&f, PY).unwrap();
+        assert_eq!(super::unpack_xz(&f).unwrap(), b"FluxCode ".repeat(50));
+        // Round trip, and a cut-off download is refused.
+        let data = b"FluxCode update test ".repeat(1000);
+        let mut xz = Vec::new();
+        lzma_rs::xz_compress(&mut &data[..], &mut xz).unwrap();
+        std::fs::write(&f, &xz).unwrap();
+        assert_eq!(super::unpack_xz(&f).unwrap(), data);
+        std::fs::write(&f, &xz[..xz.len() - 4]).unwrap();
+        assert!(super::unpack_xz(&f).is_err(), "a cut-off download is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn build_time_reads_the_tag() {
@@ -624,5 +742,20 @@ mod tests {
         // BuildDev-YYYY-MM-DD-HH-MM-SS
         assert_eq!(BUILD.len(), "BuildDev-2026-11-09-17-30-12".len());
         assert!(BUILD.starts_with("BuildDev-"));
+    }
+}
+
+#[cfg(test)]
+mod real_file {
+    /// `FX_XZ=path cargo test --bin fluxcode real_update_file -- --ignored`: a real
+    /// `.update.xz` from CI decodes to an executable.
+    #[test]
+    #[ignore]
+    fn real_update_file() {
+        let p = std::path::PathBuf::from(std::env::var("FX_XZ").expect("FX_XZ"));
+        let t = std::time::Instant::now();
+        let b = super::unpack_xz(&p).unwrap();
+        assert!(super::looks_like_exe(&b));
+        println!("{} bytes in {:?}", b.len(), t.elapsed());
     }
 }
