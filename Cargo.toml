@@ -34,6 +34,9 @@ sha1_smol = "1"
 # miniz_oxide also packs a large Flux document's text.
 base64 = "0.22"
 miniz_oxide = "0.8"
+# Updates: the new executable comes as one xz file, about 30% smaller than the ZIP /
+# tar.gz (pure Rust decoder, no C library).
+lzma-rs = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Live share: each session's traffic is encrypted with the secret in its invite code
 # (pure Rust; no TLS stack or certificates needed between two PCs).

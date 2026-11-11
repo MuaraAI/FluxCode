@@ -19,6 +19,13 @@ concurrency:
 permissions:
   contents: read
 
+# Pull requests check that FluxCode builds, passes its tests, installs and starts, with
+# the quick debug build (it shares its compiled crates with the tests, so everything is
+# compiled once). Only main makes the optimized build people download: its whole-program
+# link is what takes the time, and it only pays off for a release.
+env:
+  FAST: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   stamp:
     runs-on: ubuntu-latest
@@ -41,17 +48,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release
+          shared-key: ${{ env.FAST == 'true' && 'dev' || 'release' }}
       - name: Build
-        run: cargo build --release
+        shell: pwsh
+        run: |
+          if ($env:FAST -eq 'true') { cargo build; $bin = 'target/debug/fluxcode.exe' } else { cargo build --release; $bin = 'target/release/fluxcode.exe' }
+          Copy-Item $bin target/fluxcode.exe
+          "{0:N1} MB  fluxcode.exe" -f ((Get-Item target/fluxcode.exe).Length / 1MB)
       - name: Pack
         shell: pwsh
         run: |
           $name = "FluxCode-$env:FLUXCODE_BUILD-windows-x64"
           New-Item -ItemType Directory "dist/$name" | Out-Null
-          Copy-Item target/release/fluxcode.exe "dist/$name/FluxCode.exe"
+          Copy-Item target/fluxcode.exe "dist/$name/FluxCode.exe"
           Copy-Item packaging/windows/install.ps1, packaging/windows/Install.cmd, packaging/windows/README.txt "dist/$name"
-          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          # Plain Deflate (what the built-in updater reads), from 7-Zip's best encoder:
+          # smaller than Compress-Archive's, readable by every unzip.
+          $sevenzip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (Test-Path $sevenzip) {
+            & $sevenzip a -tzip -mm=Deflate -mx=9 -mfb=258 -mpass=15 "dist/$name.zip" "./dist/$name/*" | Out-Null
+            if ($LASTEXITCODE) { throw "7z failed" }
+          } else {
+            Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          }
+          # The update file: the exe alone, xz (installed copies update from it).
+          python packaging/xz.py target/fluxcode.exe "dist/FluxCode-$env:FLUXCODE_BUILD-windows-x64.update.xz"
+          if ($LASTEXITCODE) { throw "xz failed" }
+          Get-ChildItem dist/*.zip, dist/*.xz | ForEach-Object { "{0:N2} MB  {1}" -f ($_.Length / 1MB), $_.Name }
       # One .exe that installs for the user (packaging/windows/installer.nsi). The ZIP
       # stays: installed copies update themselves from it.
       - name: Installer
@@ -59,10 +82,11 @@ jobs:
         run: |
           $mk = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (-not (Test-Path $mk)) { choco install nsis -y --no-progress | Out-Null }
-          $exe = (Resolve-Path target/release/fluxcode.exe).Path
+          $exe = (Resolve-Path target/fluxcode.exe).Path
           $out = Join-Path (Resolve-Path dist).Path "FluxCode-$env:FLUXCODE_BUILD-windows-x64-setup.exe"
           & $mk /V2 "/DBUILD=$env:FLUXCODE_BUILD" "/DEXE=$exe" "/DOUT=$out" packaging/windows/installer.nsi
           if ($LASTEXITCODE) { throw "makensis failed" }
+          "{0:N2} MB  {1}" -f ((Get-Item $out).Length / 1MB), (Split-Path $out -Leaf)
       # Install, start, uninstall on the runner: the installer is only published if it works.
       - name: Test the installer
         shell: pwsh
@@ -86,10 +110,12 @@ jobs:
           if (Test-Path $key) { throw "uninstall left the Settings > Apps entry" }
           "installer: install, run and uninstall all worked"
       - uses: actions/upload-artifact@v4
+        if: env.FAST != 'true'
         with:
           name: windows
           path: |
             dist/*.zip
+            dist/*.xz
             dist/*-setup.exe
           if-no-files-found: error
 
@@ -114,24 +140,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release
+          shared-key: ${{ env.FAST == 'true' && 'dev' || 'release' }}
       - name: Test
         run: cargo test --bin fluxcode
       - name: Build
-        run: cargo build --release
+        run: |
+          if [ "$FAST" = true ]; then cargo build; bin=target/debug/fluxcode; else cargo build --release; bin=target/release/fluxcode; fi
+          cp "$bin" target/fluxcode-bin
+          ls -lh target/fluxcode-bin
       - name: Pack
         run: |
           name="FluxCode-$FLUXCODE_BUILD-linux-x64"
           mkdir -p "dist/$name"
-          install -m 755 target/release/fluxcode "dist/$name/fluxcode"
+          install -m 755 target/fluxcode-bin "dist/$name/fluxcode"
           install -m 755 packaging/linux/install.sh "dist/$name/install.sh"
           install -m 644 packaging/linux/fluxcode.desktop packaging/linux/README.txt "dist/$name/"
           install -m 644 assets/icon.png "dist/$name/fluxcode.png"
-          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          # gzip at its strongest (the updater runs `tar -xzf`, any level reads the same).
+          tar -cf - -C dist "$name" | gzip -9n > "dist/$name.tar.gz"
+          python3 packaging/xz.py target/fluxcode-bin "dist/$name.update.xz"
+          ls -lh dist/*.tar.gz dist/*.xz
       - uses: actions/upload-artifact@v4
+        if: env.FAST != 'true'
         with:
           name: linux
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.xz
           if-no-files-found: error
 
   macos:
@@ -152,18 +187,29 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-macos
+          shared-key: ${{ env.FAST == 'true' && 'dev-macos' || 'release-macos' }}
       - name: Test
         run: cargo test --bin fluxcode
+      # A pull request packs the Apple silicon debug build only (the runner's own);
+      # main joins both optimized halves into one universal binary.
       - name: Build
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          lipo -create -output target/fluxcode-universal \
-            target/aarch64-apple-darwin/release/fluxcode target/x86_64-apple-darwin/release/fluxcode
+          if [ "$FAST" = true ]; then
+            cargo build
+            cp target/debug/fluxcode target/fluxcode-universal
+          else
+            cargo build --release --target aarch64-apple-darwin
+            cargo build --release --target x86_64-apple-darwin
+            lipo -create -output target/fluxcode-universal \
+              target/aarch64-apple-darwin/release/fluxcode target/x86_64-apple-darwin/release/fluxcode
+          fi
           lipo -info target/fluxcode-universal
+          ls -lh target/fluxcode-universal
       - name: Pack
-        run: sh packaging/macos/bundle.sh "$FLUXCODE_BUILD" target/fluxcode-universal dist
+        run: |
+          sh packaging/macos/bundle.sh "$FLUXCODE_BUILD" target/fluxcode-universal dist
+          python3 packaging/xz.py target/fluxcode-universal "dist/FluxCode-$FLUXCODE_BUILD-macos-universal.update.xz"
+          ls -lh dist
       # Open the packed app like a user would, and keep a screenshot of its window.
       - name: Test the app
         run: |
@@ -180,11 +226,13 @@ jobs:
           pkill -x fluxcode || true
           echo "app: opened and still running after 15 s"
       - uses: actions/upload-artifact@v4
+        if: env.FAST != 'true'
         with:
           name: macos
           path: |
             dist/*.dmg
             dist/*.tar.gz
+            dist/*.xz
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
