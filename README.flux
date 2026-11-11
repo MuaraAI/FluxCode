@@ -1,8 +1,22 @@
 // README.flux: FluxCode's README, written in Flux (docs/flux.flux has the syntax).
-// README.md is made from it for GitHub: fluxcode --flux-to-md README.flux README.md
+//
+// Two files are made from it, one per language. English is the default, because
+// that is what GitHub shows first:
+//   fluxcode --flux-to-md README.flux README.md    --lang en
+//   fluxcode --flux-to-md README.flux README.id.md --lang id
+//
+// Every section is written twice, `@en` then `@id`, so a change to one is visible
+// next to the other. Blocks with no tag show in both languages: the badges, the
+// images that have no words in them, and code.
 
 # FluxCode
 
+@en
+**English** · [Bahasa Indonesia](README.id.md)
+@id
+[English](README.md) · **Bahasa Indonesia**
+
+@en
 A native code editor for Windows and Linux, written in Rust and drawn by the GPU.
 One small program with an AI agent panel, a Python-friendly terminal, built-in Source
 Control, and read-only views for files other editors refuse to open. No telemetry.
@@ -10,27 +24,56 @@ Control, and read-only views for files other editors refuse to open. No telemetr
 A [MuaraAI](https://github.com/MuaraAI) project, built by a first-semester university
 student in Indonesia ([MyKineID](https://github.com/MyKineID)). Open source, and still in
 development.
+@id
+Editor kode native untuk Windows dan Linux, ditulis dalam Rust dan digambar oleh GPU.
+Satu program kecil dengan panel agent AI, terminal yang ramah Python, Source Control
+bawaan, dan tampilan baca-saja untuk file yang tidak mau dibuka editor lain. Tanpa
+telemetri.
+
+Proyek [MuaraAI](https://github.com/MuaraAI), dibangun oleh mahasiswa semester satu di
+Indonesia ([MyKineID](https://github.com/MyKineID)). Open source, masih dalam
+pengembangan.
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
+@en
 @image assets/screenshots/agent.png width=100% link=assets/screenshots/agent.png alt="FluxCode with main.py open. In the agent panel on the right, OpenCode has added a docstring to greet(); the Changes card lists main.py with one added line, and a prompt asks before the agent runs a Python command."
 
 The agent added a docstring (line 23), the Changes card lists the file with Undo, and
 because access is set to Read & write, it has to ask before running a command.
+@id
+@image assets/screenshots/agent.png width=100% link=assets/screenshots/agent.png alt="FluxCode dengan main.py terbuka. Di panel agent sebelah kanan, OpenCode menambahkan docstring ke greet(); kartu Changes mendaftar main.py dengan satu baris tambahan, dan ada prompt yang bertanya sebelum agent menjalankan perintah Python."
 
+Agent menambahkan docstring (baris 23), kartu Changes mendaftar file itu beserta Undo,
+dan karena akses disetel ke Read & write, agent harus bertanya sebelum menjalankan
+perintah.
+
+@en
 ## Benchmark
 
 On one Windows 11 PC, FluxCode put its window on screen in **0.22 s** and sat at **1.4 MB**
 in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code 0.29 s and
 929 MB over nine processes.
+@id
+## Benchmark
+
+Di satu PC Windows 11, FluxCode menampilkan jendelanya dalam **0,22 detik** dan menetap
+di **1,4 MB** di Task Manager saat idle, dalam satu proses. Zed 0,82 detik dan 66 MB; VS
+Code 0,29 detik dan 929 MB di sembilan proses.
 
 @image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode 221 ms, Zed 818 ms, VS Code 290 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB."
 
+@en
 *Median of 5 runs each on a PC with an AMD Ryzen 5 7535HS and 15 GB of RAM, 10 November 2026. Every
 app started from a fresh, empty profile with telemetry and update checks off and no folder
 open.*
+@id
+*Median dari 5 pengukuran di PC dengan AMD Ryzen 5 7535HS dan 15 GB RAM, 10 November 2026.
+Semua aplikasi dijalankan dari profil baru yang kosong, dengan telemetri dan pemeriksaan
+update dimatikan serta tanpa folder terbuka.*
 
+@en
 @details Exact numbers, method, and what this does not measure
 
 Median, with the lowest and highest of the runs in brackets:
@@ -66,7 +109,46 @@ Median, with the lowest and highest of the runs in brackets:
   [`tools/bench/results.json`](tools/bench/results.json).
 
 @end
+@id
+@details Angka lengkap, metodenya, dan apa yang tidak diukur di sini
 
+Median, dengan nilai terendah dan tertinggi tiap pengukuran di dalam tanda kurung:
+
+| | FluxCode BuildDev-2026-11-10-04-41-34 | Zed 1.27.0 | VS Code 1.145.2 |
+| --- | --- | --- | --- |
+| Jendela tampil setelah diluncurkan (ms) | 221 (216 sampai 232) | 818 (387 sampai 1.322) | 290 (268 sampai 328) |
+| Memori di Task Manager, idle (MB) | 1,4 (1,0 sampai 4,8) | 66,2 (65,2 sampai 71,9) | 929,2 (867,7 sampai 985,4) |
+| Memori yang direservasi (MB) | 72 (72 sampai 72) | 154 (153 sampai 156) | 1.315 (1.249 sampai 1.399) |
+| CPU saat idle (% satu core) | 0,05 (0,00 sampai 0,68) | 1,46 (1,15 sampai 2,60) | 5,89 (5,57 sampai 8,12) |
+| Proses berjalan | 1 | 2 | 9 |
+| Ukuran di disk (MB) | 16 | 261 | 1.044 |
+
+- **Jendela**: dari diluncurkan sampai jendela pertama terlihat, pengukuran ke-2 sampai
+  ke-5 (pengukuran pertama membaca program dari disk dalam keadaan dingin). VS Code
+  menampilkan jendelanya sebelum workbench di dalamnya selesai dimuat.
+- **Memori di Task Manager**: private working set, 9 detik setelah diluncurkan, dijumlahkan
+  dari semua proses aplikasi. FluxCode mengembalikan memori yang tidak dipakai ke Windows
+  6 detik setelah start, jadi angka ini adalah kondisi idle-nya; sekitar 5 MB setelah satu
+  klik dan sekitar 30 MB saat animasi pemasangan agent berjalan. Zed dan VS Code menyimpan
+  memorinya.
+- **Memori yang direservasi**: private bytes (commit), memori yang sudah diklaim aplikasi
+  entah sedang berada di RAM atau tidak.
+- **CPU saat idle**: waktu CPU dari detik ke-9 sampai ke-39 setelah diluncurkan, sebagai
+  bagian dari satu core. Windows menghitungnya dalam langkah 15,6 ms, jadi 0,05% milik
+  FluxCode sudah di batas kemampuan pengukuran untuk membedakannya dari nol.
+- **Ukuran di disk**: folder pemasangan; untuk FluxCode, satu file programnya.
+- **Yang tidak diukur di sini**: latensi mengetik, membuka file sangat besar, bekerja di
+  proyek besar, atau apa pun dengan extension dan language server termuat. Zed dan VS Code
+  lebih jauh di area itu (lihat tabel perbandingan di bawah: FluxCode belum punya debugger,
+  extension, maupun language server).
+- **Cara mengulang**: tutup ketiga aplikasi, lalu jalankan
+  `powershell -ExecutionPolicy Bypass -File tools/bench/bench.ps1 -FluxExe <path ke fluxcode.exe>`
+  dan `python tools/bench/chart.py`. Data mentahnya ada di
+  [`tools/bench/results.json`](tools/bench/results.json).
+
+@end
+
+@en
 ## Download
 
 Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
@@ -80,34 +162,66 @@ There are no version numbers yet: every change merged into `main` becomes a buil
 after the moment it was made, like `BuildDev-2026-11-09-18-19-54`. Installed copies offer
 the new one in a card and update themselves in one click. Settings > Updates turns the
 check off.
+@id
+## Unduh
 
+Ambil build terbaru dari [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
+
+| Sistem | File | Pemasangan |
+| --- | --- | --- |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64.zip` | Ekstrak, klik dua kali `Install.cmd`. Tanpa hak admin. |
+| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Ekstrak, jalankan `./install.sh`. Tanpa root. |
+
+Belum ada nomor versi: setiap perubahan yang masuk ke `main` menjadi build yang dinamai
+menurut waktu pembuatannya, seperti `BuildDev-2026-11-09-18-19-54`. Salinan yang sudah
+terpasang menawarkan build baru lewat kartu dan memperbarui dirinya dengan satu klik.
+Settings > Updates mematikan pemeriksaannya.
+
+@en
 ## A closer look
+@id
+## Lebih dekat
 
 @gallery
 @image assets/screenshots/python-error.png width=49% link=assets/screenshots/python-error.png alt="A Python run fails with ModuleNotFoundError. The Output panel shows a card with the file and line, the code line, a hint, and a Fix button that runs py -m pip install tabulate."
 @image assets/screenshots/sqlite.png width=49% link=assets/screenshots/sqlite.png alt="A SQLite database opened as text: each table and view with its CREATE statement and row count, under a line saying the view is read-only."
 @end
 
+@en
 A Python error becomes a card with the file, the line and a hint; for a missing module, Fix
 installs it. A SQLite database opens as its tables, SQL and row counts, like Word, Excel,
 PDF and ZIP files do, instead of an error.
+@id
+Error Python menjadi kartu berisi file, baris, dan petunjuk; kalau modulnya tidak ada, Fix
+memasangnya. Database SQLite terbuka sebagai daftar tabel, SQL, dan jumlah barisnya, sama
+seperti file Word, Excel, PDF, dan ZIP, bukan sebagai error.
 
 @gallery
 @image assets/screenshots/source-control.png width=49% link=assets/screenshots/source-control.png alt="Source Control after git init in a game server folder: 2801 untracked files, with the folders holding most of them listed first, each with an Ignore button."
 @image assets/screenshots/go-to-file.png width=49% link=assets/screenshots/go-to-file.png alt="Go to File in the FluxMono theme: typing wbench finds workbench.rs in the src folder."
 @end
 
+@en
 Source Control stays fast with thousands of new files and offers to ignore the folders
 that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
+@id
+Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabaikan folder
+yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
 
 @gallery
 @image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."
 @image assets/screenshots/update-indonesian.png width=49% link=assets/screenshots/update-indonesian.png alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."
 @end
 
+@en
 Four color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
+@id
+Empat tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
+juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
+FluxCream.
 
+@en
 ## What makes it different
 
 - **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status
@@ -130,7 +244,33 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
   per-agent instruction files and every editor option in Settings: font, size, tab size,
   word wrap, whitespace, line numbers, folding, bracket closing, smart indent, cursor
   padding, scrolling past the end, interface size, themes and a background image.
+@id
+## Yang membedakannya
 
+- **Tata letak dan kendali seperti VS Code.** Activity bar, side bar, tab, panel, dan
+  status bar berada di tempat yang sama dengan VS Code, dan tombolnya juga punya VS Code:
+  `Ctrl+Shift+P` membuka Command Palette berisi semua perintah dan pintasannya, `Ctrl+P`
+  mencari file, `Ctrl+G` menuju baris, `Ctrl+/` mengomentari, `Alt+Up` memindah baris.
+  Kalau kamu sudah kenal VS Code, kamu sudah tahu letak semuanya. Ini bukan tiruan VS
+  Code: belum ada extension dan belum ada debugger (lihat tabel di bawah).
+- **Ringan seperti Zed.** Seluruh editor adalah satu program Rust yang digambar GPU lewat
+  GPUI, framework yang dipakai Zed. Di [benchmark](#benchmark) jendelanya muncul dalam
+  0,22 detik, mereservasi 72 MB (Zed: 154 MB), dan saat idle menampilkan 1,4 MB di Task
+  Manager, karena memori yang tidak dipakai dikembalikan ke Windows.
+- **Dibuat untuk agent AI.** Panel agent berbicara lewat Agent Client Protocol dan
+  mendaftar semua agent di registri ACP, masing-masing dengan ikonnya sendiri. Yang belum
+  terpasang bisa dipasang dengan satu klik ke folder milik FluxCode. Model, mode, dan
+  izin dipilih di bawah kotak pesan; agent bisa mengajukan pertanyaan pilihan ganda;
+  perubahan file tiap giliran bisa dibatalkan; file instruksi agent berjarak satu klik di
+  Settings.
+- **Untuk pemula dan untuk yang sudah ahli.** Pemula bisa memilih agent dari daftar,
+  menjawab pertanyaannya dengan klik, dan menjaganya tetap read-only. Yang sudah ahli
+  mendapat palette, pintasan, file instruksi per agent, dan semua opsi editor di Settings:
+  font, ukuran, lebar tab, word wrap, spasi, nomor baris, lipatan, penutup bracket, indent
+  pintar, padding kursor, scroll melewati akhir baris, ukuran antarmuka, tema, dan gambar
+  latar.
+
+@en
 ## Live share
 
 Code together in real time, with your PC as the server. The people icon in the activity
@@ -180,7 +320,62 @@ Running your own relay is one command on a VPS: see [`relay/README.md`](relay/RE
 - Not yet: other people's carets drawn inside the editor (the panel shows their line),
   separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
   and syncing files an agent edits without them being open.
+@id
+## Live share
 
+Ngoding bersama secara real time, dengan PC-mu sebagai servernya. Ikon orang di activity
+bar membuka halaman Live share di area editor: kartunya tersusun dua per baris di jendela
+lebar dan bertumpuk satu per satu di jendela sempit.
+
+1. Host membuka folder, menekan **Start hosting**, lalu mengirim kode undangan
+   (`FLUX1-...`) ke yang lain, lewat chat atau email.
+2. Tiap tamu menempelkan kodenya dan menekan **Join**, entah ke klon repositori yang sama
+   miliknya sendiri atau ke folder baru yang terisi saat file dibuka.
+3. Semua orang mengetik di file yang sama sekaligus. PC host yang menentukan urutan
+   perubahan (operational transformation), jadi teks di semua sisi berakhir sama.
+
+Panel mendaftar siapa saja yang ada di sesi (dengan nama GitHub kalau sudah masuk) beserta
+file dan baris tempat masing-masing berada. Daftar aktivitasnya menampilkan perubahan tiap
+orang dengan jumlah baris yang ditambah dan dihapus serta diff-nya; perubahan dari agent AI
+membawa label **AI** berisi agent, model, effort, dan mode yang dipakai, jadi kelihatan
+model mana yang menulis apa.
+
+Perubahan mengalir antara PC host dan tiap tamu, dienkripsi ChaCha20-Poly1305 dengan
+rahasia dari kode undangan; tidak ada server kami yang terlibat, dan tidak ada yang perlu
+VPN atau server sewaan. Saat hosting dimulai, FluxCode membuka setiap jalur masuk yang
+bisa, dan panel menampilkan tiap jalur, alamatnya, atau alasan kenapa tidak terbuka:
+
+| Jalur masuk | Siapa yang bisa memakai | Syaratnya |
+| --- | --- | --- |
+| Jaringan yang sama | siapa pun di Wi-Fi atau LAN host | tidak ada (Windows sekali bertanya untuk mengizinkan FluxCode lewat firewall) |
+| Port router (UPnP) | siapa pun di internet | router dengan UPnP aktif, seperti yang dipakai server game; tidak mungkin kalau provider membagi satu alamat publik ke banyak pelanggan (carrier-grade NAT), dan panel mendeteksi serta menjelaskannya |
+| IPv6 publik | tamu yang punya IPv6 | alamat IPv6 dari provider, dan router yang mengizinkan koneksi masuk |
+| Relay MuaraAI | siapa pun di internet | tidak ada: jalan di balik router apa pun dan carrier-grade NAT. Berubah jadi Relay publik kalau cadangan di bawah yang dipakai |
+
+Kode undangan memuat semua alamat yang terbuka. Tamu mencobanya sekaligus, jaringan yang
+sama lebih dulu, dan memakai host pertama yang membuktikan bahwa ia memegang rahasia kode
+tersebut.
+Relay-nya adalah tunnel TCP yang dijalankan MuaraAI: yang lewat sudah terenkripsi, jadi
+relay tahu ada dua PC yang sedang bicara, tapi tidak tahu isinya. Sedikit mengurangi
+kecepatan (tiap ketikan menempuh perjalanan ke `live.muaraai.com` dan kembali). Kalau
+relay MuaraAI tidak bisa dihubungi, FluxCode beralih ke tunnel publik
+[bore.pub](https://github.com/ekzhang/bore) dan panel mengubah barisnya menjadi
+**Relay publik**, jadi kelihatan mana yang membawa sesi. Menghapus centang **Let people
+join over the internet** sebelum hosting membuat sesi hanya di jaringan lokal. Port router
+ditutup kembali saat sesi berakhir.
+
+Menjalankan relay sendiri cukup satu perintah di VPS: lihat
+[`relay/README.md`](relay/README.md).
+
+- Hanya file yang sedang dibuka seseorang yang dikirim, jadi proyek besar (game, proyek
+  Laravel atau Android) hanya sebesar file yang sedang dikerjakan. File di atas 16 MB tidak
+  dibagikan. File environment, kunci privat, dan folder build seperti `node_modules` atau
+  `target` tidak pernah dibagikan, walau tamu memintanya dengan nama yang tepat.
+- Belum ada: kursor orang lain yang digambar di dalam editor (panel hanya menunjukkan
+  barisnya), undo terpisah per orang (`Ctrl+Z` bisa membatalkan perubahan orang lain di
+  layarmu), dan sinkronisasi file yang diubah agent tanpa file itu dibuka.
+
+@en
 ## Flux documents
 
 This README is written in Flux (`README.flux`); the `README.md` GitHub shows is made from
@@ -195,13 +390,40 @@ FluxCode opens it drawn, with Preview and Source above it.
   0.3 s, and shows 16 MB in Task Manager (its text kept in 2.3 MB).
 - **Readable on GitHub**: `fluxcode --flux-to-md README.flux README.md` (or **Save as
   Markdown** in FluxCode) writes GitHub Markdown; flowcharts become Mermaid and callouts
-  GitHub's alerts. The tests fail when the two files disagree.
+  GitHub's alerts. Add `--lang id` for the Indonesian sections, which ship as
+  `README.id.md`. The tests fail when any of those files disagree.
+@id
+## Dokumen Flux
 
+README ini ditulis dalam Flux (`README.flux`); `README.md` yang tampil di GitHub dibuat
+dari situ. File `.flux` adalah teks Markdown ditambah blok satu baris untuk hal yang
+biasanya diserahkan Markdown ke HTML: lebar gambar dan versi tema gelap, gambar
+berdampingan, video, flowchart, callout, bagian yang bisa dilipat, kolom, daftar isi, dan
+bagian per bahasa. FluxCode membukanya dalam bentuk tergambar, dengan Preview dan Source
+di atasnya.
+
+- **Ringan di ukuran apa pun**: satu kali pembacaan teks, tanpa salinan, hanya baris yang
+  terlihat yang digambar, dan teks dokumen besar disimpan dalam bentuk padat. Dokumen
+  1,3 juta baris (31,8 MB, berisi tabel 200.000 baris) menampilkan layar pertamanya setelah
+  0,08 ms pembacaan, terbuka dalam 0,3 detik, dan menampilkan 16 MB di Task Manager
+  (teksnya disimpan dalam 2,3 MB).
+- **Terbaca di GitHub**: `fluxcode --flux-to-md README.flux README.md` (atau **Save as
+  Markdown** di FluxCode) menulis Markdown untuk GitHub; flowchart jadi Mermaid dan
+  callout jadi alert milik GitHub. Tambahkan `--lang id` untuk bagian Indonesianya, yang
+  tersedia sebagai `README.id.md`. Test gagal kalau file-file itu tidak sama.
+
+@en
 @tip The whole syntax
 [docs/flux.md](docs/flux.md) describes every block, written in Flux itself
 ([docs/flux.flux](docs/flux.flux)).
 @end
+@id
+@tip Seluruh sintaksnya
+[docs/flux.id.md](docs/flux.id.md) menjelaskan semua blok, ditulis dalam Flux itu sendiri
+([docs/flux.flux](docs/flux.flux)).
+@end
 
+@en
 ## What else it does
 
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.
@@ -238,7 +460,48 @@ FluxCode opens it drawn, with Preview and Source above it.
   (from [`changelog.flux`](changelog.flux), in the interface language). Help > What's New
   opens it again.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
+@id
+## Kemampuan lainnya
 
+- Pewarnaan sintaks untuk sekitar 200 bahasa, dipilih dari nama file, ekstensi, atau baris
+  `#!`.
+- Workspace multi-root: tarik folder ke jendela untuk menambahkannya atau berpindah ke
+  situ.
+- Panel agent (`Ctrl+L`) menjalankan agent apa pun di [registri ACP](https://agentclientprotocol.com),
+  seperti OpenCode, Claude Agent, Codex, Gemini CLI, GitHub Copilot, atau Mura dari MuaraAI.
+  Agent yang belum ada di PC-mu punya tombol unduh di menu agent (lengkap dengan ikonnya
+  sendiri dari registri); FluxCode menaruhnya di `~/.fluxcode/agents` (termasuk paket npm,
+  tidak ke npm global-mu) dan hanya menjalankannya selama panel dipakai. Model, effort,
+  mode, dan izin berupa tombol di bawah kotak pesan; masing-masing membuka daftar tepat di
+  atasnya dengan kotak pencarian, dan menu agent menunjukkan agent mana yang aktif. GitHub
+  Copilot, yang tidak menawarkan model lewat ACP, mengambil daftar modelnya langsung dari
+  Copilot dan restart dengan model pilihanmu, di chat yang sama. Sunting pesan yang sudah
+  terkirim dan jawabannya dimulai ulang dari situ; agent mendapat ringkasan workspace dan
+  memori lokal yang bisa kamu baca, sunting, atau matikan.
+- **Browser untuk setiap agent.** FluxCode memberi tiap sesi agent sebuah browser yang
+  bisa dikendalikannya: Chrome, Brave, atau Edge yang sudah ada di PC-mu (Chrome kalau
+  tersedia), lewat [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+  dari Google melalui Chrome DevTools Protocol. Agent membuka halaman, mengklik dan
+  mengetik, membaca console dan permintaan jaringan, mengambil screenshot dan snapshot
+  aksesibilitas, serta merekam trace performa. Tidak ada yang diunduh selain alat 15 MB
+  itu, dipasang sekali ke `~/.fluxcode/tools/browser`; browsernya memakai profil sendiri,
+  tidak pernah cookie atau password-mu, dan statistik penggunaan Google dimatikan. Agent
+  settings > Browser memilih browsernya, berupa jendela atau tanpa jendela, atau
+  mematikannya.
+- Source Control melakukan commit, push, pull, dan sync, menampilkan graf commit, membuka
+  pull request dan GitHub Actions lewat `gh`, serta Remove Git untuk membatalkan `git init`.
+- Source Control memberi tahu kalau remote punya commit yang belum kamu miliki. Ia
+  menjalankan `git fetch` senyap tiap lima menit (dan saat kamu kembali ke jendela), tanpa
+  pernah meminta password, dan bagian Incoming di atas mendaftar commit baru: judul dan
+  penulisnya, lalu file yang diubah tiap commit, dan diff sebuah file di panel Output.
+  Pull menariknya masuk, atau sisihkan sampai ada yang lain datang. Titik biru di ikon
+  Source Control menandakan ada yang baru.
+- Setelah update, halaman "What's new" terbuka sekali berisi catatan sejak build terakhir
+  (dari [`changelog.flux`](changelog.flux), dalam bahasa antarmuka). Help > What's New
+  membukanya lagi.
+- Settings > About FluxCode menautkan ke repositori ini, issue tracker, dan changelog.
+
+@en
 ## FluxCode, Zed and VS Code
 
 All three are good editors made for different people. This is where each stands today.
@@ -266,7 +529,37 @@ Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agen
 keep on a short leash, and you open logs, databases and documents next to your code.
 Pick Zed for macOS, language servers out of the box and pair programming.
 Pick VS Code when you need a specific extension, a debugger or remote development.
+@id
+## FluxCode, Zed, dan VS Code
 
+Ketiganya editor bagus yang dibuat untuk orang berbeda. Berikut posisi masing-masing hari
+ini.
+
+| | FluxCode | Zed | VS Code |
+| --- | --- | --- | --- |
+| Dibangun dengan | Rust, GPUI (digambar GPU) | Rust, GPUI (digambar GPU) | TypeScript di Electron (Chromium + Node.js) |
+| Sistem | Windows, Linux | macOS, Linux, Windows | Windows, macOS, Linux, web |
+| Yang diunduh | satu program, sekitar 16 MB | sebuah installer | sebuah installer |
+| Tata letak dan tombol | tata letak VS Code dan tombol VS Code untuk perintah yang ada | tata letaknya sendiri; tersedia key map VS Code | yang aslinya |
+| Start, memori, CPU, ukuran | 0,22 detik, 1,4 MB idle, 1 proses, 16 MB ([benchmark](#benchmark)) | 0,82 detik, 66 MB, 2 proses, 261 MB | 0,29 detik, 929 MB, 9 proses, 1 GB |
+| Telemetri | tidak ada | aktif secara bawaan, bisa dimatikan | aktif secara bawaan di build Microsoft, bisa dimatikan |
+| Kecerdasan bahasa (go to definition, rename, diagnostik) | belum ada: warna dan penyelesaian kata | bawaan, lewat language server | lewat extension |
+| Debugger | belum ada (hanya Run) | ada | ada |
+| Extension | tidak ada | ada | katalog terbesar |
+| Agent AI | agent ACP apa pun, tiga tingkat akses, perubahan per giliran dengan undo, memori lokal | agent sendiri dan agent ACP | GitHub Copilot dan extension |
+| File yang bukan teks | hex, PDF, Office, ZIP, SQLite (baca-saja) | gambar | gambar; lebih banyak lewat extension |
+| Kolaborasi real-time | bawaan, lewat PC host (tanpa akun atau server) | bawaan, lewat server Zed | extension Live Share, lewat server Microsoft |
+| Pengembangan jarak jauh | tidak ada | SSH | SSH, container, WSL |
+| Bahasa antarmuka | Inggris, Bahasa Indonesia | Inggris | banyak, lewat language pack |
+| Kematangan | build pengembangan | rilis stabil | stabil, dipakai luas |
+| Lisensi | GPL-3.0-or-later | GPL-3.0 (editornya) | MIT untuk Code - OSS; build Microsoft punya lisensi sendiri |
+
+Pilih FluxCode kalau kamu ingin editor kecil dan tenang di Windows atau Linux dengan agent
+yang bisa dijaga ketat, dan kamu membuka log, database, serta dokumen di samping kode.
+Pilih Zed untuk macOS, language server yang langsung jalan, dan pair programming.
+Pilih VS Code kalau kamu butuh extension tertentu, debugger, atau pengembangan jarak jauh.
+
+@en
 ## Privacy
 
 FluxCode sends nothing about you. The only request it makes by itself is the update
@@ -282,7 +575,24 @@ bytes. If `live.muaraai.com` cannot be reached, FluxCode falls back to the publi
 tunnel, which sees the same two things.
 The first time an agent starts, FluxCode installs the agents' browser tool
 (chrome-devtools-mcp) from the npm registry; Agent settings > Browser > Off skips it.
+@id
+## Privasi
 
+FluxCode tidak mengirim apa pun tentangmu. Satu-satunya permintaan yang dibuat sendiri
+adalah pemeriksaan update: `GET` biasa ke daftar rilis di github.com, tanpa build ID,
+machine ID, atau cookie, saat start dan tiap 6 jam (Settings > Updates mematikannya).
+Sisanya keluar hanya saat kamu memulainya: agent yang kamu jalankan, `git`, GitHub saat
+kamu masuk, dan `changelog.flux` build baru saat kamu menekan What's new di kartu update.
+Menu agent membaca daftar agent ACP publik dari cdn.agentclientprotocol.com, paling banyak
+sekali sehari dan hanya saat menu itu dibuka. Menjalankan sesi Live share meminta routermu
+membuka portnya (UPnP) dan membuka tunnel di `live.muaraai.com`, kecuali kamu menghapus
+centang **Let people join over the internet**; relay lalu melihat alamat IP publikmu dan
+byte terenkripsi. Kalau `live.muaraai.com` tidak bisa dihubungi, FluxCode beralih ke tunnel
+publik bore.pub, yang melihat dua hal yang sama.
+Saat agent pertama kali dijalankan, FluxCode memasang alat browser untuk agent
+(chrome-devtools-mcp) dari registri npm; Agent settings > Browser > Off melewatinya.
+
+@en
 ## Shortcuts
 
 VS Code's keys on Windows and Linux. `Ctrl+Shift+P` (or `F1`) lists every command with its
@@ -313,7 +623,39 @@ keys, and Settings > Keyboard shortcuts shows the same list.
 | Settings / Next theme | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 
 `Ctrl+L` opens the agent (as in Cursor) where VS Code would select a line.
+@id
+## Pintasan
 
+Tombol VS Code di Windows dan Linux. `Ctrl+Shift+P` (atau `F1`) mendaftar semua perintah
+beserta tombolnya, dan Settings > Keyboard shortcuts menampilkan daftar yang sama.
+
+| Aksi | Tombol |
+| --- | --- |
+| Command Palette | `Ctrl+Shift+P` / `F1` |
+| Go to File / Go to Line | `Ctrl+P` / `Ctrl+G` |
+| Find / Replace / Find in Files | `Ctrl+F` / `Ctrl+H` / `Ctrl+Shift+F` |
+| Open File / Open Folder | `Ctrl+O` / `Ctrl+K Ctrl+O` |
+| Save / Save All | `Ctrl+S` / `Ctrl+K S` |
+| Tutup tab / Tutup semua / Buka yang ditutup | `Ctrl+W` / `Ctrl+K Ctrl+W` / `Ctrl+Shift+T` |
+| Tab berikutnya / sebelumnya | `Ctrl+Tab` atau `Ctrl+PageDown` / `Ctrl+Shift+Tab` atau `Ctrl+PageUp` |
+| Komentar baris | `Ctrl+/` |
+| Pindah baris ke atas / ke bawah | `Alt+Up` / `Alt+Down` |
+| Salin baris ke atas / ke bawah | `Shift+Alt+Up` / `Shift+Alt+Down` |
+| Tambah kursor di atas / di bawah | `Ctrl+Alt+Up` / `Ctrl+Alt+Down` |
+| Hapus baris | `Ctrl+Shift+K` |
+| Baris baru di bawah / di atas | `Ctrl+Enter` / `Ctrl+Shift+Enter` |
+| Indent / outdent | `Ctrl+]` / `Ctrl+[` |
+| Word wrap | `Alt+Z` |
+| Font editor lebih besar / kecil / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
+| Side bar / Panel / Terminal | `Ctrl+B` / `Ctrl+J` / ``Ctrl+` `` |
+| Explorer / Source Control / Run | `Ctrl+Shift+E` / `Ctrl+Shift+G` / `Ctrl+Shift+D` |
+| Jalankan file / Stop | `F5` / `Shift+F5` |
+| Panel agent | `Ctrl+L` |
+| Settings / Tema berikutnya | `Ctrl+,` / `Ctrl+K Ctrl+T` |
+
+`Ctrl+L` membuka agent (seperti di Cursor) di tempat VS Code memilih satu baris.
+
+@en
 ## Build from source
 
 Rust stable, then:
@@ -332,7 +674,28 @@ cargo test --bin fluxcode
   and Ubuntu names).
 - Builds name themselves from `FLUXCODE_BUILD` (`BuildDev-YYYY-MM-DD-HH-MM-SS`); without
   it, from the current UTC time.
+@id
+## Build dari sumber
 
+Rust stable, lalu:
+
+```sh
+cargo build --release          # target/release/fluxcode(.exe)
+cargo test --bin fluxcode
+```
+
+- Windows: shader HLSL butuh `fxc.exe` dari Windows SDK, atau setel `GPUI_FXC_PATH` ke
+  `tools/fxc-shim` yang dibangun dengan
+  `cargo build --release --manifest-path tools/fxc-shim/Cargo.toml`. Dengan toolchain GNU,
+  pakai `CARGO_TARGET_DIR` tanpa spasi (`windres` MinGW). `packaging/windows/build.ps1
+  -Install` membangun, mengemas, dan memasang seperti rilis.
+- Linux: `pkg-config clang libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+  libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype6-dev libvulkan-dev` (nama paket
+  Debian dan Ubuntu).
+- Build menamai dirinya dari `FLUXCODE_BUILD` (`BuildDev-YYYY-MM-DD-HH-MM-SS`); tanpa itu,
+  dari waktu UTC saat itu.
+
+@en
 ## Contributing
 
 FluxCode is open source, and issues are open to everyone: report a bug or suggest an idea
@@ -342,11 +705,26 @@ new issue for earlier reports of the same problem and for an outdated build.
 Pull requests are accepted only from members of the MuaraAI organization; others are
 closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each
 build: [CHANGELOG.md](CHANGELOG.md).
+@id
+## Berkontribusi
 
+FluxCode open source, dan issue terbuka untuk siapa saja: laporkan bug atau usulkan ide
+lewat [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). Bot memeriksa tiap
+issue baru terhadap laporan lama dengan masalah yang sama dan terhadap build yang sudah
+usang.
+
+Pull request hanya diterima dari anggota organisasi MuaraAI; yang lain ditutup otomatis.
+Rinciannya di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
+[CHANGELOG.md](CHANGELOG.md).
+
+@en
 ## The icon
+@id
+## Ikonnya
 
 @image assets/icon.png width=96 align=right alt="The FluxCode icon: a square meander, one ivory hook and one ochre hook locked together, on a near-black tile."
 
+@en
 The mark is a meander: one unbroken line that turns only at right angles and never
 crosses itself. The pattern is named after the river Maeander in western Anatolia (the
 Büyük Menderes today). The Greek geographer Strabo wrote that it winds so much that
@@ -361,7 +739,28 @@ for the Mezin carvings and ochre for fired clay, on ink. The line is split at it
 into two hooks of the same shape, turned 180 degrees and holding each other, so the mark
 looks the same upside down. The app's FluxDark and FluxCream themes use the same three
 colors.
+@id
+Lambangnya adalah meander: satu garis tanpa putus yang hanya berbelok tegak lurus dan
+tidak pernah memotong dirinya sendiri. Motif ini dinamai dari sungai Maeander di Anatolia
+barat (kini Büyük Menderes). Geografer Yunani Strabo menulis bahwa sungai itu berkelok
+sedemikian rupa sampai setiap alur yang berkelok ikut dinamai menurutnya. Salah satu
+meander tertua yang diketahui terukir pada gelang gading mamut yang ditemukan di Mezin,
+Ukraina, lebih dari 15.000 tahun lalu; pembuat tembikar Yunani periode Geometrik kemudian
+melukisnya mengelilingi seluruh vas.
 
+FluxCode mengambil tiga hal darinya. Namanya: flux adalah aliran, dan meander adalah
+sungai yang digambar sebagai kaidah. Strukturnya: kode juga berjalan sebagai satu jalur
+yang berbelok masuk ke sebuah blok lalu keluar lagi, seperti pemanggilan yang kembali ke
+tempat asalnya. Warnanya: gading untuk ukiran Mezin dan oker untuk tanah liat bakar, di
+atas tinta. Garisnya dibelah di tengah menjadi dua kait berbentuk sama, diputar 180
+derajat dan saling mengunci, sehingga lambang itu tetap sama walau dibalik. Tema FluxDark
+dan FluxCream di aplikasi memakai tiga warna yang sama.
+
+@en
 ## License
 
 [GPL-3.0-or-later](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+@id
+## Lisensi
+
+[GPL-3.0-or-later](LICENSE). Komponen pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

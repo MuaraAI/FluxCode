@@ -135,16 +135,48 @@ fn changelog_flux_still_reads() {
     assert_eq!(d.lang, [0, 1, 2, 1, 2]);
 }
 
-/// README.md and docs/flux.md are made from their .flux files: they must agree (run
-/// `fluxcode --flux-to-md README.flux README.md` after editing README.flux).
+/// README.md, README.id.md and docs/flux*.md are made from their .flux files: they
+/// must agree (run `fluxcode --flux-to-md README.flux README.md --lang en`, and the
+/// same with `--lang id`). English is the default every reader lands on.
 #[test]
 fn markdown_made_from_flux_is_up_to_date() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for (flux, md_file) in [("README.flux", "README.md"), ("docs/flux.flux", "docs/flux.md")] {
+    for (flux, md_file, lang) in [
+        ("README.flux", "README.md", "en"),
+        ("README.flux", "README.id.md", "id"),
+        ("docs/flux.flux", "docs/flux.md", "en"),
+        ("docs/flux.flux", "docs/flux.id.md", "id"),
+    ] {
         let src = std::fs::read_to_string(root.join(flux)).unwrap_or_else(|e| panic!("{flux}: {e}"));
-        let want = md::to_markdown(&parse(&src), &src, "en", Some(&md::banner(flux, md_file)));
+        let want = md::to_markdown(&parse(&src), &src, lang, Some(&md::banner(flux, md_file)));
         let have = std::fs::read_to_string(root.join(md_file)).unwrap_or_default().replace("\r\n", "\n");
-        assert!(have == want, "{md_file} is out of date: run `fluxcode --flux-to-md {flux} {md_file}`");
+        assert!(have == want, "{md_file} is out of date: run `fluxcode --flux-to-md {flux} {md_file} --lang {lang}`");
+    }
+}
+
+/// The English file is the default one, and both languages must be complete enough
+/// to differ: a section that exists only in English is a reader hitting a wall.
+#[test]
+fn both_languages_cover_the_same_sections() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for flux in ["README.flux", "docs/flux.flux"] {
+        let src = std::fs::read_to_string(root.join(flux)).unwrap();
+        let doc = parse(&src);
+        let levels = |lang: &str| -> Vec<u8> {
+            let mut v: Vec<u8> = doc
+                .visible(lang)
+                .into_iter()
+                .filter_map(|i| match doc.blocks[i as usize] {
+                    Block::Heading(l, _) if l <= 3 => Some(l),
+                    _ => None,
+                })
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let (en, id) = (levels("en"), levels("id"));
+        assert!(!en.is_empty(), "{flux} must have headings to compare");
+        assert_eq!(en, id, "{flux}: the Indonesian sections do not mirror the English ones");
     }
 }
 

@@ -28,7 +28,8 @@ pub fn to_markdown(doc: &Doc, src: &str, lang: &str, banner: Option<&str>) -> St
         out.push_str("\n\n");
     }
     let blocks: Vec<Block> = doc.visible(lang).into_iter().map(|i| doc.blocks[i as usize]).collect();
-    emit(doc, src, &blocks, &mut out, "");
+    let want = if lang == "id" { 2 } else { 1 };
+    emit(doc, src, &blocks, &mut out, "", want);
     while out.ends_with("\n\n") {
         out.pop();
     }
@@ -117,7 +118,7 @@ fn line(out: &mut String, prefix: &str, s: &str) {
     }
 }
 
-fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str) {
+fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, want: u8) {
     // Rows of one table come one after another: their number counts up from 0.
     let mut row_n = 0u32;
     for (bi, b) in blocks.iter().enumerate() {
@@ -196,11 +197,11 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str) 
                     Kind::Details => {
                         line(out, prefix, &format!("<details><summary>{}</summary>", if title.is_empty() { "Details" } else { title }));
                         line(out, prefix, "");
-                        emit(doc, src, inner, out, prefix);
+                        emit(doc, src, inner, out, prefix, want);
                         line(out, prefix, "");
                         line(out, prefix, "</details>");
                     }
-                    Kind::Columns => emit(doc, src, inner, out, prefix),
+                    Kind::Columns => emit(doc, src, inner, out, prefix, want),
                     Kind::Gallery => {
                         line(out, prefix, "<p align=\"center\">");
                         for b in inner {
@@ -223,14 +224,19 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str) 
                             line(out, &q, &format!("**{}**", inline_md(title)));
                         }
                         let mut body = String::new();
-                        emit(doc, src, inner, &mut body, "");
+                        emit(doc, src, inner, &mut body, "", want);
                         line(out, &q, body.trim_end());
                     }
                 }
             }
             Block::ColBreak => {}
             Block::Toc => {
+                // Only the headings this language shows: a bilingual document would
+                // otherwise list every section twice.
                 for &h in &doc.headings {
+                    if !matches!(doc.lang.get(h as usize), Some(&l) if l == 0 || l == want) {
+                        continue;
+                    }
                     if let Block::Heading(l, s) = doc.blocks[h as usize] {
                         if l <= 3 {
                             let t = text(src, s);
@@ -283,13 +289,34 @@ fn sep(t: &super::Table) -> String {
     format!("| {} |", cols.join(" | "))
 }
 
-/// `fluxcode --flux-to-md IN.flux OUT.md [--check]`: write OUT.md, or with `--check`
-/// only say whether it is up to date (exit code 1 when not). For CI and scripts.
+/// `fluxcode --flux-to-md IN.flux OUT.md [--lang en|id] [--check]`: write OUT.md,
+/// or with `--check` only say whether it is up to date (exit code 1 when not).
+/// `--lang` picks the `@en` / `@id` sections; `en` is the default because that is
+/// what GitHub shows and what a first-time reader needs.
 pub fn cli(args: &[String]) -> i32 {
-    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    let check = args.iter().any(|a| a == "--check");
+    let mut files: Vec<&String> = Vec::new();
+    let (mut check, mut lang) = (false, "en");
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--check" => check = true,
+            "--lang" => match it.next().map(String::as_str) {
+                Some("en") => lang = "en",
+                Some("id") => lang = "id",
+                other => {
+                    eprintln!("--lang takes `en` or `id`, not {}", other.unwrap_or("nothing"));
+                    return 2;
+                }
+            },
+            s if s.starts_with("--") => {
+                eprintln!("unknown option {s}");
+                return 2;
+            }
+            _ => files.push(a),
+        }
+    }
     let (Some(input), Some(output)) = (files.first(), files.get(1)) else {
-        eprintln!("usage: fluxcode --flux-to-md IN.flux OUT.md [--check]");
+        eprintln!("usage: fluxcode --flux-to-md IN.flux OUT.md [--lang en|id] [--check]");
         return 2;
     };
     let src = match std::fs::read_to_string(input) {
@@ -299,13 +326,13 @@ pub fn cli(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let md = to_markdown(&super::parse(&src), &src, "en", Some(&banner(&input.replace('\\', "/"), &output.replace('\\', "/"))));
+    let md = to_markdown(&super::parse(&src), &src, lang, Some(&banner(&input.replace('\\', "/"), &output.replace('\\', "/"))));
     if check {
         let have = std::fs::read_to_string(output).unwrap_or_default().replace("\r\n", "\n");
         if have == md {
             return 0;
         }
-        eprintln!("{output} is out of date: run fluxcode --flux-to-md {input} {output}");
+        eprintln!("{output} is out of date: run fluxcode --flux-to-md {input} {output}{}", if lang == "en" { String::new() } else { format!(" --lang {lang}") });
         return 1;
     }
     match std::fs::write(output, md) {

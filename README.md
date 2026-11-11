@@ -2,6 +2,8 @@
 
 # FluxCode
 
+**English** · [Bahasa Indonesia](README.id.md)
+
 A native code editor for Windows and Linux, written in Rust and drawn by the GPU.
 One small program with an AI agent panel, a Python-friendly terminal, built-in Source
 Control, and read-only views for files other editors refuse to open. No telemetry.
@@ -9,9 +11,6 @@ Control, and read-only views for files other editors refuse to open. No telemetr
 A [MuaraAI](https://github.com/MuaraAI) project, built by a first-semester university
 student in Indonesia ([MyKineID](https://github.com/MyKineID)). Open source, and still in
 development.
-
-[![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 <a href="assets/screenshots/agent.png"><img src="assets/screenshots/agent.png" width="100%" alt="FluxCode with main.py open. In the agent panel on the right, OpenCode has added a docstring to greet(); the Changes card lists main.py with one added line, and a prompt asks before the agent runs a Python command."></a>
 
@@ -23,11 +22,6 @@ because access is set to Read & write, it has to ask before running a command.
 On one Windows 11 PC, FluxCode put its window on screen in **0.22 s** and sat at **1.4 MB**
 in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code 0.29 s and
 929 MB over nine processes.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/benchmark-dark.svg">
-  <img src="assets/benchmarks/benchmark-light.svg" width="100%" alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode 221 ms, Zed 818 ms, VS Code 290 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB.">
-</picture>
 
 *Median of 5 runs each on a PC with an AMD Ryzen 5 7535HS and 15 GB of RAM, 10 November 2026. Every
 app started from a fresh, empty profile with telemetry and update checks off and no folder
@@ -85,27 +79,12 @@ check off.
 
 ## A closer look
 
-<p align="center">
-  <a href="assets/screenshots/python-error.png"><img src="assets/screenshots/python-error.png" width="49%" alt="A Python run fails with ModuleNotFoundError. The Output panel shows a card with the file and line, the code line, a hint, and a Fix button that runs py -m pip install tabulate."></a>
-  <a href="assets/screenshots/sqlite.png"><img src="assets/screenshots/sqlite.png" width="49%" alt="A SQLite database opened as text: each table and view with its CREATE statement and row count, under a line saying the view is read-only."></a>
-</p>
-
 A Python error becomes a card with the file, the line and a hint; for a missing module, Fix
 installs it. A SQLite database opens as its tables, SQL and row counts, like Word, Excel,
 PDF and ZIP files do, instead of an error.
 
-<p align="center">
-  <a href="assets/screenshots/source-control.png"><img src="assets/screenshots/source-control.png" width="49%" alt="Source Control after git init in a game server folder: 2801 untracked files, with the folders holding most of them listed first, each with an Ignore button."></a>
-  <a href="assets/screenshots/go-to-file.png"><img src="assets/screenshots/go-to-file.png" width="49%" alt="Go to File in the FluxMono theme: typing wbench finds workbench.rs in the src folder."></a>
-</p>
-
 Source Control stays fast with thousands of new files and offers to ignore the folders
 that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
-
-<p align="center">
-  <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="49%" alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."></a>
-  <a href="assets/screenshots/update-indonesian.png"><img src="assets/screenshots/update-indonesian.png" width="49%" alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."></a>
-</p>
 
 Four color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
@@ -197,7 +176,8 @@ FluxCode opens it drawn, with Preview and Source above it.
   0.3 s, and shows 16 MB in Task Manager (its text kept in 2.3 MB).
 - **Readable on GitHub**: `fluxcode --flux-to-md README.flux README.md` (or **Save as
   Markdown** in FluxCode) writes GitHub Markdown; flowcharts become Mermaid and callouts
-  GitHub's alerts. The tests fail when the two files disagree.
+  GitHub's alerts. Add `--lang id` for the Indonesian sections, which ship as
+  `README.id.md`. The tests fail when any of those files disagree.
 
 > [!TIP]
 > **The whole syntax**
@@ -346,8 +326,6 @@ closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What change
 build: [CHANGELOG.md](CHANGELOG.md).
 
 ## The icon
-
-<img src="assets/icon.png" width="96" align="right" alt="The FluxCode icon: a square meander, one ivory hook and one ochre hook locked together, on a near-black tile.">
 
 The mark is a meander: one unbroken line that turns only at right angles and never
 crosses itself. The pattern is named after the river Maeander in western Anatolia (the

@@ -878,7 +878,7 @@ impl Ctx<'_> {
     fn toc(&self, bi: usize) -> AnyElement {
         let mut v = v_flex().mb_4().px_4().py_3().gap_1().rounded(px(8.)).border_1().border_color(c(theme::BORDER)).child(div().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(crate::i18n::tr("Contents")));
         // A contents list is for finding your way: past TOC_MAX entries it says how many more.
-        let wanted: Vec<u32> = self.sh.doc.headings.iter().copied().filter(|&h| matches!(self.sh.doc.blocks[h as usize], Block::Heading(l, _) if l <= 3)).collect();
+        let wanted: Vec<u32> = self.sh.doc.headings.iter().copied().filter(|&h| self.sh.shown(h as usize) && matches!(self.sh.doc.blocks[h as usize], Block::Heading(l, _) if l <= 3)).collect();
         let more = wanted.len().saturating_sub(TOC_MAX);
         for (k, &h) in wanted.iter().take(TOC_MAX).enumerate() {
             let Block::Heading(l, s) = self.sh.doc.blocks[h as usize] else { continue };
