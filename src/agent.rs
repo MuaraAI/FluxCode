@@ -190,6 +190,8 @@ pub struct Change {
     /// Lines added and removed so far (counted when an edit finishes).
     pub added: usize,
     pub removed: usize,
+    /// The counts are known (the edit finished): until then the card shows a dot, not "+0 -0".
+    pub counted: bool,
 }
 
 pub struct AgentState {
@@ -1487,10 +1489,11 @@ impl Workbench {
                 let r = core::write_text(&p, &content, crlf);
                 if r.is_ok() {
                     if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
                     }
                     if let Some(ch) = self.agent.changes.iter_mut().find(|ch| ch.path == p) {
                         (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
+                        ch.counted = true;
                     }
                     self.agent_follow_edit(p.clone());
                     if self.docs.iter().any(|d| d.path == p) {
@@ -1623,8 +1626,8 @@ impl Workbench {
                     .child(self.render_agent_picker(cx))
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
-                    .child(self.render_agent_isolation(cx))
                     .child(self.render_agent_tools(cx))
+                    .child(self.render_agent_more(cx))
                     .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
@@ -1891,29 +1894,6 @@ impl Workbench {
                         })),
                 )
             })
-            .child(
-                Button::new("ag-dock")
-                    .icon(if right { IconName::PanelLeft } else { IconName::PanelRight })
-                    .xsmall()
-                    .ghost()
-                    .tooltip(if right { crate::i18n::tr("Move to the left side bar") } else { crate::i18n::tr("Move to the right side") })
-                    .on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx))),
-            )
-            .child(
-                Button::new("ag-settings-btn")
-                    .icon(Icon::new(gpui_kit::assets::IconName::Settings))
-                    .xsmall()
-                    .ghost()
-                    .selected(self.agent.show_options)
-                    .tooltip(crate::i18n::tr("Agent settings: model, permissions, browser"))
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        if this.agent.show_options {
-                            this.agent_close_options(w, cx);
-                        } else {
-                            this.agent_open_options(w, cx);
-                        }
-                    })),
-            )
     }
 
     fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2015,6 +1995,8 @@ impl Workbench {
             return;
         }
         let cwd = self.agent_cwd();
+        let temp = std::env::temp_dir();
+        let scratch = |p: &Path| p.starts_with(&temp) && !cwd.starts_with(&temp);
         let abs = |p: &str| -> PathBuf {
             let p = PathBuf::from(p);
             if p.is_absolute() { p } else { cwd.join(p) }
@@ -2024,21 +2006,21 @@ impl Workbench {
             if c.get("type").and_then(Value::as_str) != Some("diff") {
                 continue;
             }
-            let Some(p) = c.get("path").and_then(Value::as_str).map(abs) else { continue };
+            let Some(p) = c.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
                 let before = before_edit(std::fs::read_to_string(&p).ok(), c.get("oldText").and_then(Value::as_str), c.get("newText").and_then(Value::as_str).unwrap_or(""));
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
             }
             touched.push(p);
         }
         for l in u.get("locations").and_then(Value::as_array).into_iter().flatten() {
-            let Some(p) = l.get("path").and_then(Value::as_str).map(abs) else { continue };
+            let Some(p) = l.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
                 if done {
                     continue; // too late to know how it looked before
                 }
                 let before = std::fs::read_to_string(&p).ok();
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
+                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
             }
             touched.push(p);
         }
@@ -2062,6 +2044,7 @@ impl Workbench {
             if let Some(ix) = self.agent.changes.iter().position(|ch| ch.path == p) {
                 let ch = &mut self.agent.changes[ix];
                 (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
+                ch.counted = true;
                 // Looked at but not changed: not a change.
                 if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
                     self.agent.changes.remove(ix);
@@ -2082,8 +2065,14 @@ impl Workbench {
         self.agent.changes.retain_mut(|ch| {
             let after = std::fs::read_to_string(&ch.path).ok();
             (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
-            // Read but not changed after all.
-            !(ch.added == 0 && ch.removed == 0 && ch.before.is_some() && after.is_some())
+            ch.counted = true;
+            match (&ch.before, &after) {
+                // Made and removed again (a scratch file): nothing changed.
+                (None, None) => false,
+                // Read but not changed after all.
+                (Some(_), Some(_)) => ch.added > 0 || ch.removed > 0,
+                _ => true,
+            }
         });
     }
 
@@ -3017,7 +3006,11 @@ impl Workbench {
                             .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
                             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
                     )
-                    .child(counts(ch.added, ch.removed))
+                    .child(if ch.counted {
+                        counts(ch.added, ch.removed).into_any_element()
+                    } else {
+                        div().flex_none().text_color(c(theme::FG_DIM)).child("…").into_any_element()
+                    })
                     .child(
                         div()
                             .id(("ag-ch-diff", i))
@@ -3689,8 +3682,8 @@ impl Workbench {
                             .flex_1()
                             .min_w_0()
                             .gap_0p5()
-                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, narrow, cx)))
-                            .when_some(view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1), |h, m| h.child(self.render_mode_menu(m, tight, cx))),
+                            // The mode (ask / accept edits / bypass / plan) is in the header's "more" menu.
+                            .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, narrow, cx))),
                     )
                     .when_some(self.agent_status_line(), |h, (dot, label)| {
                         let tip: SharedString = label.clone().into();
@@ -3984,24 +3977,6 @@ impl Workbench {
     }
 
     /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
-    fn render_mode_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let name = m.current_name().to_string();
-        let tip: SharedString = crate::trf!("Mode: {m}"; m => name).into();
-        let mut label = name;
-        let max = if narrow { 6 } else { 11 };
-        if label.chars().count() > max {
-            label = format!("{}…", label.chars().take(max - 1).collect::<String>());
-        }
-        chip_button("ag-mode-btn", self.agent.menu.open == Some(Menu::Mode), tip)
-            .flex_none()
-            .child(div().whitespace_nowrap().text_color(c(theme::FG_MUTED)).child(label))
-            .child(chevron())
-            .on_click(cx.listener(|this, _, w, cx| {
-                cx.stop_propagation();
-                this.agent_menu_toggle(Menu::Mode, w, cx)
-            }))
-    }
-
     /// What the agent may do without asking: an icon, and its name when there's room.
     /// Full access is the one shown in the warning color, so it is never on unnoticed.
     fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {

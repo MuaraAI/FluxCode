@@ -25,7 +25,6 @@ use std::time::Instant;
 pub enum Menu {
     Agent,
     Model,
-    Mode,
     Access,
 }
 
@@ -296,23 +295,6 @@ impl Workbench {
                     })
                     .collect()
             }
-            Menu::Mode => {
-                let view = self.agent_config_view();
-                let Some(o) = view.iter().find(|o| o.category == "mode") else { return Vec::new() };
-                o.choices
-                    .iter()
-                    .map(|(v, n, d)| Row {
-                        group: SharedString::default(),
-                        lead: Lead::None,
-                        title: n.clone().into(),
-                        sub: d.clone().into(),
-                        wrap: true,
-                        checked: *v == o.current,
-                        trail: Trail::None,
-                        act: Act::Opt(o.id.clone(), v.clone()),
-                    })
-                    .collect()
-            }
             Menu::Access => {
                 let level = self.settings.access().to_string();
                 ACCESS
@@ -449,7 +431,6 @@ impl Workbench {
         let title: SharedString = match m {
             Menu::Agent => tr("Agents").into(),
             Menu::Model => tr("Model").into(),
-            Menu::Mode => tr("Mode").into(),
             Menu::Access => tr("Permissions").into(),
         };
         let bg = gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1]));
@@ -991,8 +972,6 @@ mod tests {
         assert!(searchable(Menu::Model, 2));
         assert!(searchable(Menu::Agent, 1));
         assert!(!searchable(Menu::Access, 3));
-        assert!(!searchable(Menu::Mode, 4));
-        assert!(searchable(Menu::Mode, 12));
         assert_eq!(first_sentence("An agent. It codes."), "An agent");
     }
 }
