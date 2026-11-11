@@ -89,6 +89,7 @@ pub fn took(d: Duration) -> String {
 pub struct Group {
     /// Index of its first item (its key in `open_groups`).
     pub first: usize,
+    pub last: usize,
     pub thoughts: usize,
     pub tools: usize,
     pub running: bool,
@@ -241,7 +242,7 @@ impl Workbench {
 
 impl Workbench {
     pub(crate) fn render_step_group(&self, g: Group, cx: &mut Context<Self>) -> AnyElement {
-        let first = g.first;
+        let (first, last) = (g.first, g.last);
         let mut parts: Vec<String> = Vec::new();
         if g.thoughts > 0 {
             parts.push(if g.thoughts == 1 { tr("1 thought").to_string() } else { crate::trf!("{n} thoughts"; n => g.thoughts) });
@@ -292,6 +293,8 @@ impl Workbench {
                 if !this.agent.open_groups.remove(&first) {
                     this.agent.open_groups.insert(first);
                 }
+                // Its steps appear or fold away.
+                this.agent.remeasure.borrow_mut().push(first..last + 1);
                 cx.notify();
             }))
             .into_any_element()

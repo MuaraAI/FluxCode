@@ -146,6 +146,8 @@ pub struct Chat {
 }
 
 const HISTORY_FILE: &str = "agent-history.json";
+/// How far back a tool's update is looked for (an agent runs a few tools at a time).
+const RECENT: usize = 4096;
 const HISTORY_MAX: usize = 50;
 
 fn now_ms() -> u64 {
@@ -231,7 +233,19 @@ pub struct AgentState {
     pub worktree: Option<worktree::Worktree>,
     pub worktree_busy: bool,
     pub(crate) input: Entity<TextareaState>,
-    scroll: ScrollHandle,
+    /// The chat log as a virtual list: only the messages on screen are laid out, so a
+    /// chat of a million items costs a frame what one of twenty does. It follows the
+    /// newest text (tail mode) until the reader scrolls up, and again once they scroll
+    /// back to the bottom.
+    pub(crate) list: ListState,
+    /// What the list was last told (see `agent_sync_list`).
+    list_seen: std::cell::RefCell<ListSeen>,
+    /// The first item in the list. Older ones are not rendered at all: while the reader
+    /// follows the newest text they leave on their own, and "Show earlier" pages them
+    /// back in, PAGE at a time.
+    view_start: std::cell::Cell<usize>,
+    /// Items whose height changed by a click (a thought or a group opened).
+    remeasure: std::cell::RefCell<Vec<std::ops::Range<usize>>>,
     /// The chat keeps the newest text in view: off once the reader scrolls up, on again
     /// when they scroll back to the bottom or send a message.
     pub(crate) follow: bool,
@@ -488,7 +502,14 @@ impl AgentState {
             worktree: None,
             worktree_busy: false,
             input,
-            scroll: ScrollHandle::new(),
+            list: {
+                let l = ListState::new(0, ListAlignment::Top, px(600.));
+                l.set_follow_mode(FollowMode::Tail);
+                l
+            },
+            list_seen: Default::default(),
+            view_start: Default::default(),
+            remeasure: Default::default(),
             follow: true,
             history: crate::settings::load_json(HISTORY_FILE),
             chat_id: None,
@@ -805,6 +826,8 @@ impl Workbench {
     fn agent_send_edit(&mut self, ix: usize, text: String, cx: &mut Context<Self>) {
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.items.truncate(ix);
+        self.agent.open_thoughts.retain(|k| *k < ix);
+        self.agent.open_groups.retain(|k| *k < ix);
         self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
         self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
         self.agent.queue = vec![Queued { text, files }];
@@ -831,7 +854,7 @@ impl Workbench {
             _ => self.agent_start(cx),
         }
         self.agent.follow = true;
-        self.agent.scroll.scroll_to_bottom();
+        self.agent_to_end();
         cx.notify();
     }
 
@@ -954,7 +977,7 @@ impl Workbench {
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.queue.push(Queued { text, files });
         self.agent.follow = true;
-        self.agent.scroll.scroll_to_bottom();
+        self.agent_to_end();
         match (&self.agent.status, &self.agent.session) {
             (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
             // Still answering: the message waits in the queue (Send now interrupts).
@@ -1287,9 +1310,11 @@ impl Workbench {
             }
             "tool_call" if web::hidden_tool(u) => {}
             "tool_call" if web::is_web(u) => self.agent.items.push(Item::Web(web::Web::new(u))),
-            "tool_call_update" if self.agent.items.iter().any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
+            // Updates go to recent items: the search stops RECENT items back, so a tool
+            // update costs the same in a chat of any length.
+            "tool_call_update" if self.agent.items.iter().rev().take(RECENT).any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
                 let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
-                if let Some(Item::Web(w)) = self.agent.items.iter_mut().rev().find(|i| matches!(i, Item::Web(w) if w.id == id)) {
+                if let Some(Item::Web(w)) = self.agent.items.iter_mut().rev().take(RECENT).find(|i| matches!(i, Item::Web(w) if w.id == id)) {
                     w.take(u);
                 }
             }
@@ -1306,13 +1331,13 @@ impl Workbench {
             }
             "tool_call_update" => {
                 let id = s(u, "toolCallId").unwrap_or_default();
-                let known = self.agent.items.iter().rev().find_map(|i| match i {
+                let known = self.agent.items.iter().rev().take(RECENT).find_map(|i| match i {
                     Item::Tool { id: tid, kind, .. } if *tid == id => Some(kind.clone()),
                     _ => None,
                 });
                 let kind = s(u, "kind").or(known).unwrap_or_default();
                 self.agent_track_edit(u, &kind, s(u, "status").as_deref() == Some("completed"));
-                for item in self.agent.items.iter_mut().rev() {
+                for item in self.agent.items.iter_mut().rev().take(RECENT) {
                     if let Item::Tool { id: tid, title, status, kind } = item {
                         if *tid == id {
                             if let Some(k) = s(u, "kind") {
@@ -1413,7 +1438,7 @@ impl Workbench {
                     self.sidebar_open = true;
                 }
                 self.agent.follow = true;
-                self.agent.scroll.scroll_to_bottom();
+                self.agent_to_end();
                 if self.settings.agent_notify {
                     crate::wintitle::flash_attention();
                 }
@@ -1484,6 +1509,7 @@ impl Workbench {
     fn agent_new_chat(&mut self, cx: &mut Context<Self>) {
         self.agent.save_chat();
         self.agent.items.clear();
+        self.agent_fresh_view();
         self.agent.chat_id = None;
         self.agent.carry = None;
         self.agent.show_history = false;
@@ -1496,10 +1522,21 @@ impl Workbench {
         cx.notify();
     }
 
+    /// A chat starts clean: what was opened, timed or changed belonged to the last one
+    /// (its changes count as kept, as with Keep all).
+    fn agent_fresh_view(&mut self) {
+        self.agent.open_thoughts.clear();
+        self.agent.open_groups.clear();
+        self.agent.times.clear();
+        self.agent.changes.clear();
+        self.agent.changes_folded = false;
+    }
+
     /// Reopen a saved chat. OpenCode can't resume the old session, so the next
     /// message carries the earlier ones as context.
     fn agent_open_chat(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(chat) = self.agent.history.iter().find(|c| c.id == id).cloned() else { return };
+        self.agent_fresh_view();
         if self.agent.chat_id != Some(id) {
             self.agent.save_chat();
         }
@@ -1522,7 +1559,7 @@ impl Workbench {
         self.agent.chat_id = Some(id);
         self.agent.show_history = false;
         self.agent.follow = true;
-        self.agent.scroll.scroll_to_bottom();
+        self.agent_to_end();
         cx.notify();
     }
 
@@ -2869,266 +2906,43 @@ impl Workbench {
             return self.render_uninstall(id, cx);
         }
 
-        let name = agent_name();
-        let mut log = v_flex()
-            .id("ag-log")
-            .size_full()
-            .px_3()
-            .pb_3()
-            .gap_2()
-            .overflow_y_scroll()
-            .track_scroll(&a.scroll)
-            .on_scroll(cx.listener(|this, ev: &ScrollEvent, _, _| {
-                let dy = ev.delta.pixel_delta(px(22.)).y;
-                if dy != px(0.) {
-                    this.agent_scrolled(dy > px(0.));
-                }
-            }));
-        if a.items.is_empty() && !matches!(a.status, Status::Error(_)) {
-            log = log.child(self.render_agent_welcome(on, cx));
-        }
-        if let Status::Error(e) = &a.status {
-            log = log.child(div().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone()));
-        }
-        // The agent's name heads each answer, like a chat: after every user message.
-        let speaker = |who: &str, icon: Icon| {
-            h_flex()
-                .pt_1()
-                .gap_1p5()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(c(theme::FG_MUTED))
-                .child(icon.size(theme::u(13.)))
-                .child(who.to_string())
+        self.agent_sync_list();
+        let error = match &a.status {
+            Status::Error(e) => Some(div().mx_3().mb_2().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone())),
+            _ => None,
         };
-        let mut after_user = true;
-        // Runs of two or more steps (thoughts and tools) in a row: (first, last).
-        let mut runs: Vec<(usize, usize)> = Vec::new();
-        for (i, item) in a.items.iter().enumerate() {
-            if !is_step(Some(item)) {
-                continue;
-            }
-            match runs.last_mut() {
-                Some(r) if r.1 + 1 == i => r.1 = i,
-                _ => runs.push((i, i)),
-            }
-        }
-        runs.retain(|r| r.1 > r.0);
-        let run_of = |i: usize| runs.iter().copied().find(|r| r.0 <= i && i <= r.1);
-        let busy = a.status == Status::Busy;
-        // The group header sits above the first step of a group, so the rail joins them.
-        let joined_up = |i: usize| is_step(i.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(i).is_some_and(|r| r.0 == i);
-        for (i, item) in a.items.iter().enumerate() {
-            if matches!(item, Item::Branch(_)) {
-                after_user = true;
-            }
-            let starts_answer = after_user && !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
-            if starts_answer {
-                log = log.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
-                after_user = false;
-            }
-            if let Some((first, last)) = run_of(i) {
-                let open = a.open_groups.contains(&first);
-                // While the agent works on the last group, its newest step stays in view.
-                let live_tail = busy && last + 1 == a.items.len();
-                if i == first {
-                    let members = &a.items[first..=last];
-                    let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
-                    let tools = members.len() - thoughts;
-                    let total: std::time::Duration = (first..=last)
-                        .filter_map(|k| {
-                            let key = match &a.items[k] {
-                                Item::Tool { id, .. } => id.clone(),
-                                _ => format!("think-{k}"),
-                            };
-                            a.times.get(&key).and_then(|t| t.1)
-                        })
-                        .sum();
-                    log = log.child(self.render_step_group(activity::Group {
-                        first,
-                        thoughts,
-                        tools,
-                        running: live_tail,
-                        open,
-                        total: (!total.is_zero()).then_some(total),
-                        joined_down: open || live_tail,
-                    }, cx));
-                }
-                if !open && !(live_tail && i == last) {
-                    continue;
-                }
-            }
-            log = log.child(match item {
-                Item::User(t) => {
-                    after_user = true;
-                    let group = SharedString::from(format!("ag-user-{i}"));
-                    let editing = a.editing == Some(i);
-                    v_flex()
-                        .items_end()
-                        .gap_1()
-                        .pt_1()
-                        .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User)))
-                        .child(
-                            h_flex()
-                                .group(group.clone())
-                                .w_full()
-                                .justify_end()
-                                .items_center()
-                                .gap_1()
-                                // Edit sits left of the bubble, dim until pointed at.
-                                .child(
-                                    div()
-                                        .id(("ag-edit", i))
-                                        .flex_none()
-                                        .size(theme::u(22.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(4.))
-                                        .cursor_pointer()
-                                        .text_color(c(theme::FG_DIM))
-                                        .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
-                                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
-                                        .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
-                                        .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
-                                )
-                                .child(
-                            div()
-                                .max_w(relative(0.88))
-                                .px_2p5()
-                                .py_1p5()
-                                .rounded(px(8.))
-                                .bg(c(theme::BG_ELEVATED))
-                                .border_1()
-                                .border_color(c(theme::BORDER_STRONG))
-                                .text_sm()
-                                .text_color(c(theme::FG_STRONG))
-                                .child(t.clone()),
-                                ),
-                        )
-                        .into_any_element()
-                }
-                Item::Text(t) => TextView::markdown(("ag-md", i), tidy::answer(t).into_owned())
-                    .text_sm()
-                    .style(chat_text_style())
-                    .code_block_actions(|block, _, _| {
-                        let (copy, insert) = (block.code().to_string(), block.code().to_string());
-                        // A solid strip so the buttons never sit on top of the code.
-                        h_flex()
-                            .gap_px()
-                            .p_px()
-                            .rounded(px(4.))
-                            .bg(c(theme::BG_ELEVATED))
-                            .border_1()
-                            .border_color(c(theme::BORDER))
-                            .child(
-                                Button::new("cb-copy")
-                                    .icon(IconName::Copy)
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(tr("Copy"))
-                                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
-                            )
-                            .child(
-                                Button::new("cb-insert")
-                                    .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
-                                    .on_click(move |_, w, cx| {
-                                        if let Ok(mut p) = PENDING_INSERT.lock() {
-                                            *p = Some(insert.clone());
-                                        }
-                                        w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
-                                    }),
-                            )
-                    })
-                    .into_any_element(),
-                Item::Thought(t) => {
-                    let open = a.open_thoughts.contains(&i);
-                    let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
-                    let step = activity::Step {
-                        key: format!("think-{i}"),
-                        kind: "think",
-                        title: "",
-                        status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
-                        joined_up: joined_up(i),
-                        joined_down: is_step(a.items.get(i + 1)),
-                        live: a.status == Status::Busy,
-                        note: (!open).then_some(last),
-                        open,
-                        detail: open.then(|| tidy::thought(t)),
-                    };
-                    let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
-                        if !this.agent.open_thoughts.remove(&i) {
-                            this.agent.open_thoughts.insert(i);
-                        }
-                        cx.notify();
-                    });
-                    self.render_step(step, Some(toggle), cx)
-                }
-                Item::Branch(t) => h_flex()
-                    .py_1()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
-                    .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
-                    .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
-                    .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
-                    .into_any_element(),
-                Item::Web(w) => self.render_web_item(i, w, cx),
-                Item::Tool { id, title, status, kind } => self.render_step(
-                    activity::Step {
-                        key: id.clone(),
-                        kind,
-                        title,
-                        status,
-                        joined_up: joined_up(i),
-                        joined_down: is_step(a.items.get(i + 1)),
-                        live: a.status == Status::Busy,
-                        note: None,
-                        open: false,
-                        detail: None,
-                    },
-                    None,
-                    cx,
-                ),
-                Item::Plan(entries) => v_flex()
-                    .gap_1()
-                    .p_2()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(c(theme::BORDER))
-                    .text_xs()
-                    .children(entries.iter().map(|(t, st)| {
-                        let (icon, col) = match st.as_str() {
-                            "completed" => (IconName::CircleCheck, theme::GREEN),
-                            "in_progress" => (IconName::LoaderCircle, theme::BLUE),
-                            _ => (IconName::Dash, theme::FG_DIM),
-                        };
-                        h_flex()
-                            .gap_1p5()
-                            .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
-                            .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
-                    }))
-                    .into_any_element(),
-                // Notes: the icon sits in a box one text line tall, so it centers on the first line.
-                Item::Note(t, err) => h_flex()
-                    .items_start()
-                    .gap_1p5()
-                    .text_xs()
-                    .line_height(theme::u(18.))
-                    .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
-                    .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
-                    .child(div().flex_1().min_w_0().child(t.clone()))
-                    .into_any_element(),
-            });
-        }
-
+        let log: AnyElement = if a.items.is_empty() {
+            v_flex()
+                .id("ag-log")
+                .size_full()
+                .px_3()
+                .pb_3()
+                .overflow_y_scroll()
+                .children(error.is_none().then(|| self.render_agent_welcome(on, cx)))
+                .children(error)
+                .into_any_element()
+        } else {
+            v_flex()
+                .size_full()
+                .children(error)
+                .child(
+                    list(
+                        a.list.clone(),
+                        cx.processor(|this, ix: usize, window, cx| {
+                            let start = this.agent.view_start.get();
+                            match (start > 0, ix) {
+                                (true, 0) => this.render_agent_pager(start, cx),
+                                (pager, _) => this.render_agent_item(start + ix - pager as usize, window, cx),
+                            }
+                        }),
+                    )
+                    .flex_1()
+                    .min_h_0(),
+                )
+                .into_any_element()
+        };
         let permission = a.permission.as_ref().map(|p| self.render_permission(p, cx));
-
+        
         // What the agent changed this turn, like a worktree: each file with its
         // lines added / removed, a diff, and undo.
         let folded = a.changes_folded;
@@ -3266,8 +3080,7 @@ impl Workbench {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .child(log)
-                    .child(self.smooth_scroll_layer(crate::workbench::ScrollTarget::Handle(CHAT_SCROLL_KEY, a.scroll.clone()), cx)),
+                    .child(log),
             )
             .children(self.render_agent_ask(cx))
             .when_some(permission, |v, p| v.child(p))
@@ -3278,6 +3091,240 @@ impl Workbench {
             .children(self.render_mention_popup(cx))
             .child(self.render_composer(window, cx))
             .into_any_element()
+    }
+
+
+    /// One chat item, for the virtual list: the speaker line when an answer starts, the
+    /// group line above a run of steps, then the item (or nothing, folded in a group).
+    fn render_agent_item(&mut self, i: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let a = &self.agent;
+        let Some(item) = a.items.get(i) else { return div().into_any_element() };
+        let name = agent_name();
+        let speaker = |who: &str, icon: Icon| {
+            h_flex()
+                .pt_1()
+                .gap_1p5()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(icon.size(theme::u(13.)))
+                .child(who.to_string())
+        };
+        let busy = a.status == Status::Busy;
+        let run_of = |k: usize| self.agent_run_of(k);
+        // The group header sits above the first step of a group, so the rail joins them.
+        let joined_up = |k: usize| is_step(k.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(k).is_some_and(|r| r.0 == k);
+        let last_item = i + 1 == a.items.len();
+        // Rows get the list's width: relative widths inside (the user bubble) are of the panel.
+        let mut col = v_flex().w_full().min_w_0().px_3().pt_2().when(last_item, |v| v.pb_3());
+        // An answer starts after the user's message (or a branch), notes aside.
+        let answer = !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
+        let prev = a.items[..i].iter().rev().find(|x| !matches!(x, Item::Note(..)));
+        if answer && matches!(prev, None | Some(Item::User(_) | Item::Branch(_))) {
+            col = col.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
+        }
+        let top = a.view_start.get();
+        if let Some((first, last)) = run_of(i) {
+            let head = first.max(top);
+            let open = a.open_groups.contains(&first);
+            // While the agent works on the last group, its newest step stays in view.
+            let live_tail = busy && last + 1 == a.items.len();
+            if i == head {
+                let members = &a.items[first..=last];
+                let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
+                let tools = members.len() - thoughts;
+                let total: std::time::Duration = (first..=last)
+                    .filter_map(|k| {
+                        let key = match &a.items[k] {
+                            Item::Tool { id, .. } => id.clone(),
+                            _ => format!("think-{k}"),
+                        };
+                        a.times.get(&key).and_then(|t| t.1)
+                    })
+                    .sum();
+                col = col.child(self.render_step_group(activity::Group {
+                    first,
+                    last,
+                    thoughts,
+                    tools,
+                    running: live_tail,
+                    open,
+                    total: (!total.is_zero()).then_some(total),
+                    joined_down: open || live_tail,
+                }, cx));
+            }
+            if !open && !(live_tail && i == last) {
+                return if i == head { col.into_any_element() } else { div().into_any_element() };
+            }
+        }
+    col.child(match item {
+            Item::User(t) => {
+                let group = SharedString::from(format!("ag-user-{i}"));
+                let editing = a.editing == Some(i);
+                v_flex()
+                    .items_end()
+                    .gap_1()
+                    .pt_1()
+                    .child(speaker(crate::i18n::tr("You"), Icon::new(IconName::User)))
+                    .child(
+                        h_flex()
+                            .group(group.clone())
+                            .w_full()
+                            .justify_end()
+                            .items_center()
+                            .gap_1()
+                            // Edit sits left of the bubble, dim until pointed at.
+                            .child(
+                                div()
+                                    .id(("ag-edit", i))
+                                    .flex_none()
+                                    .size(theme::u(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .text_color(c(theme::FG_DIM))
+                                    .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
+                                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
+                                    .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
+                                    .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
+                            )
+                            .child(
+                        div()
+                            .max_w(relative(0.88))
+                            .px_2p5()
+                            .py_1p5()
+                            .rounded(px(8.))
+                            .bg(c(theme::BG_ELEVATED))
+                            .border_1()
+                            .border_color(c(theme::BORDER_STRONG))
+                            .text_sm()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(t.clone()),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            Item::Text(t) => TextView::markdown(("ag-md", i), tidy::answer(t).into_owned())
+                .text_sm()
+                .style(chat_text_style())
+                .code_block_actions(|block, _, _| {
+                    let (copy, insert) = (block.code().to_string(), block.code().to_string());
+                    // A solid strip so the buttons never sit on top of the code.
+                    h_flex()
+                        .gap_px()
+                        .p_px()
+                        .rounded(px(4.))
+                        .bg(c(theme::BG_ELEVATED))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .child(
+                            Button::new("cb-copy")
+                                .icon(IconName::Copy)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Copy"))
+                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                        )
+                        .child(
+                            Button::new("cb-insert")
+                                .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
+                                .on_click(move |_, w, cx| {
+                                    if let Ok(mut p) = PENDING_INSERT.lock() {
+                                        *p = Some(insert.clone());
+                                    }
+                                    w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
+                                }),
+                        )
+                })
+                .into_any_element(),
+            Item::Thought(t) => {
+                let open = a.open_thoughts.contains(&i);
+                let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+                let step = activity::Step {
+                    key: format!("think-{i}"),
+                    kind: "think",
+                    title: "",
+                    status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
+                    joined_up: joined_up(i),
+                    joined_down: is_step(a.items.get(i + 1)),
+                    live: a.status == Status::Busy,
+                    note: (!open).then_some(last),
+                    open,
+                    detail: open.then(|| tidy::thought(t)),
+                };
+                let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
+                    if !this.agent.open_thoughts.remove(&i) {
+                        this.agent.open_thoughts.insert(i);
+                    }
+                    this.agent.remeasure.borrow_mut().push(i..i + 1);
+                    cx.notify();
+                });
+                self.render_step(step, Some(toggle), cx)
+            }
+            Item::Branch(t) => h_flex()
+                .py_1()
+                .gap_2()
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
+                .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
+                .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
+                .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
+                .into_any_element(),
+            Item::Web(w) => self.render_web_item(i, w, cx),
+            Item::Tool { id, title, status, kind } => self.render_step(
+                activity::Step {
+                    key: id.clone(),
+                    kind,
+                    title,
+                    status,
+                    joined_up: joined_up(i),
+                    joined_down: is_step(a.items.get(i + 1)),
+                    live: a.status == Status::Busy,
+                    note: None,
+                    open: false,
+                    detail: None,
+                },
+                None,
+                cx,
+            ),
+            Item::Plan(entries) => v_flex()
+                .gap_1()
+                .p_2()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(c(theme::BORDER))
+                .text_xs()
+                .children(entries.iter().map(|(t, st)| {
+                    let (icon, col) = match st.as_str() {
+                        "completed" => (IconName::CircleCheck, theme::GREEN),
+                        "in_progress" => (IconName::LoaderCircle, theme::BLUE),
+                        _ => (IconName::Dash, theme::FG_DIM),
+                    };
+                    h_flex()
+                        .gap_1p5()
+                        .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
+                        .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
+                }))
+                .into_any_element(),
+            // Notes: the icon sits in a box one text line tall, so it centers on the first line.
+            Item::Note(t, err) => h_flex()
+                .items_start()
+                .gap_1p5()
+                .text_xs()
+                .line_height(theme::u(18.))
+                .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
+                .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
+                .child(div().flex_1().min_w_0().child(t.clone()))
+                .into_any_element(),
+        })
+    .into_any_element()
     }
 
     /// Add files to the next message (button, drop or paste). Folders become @mentions.
@@ -4251,25 +4298,199 @@ fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
 }
 
 impl Workbench {
-    /// Keep the newest text in view only while the reader follows it. Once they scroll
-    /// up the view stays where they put it, however much the answer grows. A wheel glide
-    /// decides for itself: one heading for the bottom tracks it as the answer grows.
-    fn agent_follow(&self) {
-        if self.agent.follow && !self.smooth_running(CHAT_SCROLL_KEY) {
-            self.agent.scroll.scroll_to_bottom();
-        }
+    /// The list follows the newest text by itself (tail mode) while the reader is at the
+    /// bottom; nothing to do per update.
+    fn agent_follow(&self) {}
+
+    /// Jump to the newest message and follow it again (a message was sent).
+    pub(crate) fn agent_to_end(&self) {
+        self.agent.list.set_follow_mode(FollowMode::Tail);
+        self.agent.list.scroll_to_end();
     }
 
-    /// A touchpad scroll of the chat (wheel notches go through the glide): up leaves the
-    /// bottom, down to within a line of it follows again.
-    pub(crate) fn agent_scrolled(&mut self, up: bool) {
-        if up {
-            self.agent.follow = false;
-        } else {
-            let h = &self.agent.scroll;
-            self.agent.follow = h.max_offset().y + h.offset().y <= px(24.);
+    /// Tell the list what changed since the last frame. Streaming only ever changes the
+    /// last few items, so only those are compared (by size, not by content); a chat that
+    /// was replaced or cut short starts over. Costs the same for any length of chat.
+    fn agent_sync_list(&self) {
+        let a = &self.agent;
+        let items = &a.items;
+        let n = items.len();
+        let busy = a.status == Status::Busy;
+        let mut seen = a.list_seen.borrow_mut();
+        let ptr = items.as_ptr() as usize;
+        const TAIL: usize = 16;
+        let tail: Vec<u64> = items[n.saturating_sub(TAIL)..].iter().map(item_size_sig).collect();
+        let replaced = n < seen.len || (ptr != seen.ptr && seen.len > 0 && n > 0 && items.first().map(item_size_sig) != Some(seen.first));
+        // The window: a chat opened (or cut short) shows its newest items; while the
+        // reader follows the bottom, the oldest leave once PAGE more have come in.
+        let mut start = a.view_start.get().min(n);
+        if replaced || seen.len == 0 {
+            start = n.saturating_sub(WINDOW);
+        } else if a.list.is_following_tail() && n - start > WINDOW + PAGE {
+            start = n - WINDOW;
         }
+        a.view_start.set(start);
+        let pager = (start > 0) as usize;
+        let row = |abs: usize| abs.saturating_sub(start) + pager;
+        let rows = n - start + pager;
+        let mut from = usize::MAX;
+        if replaced || start != seen.start || seen.len == 0 {
+            a.list.reset(rows);
+            if replaced {
+                seen.run_start.clear();
+                seen.run_end.clear();
+                from = 0;
+            } else {
+                from = seen.len.saturating_sub(2);
+            }
+            if start < seen.start && !replaced {
+                // Paged back: the item that was on top stays where the reader had it.
+                a.list.scroll_to(ListOffset { item_ix: row(seen.start), offset_in_item: px(0.) });
+            } else if a.list.is_following_tail() || replaced {
+                a.list.scroll_to_end();
+            }
+        } else {
+            if n > seen.len {
+                let old_rows = row(seen.len);
+                a.list.splice(old_rows..old_rows, n - seen.len);
+                // The old last item(s) lose the bottom padding or fold into a group.
+                from = seen.len.saturating_sub(2);
+            }
+            // The first of the last items whose size changed.
+            let base = n.saturating_sub(TAIL);
+            for (k, sig) in tail.iter().enumerate() {
+                let ix = base + k;
+                let old = ix.checked_sub(seen.len.saturating_sub(seen.tail.len())).and_then(|o| seen.tail.get(o));
+                if ix < seen.len && old != Some(sig) {
+                    from = from.min(ix);
+                    break;
+                }
+            }
+            // Working / done changes what the last group shows.
+            if busy != seen.busy {
+                from = from.min(n.saturating_sub(TAIL));
+            }
+            let upto = seen.len.min(n);
+            if from < upto {
+                a.list.remeasure_items(row(from.max(start))..row(upto));
+            }
+            for r in a.remeasure.borrow_mut().drain(..) {
+                let (lo, hi) = (r.start.max(start).min(n), r.end.min(n));
+                if lo < hi {
+                    a.list.remeasure_items(row(lo)..row(hi));
+                }
+            }
+        }
+        a.remeasure.borrow_mut().clear();
+        // Step runs, kept up to date from the first changed item only.
+        let from = from.min(seen.run_start.len()).min(n);
+        seen.run_start.truncate(from);
+        seen.run_end.retain(|&f, _| f < from);
+        if let Some(&f) = from.checked_sub(1).and_then(|k| seen.run_start.get(k)).filter(|f| **f != usize::MAX) {
+            seen.run_end.insert(f, from - 1);
+        }
+        for i in from..n {
+            let first = if !is_step(items.get(i)) {
+                usize::MAX
+            } else if i > 0 && is_step(items.get(i - 1)) {
+                seen.run_start[i - 1]
+            } else {
+                i
+            };
+            seen.run_start.push(first);
+            if first != usize::MAX {
+                seen.run_end.insert(first, i);
+            }
+        }
+        seen.len = n;
+        seen.start = start;
+        seen.ptr = ptr;
+        seen.first = items.first().map(item_size_sig).unwrap_or(0);
+        seen.tail = tail;
+        seen.busy = busy;
     }
+
+    /// The row above the window: how many earlier items are not shown, and a button that
+    /// brings back PAGE more (the reader stays where they were).
+    fn render_agent_pager(&mut self, start: usize, cx: &mut Context<Self>) -> AnyElement {
+        let more = start.min(PAGE);
+        h_flex()
+            .w_full()
+            .px_3()
+            .pt_2()
+            .justify_center()
+            .child(
+                h_flex()
+                    .id("ag-pager")
+                    .px_3()
+                    .h(theme::u(26.))
+                    .gap_1p5()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .child(Icon::new(IconName::ChevronUp).size(theme::u(12.)))
+                    .child(crate::trf!("Show {n} earlier"; n => more))
+                    .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("· {n} hidden"; n => start)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // Reading back: stop following the newest text until the reader
+                        // returns to the bottom.
+                        this.agent.list.pause_following_tail();
+                        this.agent.view_start.set(this.agent.view_start.get().saturating_sub(PAGE));
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// The run of two or more steps `i` belongs to: (first, last).
+    fn agent_run_of(&self, i: usize) -> Option<(usize, usize)> {
+        let seen = self.agent.list_seen.borrow();
+        let f = *seen.run_start.get(i)?;
+        let l = *seen.run_end.get(&f)?;
+        (f != usize::MAX && l > f).then_some((f, l))
+    }
+}
+
+/// Items in the list while the reader follows the newest text, and how many more come
+/// in before the oldest leave (and each "Show earlier" step).
+const WINDOW: usize = 40;
+const PAGE: usize = 20;
+
+/// What the virtual list was told last frame.
+#[derive(Default)]
+pub(crate) struct ListSeen {
+    len: usize,
+    /// The window's first item.
+    start: usize,
+    ptr: usize,
+    first: u64,
+    busy: bool,
+    /// Size signatures of the last items.
+    tail: Vec<u64>,
+    /// For each item, the first item of its step run (usize::MAX: not a step); and each
+    /// run's last item, by its first.
+    run_start: Vec<usize>,
+    run_end: HashMap<usize, usize>,
+}
+
+/// Changes when an item's height can: its kind and the lengths of what it shows.
+fn item_size_sig(item: &Item) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(item).hash(&mut h);
+    match item {
+        Item::User(t) | Item::Text(t) | Item::Thought(t) | Item::Branch(t) => t.len().hash(&mut h),
+        Item::Note(t, e) => (t.len(), *e).hash(&mut h),
+        Item::Tool { title, status, kind, .. } => (title.len(), status, kind).hash(&mut h),
+        Item::Plan(e) => (e.len(), e.iter().filter(|x| x.1 == "completed").count()).hash(&mut h),
+        Item::Web(w) => (w.results.len(), &w.status, w.query.len()).hash(&mut h),
+    }
+    h.finish()
 }
 
 /// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
