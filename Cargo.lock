@@ -1888,6 +1888,8 @@ dependencies = [
  "getrandom 0.2.17",
  "gpui-kit",
  "gpui-webview",
+ "hex",
+ "hmac",
  "image",
  "lb-wry",
  "lsp-types",
@@ -1896,7 +1898,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1_smol",
+ "sha2 0.10.9",
  "socket2",
+ "uuid",
 ]
 
 [[package]]

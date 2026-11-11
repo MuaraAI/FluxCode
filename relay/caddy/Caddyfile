@@ -1,0 +1,31 @@
+# Servis halaman informasi FluxCode Live Share.
+#
+# Relay TCP-nya sendiri jalan di port 7835 dan 20000-20049 dan tidak lewat HTTP
+# sama sekali. Halaman ini hanya penanda identitas: raw TCP tidak punya konsep
+# path, jadi /fluxcode hanya bisa hidup di HTTP.
+#
+# DNS live.muaraai.com harus DNS-only (grey cloud). Kalau di-proxy Cloudflare,
+# port 7835 dan 20000-an tidak akan diteruskan sama sekali.
+
+{$FLUXCODE_RELAY_HOST:live.muaraai.com} {
+	root * /var/www/fluxcode-relay
+
+	redir / /fluxcode 302
+
+	handle /fluxcode* {
+		rewrite * /index.html
+		file_server
+	}
+
+	handle {
+		file_server
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	header /fluxcode* Cache-Control "public, max-age=300"
+}

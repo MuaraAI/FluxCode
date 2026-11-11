@@ -147,7 +147,7 @@ impl Workbench {
                             .flex_1()
                             .min_w_0()
                             .child(div().text_color(c(theme::FG)).child(tr("Allow joining over the internet")))
-                            .child(meta(if on { tr("Through your router, or an encrypted relay.") } else { tr("Only people on your network can join.") }.into())),
+                            .child(meta(if on { tr("Through your router, our relay, or a public one if ours is down. Only encrypted bytes pass through. No VPN, no server of your own.") } else { tr("Only people on your network can join.") }.into())),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.collab.internet = !this.collab.internet;
@@ -314,6 +314,10 @@ impl Workbench {
             None => reach::State::No(tr("No network connection.").into()),
         };
         let open = [&lan, &reach.upnp, &reach.ipv6, &reach.relay].iter().filter(|s| matches!(s, reach::State::Ready(_))).count();
+        // The public relay is not ours, so calling it MuaraAI would be a lie the
+        // moment our own relay is off.
+        let on_public = matches!(&reach.relay, reach::State::Ready(a) if !reach::is_primary_relay(a));
+        let relay_name = if on_public { tr("Relay (public)") } else { tr("Relay (MuaraAI)") };
         let full = co.ways_open;
         let toggle = Button::new("co-ways-more")
             .label(if full { tr("Less") } else { tr("Details") })
@@ -335,7 +339,7 @@ impl Workbench {
                     .when(!local, |v| {
                         v.child(way_row(1, tr("Router port (UPnP)"), &reach.upnp, None, full))
                             .child(way_row(2, tr("Public IPv6"), &reach.ipv6, Some(tr("For guests with IPv6, when your router lets connections in.")), full))
-                            .child(way_row(3, tr("Relay (bore.pub)"), &reach.relay, Some(tr("Works from any network.")), full))
+                            .child(way_row(3, relay_name, &reach.relay, Some(tr("Works from any network.")), full))
                     })
                     .when(local, |v| {
                         v.child(
@@ -364,7 +368,8 @@ impl Workbench {
     fn connection_card(&self, addr: &str) -> AnyElement {
         let (icon, via): (IconName, SharedString) = match super::path_kind(addr) {
             super::Via::Lan => (IconName::House, tr("Straight to the host over your network, encrypted.").into()),
-            super::Via::Relay => (IconName::RadioTower, tr("Through the bore.pub relay, encrypted end to end: the relay can't read it.").into()),
+            super::Via::Relay => (IconName::RadioTower, tr("Through the MuaraAI relay, encrypted end to end: the relay can't read it.").into()),
+            super::Via::RelayPublic => (IconName::RadioTower, tr("Through the public relay, encrypted end to end: the relay can't read it.").into()),
             super::Via::Internet => (IconName::Globe, tr("Straight to the host over the internet, encrypted.").into()),
         };
         let root = self.collab.root.as_ref().map(|r| r.display().to_string()).unwrap_or_default();

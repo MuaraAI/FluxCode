@@ -85,23 +85,6 @@ Opened in FluxCode (release build, fresh profile, three runs each):
 
 Paragraphs, headings and lists are written as in Markdown.
 
-```flux
-# A heading
-## A smaller one
-
-A paragraph can run over several lines.
-A blank line ends it.
-
-- a list item
-  - nested two spaces in
-- [x] a done task
-1. a numbered item
-
-> A quote.
-
----
-```
-
 Inline: **bold** `**bold**`, *italic* `*italic*`, `code` with backquotes, ~~struck~~
 `~~struck~~`, **highlighted** `==highlighted==`, [a link](https://github.com/MuaraAI/FluxCode)
 `[a link](url)` (a bare `https://...` is a link too), a key <kbd>Ctrl+Shift+P</kbd>
@@ -114,40 +97,13 @@ Lines starting with `//` are comments: they never show.
 
 A pipe table works as on GitHub; the line under the header sets the alignment.
 
-```flux
-| Editor | Start | Memory |
-| :--- | ---: | :---: |
-| FluxCode | 0.22 s | 1.4 MB |
-```
-
 `@table` needs no pipes at the ends and takes options:
-
-```flux
-@table align=l,r,r widths=3,1,1
-Editor | Start | Memory
-FluxCode | 0.22 s | 1.4 MB
-Zed | 0.82 s | 66 MB
-@end
-```
-
-| Editor | Start | Memory |
-| --- | ---: | ---: |
-| FluxCode | 0.22 s | 1.4 MB |
-| Zed | 0.82 s | 66 MB |
-| VS Code | 0.29 s | 929 MB |
 
 `align=` takes `l`, `c` or `r` per column, `widths=` relative widths, and
 `header=none` makes the first row an ordinary one. A table can have any number of rows:
 FluxCode draws only those on screen.
 
 ## Images, GIFs and video
-
-```flux
-@image assets/icon.png width=96 alt="The FluxCode icon"
-@image chart-light.svg dark=chart-dark.svg width=100% alt="A chart"
-@image demo.gif width=60% caption="A GIF plays as it is" link=demo.gif
-@video intro.mp4 poster=intro.png alt="A one-minute tour"
-```
 
 - `width=` in pixels or as a share of the page (`60%`); `align=right` floats it right.
 - `dark=` is shown instead when the theme is dark (on GitHub too, through `<picture>`).
@@ -158,44 +114,9 @@ FluxCode draws only those on screen.
   player (FluxCode has no video decoder, which keeps it at 16 MB). On GitHub it is the
   poster linked to the video.
 
-<img src="../assets/icon.png" width="96" alt="The FluxCode icon: a square meander, one ivory hook and one ochre hook locked together, on a near-black tile.">
-
 Two or more images side by side:
 
-```flux
-@gallery
-@image before.png width=49% alt="Before"
-@image after.png width=49% alt="After"
-@end
-```
-
 ## Flowcharts
-
-```flux
-@flow down
-src([README.flux]) -> read[FluxCode reads it]
-read -> view{Where?}
-view -in FluxCode-> draw[Drawn, only what is on screen]
-view -on GitHub-> md[README.md, flowcharts as Mermaid]
-md ..> src
-style src fill=#3a2f22 text=#f2e6d0 border=#d0a070
-@end
-```
-
-```mermaid
-flowchart TD
-    src(["README.flux"])
-    read["FluxCode reads it"]
-    view{"Where?"}
-    draw["Drawn, only what is on screen"]
-    md["README.md, flowcharts as Mermaid"]
-    src --> read
-    read --> view
-    view -->|in FluxCode| draw
-    view -->|on GitHub| md
-    md -.-> src
-    style src fill:#3a2f22,color:#f2e6d0,stroke:#d0a070
-```
 
 - Nodes: `id[Box]`, `id(Rounded)`, `id([Pill])`, `id{Decision}`, `id((Circle))`. A node
   is declared the first time it has a label; after that its id is enough.
@@ -207,22 +128,6 @@ flowchart TD
   the side. On GitHub it becomes a Mermaid flowchart, which GitHub draws.
 
 ## Callouts, details and columns
-
-```flux
-@tip Keep it short
-One idea per callout.
-@end
-
-@details What happens on GitHub
-A collapsed section, opened with a click.
-@end
-
-@columns
-Left column.
-@col
-Right column.
-@end
-```
 
 > [!TIP]
 > **Keep it short**
@@ -280,6 +185,10 @@ fluxcode --flux-to-md README.flux README.md --check
 The second line changes nothing and fails when `README.md` is out of date; FluxCode's
 tests run the same check, so the two can't drift apart. In FluxCode, **Save as Markdown**
 above a Flux document does the same for the file you have open.
+
+Add `--lang id` to write the Indonesian sections instead (FluxCode's own README ships as
+`README.md` and `README.id.md`). English is the default, because that is what a first-time
+reader on GitHub needs.
 
 > [!WARNING]
 > **The .flux name on GitHub**

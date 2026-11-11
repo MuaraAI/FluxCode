@@ -93,6 +93,21 @@ impl Op {
         }).sum()
     }
 
+    /// Bytes this operation inserts or deletes. A paste of a megabyte and a single
+    /// keystroke are not the same amount of work: the host clones the text, applies
+    /// the edit, and rebroadcasts it to every peer. Bytes rather than characters,
+    /// because the frame is byte-bounded and JSON escaping is not free either.
+    pub fn changed_bytes(&self) -> usize {
+        self.comps
+            .iter()
+            .map(|c| match c {
+                Comp::Retain(_) => 0,
+                Comp::Insert(s) => s.len(),
+                Comp::Delete(n) => *n,
+            })
+            .sum()
+    }
+
     /// Keeps everything: changes nothing.
     #[cfg(test)]
     pub fn is_noop(&self) -> bool {

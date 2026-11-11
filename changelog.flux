@@ -11,6 +11,38 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-11
+@title en: Our own Live Share relay, and a README in two languages
+@title id: Relay Live Share sendiri, dan README dalam dua bahasa
+@en
+**Live Share** now goes through MuaraAI's own relay at `live.muaraai.com` before it falls
+back to the free public one. The panel says which is in use: **Relay (MuaraAI)** when it is
+ours, **Relay (public)** when the fallback carries the session. Ours is faster and has a
+bandwidth ceiling, so it stops rather than runs up a bill.
+
+Shared sessions now refuse to send what should never leave a PC: environment files,
+private keys, `credentials*`, `.envrc`, and build folders like `node_modules`, `target`
+and `.git`, even when a guest asks for one by name on Windows paths that try to escape the
+shared folder.
+
+The **README** and the Flux guide come in English and Indonesian (`README.id.md`,
+`docs/flux.id.md`), with English first because that is what a first-time reader needs.
+The README link at the top switches between them.
+@id
+**Live Share** sekarang lewat relay milik MuaraAI di `live.muaraai.com` sebelum beralih
+ke relay publik gratis. Panelnya menunjukkan mana yang dipakai: **Relay MuaraAI** saat
+memakai milik kita, **Relay publik** saat cadangannya yang membawa sesi. Yang punya kita
+lebih cepat dan punya batas bandwidth, jadi ia berhenti alih-alih menagih.
+
+Sesi berbagi sekarang menolak mengirim hal yang tidak boleh keluar dari PC: file
+environment, kunci privat, `credentials*`, `.envrc`, dan folder build seperti
+`node_modules`, `target`, serta `.git`, bahkan saat tamu memintanya dengan nama yang tepat
+lewat path Windows yang mencoba keluar dari folder berbagi.
+
+**README** dan panduan Flux tersedia dalam bahasa Inggris dan Indonesia (`README.id.md`,
+`docs/flux.id.md`), dengan bahasa Inggris lebih dulu karena itu yang dibutuhkan pembaca
+pertama kali. Tautan di atas README berpindah antara keduanya.
+
+@release 2026-11-11
 @title en: The agent asks before it acts
 @title id: Agent bertanya sebelum bertindak
 @en

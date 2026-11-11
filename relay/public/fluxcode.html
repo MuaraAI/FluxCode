@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FluxCode Live Share Relay</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #17181c; color: #e6e7ea;
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 34rem; padding: 2rem 1.5rem; }
+  h1 { margin: 0 0 .25rem; font-size: 1.4rem; font-weight: 600; letter-spacing: -.01em; }
+  .sub { margin: 0 0 1.75rem; color: #9a9ca3; }
+  dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: .5rem 1rem; margin: 0 0 1.75rem; }
+  dt { color: #9a9ca3; }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  code { font: 13px/1.5 ui-monospace, "JetBrains Mono", monospace; color: #cfd2d8; }
+  p { margin: 0 0 .75rem; }
+  footer { color: #74767d; font-size: 13px; border-top: 1px solid #2a2c32; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>FluxCode Live Share Relay</h1>
+  <p class="sub">The shared relay behind Live Share in FluxCode.</p>
+
+  <dl>
+    <dt>Control</dt><dd><code>live.muaraai.com:7835</code></dd>
+    <dt>Tunnels</dt><dd><code>20000&ndash;20049</code></dd>
+    <dt>Slots</dt><dd>50 concurrent sessions</dd>
+    <dt>Encryption</dt><dd>ChaCha20-Poly1305, end to end</dd>
+  </dl>
+
+  <p>This relay only forwards encrypted bytes. The session key lives in the invite code and is never sent to the relay, so it cannot read the files, text, or cursor positions that pass through.</p>
+  <p>To start, open FluxCode &rarr; <em>Live Share</em> &rarr; <em>Host</em>, then send the invite code to your colleague over a private channel.</p>
+
+  <footer>Run by MuaraAI. This page is static and shows no session data of any kind.</footer>
+</main>
+</body>
+</html>

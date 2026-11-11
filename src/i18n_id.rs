@@ -872,12 +872,13 @@ pub const ID: &[(&str, &str)] = &[
         "Membuka jalur masuk dari internet. Kodenya ikut diperbarui tiap ada jalur yang terbuka.",
     ),
     (
-        "Through your router, or a free relay that passes only encrypted bytes. No VPN or server.",
-        "Lewat router-mu, atau relay gratis yang hanya meneruskan data terenkripsi. Tanpa VPN atau server.",
+        "Through your router, our relay, or a public one if ours is down. Only encrypted bytes pass through. No VPN, no server of your own.",
+        "Lewat router-mu, relay kami, atau relay publik kalau relay kami mati. Hanya data terenkripsi yang lewat. Tanpa VPN, tanpa server sendiri.",
     ),
     ("People", "Orang"),
     ("Public IPv6", "IPv6 publik"),
-    ("Relay (bore.pub)", "Relay (bore.pub)"),
+    ("Relay (MuaraAI)", "Relay MuaraAI"),
+    ("Relay (public)", "Relay publik"),
     ("Router port (UPnP)", "Port router (UPnP)"),
     ("Same network", "Jaringan yang sama"),
     (
@@ -907,10 +908,16 @@ pub const ID: &[(&str, &str)] = &[
         "This PC has a public IPv6 address, but the session could not listen on it.",
         "PC ini punya alamat IPv6 publik, tapi sesi tidak bisa mendengarkan di alamat itu.",
     ),
+    ("This session is full.", "Sesi ini sudah penuh."),
     (
-        "Through the bore.pub relay, encrypted end to end: the relay can't read it.",
-        "Lewat relay bore.pub, terenkripsi ujung ke ujung: relay tidak bisa membacanya.",
+        "Through the MuaraAI relay, encrypted end to end: the relay can't read it.",
+        "Lewat relay MuaraAI, terenkripsi ujung ke ujung: relay tidak bisa membacanya.",
     ),
+    (
+        "Through the public relay, encrypted end to end: the relay can't read it.",
+        "Lewat relay publik, terenkripsi ujung ke ujung: relay tidak bisa membacanya.",
+    ),
+    ("Too many requests, slow down.", "Terlalu banyak permintaan, pelan-pelan."),
     ("Ways in", "Jalur masuk"),
     ("Works from any network.", "Bisa dari jaringan mana saja."),
     ("Your internet provider gives this PC no public IPv6 address.", "Provider internetmu tidak memberi PC ini alamat IPv6 publik."),
@@ -925,6 +932,10 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("{relay} did not answer ({e}).", "{relay} tidak menjawab ({e})."),
     ("{relay} refused: {why}", "{relay} menolak: {why}"),
+    (
+        "{relay} did not ask for a secret. Check `--secret` on the relay.",
+        "{relay} tidak meminta secret. Periksa `--secret` di relay.",
+    ),
     ("{why} Trying again in a few seconds.", "{why} Mencoba lagi beberapa detik lagi."),
     (
         "Guests with IPv6 may join over the internet; everyone else only from your network.",

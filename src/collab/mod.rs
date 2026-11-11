@@ -19,7 +19,9 @@ pub mod net;
 pub mod ot;
 pub mod page;
 pub mod proto;
+pub mod ratelimit;
 pub mod reach;
+pub mod share;
 
 use crate::i18n::tr;
 use crate::workbench::Workbench;
@@ -37,6 +39,15 @@ use std::time::Instant;
 const MAX_SHARED_FILE: usize = 16 << 20;
 /// File names sent to guests for their file list.
 const MAX_LISTED: usize = 20_000;
+/// Guests one host serves at once. Each guest holds a socket and a token bucket,
+/// and its messages are rebroadcast to everyone else.
+const MAX_GUESTS: usize = 16;
+/// A `Cursor` path is shifted around and rebroadcast whole; nobody has a file
+/// name this long, and a multi-megabyte one would be a cheap way to burn the host.
+const MAX_CURSOR_PATH: usize = 1024;
+/// A guest's display name is rebroadcast with every peer update, so it is bounded
+/// for the same reason as the cursor path, and tighter: nobody needs more.
+const MAX_PEER_NAME: usize = 64;
 
 pub enum Role {
     Host { server: net::Host, guests: HashMap<u64, Guest> },
@@ -46,6 +57,17 @@ pub enum Role {
 pub struct Guest {
     tx: Sender<Msg>,
     peer: Option<Peer>,
+    opens: ratelimit::Bucket,
+    edits: ratelimit::Bucket,
+    cursors: ratelimit::Bucket,
+}
+
+/// Which of a guest's buckets a message draws from.
+#[derive(Clone, Copy)]
+enum Limb {
+    Open,
+    Edit,
+    Cursor,
 }
 
 /// One shared file on this PC.
@@ -107,6 +129,9 @@ pub struct Collab {
     /// The Live share page is showing in the editor area.
     pub page: bool,
     last_cursor: (String, u32),
+    /// Every guest's `Open` and `Hello` also draws from this one, so a client that
+    /// reconnects for a fresh per-guest bucket still shares a host-wide budget.
+    host_opens: ratelimit::Bucket,
     /// Re-render as the invite code or the file filter is typed.
     _subs: Vec<Subscription>,
 }
@@ -146,6 +171,9 @@ impl Collab {
             ways_open: false,
             page: false,
             last_cursor: (String::new(), 0),
+            // Host-wide ceiling for open requests: 40 a second, burst 120. Per-guest
+            // buckets are separate and far tighter; this only stops the aggregate.
+            host_opens: ratelimit::Bucket::new(120, 40),
             _subs,
         }
     }
@@ -167,11 +195,13 @@ impl Collab {
     }
 
     /// The path of `rel` on this PC; `None` for paths that would leave the folder.
+    ///
+    /// The rules live in [`share::safe_components`] because the guest side needs
+    /// the same ones: a host that sends `Snapshot { path }` must not be able to
+    /// make a guest write outside its own folder either.
     fn abs_of(&self, rel: &str) -> Option<PathBuf> {
-        if rel.split('/').any(|p| p == ".." || p.is_empty()) || rel.contains(':') || rel.starts_with('/') {
-            return None;
-        }
-        Some(rel.split('/').fold(self.root.clone()?, |p, s| p.join(s)))
+        let parts = share::safe_components(rel)?;
+        Some(parts.iter().fold(self.root.clone()?, |p, s| p.join(s)))
     }
 
     fn send_all(&self, msg: &Msg, except: Option<u64>) {
@@ -452,8 +482,17 @@ impl Workbench {
     fn collab_host_event(&mut self, ev: NetEvent, window: &mut Window, cx: &mut Context<Self>) {
         match ev {
             NetEvent::Connected { conn, tx } => {
+                let full = if let Some(Role::Host { guests, .. }) = &self.collab.role { guests.len() >= MAX_GUESTS } else { false };
+                if full {
+                    // Refused alone leaves the socket open: the guest reads it as a
+                    // status line and waits, while the host keeps a thread blocked on
+                    // the same stream. Bye closes it from the writer side.
+                    let _ = tx.send(Msg::Refused { why: tr("This session is full.").to_string() });
+                    let _ = tx.send(Msg::Bye { why: tr("This session is full.").to_string() });
+                    return;
+                }
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
-                    guests.insert(conn, Guest { tx, peer: None });
+                    guests.insert(conn, Guest { tx, peer: None, opens: ratelimit::Bucket::new(10, 1), edits: ratelimit::Bucket::new(60, 60), cursors: ratelimit::Bucket::new(20, 20) });
                 }
             }
             NetEvent::Closed { conn, .. } | NetEvent::Message { conn, msg: Msg::Bye { .. } } => {
@@ -469,6 +508,26 @@ impl Workbench {
         }
     }
 
+    /// Spend `weight` of `conn`'s tokens for this kind of message. A guest we
+    /// don't know is allowed through: the connection is about to be dropped.
+    ///
+    /// `Open` and `Hello` also spend one from the host-wide bucket, because the
+    /// per-guest ones are recreated with the connection: reconnecting would
+    /// otherwise hand a client an unlimited supply.
+    fn guest_take(&mut self, conn: u64, limb: Limb, weight: f64) -> bool {
+        if matches!(limb, Limb::Open) && !self.collab.host_opens.take_weight(1.0) {
+            return false;
+        }
+        let Some(Role::Host { guests, .. }) = &mut self.collab.role else { return true };
+        let Some(g) = guests.get_mut(&conn) else { return true };
+        let bucket = match limb {
+            Limb::Open => &mut g.opens,
+            Limb::Edit => &mut g.edits,
+            Limb::Cursor => &mut g.cursors,
+        };
+        bucket.take_weight(weight)
+    }
+
     fn collab_host_msg(&mut self, conn: u64, msg: Msg, window: &mut Window, cx: &mut Context<Self>) {
         let reply = |this: &Self, m: Msg| {
             if let Some(Role::Host { guests, .. }) = &this.collab.role {
@@ -479,25 +538,54 @@ impl Workbench {
         };
         match msg {
             Msg::Hello { name, github, .. } => {
+                // A guest can say Hello as often as it likes; each one rebuilds the
+                // 20 000-path list and rebroadcasts the peer table to everyone, so
+                // it draws from the same bucket as Open. Replacing the peer (instead
+                // of pushing) keeps a repeated Hello from growing the table.
+                if !self.guest_take(conn, Limb::Open, 1.0) {
+                    reply(self, Msg::Refused { why: tr("Too many requests, slow down.").to_string() });
+                    return;
+                }
+                // The name travels with every peer update, so an oversized one
+                // would be rebroadcast forever at cursor rate.
+                let name: String = name.trim().chars().take(MAX_PEER_NAME).collect();
                 let peer = Peer { id: conn, name: name.clone(), github, host: false, file: String::new(), line: 0 };
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
                     if let Some(g) = guests.get_mut(&conn) {
                         g.peer = Some(peer.clone());
                     }
                 }
-                self.collab.peers.push(peer);
+                match self.collab.peers.iter_mut().find(|p| p.id == conn) {
+                    Some(slot) => *slot = peer,
+                    None => self.collab.peers.push(peer),
+                }
                 let root = self.collab.root.clone();
-                let files: Vec<String> = self.all_files.iter().filter_map(|f| root.as_ref().and_then(|r| Path::new(f).strip_prefix(r).ok()).map(|p| p.to_string_lossy().replace('\\', "/"))).take(MAX_LISTED).collect();
+                let files: Vec<String> = self.all_files.iter().filter_map(|f| root.as_ref().and_then(|r| Path::new(f).strip_prefix(r).ok()).map(|p| p.to_string_lossy().replace('\\', "/"))).filter(|p| share::is_shareable(p)).take(MAX_LISTED).collect();
                 reply(self, Msg::Welcome { you: conn, host: self.collab.host_name.clone(), folder: self.collab.folder.clone(), files, peers: self.collab.peers.clone() });
                 let peers = self.collab.peers.clone();
                 self.collab.send_all(&Msg::Peers { peers }, Some(conn));
                 self.status = crate::trf!("{name} joined the session"; name => name).into();
             }
-            Msg::Open { path } => match self.collab_host_open(&path, window, cx) {
-                Ok((rev, text)) => reply(self, Msg::Snapshot { path, rev, text }),
-                Err(why) => reply(self, Msg::Refused { why }),
-            },
+            Msg::Open { path } => {
+                if !self.guest_take(conn, Limb::Open, 1.0) {
+                    reply(self, Msg::Refused { why: tr("Too many requests, slow down.").to_string() });
+                    return;
+                }
+                match self.collab_host_open(&path, window, cx) {
+                    Ok((rev, text)) => reply(self, Msg::Snapshot { path, rev, text }),
+                    Err(why) => reply(self, Msg::Refused { why }),
+                }
+            }
             Msg::Edit { path, rev, op, ai } => {
+                // The host pays for two things: cloning and applying the text, and
+                // transforming the edit past every revision it missed (up to HISTORY
+                // of them). Charging only bytes misses the second: a 1-byte edit
+                // sent at the oldest allowed revision buys thousands of transforms.
+                let behind = self.collab.docs.get(&path).and_then(|d| d.server.as_ref()).map(|s| s.rev.saturating_sub(rev) as f64).unwrap_or(0.0);
+                let weight = 1.0 + op.changed_bytes() as f64 / 1024.0 + behind / 64.0;
+                if !self.guest_take(conn, Limb::Edit, weight) {
+                    return;
+                }
                 let who = self.collab.name_of(conn);
                 let Some(doc) = self.collab.docs.get_mut(&path) else { return };
                 let Some(server) = doc.server.as_mut() else { return };
@@ -523,6 +611,9 @@ impl Workbench {
                 }
             }
             Msg::Cursor { path, line } => {
+                if !self.guest_take(conn, Limb::Cursor, 1.0) || path.len() > MAX_CURSOR_PATH {
+                    return;
+                }
                 if let Some(p) = self.collab.peers.iter_mut().find(|p| p.id == conn) {
                     p.file = path;
                     p.line = line;
@@ -537,9 +628,19 @@ impl Workbench {
     /// A guest opens `rel`: the host opens it too (in a tab, without moving away from
     /// what they are on) and serves its text.
     fn collab_host_open(&mut self, rel: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(u64, String), String> {
+        share::ensure_shareable(rel)?;
         let abs = self.collab.abs_of(rel).ok_or_else(|| tr("That file is outside the shared folder.").to_string())?;
-        if !abs.is_file() {
-            return Err(tr("That file is not there any more.").into());
+        // A symlink inside the folder can still point outside it, and `is_file`
+        // follows links. Resolve first, then require the result to stay inside.
+        let resolved = std::fs::canonicalize(&abs).map_err(|_| tr("That file is not there any more.").to_string())?;
+        // Fail closed: with no resolved root there is nothing to compare against,
+        // and skipping the check is the whole vulnerability.
+        let root = self.collab.root.as_ref().and_then(|r| std::fs::canonicalize(r).ok()).ok_or_else(|| tr("That file is outside the shared folder.").to_string())?;
+        if !resolved.starts_with(&root) {
+            return Err(tr("That file is outside the shared folder.").to_string());
+        }
+        if !resolved.is_file() {
+            return Err(tr("That file is not there any more.").to_string());
         }
         if let Some(d) = self.collab.docs.get(rel) {
             if let Some(s) = &d.server {
@@ -776,14 +877,20 @@ impl Workbench {
 
 enum Via {
     Lan,
+    /// Our own relay, the one that is on when it is up.
     Relay,
+    /// The public `bore.pub`, used when our relay is off or unreachable.
+    RelayPublic,
     Internet,
 }
 
 /// How a guest reached the host, from the address it connected to.
 fn path_kind(addr: &str) -> Via {
-    if addr.starts_with(reach::RELAY_HOST) {
+    if reach::is_primary_relay(addr) {
         return Via::Relay;
+    }
+    if reach::is_relay_addr(addr) {
+        return Via::RelayPublic;
     }
     match addr.parse::<std::net::SocketAddr>().map(|s| s.ip()) {
         Ok(std::net::IpAddr::V4(ip)) if reach::is_private_v4(&ip) => Via::Lan,

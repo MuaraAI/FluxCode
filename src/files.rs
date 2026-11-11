@@ -6,7 +6,7 @@ use std::path::Path;
 
 /// Folders that are never worth walking for the explorer. They are still listed
 /// (as folders, dimmed), just not opened.
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv"];
+pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv"];
 /// Upper bound so a huge folder can't stall startup.
 const MAX_ENTRIES: usize = 20_000;
 

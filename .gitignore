@@ -5,3 +5,10 @@
 .claude/
 .worktree*
 .worktrees/
+node_modules/
+h.md
+docs/superpowers/
+graphify-out/
+.superpowers/
+superpowers/
+src-tauri/

@@ -5,6 +5,26 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Our own Live Share relay, and a README in two languages (11 November 2026)
+
+- Live Share now goes through MuaraAI's own relay at `live.muaraai.com` before it falls
+  back to the free public one. The panel says which is in use: **Relay (MuaraAI)** when
+  ours carries the session, **Relay (public)** when the fallback does. Ours is faster and
+  has a bandwidth ceiling, so it stops instead of running up a bill.
+- A shared session refuses to send what should never leave a PC: environment files,
+  private keys, `credentials*`, `.envrc`, and build folders like `node_modules`, `target`
+  and `.git`, even when a guest asks for one by name. Windows paths that try to escape the
+  shared folder (a leading backslash, a drive letter, a name Windows would trim, a symlink)
+  are refused.
+- A guest can no longer flood the host: opens and joins are rate limited per guest and
+  across the session, edits are charged by the bytes they change, and the peer table is
+  bounded.
+- The README and the Flux guide come in English and Indonesian (`README.id.md`,
+  `docs/flux.id.md`), English first. `fluxcode --flux-to-md ... --lang id` writes the
+  Indonesian file, and the tests keep all four generated files in step.
+- The relay's own setup, from the VPS to the DNS record, is documented in
+  [`relay/README.md`](relay/README.md).
+
 ## The agent asks before it acts, settings in a dialog (11 November 2026)
 
 - When the agent wants to run a command or change a file, a card in the chat says what it
