@@ -46,10 +46,13 @@ codesign --verify --verbose=2 "$app"
 # The update archive: one folder holding FluxCode.app.
 mkdir -p "$work/tar/$name"
 cp -R "$app" "$work/tar/$name/"
-tar -czf "$out/$name.tar.gz" -C "$work/tar" "$name"
+# gzip at its strongest: the updater runs `tar -xzf`, which reads any level.
+tar -cf - -C "$work/tar" "$name" | gzip -9n > "$out/$name.tar.gz"
 
 # The disk image: FluxCode.app next to a link to Applications.
 ln -s /Applications "$work/stage/Applications"
 cp "$here/README.txt" "$work/stage/Read me.txt"
-hdiutil create -volname "FluxCode" -srcfolder "$work/stage" -fs HFS+ -format UDZO -ov "$out/$name.dmg" >/dev/null
+# LZMA (ULMO, macOS 10.15+; FluxCode needs 11): about a third smaller than zlib (UDZO).
+hdiutil create -volname "FluxCode" -srcfolder "$work/stage" -fs HFS+ -format ULMO -ov "$out/$name.dmg" >/dev/null
+ls -lh "$out"
 echo "Packed $out/$name.dmg and $out/$name.tar.gz"

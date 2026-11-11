@@ -23,6 +23,8 @@ Unicode true
 ManifestDPIAware true
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
+; The whole exe in one window: LZMA finds more repeats than with the default 8 MB.
+SetCompressorDictSize 64
 
 !define APP "FluxCode Development"
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\FluxCode"
