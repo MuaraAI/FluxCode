@@ -1730,7 +1730,10 @@ impl Workbench {
                                 this.close(ix, window, cx);
                             })),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.agent.user_nav = Some(std::time::Instant::now());
+                        this.activate(ix, window, cx)
+                    }))
                     .context_menu({
                         let weak = cx.entity().downgrade();
                         let path = d.path.clone();
@@ -1868,7 +1871,9 @@ impl Workbench {
                                 .font_family(self.settings.font_family.clone())
                                 .text_size(px(self.settings.font_size)),
                         )
-                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx)),
+                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx))
+                        // A file comes in with a short fade (once per switch; nothing runs after).
+                        .with_animation(SharedString::from(format!("doc-in-{}", self.docs[ix].path.display())), Animation::new(std::time::Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(0.4 + 0.6 * t)),
                 ))
                 .into_any_element(),
             // The welcome page: one column, at most 320 wide, that narrows with the editor

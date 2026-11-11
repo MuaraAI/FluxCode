@@ -222,6 +222,12 @@ pub struct AgentState {
     pub reloads: Vec<PathBuf>,
     /// Files the agent finished editing, for the editor to follow (follow.rs).
     pub follow_q: Vec<PathBuf>,
+    /// The files each edit tool touched, so its "done" update (which often names no
+    /// file) still gets its lines counted.
+    tool_paths: HashMap<String, Vec<PathBuf>>,
+    /// When the user last picked a tab or file themselves: the editor doesn't jump to the
+    /// agent's edits for a moment after (follow.rs).
+    pub(crate) user_nav: Option<std::time::Instant>,
     /// The replay on screen: its file and final text; the counter stops older ones.
     pub replay: Option<(PathBuf, String)>,
     pub replay_gen: u64,
@@ -495,6 +501,8 @@ impl AgentState {
             changes: Vec::new(),
             reloads: Vec::new(),
             follow_q: Vec::new(),
+            tool_paths: HashMap::new(),
+            user_nav: None,
             replay: None,
             replay_gen: 0,
             changes_folded: false,
@@ -1217,6 +1225,7 @@ impl Workbench {
             }
             Req::Prompt => {
                 self.agent_close_thought();
+                self.agent_recount();
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
                 if stop != "end_turn" && !quiet {
@@ -2017,7 +2026,7 @@ impl Workbench {
             }
             let Some(p) = c.get("path").and_then(Value::as_str).map(abs) else { continue };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                let before = c.get("oldText").and_then(Value::as_str).map(String::from);
+                let before = before_edit(std::fs::read_to_string(&p).ok(), c.get("oldText").and_then(Value::as_str), c.get("newText").and_then(Value::as_str).unwrap_or(""));
                 self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0 });
             }
             touched.push(p);
@@ -2033,8 +2042,20 @@ impl Workbench {
             }
             touched.push(p);
         }
+        let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("").to_string();
         if !done {
+            let known = self.agent.tool_paths.entry(id).or_default();
+            for p in touched {
+                if !known.contains(&p) {
+                    known.push(p);
+                }
+            }
             return;
+        }
+        for p in self.agent.tool_paths.remove(&id).unwrap_or_default() {
+            if !touched.contains(&p) {
+                touched.push(p);
+            }
         }
         for p in touched {
             let after = std::fs::read_to_string(&p).unwrap_or_default();
@@ -2053,6 +2074,17 @@ impl Workbench {
                 self.agent.reloads.push(p);
             }
         }
+    }
+
+    /// Count every changed file's lines again from the disk (end of a turn).
+    fn agent_recount(&mut self) {
+        self.agent.tool_paths.clear();
+        self.agent.changes.retain_mut(|ch| {
+            let after = std::fs::read_to_string(&ch.path).ok();
+            (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
+            // Read but not changed after all.
+            !(ch.added == 0 && ch.removed == 0 && ch.before.is_some() && after.is_some())
+        });
     }
 
     /// Open what the agent changed in a file as a unified diff, in a tab.
@@ -2976,7 +3008,10 @@ impl Workbench {
                             .min_w_0()
                             .gap_1p5()
                             .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx)))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.agent.user_nav = Some(std::time::Instant::now());
+                                this.open_file(path.clone(), w, cx)
+                            }))
                             .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(theme::tint(tint)))
                             .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
                             .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
@@ -4461,6 +4496,20 @@ impl Workbench {
 const WINDOW: usize = 40;
 const PAGE: usize = 20;
 
+/// The file as it was before an edit tool ran, from what is on disk now and the tool's
+/// diff. Agents send the diff of the edit (Claude: just the replaced snippet), and the
+/// update can come before or after the file is written: if the new text is there and the
+/// old is not, the edit already ran and is undone here; else the disk is the "before".
+fn before_edit(disk: Option<String>, old: Option<&str>, new: &str) -> Option<String> {
+    let d = disk?;
+    match old {
+        // A new file this tool wrote.
+        None if d == new => None,
+        Some(o) if !new.is_empty() && !o.is_empty() && d.contains(new) && !d.contains(o) => Some(d.replacen(new, o, 1)),
+        _ => Some(d),
+    }
+}
+
 /// What the virtual list was told last frame.
 #[derive(Default)]
 pub(crate) struct ListSeen {
@@ -4507,6 +4556,18 @@ static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(
 #[cfg(test)]
 mod tests {
     use super::model_groups;
+
+    #[test]
+    fn before_an_edit() {
+        use super::before_edit;
+        // Not written yet: the disk is the "before".
+        assert_eq!(before_edit(Some("a\nold\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
+        // Already written: the snippet is undone.
+        assert_eq!(before_edit(Some("a\nnew\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
+        // A new file.
+        assert_eq!(before_edit(Some("x".into()), None, "x"), None);
+        assert_eq!(before_edit(None, None, "x"), None);
+    }
 
     #[test]
     fn groups_free_models_first() {

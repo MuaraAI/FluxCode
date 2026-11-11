@@ -35,7 +35,8 @@ impl Workbench {
         // Follow the active tab: its folders open and its row scrolls into view, like
         // VS Code's "reveal active file". Runs only while the explorer is on screen (so a
         // hidden side bar costs nothing and catches up when shown), once per tab change.
-        if let Some(p) = active_path.clone().filter(|p| self.revealed.borrow().as_deref() != Some(p.as_str())) {
+        let inside = |p: &String| self.roots().iter().any(|r| Path::new(p).starts_with(r));
+        if let Some(p) = active_path.clone().filter(|p| self.revealed.borrow().as_deref() != Some(p.as_str()) && inside(p)) {
             *self.revealed.borrow_mut() = Some(p.clone());
             let id = SharedString::from(p);
             self.tree.update(cx, |t, cx| {
@@ -126,6 +127,7 @@ impl Workbench {
                         view.update(cx, |this, cx| {
                             this.selected = Some(path.clone());
                             if !is_dir {
+                                this.agent.user_nav = Some(std::time::Instant::now());
                                 this.open_file(path, window, cx);
                             }
                             cx.notify();
