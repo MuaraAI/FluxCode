@@ -10,24 +10,35 @@ use crate::files::SKIP_DIRS;
 /// Folders that hold machine state or secrets rather than source.
 const DENIED_DIRS: &[&str] = &[".aws", ".ssh"];
 
+/// Both separators count as separators on Windows, where a guest can send either.
+/// On Linux and macOS `\` is an ordinary character in a file name, so treating it
+/// as a separator would make such a file unreachable rather than unsafe.
+fn is_sep(c: char) -> bool {
+    c == '/' || (cfg!(windows) && c == '\\')
+}
+
 /// Split a relative path into components, or `None` when it is not a path we
 /// are willing to resolve at all.
 ///
 /// This is the security-critical half. On Windows `\Users\me\.git\config` is a
-/// *rooted* path: joining it onto the shared folder silently drops the folder
-/// and the guest reads anywhere on the disk. Both separators are treated as
-/// separators here, a leading one is refused, and a name Windows would trim of
-/// trailing dots or spaces is refused rather than resolved to something else.
+/// *rooted* path: joining it onto the shared folder drops the folder and the
+/// guest reads anywhere on the disk, so a leading separator, a drive letter and a
+/// component Windows would trim of trailing dots or spaces are all refused
+/// rather than resolved to something else.
 pub fn safe_components(rel: &str) -> Option<Vec<String>> {
-    if rel.is_empty() || rel.starts_with('/') || rel.starts_with('\\') || rel.contains(':') {
+    if rel.is_empty() {
+        return None;
+    }
+    let bytes = rel.as_bytes();
+    if rel.starts_with('/') || (cfg!(windows) && bytes.first() == Some(&b'\\')) || rel.contains(':') {
         return None;
     }
     let mut out = Vec::new();
-    for raw in rel.split(['/', '\\']) {
+    for raw in rel.split(is_sep) {
         if raw.is_empty() || raw == "." || raw == ".." {
             return None;
         }
-        if raw.trim_end_matches([' ', '.']) != raw {
+        if cfg!(windows) && raw.trim_end_matches([' ', '.']) != raw {
             return None;
         }
         out.push(raw.to_string());
@@ -39,28 +50,36 @@ pub fn safe_components(rel: &str) -> Option<Vec<String>> {
     }
 }
 
+/// Would a file system that folds case resolve `name` to `denied`?
+///
+/// ASCII folding is not enough: NTFS's upcase table maps `ı` (U+0131) to `I` and
+/// `ſ` (U+017F) to `S`, so `.gıt/config` and `.ſsh/config` open the real `.git`
+/// and `.ssh`. Comparing both directions in full Unicode closes that, and costs
+/// nothing for the ASCII names that make up the list.
+fn folds_to(name: &str, denied: &str) -> bool {
+    name.eq_ignore_ascii_case(denied) || name.to_uppercase() == denied.to_uppercase() || name.to_lowercase() == denied.to_lowercase()
+}
+
 fn denied_dir(comp: &str) -> bool {
-    SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(comp)) || DENIED_DIRS.iter().any(|d| d.eq_ignore_ascii_case(comp))
+    SKIP_DIRS.iter().any(|d| folds_to(comp, d)) || DENIED_DIRS.iter().any(|d| folds_to(comp, d))
 }
 
 /// Names that are never worth sending: dotfiles that hold credentials and
-/// private keys by any common naming scheme. Compared lowercased, because
-/// Windows resolves `.SSH/config` to the real `.ssh` directory.
+/// private keys by any common naming scheme. Compared with the same folding as
+/// [`denied_dir`], because Windows resolves `.SSH/config` to the real directory.
 fn denied_name(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    if n == ".env" || n.starts_with(".env.") || n == ".envrc" || n.starts_with(".envrc.") {
+    let starts = |p: &str| name.len() >= p.len() && folds_to(&name[..p.len()], p);
+    let ends = |p: &str| name.len() >= p.len() && folds_to(&name[name.len() - p.len()..], p);
+    if folds_to(name, ".env") || starts(".env.") || folds_to(name, ".envrc") || starts(".envrc.") {
         return true;
     }
-    if n.ends_with(".pem") || n.ends_with(".key") || n.ends_with(".p12") || n.ends_with(".pfx") || n.ends_with(".jks") || n.ends_with(".kdbx") {
+    if [".pem", ".key", ".p12", ".pfx", ".jks", ".kdbx"].iter().any(|e| ends(e)) {
         return true;
     }
-    if n.starts_with("id_rsa") || n.starts_with("id_ed25519") || n.starts_with("id_ecdsa") || n.starts_with("id_dsa") {
+    if ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "credentials"].iter().any(|p| starts(p)) {
         return true;
     }
-    if n.starts_with("credentials") {
-        return true;
-    }
-    matches!(n.as_str(), ".netrc" | ".npmrc" | ".pypirc" | ".git-credentials")
+    [".netrc", ".npmrc", ".pypirc", ".git-credentials"].iter().any(|p| folds_to(name, p))
 }
 
 pub fn is_shareable(rel: &str) -> bool {
@@ -76,7 +95,7 @@ pub fn ensure_shareable(rel: &str) -> Result<(), String> {
     if is_shareable(rel) {
         return Ok(());
     }
-    let file = rel.rsplit(['/', '\\']).next().unwrap_or(rel);
+    let file = rel.rsplit(is_sep).next().unwrap_or(rel);
     Err(crate::trf!("\"{file}\" can't be shared."; file => file))
 }
 
@@ -128,12 +147,20 @@ mod tests {
 
     #[test]
     fn refuses_windows_separators_and_rooted_paths() {
-        assert!(!is_shareable(r"..\x"));
-        assert!(!is_shareable(r"a\..\b"));
-        assert!(!is_shareable(r"\Users\me\.git\config"), "a rooted path escapes the shared folder on Windows");
+        // A backslash is a separator only on Windows; on Linux it is an ordinary
+        // character, and refusing it there would hide a real file.
+        if cfg!(windows) {
+            assert!(!is_shareable(r"..\x"));
+            assert!(!is_shareable(r"a\..\b"));
+            assert!(!is_shareable(r"\Users\me\.git\config"), "a rooted path escapes the shared folder");
+            assert!(!is_shareable(r"node_modules\x\index.js"), "backslash form of a skipped dir");
+            assert!(!is_shareable(r".ssh\config"));
+        } else {
+            assert!(is_shareable(r"weird\name.txt"), "a backslash is legal in a POSIX name");
+        }
+        // A drive letter and a drive-absolute path are refused everywhere.
         assert!(!is_shareable(r"C:\Windows\win.ini"));
-        assert!(!is_shareable(r"node_modules\x\index.js"), "backslash form of a skipped dir");
-        assert!(!is_shareable(r".ssh\config"));
+        assert!(!is_shareable("C:/Windows/win.ini"));
     }
 
     #[test]
@@ -147,9 +174,20 @@ mod tests {
 
     #[test]
     fn refuses_names_windows_would_trim() {
-        assert!(!is_shareable(".env "), "Windows drops the trailing space and opens .env");
-        assert!(!is_shareable(".env."));
-        assert!(!is_shareable(r".ssh \config"));
+        if cfg!(windows) {
+            assert!(!is_shareable(".env "), "Windows drops the trailing space and opens .env");
+            assert!(!is_shareable(".env."));
+            assert!(!is_shareable(r".ssh \config"));
+        }
+    }
+
+    #[test]
+    fn refuses_names_that_fold_to_a_denied_one() {
+        // NTFS's upcase table maps these to ASCII: `.gıt` opens `.git`, `.ſsh`
+        // opens `.ssh`. ASCII-only folding would let both through.
+        assert!(!is_shareable(".gıt/config"), "dotless i uppercases to I on NTFS");
+        assert!(!is_shareable(".ſsh/config"), "long s uppercases to S on NTFS");
+        assert!(!is_shareable(".ssh/CONFIG"));
     }
 
     #[test]

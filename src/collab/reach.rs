@@ -466,32 +466,39 @@ fn relay(port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &d
     Err(failures.join(" "))
 }
 
+/// Tunnels one relay session will hold open at once. Each is a thread and two
+/// sockets, and the relay decides when to send a `Connection`, so the cap is what
+/// keeps a hostile or confused relay from spending the host's threads.
+const MAX_TUNNELS: usize = 32;
+
 /// One attempt against a single relay.
 fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &dyn Fn(String)) -> Result<String, String> {
     let mut control = relay_connect(ep).map_err(|e| crate::trf!("{relay} could not be reached ({e}). A firewall or the network may block it."; relay => ep.host.clone(), e => e))?;
     let mut reader = BufReader::new(control.try_clone().map_err(|e| e.to_string())?);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
-    let early = relay_auth(ep, &mut control, &mut reader)?;
+    relay_auth(ep, &mut control, &mut reader)?;
     if let Ok(mut c) = ctl.lock() {
         *c = control.try_clone().ok();
     }
-    let hello = match early {
-        Some(frame) => frame,
-        None => {
-            write_frame(&mut control, &serde_json::json!({ "Hello": 0 })).map_err(|e| e.to_string())?;
-            read_frame(&mut reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => ep.host.clone(), e => e))?
-        }
-    };
+    write_frame(&mut control, &serde_json::json!({ "Hello": 0 })).map_err(|e| e.to_string())?;
+    let hello = read_frame(&mut reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => ep.host.clone(), e => e))?;
     let public = hello.get("Hello").and_then(|p| p.as_u64()).ok_or_else(|| crate::trf!("{relay} refused: {why}"; relay => ep.host.clone(), why => hello.get("Error").and_then(|e| e.as_str()).unwrap_or("unexpected reply")))?;
     ready(format!("{}:{public}", ep.host));
     // The relay sends a heartbeat every half second; a minute of silence means it's gone.
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(60)));
+    let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         let Ok(msg) = read_frame(&mut reader) else { break };
         if let Some(id) = msg.get("Connection").and_then(|v| v.as_str()).map(String::from) {
-            let ep = ep.clone();
+            let n = live.fetch_add(1, Ordering::Relaxed);
+            if n >= MAX_TUNNELS {
+                live.fetch_sub(1, Ordering::Relaxed);
+                continue;
+            }
+            let (ep, live) = (ep.clone(), live.clone());
             std::thread::spawn(move || {
                 let _ = relay_accept(&id, port, &ep);
+                live.fetch_sub(1, Ordering::Relaxed);
             });
         }
     }
@@ -500,21 +507,20 @@ fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Opti
 
 /// Prove we know the relay's secret, when it has one. A relay started with
 /// `--secret` speaks first: it sends a UUID challenge and ignores everything
-/// until we answer. A relay without one says nothing until we ask for a port,
-/// and then any frame already read is returned for the caller to use.
-fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<Option<serde_json::Value>, String> {
-    let Some(secret) = ep.secret.as_deref() else { return Ok(None) };
+/// until we answer.
+///
+/// A relay without one says nothing here, so with a secret configured and no
+/// `Challenge` something is wrong: answering with `Authenticate` would be ignored
+/// and the next frame misread, so say what happened instead.
+fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<(), String> {
+    let Some(secret) = ep.secret.as_deref() else { return Ok(()) };
     let relay = ep.host.clone();
     let frame = read_frame(reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => relay.clone(), e => e))?;
     let Some(challenge) = frame.get("Challenge").and_then(|c| c.as_str()) else {
-        // An open relay: it answered a question we never asked, so the frame is
-        // the answer to `Hello`. Accepting it keeps `FLUXCODE_RELAY_HOST` usable
-        // against a relay someone forgot to start with `--secret`.
-        return Ok(Some(frame));
+        return Err(crate::trf!("{relay} did not ask for a secret. Check `--secret` on the relay."; relay => relay));
     };
     let tag = challenge_tag(secret, challenge)?;
-    write_frame(control, &serde_json::json!({ "Authenticate": tag })).map_err(|e| e.to_string())?;
-    Ok(None)
+    write_frame(control, &serde_json::json!({ "Authenticate": tag })).map_err(|e| e.to_string())
 }
 
 /// One guest through the relay: claim its connection, then copy bytes both ways.
@@ -525,10 +531,11 @@ fn relay_accept(id: &str, port: u16, ep: &RelayEndpoint) -> std::io::Result<()> 
     let mut reader = BufReader::new(remote.try_clone()?);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
     relay_auth(ep, &mut remote, &mut reader).map_err(std::io::Error::other)?;
-    // The timeout we just set lives on the socket, not the handle, so the copy
-    // loop below would inherit it: a guest that is only reading sends nothing,
-    // and after 10 s the tunnel would tear itself down. Clear it before piping.
-    let _ = remote.set_read_timeout(None);
+    // The timeout lives on the socket, not the handle, so the copy loop would
+    // inherit it: a guest that only reads sends nothing, and after 10 s the
+    // tunnel would tear itself down. Clearing it must succeed, or the tunnel is a
+    // trap for every quiet guest.
+    remote.set_read_timeout(None)?;
     write_frame(&mut remote, &serde_json::json!({ "Accept": id }))?;
     let local = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(3))?;
     let _ = local.set_nodelay(true);

@@ -45,6 +45,9 @@ const MAX_GUESTS: usize = 16;
 /// A `Cursor` path is shifted around and rebroadcast whole; nobody has a file
 /// name this long, and a multi-megabyte one would be a cheap way to burn the host.
 const MAX_CURSOR_PATH: usize = 1024;
+/// A guest's display name is rebroadcast with every peer update, so it is bounded
+/// for the same reason as the cursor path, and tighter: nobody needs more.
+const MAX_PEER_NAME: usize = 64;
 
 pub enum Role {
     Host { server: net::Host, guests: HashMap<u64, Guest> },
@@ -124,6 +127,9 @@ pub struct Collab {
     /// The Live share page is showing in the editor area.
     pub page: bool,
     last_cursor: (String, u32),
+    /// Every guest's `Open` and `Hello` also draws from this one, so a client that
+    /// reconnects for a fresh per-guest bucket still shares a host-wide budget.
+    host_opens: ratelimit::Bucket,
     /// Re-render as the invite code or the file filter is typed.
     _subs: Vec<Subscription>,
 }
@@ -162,6 +168,9 @@ impl Collab {
             copied_code: None,
             page: false,
             last_cursor: (String::new(), 0),
+            // Host-wide ceiling for open requests: 40 a second, burst 120. Per-guest
+            // buckets are separate and far tighter; this only stops the aggregate.
+            host_opens: ratelimit::Bucket::new(120, 40),
             _subs,
         }
     }
@@ -472,9 +481,11 @@ impl Workbench {
             NetEvent::Connected { conn, tx } => {
                 let full = if let Some(Role::Host { guests, .. }) = &self.collab.role { guests.len() >= MAX_GUESTS } else { false };
                 if full {
-                    // Buckets live with the connection, so a guest could otherwise
-                    // reconnect for a fresh burst. A ceiling makes that pointless.
+                    // Refused alone leaves the socket open: the guest reads it as a
+                    // status line and waits, while the host keeps a thread blocked on
+                    // the same stream. Bye closes it from the writer side.
                     let _ = tx.send(Msg::Refused { why: tr("This session is full.").to_string() });
+                    let _ = tx.send(Msg::Bye { why: tr("This session is full.").to_string() });
                     return;
                 }
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
@@ -496,7 +507,14 @@ impl Workbench {
 
     /// Spend `weight` of `conn`'s tokens for this kind of message. A guest we
     /// don't know is allowed through: the connection is about to be dropped.
+    ///
+    /// `Open` and `Hello` also spend one from the host-wide bucket, because the
+    /// per-guest ones are recreated with the connection: reconnecting would
+    /// otherwise hand a client an unlimited supply.
     fn guest_take(&mut self, conn: u64, limb: Limb, weight: f64) -> bool {
+        if matches!(limb, Limb::Open) && !self.collab.host_opens.take_weight(1.0) {
+            return false;
+        }
         let Some(Role::Host { guests, .. }) = &mut self.collab.role else { return true };
         let Some(g) = guests.get_mut(&conn) else { return true };
         let bucket = match limb {
@@ -525,6 +543,9 @@ impl Workbench {
                     reply(self, Msg::Refused { why: tr("Too many requests, slow down.").to_string() });
                     return;
                 }
+                // The name travels with every peer update, so an oversized one
+                // would be rebroadcast forever at cursor rate.
+                let name: String = name.trim().chars().take(MAX_PEER_NAME).collect();
                 let peer = Peer { id: conn, name: name.clone(), github, host: false, file: String::new(), line: 0 };
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
                     if let Some(g) = guests.get_mut(&conn) {
@@ -553,9 +574,12 @@ impl Workbench {
                 }
             }
             Msg::Edit { path, rev, op, ai } => {
-                // Charge by characters changed: one frame carrying a whole file
-                // is far more work than the keystroke the bucket is sized for.
-                let weight = 1.0 + op.changed_len() as f64 / 1024.0;
+                // The host pays for two things: cloning and applying the text, and
+                // transforming the edit past every revision it missed (up to HISTORY
+                // of them). Charging only bytes misses the second: a 1-byte edit
+                // sent at the oldest allowed revision buys thousands of transforms.
+                let behind = self.collab.docs.get(&path).and_then(|d| d.server.as_ref()).map(|s| s.rev.saturating_sub(rev) as f64).unwrap_or(0.0);
+                let weight = 1.0 + op.changed_bytes() as f64 / 1024.0 + behind / 64.0;
                 if !self.guest_take(conn, Limb::Edit, weight) {
                     return;
                 }

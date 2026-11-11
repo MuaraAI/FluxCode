@@ -93,15 +93,16 @@ impl Op {
         }).sum()
     }
 
-    /// Characters this operation inserts or deletes. A paste of a megabyte and a
-    /// single keystroke are not the same amount of work: the host rebroadcasts
-    /// the whole insert to every peer and replays it through the merge machinery.
-    pub fn changed_len(&self) -> usize {
+    /// Bytes this operation inserts or deletes. A paste of a megabyte and a single
+    /// keystroke are not the same amount of work: the host clones the text, applies
+    /// the edit, and rebroadcasts it to every peer. Bytes rather than characters,
+    /// because the frame is byte-bounded and JSON escaping is not free either.
+    pub fn changed_bytes(&self) -> usize {
         self.comps
             .iter()
             .map(|c| match c {
                 Comp::Retain(_) => 0,
-                Comp::Insert(s) => clen(s),
+                Comp::Insert(s) => s.len(),
                 Comp::Delete(n) => *n,
             })
             .sum()

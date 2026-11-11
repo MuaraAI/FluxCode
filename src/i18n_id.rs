@@ -769,6 +769,10 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("{relay} did not answer ({e}).", "{relay} tidak menjawab ({e})."),
     ("{relay} refused: {why}", "{relay} menolak: {why}"),
+    (
+        "{relay} did not ask for a secret. Check `--secret` on the relay.",
+        "{relay} tidak meminta secret. Periksa `--secret` di relay.",
+    ),
     ("{why} Trying again in a few seconds.", "{why} Mencoba lagi beberapa detik lagi."),
     (
         "Guests with IPv6 may join over the internet; everyone else only from your network.",

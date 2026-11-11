@@ -1,87 +1,86 @@
-# Relay Live Share FluxCode
+# FluxCode Live Share relay
 
-Relay TCP yang membuat Live Share FluxCode bekerja antar jaringan, tanpa port
-forwarding di PC siapa pun.
+The TCP relay that makes FluxCode Live Share work across networks, without port
+forwarding on anyone's PC.
 
-Satu VPS menjalankan relay. Host dan guest sama-sama menyambung **keluar** ke
-relay ini, jadi tidak ada PC yang perlu IP publik.
+One VPS runs the relay. Host and guest both connect **out** to it, so no PC needs
+a public address.
 
 ```text
 Guest ──┐
-        ├── TCP 7835 / 20000-20049 ──► VPS relay ──► Host PC
-Host ───┘        (ciphertext saja)
+        ├── TCP 7835 / 20000-20049 ──► relay VPS ──► Host PC
+Host ───┘        (ciphertext only)
 ```
+Session content is encrypted with the key in the invite code. The relay only sees
+ciphertext: it cannot read files, text, or cursor positions.
 
-Isi sesi dienkripsi dengan kunci yang ada di kode undangan. Relay hanya melihat
-byte terenkripsi: tidak bisa membaca berkas, teks, maupun posisi kursor.
+## Two relays, one client
 
-## Dua relay, satu klien
+FluxCode knows two relays, and they are not the same thing:
 
-FluxCode mengenal dua relay sekaligus, dan keduanya bukan hal yang sama:
-
-| | Relay MuaraAI (`live.muaraai.com`) | Relay publik (`bore.pub`) |
+| | MuaraAI relay (`live.muaraai.com`) | Public relay (`bore.pub`) |
 |---|---|---|
-| Dikelola siapa | kamu, di VPS ini | proyek `bore` ekzhang, gratis |
-| Kapan dipakai | **selalu dicoba lebih dulu** | otomatis, hanya kalau relay ini gagal |
-| Autentikasi | HMAC-SHA256 dengan secret | tidak ada |
-| Batas | 190 GB/bulan, dijaga `budget-guard` | tidak dijamin, bisa berubah kapan saja |
-| Nama di UI klien | "Relay (MuaraAI)" | "Relay (public)" |
+| Run by | you, on this VPS | the `bore` project by ekzhang, free |
+| When it is used | **always tried first** | automatically, only when our relay fails |
+| Authentication | HMAC-SHA256 with the secret | none |
+| Limit | 190 GB/month, enforced by `budget-guard` | no guarantee, can change any day |
+| Name in the client UI | "Relay (MuaraAI)" | "Relay (public)" |
 
-Urutannya ada di `endpoints()` (`src/collab/reach.rs`): relay ini lebih dulu,
-`bore.pub` sebagai cadangan. "Relay ini mati" tidak perlu diatur manual: kalau
-VPS mati, port 7835 diblokir, atau secret tidak cocok, klien pindah sendiri ke
-`bore.pub` dan sesi tetap jalan.
+The order lives in `endpoints()` (`src/collab/reach.rs`): this relay first,
+`bore.pub` as the spare. "This relay is down" needs no manual switch: if the VPS
+is off, port 7835 is blocked, or the secret does not match, the client moves to
+`bore.pub` on its own and the session keeps working.
 
-Build tanpa secret tidak punya endpoint primer sama sekali: `bore.pub` saja.
-Itu disengaja, supaya build PR tidak mengirim traffic ke VPS ini.
+A build without a secret has no primary endpoint at all: `bore.pub` only. That is
+deliberate, so a PR build sends no traffic to this VPS.
 
-Untuk mematikan cadangan sama sekali (misalnya saat menguji uninstall):
+To disable the spare entirely (for example while testing the uninstall):
 `FLUXCODE_RELAY_FALLBACK=0`.
 
 ---
 
-## 1. Prasyarat VPS
+## 1. VPS requirements
 
-| Item | Syarat |
+| Item | Requirement |
 |---|---|
-| Distro | apa pun dengan `systemd` dan `sh` (diuji di Ubuntu 22.04) |
-| Akses | `root` atau `sudo` |
-| IP | **publik dan statis**. IP dinamis akan memutus DNS saat berubah |
-| RAM | 64 MB cukup. Relay memakai ~2 MB saat idle |
-| Disk | < 5 MB |
-| Bandwidth | anggaran default 190 GB/bulan (lihat bagian 7) |
+| Distro | anything with `systemd` and `sh` (tested on Ubuntu 22.04) |
+| Access | `root` or `sudo` |
+| Address | **public and static**. A dynamic address breaks DNS when it changes |
+| RAM | 64 MB is enough. The relay uses about 2 MB idle |
+| Disk | under 5 MB |
+| Bandwidth | default budget 190 GB/month (see section 7) |
 
-Tidak perlu GPU, database, Docker, atau runtime bahasa apa pun.
+No GPU, database, Docker, or language runtime.
 
 ---
 
-## 2. Port yang Harus Terbuka
+## 2. Ports that must be open
 
-| Port | Protokol | Untuk |
+| Port | Protocol | For |
 |---|---|---|
-| `7835` | TCP | kontrol relay (handshake + penugasan port) |
-| `20000-20049` | TCP | data; satu port per sesi Live Share |
-| `80`, `443` | TCP | opsional, hanya untuk halaman `/fluxcode` |
+| `7835` | TCP | relay control (handshake and port assignment) |
+| `20000-20049` | TCP | data; one port per Live Share session |
+| `80`, `443` | TCP | optional, only for the `/fluxcode` page |
 
-`install.sh` membuka port pada firewall **lokal** (`ufw` atau `firewalld`).
-Firewall **provider** harus dibuka manual, karena tidak bisa diotomasi dari
-dalam VPS.
+`install.sh` opens the ports in the **local** firewall (`ufw` or `firewalld`). The
+**provider** firewall must be opened by hand, because it cannot be automated from
+inside the VPS.
 
-Contoh langkah di provider yang umum dipakai:
+Typical provider steps:
 
 - **Tencent Cloud** — CVM → Security Group → Add Rule → TCP, `7835`, `20000-20049`, source `0.0.0.0/0`
 - **AWS** — EC2 → Security → Security groups → Inbound rules → Custom TCP, port range `20000-20049`
 - **DigitalOcean** — Networking → Firewalls → Inbound Rules → Custom, TCP `20000-20049`
 - **Hetzner** — Firewalls → Add rule → TCP, port `20000-20049`
-- **VPS tanpa firewall provider** — cukup firewall lokal, `install.sh` yang urus
+- **VPS with no provider firewall** — the local firewall is all there is; `install.sh` handles it
 
-Kalau `20000-20049` tidak bisa dibuka sekaligus, buka rentang lebih kecil dan
-sesuaikan `--min-port`/`--max-port` di `/etc/systemd/system/bore-server.service`.
-Satu port = satu sesi bersamaan.
+If `20000-20049` cannot be opened as one range, open a smaller one and adjust
+`--min-port`/`--max-port` in `/etc/systemd/system/bore-server.service`. One port
+is one concurrent session.
 
 ---
 
-## 3. Instalasi
+## 3. Install
 
 ```bash
 git clone https://github.com/MuaraAI/FluxCode.git
@@ -89,160 +88,159 @@ cd FluxCode/relay
 sudo ./install.sh
 ```
 
-Skrip ini idempoten: dijalankan dua kali hasilnya sama.
+The script is idempotent: running it twice gives the same result.
 
-Yang diubah pada sistem:
+What it changes on the system:
 
-| Path | Isi |
+| Path | Contents |
 |---|---|
-| `/usr/local/bin/bore` | binary relay v0.6.0, checksum diverifikasi |
-| `/etc/bore-relay/env` | `BORE_SECRET`, mode `0640`, **tidak ditimpa** |
-| `/etc/systemd/system/bore-server.service` | unit relay |
-| `/etc/systemd/system/budget-guard.{service,timer}` | penjaga anggaran |
-| `/usr/local/lib/fluxcode-relay/budget-guard.sh` | skrip penjaga |
-| `/var/www/fluxcode-relay/index.html` | halaman `/fluxcode` (kalau port 80/443 bebas) |
-| `/etc/caddy/Caddyfile` | hanya kalau `caddy` sudah ada dan port bebas |
+| `/usr/local/bin/bore` | relay binary v0.6.0, checksum verified |
+| `/etc/bore-relay/env` | `BORE_SECRET`, mode `0640`, **never overwritten** |
+| `/etc/systemd/system/bore-server.service` | the relay unit |
+| `/etc/systemd/system/budget-guard.{service,timer}` | the budget guard |
+| `/usr/local/lib/fluxcode-relay/budget-guard.sh` | the guard script |
+| `/var/www/fluxcode-relay/index.html` | the `/fluxcode` page (when ports 80/443 are free) |
+| `/etc/caddy/Caddyfile` | appended to, never replaced |
 
-Tidak ada paket yang dihapus, tidak ada konfigurasi lain yang ditimpa.
+No package is removed and no other configuration is overwritten.
 
 ---
 
-## 4. Verifikasi Setelah Install
+## 4. Verify after install
 
 ```bash
 systemctl status bore-server --no-pager
 ss -tlnp | grep bore
 ```
 
-Harus terlihat mendengarkan di `0.0.0.0:7835`.
+It must be listening on `0.0.0.0:7835`.
 
-Uji dari **mesin lain** (bukan VPS-nya), karena itu satu-satunya cara menguji
-firewall provider:
+Test from **another machine** (not the VPS itself), because that is the only way to
+test the provider firewall:
 
 ```bash
 nc -vz live.muaraai.com 7835
 nc -vz live.muaraai.com 20000
 ```
 
-Keduanya harus `succeeded`. Kalau `timed out`, berarti security group provider
-masih menutup port.
+Both must report `succeeded`. A `timed out` means the provider security group still
+blocks the port.
 
-Uji handshake dengan secret (harus mengembalikan Challenge):
+Test the secret handshake (it must return a Challenge):
 
 ```bash
 printf '{"Hello":0}\0' | timeout 3 nc live.muaraai.com 7835 | xxd | head -3
 ```
 
-Balasan berisi `Challenge` berarti relay siap dan memang meminta secret.
+A reply containing `Challenge` means the relay is up and does ask for the secret.
 
 ---
 
 ## 5. DNS
 
-Di Cloudflare:
+In Cloudflare:
 
 ```
 Type   : A
 Name   : live
-Content: <IP VPS>
+Content: <VPS IP>
 Proxy  : OFF  (grey cloud)
 TTL    : Auto
 ```
 
-Proxy **wajib OFF**. Cloudflare hanya meneruskan HTTP/HTTPS di port standar;
-port `7835` dan `20000-20049` akan mati total kalau di-proxy.
+The proxy **must be OFF**. Cloudflare only forwards HTTP/HTTPS on the standard
+ports; `7835` and `20000-20049` die completely behind the proxy.
 
-Cek propagasi:
+Check propagation:
 
 ```bash
 dig +short live.muaraai.com
-# harus mengembalikan IP VPS, bukan 104.x / 172.x milik Cloudflare
+# must return the VPS address, not Cloudflare's 104.x / 172.x
 ```
 
 ---
 
-## 6. Rotasi Secret
+## 6. Rotating the secret
 
-Secret ada di dua tempat: server dan build klien. Keduanya harus berubah.
+The secret lives in two places: the server and the client build. Both must change.
 
-**a. Di relay**
+**a. On the relay**
 
 ```bash
 sudo sh -c 'printf "BORE_SECRET=%s\n" "$(openssl rand -hex 32)" > /etc/bore-relay/env'
 sudo chown root:borerelay /etc/bore-relay/env
 sudo chmod 0640 /etc/bore-relay/env
 sudo systemctl restart bore-server
-sudo cat /etc/bore-relay/env     # salin nilainya
+sudo cat /etc/bore-relay/env     # copy the value
 ```
 
-Setelah restart, klien lama langsung ditolak. Host yang sedang sesi harus
-memulai sesi baru.
+After the restart, old clients are refused immediately. A host in the middle of a
+session has to start a new one.
 
-**b. Di klien**
+**b. In the client**
 
-GitHub → repo FluxCode → Settings → Secrets and variables → Actions →
-`FLUXCODE_RELAY_SECRET` → isi nilai baru → build dan rilis ulang.
+GitHub → the FluxCode repo → Settings → Secrets and variables → Actions →
+`FLUXCODE_RELAY_SECRET` → enter the new value → rebuild and release.
 
-Kalau rotasi karena penyalahgunaan, lakukan (a) dan (b) berurutan dalam
-hitungan menit, lalu umumkan ke pengguna bahwa versi lama tidak bisa Live Share.
+If the rotation is because of abuse, do (a) and (b) back to back within minutes,
+then tell users that older builds can no longer use Live Share.
 
 ---
 
-## 7. Anggaran Bandwidth
+## 7. Bandwidth budget
 
-Relay berhenti sendiri pada **190 GB/bulan** (dari anggaran 200 GB). Batasnya
-dipasang sengaja di bawah anggaran supaya tidak ada tagihan kejutan.
+The relay stops itself at **190 GB/month** (out of a 200 GB allowance). The ceiling
+sits deliberately below the allowance so there is no surprise bill.
 
 ```bash
-vnstat -m                              # pemakaian per bulan, format manusia
-vnstat --oneline b                     # yang dibaca penjaga: field 11 = total bulan ini, byte
+vnstat -m                              # monthly usage, human format
+vnstat --oneline b                     # what the guard reads: field 11 = this month, bytes
 systemctl list-timers budget-guard.timer
 journalctl -u budget-guard -n 20
 ```
 
-`install.sh` memasang `vnstat` kalau belum ada. Penjaga anggaran tanpa vnstat
-hanya hijau di `systemctl` sementara tagihan berjalan sendiri. Skripnya sengaja
-gagal keras (`exit 1`) kalau vnstat tidak ada atau keluarannya tidak dikenali,
-jadi kelihatan di `systemctl --failed`.
+`install.sh` installs `vnstat` when it is missing. A budget guard without vnstat is
+only green in `systemctl` while the bill runs on its own. The script fails hard
+(`exit 1`) when vnstat is absent or its output is not recognised, so the failure
+shows in `systemctl --failed`.
 
-`--oneline` hanya menerima mode `b`; `m` ditolak dengan pesan error dan keluar
-non-zero. Nilai dari mode `b` sudah byte mentah, tanpa satuan yang perlu diurai.
+`--oneline` accepts only mode `b`; `m` is rejected with an error and a non-zero
+exit. Mode `b` already reports raw bytes, with no unit to parse.
 
-Menaikkan batas:
+Raise the ceiling:
 
 ```bash
 sudo sh -c 'printf "FLUXCODE_RELAY_BUDGET_GB=250\n" > /etc/bore-relay/budget'
-sudo systemctl restart budget-guard.timer   # unit sudah membaca EnvironmentFile itu
+sudo systemctl restart budget-guard.timer   # the unit already reads that EnvironmentFile
 sudo systemctl start budget-guard.service
 ```
 
-Relay yang berhenti karena anggaran tidak akan menyala sendiri. Nyalakan ulang
-setelah bulan berganti:
+A relay stopped by the guard does not come back on its own. Start it after the
+month rolls over:
 
 ```bash
 sudo systemctl start bore-server
 ```
 
-Hitungan kasar: 200 GB/bulan = 6,6 GB/hari. Sesi Live Share tipikal memakai
-ratusan kilobyte sampai beberapa megabyte, jadi ratusan sesi per hari masih
-masuk anggaran.
+Rough arithmetic: 200 GB/month is 6.6 GB/day. A typical Live Share session uses
+hundreds of kilobytes to a few megabytes, so hundreds of sessions a day still fit.
 
 ---
 
 ## 8. Troubleshooting
 
-| Gejala | Penyebab | Tindakan |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `nc` ke 7835 timeout | security group provider menutup port | buka `7835/tcp` di panel provider |
-| `nc` ke 20000 timeout | rentang data belum dibuka | buka `20000-20049/tcp` |
-| `bore-server` restart terus | secret tidak terbaca | `journalctl -u bore-server -n 50` |
-| Klien bilang "did not ask for a secret" | relay jalan tanpa `--secret` | start ulang dengan secret |
-| Klien gagal semua jalur | DNS di-proxy Cloudflare | set record ke DNS-only |
-| Halaman `/fluxcode` 404 | Caddy tidak terpasang atau port dipakai lain | `systemctl status caddy` |
-| `dig` mengembalikan `104.x` / `172.x` | proxy Cloudflare masih aktif | matikan proxy |
-| Relay mati sendiri | anggaran 190 GB tercapai | lihat bagian 7 |
+| `nc` to 7835 times out | provider security group blocks the port | open `7835/tcp` in the provider panel |
+| `nc` to 20000 times out | the data range is not open | open `20000-20049/tcp` |
+| `bore-server` keeps restarting | the secret cannot be read | `journalctl -u bore-server -n 50` |
+| Client says "did not ask for a secret" | the relay runs without `--secret` | restart it with a secret |
+| Client fails on every path | DNS is behind the Cloudflare proxy | set the record to DNS-only |
+| `/fluxcode` returns 404 | Caddy is missing or the ports are taken | `systemctl status caddy` |
+| `dig` returns `104.x` / `172.x` | the Cloudflare proxy is still on | turn the proxy off |
+| Relay stopped by itself | the 190 GB budget was reached | see section 7 |
 
-Log:
+Logs:
 
 ```bash
 journalctl -u bore-server -n 100 --no-pager
@@ -264,5 +262,5 @@ sudo rm -f /usr/local/bin/bore
 sudo userdel borerelay
 ```
 
-Bila `install.sh` yang menulis `/etc/caddy/Caddyfile`, periksa dulu isinya
-sebelum menghapus: mungkin ada situs lain di berkas yang sama.
+If `install.sh` wrote to `/etc/caddy/Caddyfile`, read it before deleting anything:
+the file may hold other sites.
