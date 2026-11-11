@@ -391,6 +391,18 @@ fn write_frame(w: &mut TcpStream, v: &serde_json::Value) -> std::io::Result<()> 
     w.write_all(&b)
 }
 
+/// Answer to a relay's `Challenge`. `bore` keys its HMAC with SHA-256 of the
+/// secret and signs the challenge's 16 raw UUID bytes, not its printed form.
+fn challenge_tag(secret: &str, challenge: &str) -> Result<String, String> {
+    use hmac::Mac;
+    use sha2::Digest;
+    let key = sha2::Sha256::digest(secret.as_bytes());
+    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::parse_str(challenge).map_err(|e| e.to_string())?;
+    mac.update(id.as_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
 fn relay_connect(ep: &RelayEndpoint) -> std::io::Result<TcpStream> {
     let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "no address for the relay");
     for a in (ep.host.as_str(), ep.port).to_socket_addrs()? {
@@ -433,12 +445,13 @@ fn relay(port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &d
 /// One attempt against a single relay.
 fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &dyn Fn(String)) -> Result<String, String> {
     let mut control = relay_connect(ep).map_err(|e| crate::trf!("{relay} could not be reached ({e}). A firewall or the network may block it."; relay => ep.host.clone(), e => e))?;
+    let mut reader = BufReader::new(control.try_clone().map_err(|e| e.to_string())?);
+    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
+    relay_auth(ep, &mut control, &mut reader)?;
     write_frame(&mut control, &serde_json::json!({ "Hello": 0 })).map_err(|e| e.to_string())?;
     if let Ok(mut c) = ctl.lock() {
         *c = control.try_clone().ok();
     }
-    let mut reader = BufReader::new(control);
-    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
     let hello = read_frame(&mut reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => ep.host.clone(), e => e))?;
     let public = hello.get("Hello").and_then(|p| p.as_u64()).ok_or_else(|| crate::trf!("{relay} refused: {why}"; relay => ep.host.clone(), why => hello.get("Error").and_then(|e| e.as_str()).unwrap_or("unexpected reply")))?;
     ready(format!("{}:{public}", ep.host));
@@ -456,10 +469,28 @@ fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Opti
     Ok(ep.host.clone())
 }
 
+/// Prove we know the relay's secret, when it has one. A relay started with
+/// `--secret` speaks first: it sends a UUID challenge and ignores everything
+/// until we answer. A relay without one says nothing until we ask for a port.
+fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<(), String> {
+    let Some(secret) = ep.secret.as_deref() else { return Ok(()) };
+    let relay = ep.host.clone();
+    let frame = read_frame(reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => relay.clone(), e => e))?;
+    let Some(challenge) = frame.get("Challenge").and_then(|c| c.as_str()) else {
+        return Err(crate::trf!("{relay} did not ask for a secret. Check `--secret` on the relay."; relay => relay));
+    };
+    let tag = challenge_tag(secret, challenge)?;
+    write_frame(control, &serde_json::json!({ "Authenticate": tag })).map_err(|e| e.to_string())
+}
+
 /// One guest through the relay: claim its connection, then copy bytes both ways.
-/// It must go back to the same relay that handed out the port.
+/// It must go back to the same relay that handed out the port, and prove the
+/// secret again — every control connection is authenticated, not just the first.
 fn relay_accept(id: &str, port: u16, ep: &RelayEndpoint) -> std::io::Result<()> {
     let mut remote = relay_connect(ep)?;
+    let mut reader = BufReader::new(remote.try_clone()?);
+    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
+    relay_auth(ep, &mut remote, &mut reader).map_err(std::io::Error::other)?;
     write_frame(&mut remote, &serde_json::json!({ "Accept": id }))?;
     let local = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(3))?;
     let _ = local.set_nodelay(true);
@@ -483,6 +514,28 @@ fn pipe(a: TcpStream, b: TcpStream) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{control_url, dechunk, is_global_v6, is_private_v4, Reach, State};
+
+    /// Vector computed independently with Python's hmac over `uuid.bytes`.
+    #[test]
+    fn challenge_tag_matches_bore_scheme() {
+        let tag = super::challenge_tag("MyKineSecret", "11111111-2222-3333-4444-555555555555").unwrap();
+        assert_eq!(tag, "dd6715e066ac25007d7d425e59c0864f58517c8bd56319594cd1b473b8e696e1");
+    }
+
+    #[test]
+    fn challenge_tag_differs_per_secret_and_challenge() {
+        let a = super::challenge_tag("one", "11111111-2222-3333-4444-555555555555").unwrap();
+        let b = super::challenge_tag("two", "11111111-2222-3333-4444-555555555555").unwrap();
+        let c = super::challenge_tag("one", "11111111-2222-3333-4444-666666666666").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn challenge_tag_rejects_a_non_uuid() {
+        assert!(super::challenge_tag("s", "not-a-uuid").is_err());
+    }
 
     fn env_of(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         let owned: Vec<(&'static str, String)> = pairs.iter().map(|(k, v)| (*k, v.to_string())).collect();
@@ -663,5 +716,61 @@ mod tests {
                 let _ = c.shutdown(std::net::Shutdown::Both);
             }
         });
+    }
+
+    /// A relay started with `--secret`, end to end: the handshake is what makes
+    /// this work, so it proves the wire order against the real bore binary.
+    /// Needs `bore` on PATH (or at /tmp/bore): `cargo test relay_round_trip_with_secret -- --ignored`.
+    #[test]
+    #[ignore]
+    fn relay_round_trip_with_secret() {
+        use std::io::{Read, Write};
+        let bore = [std::path::PathBuf::from("/tmp/bore"), std::path::PathBuf::from("bore")]
+            .into_iter()
+            .find(|p| p.exists() || p.components().count() == 1)
+            .unwrap();
+        // bore's control port is fixed at 7835; --min-port/--max-port only bound tunnels.
+        let port = 7835u16;
+        let mut srv = std::process::Command::new(&bore)
+            .args(["server", "--secret", "s3cret", "--min-port", "29800", "--max-port", "29810", "--bind-addr", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start bore server");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut b = [0u8; 5];
+                    if s.read_exact(&mut b).is_ok() {
+                        let _ = s.write_all(&b);
+                    }
+                });
+            }
+        });
+
+        let ep = super::RelayEndpoint { host: "127.0.0.1".into(), port, secret: Some("s3cret".into()) };
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let ctl = std::sync::Mutex::new(None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|sc| {
+            sc.spawn(|| {
+                let _ = super::relay_open(&ep, local, &stop, &ctl, &|a| tx.send(a).unwrap());
+            });
+            let addr = rx.recv_timeout(std::time::Duration::from_secs(15)).expect("relay port");
+            let mut g = std::net::TcpStream::connect(addr).unwrap();
+            g.write_all(b"hello").unwrap();
+            let mut back = [0u8; 5];
+            g.read_exact(&mut back).unwrap();
+            assert_eq!(&back, b"hello");
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(c) = ctl.lock().unwrap().take() {
+                let _ = c.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        let _ = srv.kill();
     }
 }

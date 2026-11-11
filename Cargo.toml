@@ -38,6 +38,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Live share: each session's traffic is encrypted with the secret in its invite code
 # (pure Rust; no TLS stack or certificates needed between two PCs).
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Live share relay: a relay started with `--secret` answers with a UUID challenge
+# and expects `hex(HMAC-SHA256(SHA256(secret), challenge_bytes))` back.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["serde"] }
 getrandom = "0.2"
 # Live share: an IPv6-only listener next to the IPv4 one (Linux sockets are dual-stack by default).
 socket2 = "0.6"
