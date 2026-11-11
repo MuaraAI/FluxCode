@@ -139,11 +139,26 @@ jobs:
           fetch-depth: 0
       - name: System libraries for GPUI
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config clang libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype6-dev \
-            libvulkan-dev libssl-dev libzstd-dev
+          packages="pkg-config clang libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+                    libx11-xcb-dev libxcb1-dev libfontconfig1-dev libfreetype6-dev
+                    libvulkan-dev libssl-dev libzstd-dev"
+          # The runner's resolver sometimes fails on the Ubuntu mirrors
+          # (azure.archive.ubuntu.com and friends) while Microsoft's repo resolves
+          # fine, which fails this step before a single line is compiled. Retry, and
+          # if that does not take, point the runner at public resolvers and retry
+          # again, so a flaky DNS server costs a minute instead of the whole job.
+          apt_install() {
+            sudo apt-get update -qq &&
+              sudo apt-get install -y --no-install-recommends $packages
+          }
+          apt_install ||
+            { sleep 10; apt_install; } ||
+            {
+              echo "apt cannot reach the mirrors; using 1.1.1.1 and 8.8.8.8" >&2
+              printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf >/dev/null
+              sleep 5
+              apt_install
+            }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
