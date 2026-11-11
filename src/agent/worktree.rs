@@ -24,7 +24,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     menu::DropdownMenu,
-    Icon, Selectable, Sizable,
+    Icon, IconName, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
@@ -277,50 +277,79 @@ impl Workbench {
         self.agent_use_account(Some(name), cx);
     }
 
-    pub(crate) fn render_agent_isolation(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The header's one "more" button: the harness's mode (Claude's permission modes:
+    /// ask, accept edits, bypass, plan), its own worktree, the account, the side it docks
+    /// on, and its settings. These used to be five icons and a chip under the message
+    /// box; they are things set once in a while, so they share one menu.
+    pub(crate) fn render_agent_more(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on = self.agent.worktree.is_some();
-        let busy = self.agent.worktree_busy;
         let (fam, accounts) = self.agent_accounts();
         let current = self.agent_account().map(|a| a.name);
+        let mode = self.agent_config_view().into_iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1);
+        let right = self.settings.agent_right;
+        // A mode that skips the questions shows on the button, so it is never on unnoticed.
+        let risky = mode.as_ref().is_some_and(|m| {
+            let c = m.current.to_ascii_lowercase();
+            c.contains("bypass") || c.contains("yolo") || c.contains("dontask") || c.contains("dont_ask")
+        });
         let weak = cx.entity().downgrade();
-        h_flex()
-            .gap_px()
-            .child(
-                Button::new("ag-worktree")
-                    .icon(Icon::new(gpui_kit::assets::IconName::GitFork))
-                    .xsmall()
-                    .ghost()
-                    .selected(on)
-                    .loading(busy)
-                    .tooltip(if on { tr("Working in its own worktree: click to remove it and go back to your checkout") } else { tr("Work in its own git worktree, so it doesn't touch your checkout") })
-                    .on_click(cx.listener(|this, _, _, cx| this.agent_worktree_toggle(cx))),
-            )
-            .when(fam.is_some(), |h| {
-                h.child(
-                    Button::new("ag-account")
-                        .icon(Icon::new(gpui_kit::assets::IconName::Users))
-                        .xsmall()
-                        .ghost()
-                        .selected(current.is_some())
-                        .tooltip(tr("Account"))
-                        .dropdown_menu(move |menu, _, _| {
-                            let pick = |name: Option<String>, label: String, checked: bool| {
-                                let weak = weak.clone();
-                                gpui_kit::component::menu::PopupMenuItem::new(label).checked(checked).on_click(move |_, _, cx| {
-                                    let name = name.clone();
-                                    _ = weak.update(cx, |this, cx| this.agent_use_account(name, cx));
-                                })
-                            };
-                            let mut m = menu.min_w(px(200.)).item(pick(None, tr("Default account").into(), current.is_none()));
-                            for a in &accounts {
-                                m = m.item(pick(Some(a.name.clone()), a.name.clone(), current.as_deref() == Some(a.name.as_str())));
+        Button::new("ag-more")
+            .icon(Icon::new(IconName::Ellipsis).when(risky, |i| i.text_color(c(theme::WARN))))
+            .xsmall()
+            .ghost()
+            .selected(on || current.is_some())
+            .loading(self.agent.worktree_busy)
+            .tooltip(match &mode {
+                Some(m) => crate::trf!("More · mode: {m}"; m => m.current_name()),
+                None => tr("More").to_string(),
+            })
+            .dropdown_menu(move |menu, _, _| {
+                let act = |label: String, checked: bool, f: Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>| {
+                    let weak = weak.clone();
+                    gpui_kit::component::menu::PopupMenuItem::new(label).checked(checked).on_click(move |_, w, cx| {
+                        _ = weak.update(cx, |this, cx| f(this, w, cx));
+                    })
+                };
+                let mut m = menu.min_w(px(240.));
+                if let Some(o) = &mode {
+                    m = m.label(tr("Mode"));
+                    for (v, name, _) in &o.choices {
+                        let (id, v) = (o.id.clone(), v.clone());
+                        m = m.item(act(name.clone(), *v == o.current, Box::new(move |this, _, cx| this.agent_set_option(&id, v.clone(), true, cx))));
+                    }
+                    m = m.separator();
+                }
+                m = m.item(act(
+                    if on { tr("Own worktree (on): remove it") } else { tr("Work in its own git worktree") }.into(),
+                    on,
+                    Box::new(|this, _, cx| this.agent_worktree_toggle(cx)),
+                ));
+                if fam.is_some() {
+                    m = m.separator().label(tr("Account"));
+                    m = m.item(act(tr("Default account").into(), current.is_none(), Box::new(|this, _, cx| this.agent_use_account(None, cx))));
+                    for a in &accounts {
+                        let name = a.name.clone();
+                        m = m.item(act(a.name.clone(), current.as_deref() == Some(a.name.as_str()), Box::new(move |this, _, cx| this.agent_use_account(Some(name.clone()), cx))));
+                    }
+                    m = m.item(act(tr("Add account and sign in…").into(), false, Box::new(|this, _, cx| this.agent_add_account(cx))));
+                }
+                m.separator()
+                    .item(act(
+                        if right { tr("Move to the left side bar") } else { tr("Move to the right side") }.into(),
+                        false,
+                        Box::new(|this, w, cx| this.agent_move_dock(w, cx)),
+                    ))
+                    .item(act(
+                        tr("Agent settings: model, permissions, browser").into(),
+                        false,
+                        Box::new(|this, w, cx| {
+                            if this.agent.show_options {
+                                this.agent_close_options(w, cx);
+                            } else {
+                                this.agent_open_options(w, cx);
                             }
-                            let weak = weak.clone();
-                            m.separator().item(gpui_kit::component::menu::PopupMenuItem::new(tr("Add account and sign in…")).on_click(move |_, _, cx| {
-                                _ = weak.update(cx, |this, cx| this.agent_add_account(cx));
-                            }))
                         }),
-                )
+                    ))
             })
     }
 

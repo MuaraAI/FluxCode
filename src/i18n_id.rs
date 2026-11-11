@@ -1092,6 +1092,9 @@ pub const ID: &[(&str, &str)] = &[
     ("Show {n} earlier", "Tampilkan {n} sebelumnya"),
     ("· {n} hidden", "· {n} tersembunyi"),
     // ------------------------------------------------------------ tabs menu, agent steps, worktree, accounts
+    ("More · mode: {m}", "Lainnya · mode: {m}"),
+    ("Own worktree (on): remove it", "Worktree sendiri (aktif): hapus"),
+    ("Work in its own git worktree", "Kerja di git worktree sendiri"),
     ("Close Others", "Tutup yang Lain"),
     ("Close to the Right", "Tutup di Sebelah Kanan"),
     ("Close Saved", "Tutup yang Tersimpan"),

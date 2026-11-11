@@ -84,6 +84,9 @@ fn main() {
     app.with_assets(AppAssets).run(move |cx| {
         boot::mark("app running");
         gpui_kit::init(cx);
+        // The pointer stays visible while typing: hiding it on every key (Tab, shortcuts)
+        // made it blink away and back in the editor.
+        cx.set_cursor_hide_mode(CursorHideMode::Never);
         boot::mark("gpui-kit init");
         // The saved theme is active before the first frame, so the window never flashes another one.
         let saved = settings::Settings::load();
