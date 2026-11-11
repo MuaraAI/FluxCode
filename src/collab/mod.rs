@@ -19,6 +19,7 @@ pub mod net;
 pub mod ot;
 pub mod page;
 pub mod proto;
+pub mod ratelimit;
 pub mod reach;
 pub mod share;
 
@@ -47,6 +48,17 @@ pub enum Role {
 pub struct Guest {
     tx: Sender<Msg>,
     peer: Option<Peer>,
+    opens: ratelimit::Bucket,
+    edits: ratelimit::Bucket,
+    cursors: ratelimit::Bucket,
+}
+
+/// Which of a guest's buckets a message draws from.
+#[derive(Clone, Copy)]
+enum Limb {
+    Open,
+    Edit,
+    Cursor,
 }
 
 /// One shared file on this PC.
@@ -451,7 +463,7 @@ impl Workbench {
         match ev {
             NetEvent::Connected { conn, tx } => {
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
-                    guests.insert(conn, Guest { tx, peer: None });
+                    guests.insert(conn, Guest { tx, peer: None, opens: ratelimit::Bucket::new(10, 1), edits: ratelimit::Bucket::new(200, 200), cursors: ratelimit::Bucket::new(50, 50) });
                 }
             }
             NetEvent::Closed { conn, .. } | NetEvent::Message { conn, msg: Msg::Bye { .. } } => {
@@ -464,6 +476,18 @@ impl Workbench {
                 }
             }
             NetEvent::Message { conn, msg } => self.collab_host_msg(conn, msg, window, cx),
+        }
+    }
+
+    /// Spend one of `conn`'s tokens for this kind of message. A guest we don't
+    /// know is allowed through: the connection is about to be dropped anyway.
+    fn guest_take(&mut self, conn: u64, limb: Limb) -> bool {
+        let Some(Role::Host { guests, .. }) = &mut self.collab.role else { return true };
+        let Some(g) = guests.get_mut(&conn) else { return true };
+        match limb {
+            Limb::Open => g.opens.take(),
+            Limb::Edit => g.edits.take(),
+            Limb::Cursor => g.cursors.take(),
         }
     }
 
@@ -491,11 +515,20 @@ impl Workbench {
                 self.collab.send_all(&Msg::Peers { peers }, Some(conn));
                 self.status = crate::trf!("{name} joined the session"; name => name).into();
             }
-            Msg::Open { path } => match self.collab_host_open(&path, window, cx) {
-                Ok((rev, text)) => reply(self, Msg::Snapshot { path, rev, text }),
-                Err(why) => reply(self, Msg::Refused { why }),
-            },
+            Msg::Open { path } => {
+                if !self.guest_take(conn, Limb::Open) {
+                    reply(self, Msg::Refused { why: "Too many requests, slow down.".into() });
+                    return;
+                }
+                match self.collab_host_open(&path, window, cx) {
+                    Ok((rev, text)) => reply(self, Msg::Snapshot { path, rev, text }),
+                    Err(why) => reply(self, Msg::Refused { why }),
+                }
+            }
             Msg::Edit { path, rev, op, ai } => {
+                if !self.guest_take(conn, Limb::Edit) {
+                    return;
+                }
                 let who = self.collab.name_of(conn);
                 let Some(doc) = self.collab.docs.get_mut(&path) else { return };
                 let Some(server) = doc.server.as_mut() else { return };
@@ -521,6 +554,9 @@ impl Workbench {
                 }
             }
             Msg::Cursor { path, line } => {
+                if !self.guest_take(conn, Limb::Cursor) {
+                    return;
+                }
                 if let Some(p) = self.collab.peers.iter_mut().find(|p| p.id == conn) {
                     p.file = path;
                     p.line = line;
