@@ -93,6 +93,20 @@ impl Op {
         }).sum()
     }
 
+    /// Characters this operation inserts or deletes. A paste of a megabyte and a
+    /// single keystroke are not the same amount of work: the host rebroadcasts
+    /// the whole insert to every peer and replays it through the merge machinery.
+    pub fn changed_len(&self) -> usize {
+        self.comps
+            .iter()
+            .map(|c| match c {
+                Comp::Retain(_) => 0,
+                Comp::Insert(s) => clen(s),
+                Comp::Delete(n) => *n,
+            })
+            .sum()
+    }
+
     /// Keeps everything: changes nothing.
     #[cfg(test)]
     pub fn is_noop(&self) -> bool {

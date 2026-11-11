@@ -44,7 +44,12 @@ pub fn endpoints() -> Vec<RelayEndpoint> {
 }
 
 fn endpoints_from(get: &dyn Fn(&str) -> Option<String>, baked: Option<&'static str>) -> Vec<RelayEndpoint> {
-    let secret = get("FLUXCODE_RELAY_SECRET").filter(|s| !s.is_empty()).or_else(|| baked.map(str::to_string).filter(|s| !s.is_empty()));
+    // Set-but-empty means "do not use a secret": it must beat the baked one, or a
+    // developer could not point a release build at the public relay.
+    let secret = match get("FLUXCODE_RELAY_SECRET") {
+        Some(s) => Some(s).filter(|s| !s.is_empty()),
+        None => baked.map(str::to_string).filter(|s| !s.is_empty()),
+    };
     let mut out = Vec::new();
     if let Some(secret) = secret {
         let host = get("FLUXCODE_RELAY_HOST").filter(|h| !h.is_empty()).unwrap_or_else(|| PRIMARY_RELAY_HOST.to_string());
@@ -57,10 +62,27 @@ fn endpoints_from(get: &dyn Fn(&str) -> Option<String>, baked: Option<&'static s
     out
 }
 
-/// Is `addr` (`host:port`) one of the relays we hand out?
+/// Hosts we hand out, resolved once: [`is_relay_addr`] runs on the render path.
+static RELAY_HOSTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| endpoints().into_iter().map(|e| e.host).collect());
+
+/// Host of our own relay, when one is configured. The fallback is somebody
+/// else's service; the UI must not call it MuaraAI.
+static PRIMARY_HOST: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| primary_host_of(&endpoints()));
+
+fn primary_host_of(eps: &[RelayEndpoint]) -> Option<String> {
+    eps.iter().find(|e| e.secret.is_some()).map(|e| e.host.clone())
+}
+
+/// Is `addr` (`host:port`) the relay we run ourselves?
+pub fn is_primary_relay(addr: &str) -> bool {
+    let Some((host, _)) = addr.rsplit_once(':') else { return false };
+    PRIMARY_HOST.as_deref() == Some(host)
+}
+
+/// Is `addr` (`host:port`) any relay we hand out, ours or the public fallback?
 pub fn is_relay_addr(addr: &str) -> bool {
     let Some((host, _)) = addr.rsplit_once(':') else { return false };
-    endpoints().iter().any(|e| e.host == host)
+    RELAY_HOSTS.iter().any(|h| h == host)
 }
 
 /// Where one way in stands.
@@ -367,12 +389,19 @@ fn soap(control: &str, service: &str, action: &str, args: &str) -> Result<String
 
 // ---------------------------------------------------------------- relay
 
+/// The largest control frame we will read. Real ones are a few dozen bytes; the
+/// bound stops a relay (or something on the path) from growing the buffer until
+/// the host runs out of memory.
+const MAX_CONTROL_FRAME: usize = 64 << 10;
+
 /// One null-terminated JSON frame from a bore stream.
 fn read_frame(r: &mut BufReader<TcpStream>) -> std::io::Result<serde_json::Value> {
     let mut buf = Vec::new();
-    r.read_until(0, &mut buf)?;
+    let read = r.by_ref().take(MAX_CONTROL_FRAME as u64 + 1).read_until(0, &mut buf)?;
     if buf.last() == Some(&0) {
         buf.pop();
+    } else if read > MAX_CONTROL_FRAME {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "the relay sent an oversized frame"));
     }
     if buf.is_empty() {
         return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the relay closed the connection"));
@@ -442,12 +471,17 @@ fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Opti
     let mut control = relay_connect(ep).map_err(|e| crate::trf!("{relay} could not be reached ({e}). A firewall or the network may block it."; relay => ep.host.clone(), e => e))?;
     let mut reader = BufReader::new(control.try_clone().map_err(|e| e.to_string())?);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
-    relay_auth(ep, &mut control, &mut reader)?;
-    write_frame(&mut control, &serde_json::json!({ "Hello": 0 })).map_err(|e| e.to_string())?;
+    let early = relay_auth(ep, &mut control, &mut reader)?;
     if let Ok(mut c) = ctl.lock() {
         *c = control.try_clone().ok();
     }
-    let hello = read_frame(&mut reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => ep.host.clone(), e => e))?;
+    let hello = match early {
+        Some(frame) => frame,
+        None => {
+            write_frame(&mut control, &serde_json::json!({ "Hello": 0 })).map_err(|e| e.to_string())?;
+            read_frame(&mut reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => ep.host.clone(), e => e))?
+        }
+    };
     let public = hello.get("Hello").and_then(|p| p.as_u64()).ok_or_else(|| crate::trf!("{relay} refused: {why}"; relay => ep.host.clone(), why => hello.get("Error").and_then(|e| e.as_str()).unwrap_or("unexpected reply")))?;
     ready(format!("{}:{public}", ep.host));
     // The relay sends a heartbeat every half second; a minute of silence means it's gone.
@@ -466,16 +500,21 @@ fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Opti
 
 /// Prove we know the relay's secret, when it has one. A relay started with
 /// `--secret` speaks first: it sends a UUID challenge and ignores everything
-/// until we answer. A relay without one says nothing until we ask for a port.
-fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<(), String> {
-    let Some(secret) = ep.secret.as_deref() else { return Ok(()) };
+/// until we answer. A relay without one says nothing until we ask for a port,
+/// and then any frame already read is returned for the caller to use.
+fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<Option<serde_json::Value>, String> {
+    let Some(secret) = ep.secret.as_deref() else { return Ok(None) };
     let relay = ep.host.clone();
     let frame = read_frame(reader).map_err(|e| crate::trf!("{relay} did not answer ({e})."; relay => relay.clone(), e => e))?;
     let Some(challenge) = frame.get("Challenge").and_then(|c| c.as_str()) else {
-        return Err(crate::trf!("{relay} did not ask for a secret. Check `--secret` on the relay."; relay => relay));
+        // An open relay: it answered a question we never asked, so the frame is
+        // the answer to `Hello`. Accepting it keeps `FLUXCODE_RELAY_HOST` usable
+        // against a relay someone forgot to start with `--secret`.
+        return Ok(Some(frame));
     };
     let tag = challenge_tag(secret, challenge)?;
-    write_frame(control, &serde_json::json!({ "Authenticate": tag })).map_err(|e| e.to_string())
+    write_frame(control, &serde_json::json!({ "Authenticate": tag })).map_err(|e| e.to_string())?;
+    Ok(None)
 }
 
 /// One guest through the relay: claim its connection, then copy bytes both ways.
@@ -486,6 +525,10 @@ fn relay_accept(id: &str, port: u16, ep: &RelayEndpoint) -> std::io::Result<()> 
     let mut reader = BufReader::new(remote.try_clone()?);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
     relay_auth(ep, &mut remote, &mut reader).map_err(std::io::Error::other)?;
+    // The timeout we just set lives on the socket, not the handle, so the copy
+    // loop below would inherit it: a guest that is only reading sends nothing,
+    // and after 10 s the tunnel would tear itself down. Clear it before piping.
+    let _ = remote.set_read_timeout(None);
     write_frame(&mut remote, &serde_json::json!({ "Accept": id }))?;
     let local = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(3))?;
     let _ = local.set_nodelay(true);
@@ -556,6 +599,13 @@ mod tests {
     }
 
     #[test]
+    fn empty_env_secret_beats_the_baked_one() {
+        let eps = super::endpoints_from(&env_of(&[("FLUXCODE_RELAY_SECRET", "")]), Some("baked"));
+        assert_eq!(eps.len(), 1, "an explicit empty secret must disable the primary even in a release build");
+        assert_eq!(eps[0].host, "bore.pub");
+    }
+
+    #[test]
     fn env_overrides_primary() {
         let eps = super::endpoints_from(
             &env_of(&[("FLUXCODE_RELAY_SECRET", "s"), ("FLUXCODE_RELAY_HOST", "relay.example"), ("FLUXCODE_RELAY_PORT", "9000")]),
@@ -577,6 +627,17 @@ mod tests {
     fn relay_addr_does_not_match_a_lan_address() {
         assert!(!super::is_relay_addr("192.168.1.5:47615"));
         assert!(!super::is_relay_addr("10.0.0.2:47615"));
+    }
+
+    #[test]
+    fn the_fallback_is_not_our_relay() {
+        let eps = super::endpoints_from(&env_of(&[("FLUXCODE_RELAY_SECRET", "s")]), None);
+        let primary = super::primary_host_of(&eps);
+        assert_eq!(primary.as_deref(), Some("live.muaraai.com"));
+        // bore.pub is a different service; the panel must not call it MuaraAI.
+        let public = super::endpoints_from(&env_of(&[]), None);
+        assert_eq!(super::primary_host_of(&public), None, "with no secret there is no relay of ours");
+        assert_eq!(public.len(), 1);
     }
 
     #[test]
@@ -767,6 +828,84 @@ mod tests {
             }
         });
         let _ = srv.kill();
+    }
+
+    /// A guest that only reads sends nothing for minutes. The accept path used to
+    /// leave a 10 s read timeout on the socket that the copy loop inherited, so
+    /// the tunnel tore itself down while the guest was idle. Needs `bore`:
+    /// `cargo test idle_guest_survives -- --ignored --test-threads=1`.
+    #[test]
+    #[ignore]
+    fn idle_guest_survives() {
+        use std::io::{Read, Write};
+        let bore = [std::path::PathBuf::from("/tmp/bore"), std::path::PathBuf::from("bore")]
+            .into_iter()
+            .find(|p| p.exists() || p.components().count() == 1)
+            .unwrap();
+        let mut srv = std::process::Command::new(&bore)
+            .args(["server", "--secret", "s3cret", "--min-port", "29840", "--max-port", "29850", "--bind-addr", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start bore server");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                std::thread::spawn(move || {
+                    // Echo everything, so the tunnel stays up between round trips.
+                    let mut b = [0u8; 256];
+                    while let Ok(n) = s.read(&mut b) {
+                        if n == 0 || s.write_all(&b[..n]).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+
+        let ep = super::RelayEndpoint { host: "127.0.0.1".into(), port: 7835, secret: Some("s3cret".into()) };
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let ctl = std::sync::Mutex::new(None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        // No panic inside the scope: unwinding past it would skip the shutdown and
+        // leave the relay thread reading heartbeats until the test binary exits.
+        let outcome: Result<(), String> = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                let _ = super::relay_open(&ep, local, &stop, &ctl, &|a| tx.send(a).unwrap());
+            });
+            let result = (|| -> Result<(), String> {
+                let addr = rx.recv_timeout(std::time::Duration::from_secs(15)).map_err(|e| format!("relay port: {e}"))?;
+                let mut g = std::net::TcpStream::connect(addr).map_err(|e| e.to_string())?;
+                g.set_read_timeout(Some(std::time::Duration::from_secs(20))).map_err(|e| e.to_string())?;
+                g.write_all(b"hello").map_err(|e| e.to_string())?;
+                let mut back = [0u8; 5];
+                g.read_exact(&mut back).map_err(|e| format!("first echo: {e}"))?;
+                if &back != b"hello" {
+                    return Err(format!("first echo was {back:?}"));
+                }
+                // Longer than the 10 s timeout the accept path used to leave behind.
+                std::thread::sleep(std::time::Duration::from_secs(12));
+                g.write_all(b"again").map_err(|e| format!("write after idle: {e}"))?;
+                let mut back2 = [0u8; 5];
+                g.read_exact(&mut back2).map_err(|e| format!("no echo after the idle window: {e}"))?;
+                if &back2 != b"again" {
+                    return Err(format!("second echo was {back2:?}"));
+                }
+                Ok(())
+            })();
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(c) = ctl.lock().unwrap().take() {
+                let _ = c.shutdown(std::net::Shutdown::Both);
+            }
+            result
+        });
+        let _ = srv.kill();
+        if let Err(e) = outcome {
+            panic!("{e}");
+        }
     }
 
     /// A wrong secret must fail with a readable error, not a panic or a hang.

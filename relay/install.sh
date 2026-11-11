@@ -66,7 +66,7 @@ else
 fi
 
 step "Menyiapkan secret"
-install -d -m 0750 /etc/bore-relay
+install -d -m 0750 -o root -g borerelay /etc/bore-relay
 if [ -s /etc/bore-relay/env ]; then
     say "sudah ada, dibiarkan (rotasi manual, lihat README)"
 else
@@ -82,6 +82,25 @@ if [ -n "${FLUXCODE_RELAY_BUDGET_GB:-}" ]; then
     chmod 0644 /etc/bore-relay/budget
     say "batas anggaran disetel ke ${FLUXCODE_RELAY_BUDGET_GB} GB/bulan"
 fi
+
+step "Memeriksa alat pengukur bandwidth"
+if command -v vnstat >/dev/null 2>&1; then
+    say "vnstat sudah terpasang"
+else
+    # Tanpa vnstat penjaga anggaran buta, dan itu lebih buruk daripada tidak ada
+    # penjaga sama sekali: timer tetap hijau sementara tagihan jalan sendiri.
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get install -y vnstat >/dev/null || die "gagal memasang vnstat"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y vnstat >/dev/null || die "gagal memasang vnstat"
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm vnstat >/dev/null || die "gagal memasang vnstat"
+    else
+        die "vnstat tidak terpasang dan tidak ada package manager yang dikenal; pasang manual lalu jalankan ulang"
+    fi
+    say "vnstat dipasang"
+fi
+systemctl enable --now vnstat >/dev/null 2>&1 || say "PERINGATAN: layanan vnstat tidak bisa diaktifkan"
 
 step "Memasang unit systemd"
 install -m 0644 "$RELAY_DIR/bore-server.service" /etc/systemd/system/bore-server.service
@@ -123,7 +142,14 @@ if command -v caddy >/dev/null 2>&1; then
         install -d -m 0755 /var/www/fluxcode-relay
         install -m 0644 "$RELAY_DIR/public/fluxcode.html" /var/www/fluxcode-relay/index.html
         install -d -m 0755 /etc/caddy
-        install -m 0644 "$RELAY_DIR/caddy/Caddyfile" /etc/caddy/Caddyfile
+        # Caddyfile bisa memuat situs lain milik operator, jadi isinya tidak
+        # ditimpa: blok kita hanya ditambahkan kalau belum ada.
+        if grep -q "/var/www/fluxcode-relay" /etc/caddy/Caddyfile 2>/dev/null; then
+            say "Caddyfile sudah memuat fluxcode-relay, dibiarkan"
+        else
+            cat "$RELAY_DIR/caddy/Caddyfile" >> /etc/caddy/Caddyfile
+            say "blok fluxcode ditambahkan ke /etc/caddy/Caddyfile"
+        fi
         systemctl reload caddy 2>/dev/null || systemctl restart caddy
         say "halaman info dipasang di /fluxcode"
     fi

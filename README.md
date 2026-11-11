@@ -161,14 +161,15 @@ shows each one, its address, or why it isn't open:
 | Same network | anyone on the host's Wi-Fi or LAN | nothing (Windows asks once to let FluxCode through its firewall) |
 | Router port (UPnP) | anyone on the internet | a router with UPnP on, like the ones game servers open ports on; not possible when the provider shares one public address between customers (carrier-grade NAT), which the panel detects and says |
 | Public IPv6 | guests with IPv6 | an IPv6 address from the provider, and a router that lets connections in |
-| Relay (MuaraAI) | anyone on the internet | nothing: it works behind any router and carrier-grade NAT |
+| Relay (MuaraAI) | anyone on the internet | nothing: it works behind any router and carrier-grade NAT. Shows as Relay (public) when the fallback below is the one in use |
 
 The invite code carries every address that opened. The guest tries them all at once, the
 same network first, and uses the first host that proves it holds the code's secret.
 The relay is a TCP tunnel run by MuaraAI: it passes bytes that are already encrypted, so
 it can see that two PCs are talking, but not what they send. It costs a little speed (each
 keystroke travels to `live.muaraai.com` and back). When MuaraAI's relay cannot be reached,
-FluxCode falls back to the public [bore.pub](https://github.com/ekzhang/bore) tunnel.
+FluxCode falls back to the public [bore.pub](https://github.com/ekzhang/bore) tunnel and
+the panel relabels the row **Relay (public)**, so you can tell which one carries the session.
 Unticking **Let people join over the internet** before hosting keeps the session on the
 network only. The router's port is closed again when the session ends.
 

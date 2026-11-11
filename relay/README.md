@@ -15,6 +15,29 @@ Host ───┘        (ciphertext saja)
 Isi sesi dienkripsi dengan kunci yang ada di kode undangan. Relay hanya melihat
 byte terenkripsi: tidak bisa membaca berkas, teks, maupun posisi kursor.
 
+## Dua relay, satu klien
+
+FluxCode mengenal dua relay sekaligus, dan keduanya bukan hal yang sama:
+
+| | Relay MuaraAI (`live.muaraai.com`) | Relay publik (`bore.pub`) |
+|---|---|---|
+| Dikelola siapa | kamu, di VPS ini | proyek `bore` ekzhang, gratis |
+| Kapan dipakai | **selalu dicoba lebih dulu** | otomatis, hanya kalau relay ini gagal |
+| Autentikasi | HMAC-SHA256 dengan secret | tidak ada |
+| Batas | 190 GB/bulan, dijaga `budget-guard` | tidak dijamin, bisa berubah kapan saja |
+| Nama di UI klien | "Relay (MuaraAI)" | "Relay (public)" |
+
+Urutannya ada di `endpoints()` (`src/collab/reach.rs`): relay ini lebih dulu,
+`bore.pub` sebagai cadangan. "Relay ini mati" tidak perlu diatur manual: kalau
+VPS mati, port 7835 diblokir, atau secret tidak cocok, klien pindah sendiri ke
+`bore.pub` dan sesi tetap jalan.
+
+Build tanpa secret tidak punya endpoint primer sama sekali: `bore.pub` saja.
+Itu disengaja, supaya build PR tidak mengirim traffic ke VPS ini.
+
+Untuk mematikan cadangan sama sekali (misalnya saat menguji uninstall):
+`FLUXCODE_RELAY_FALLBACK=0`.
+
 ---
 
 ## 1. Prasyarat VPS
@@ -171,16 +194,25 @@ Relay berhenti sendiri pada **190 GB/bulan** (dari anggaran 200 GB). Batasnya
 dipasang sengaja di bawah anggaran supaya tidak ada tagihan kejutan.
 
 ```bash
-vnstat -m                        # pemakaian per bulan
+vnstat -m                              # pemakaian per bulan, format manusia
+vnstat --oneline b                     # yang dibaca penjaga: field 11 = total bulan ini, byte
 systemctl list-timers budget-guard.timer
 journalctl -u budget-guard -n 20
 ```
+
+`install.sh` memasang `vnstat` kalau belum ada. Penjaga anggaran tanpa vnstat
+hanya hijau di `systemctl` sementara tagihan berjalan sendiri. Skripnya sengaja
+gagal keras (`exit 1`) kalau vnstat tidak ada atau keluarannya tidak dikenali,
+jadi kelihatan di `systemctl --failed`.
+
+`--oneline` hanya menerima mode `b`; `m` ditolak dengan pesan error dan keluar
+non-zero. Nilai dari mode `b` sudah byte mentah, tanpa satuan yang perlu diurai.
 
 Menaikkan batas:
 
 ```bash
 sudo sh -c 'printf "FLUXCODE_RELAY_BUDGET_GB=250\n" > /etc/bore-relay/budget'
-sudo systemctl edit budget-guard.service   # tambahkan EnvironmentFile=/etc/bore-relay/budget
+sudo systemctl restart budget-guard.timer   # unit sudah membaca EnvironmentFile itu
 sudo systemctl start budget-guard.service
 ```
 

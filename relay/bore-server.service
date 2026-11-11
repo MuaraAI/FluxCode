@@ -8,8 +8,11 @@ Wants=network-online.target
 Type=simple
 User=borerelay
 Group=borerelay
+# `--secret` on the command line would put the relay secret into `ps` and into
+# the journal. bore reads BORE_SECRET from the environment, and the unit
+# supplies it from a 0640 root:borerelay file instead.
 EnvironmentFile=/etc/bore-relay/env
-ExecStart=/usr/local/bin/bore server --bind-addr 0.0.0.0 --min-port 20000 --max-port 20049 --secret ${BORE_SECRET}
+ExecStart=/usr/local/bin/bore server --bind-addr 0.0.0.0 --min-port 20000 --max-port 20049
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
