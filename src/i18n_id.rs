@@ -1089,6 +1089,8 @@ pub const ID: &[(&str, &str)] = &[
     ("Remove…", "Hapus…"),
     ("Browser for agents", "Browser untuk agent"),
     ("Copy the selection (Ctrl+C)", "Salin yang diblok (Ctrl+C)"),
+    ("Show {n} earlier", "Tampilkan {n} sebelumnya"),
+    ("· {n} hidden", "· {n} tersembunyi"),
     // ------------------------------------------------------------ tabs menu, agent steps, worktree, accounts
     ("Close Others", "Tutup yang Lain"),
     ("Close to the Right", "Tutup di Sebelah Kanan"),

@@ -32,6 +32,22 @@ impl Workbench {
         }
         let view = cx.entity();
         let active_path = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned());
+        // Follow the active tab: its folders open and its row scrolls into view, like
+        // VS Code's "reveal active file". Runs only while the explorer is on screen (so a
+        // hidden side bar costs nothing and catches up when shown), once per tab change.
+        if let Some(p) = active_path.clone().filter(|p| self.revealed.borrow().as_deref() != Some(p.as_str())) {
+            *self.revealed.borrow_mut() = Some(p.clone());
+            let id = SharedString::from(p);
+            self.tree.update(cx, |t, cx| {
+                if t.index_of(&id).is_none() {
+                    t.reveal_item(&id, ScrollStrategy::Center, cx);
+                }
+                if let Some(ix) = t.index_of(&id) {
+                    t.scroll_to_item(ix, ScrollStrategy::Nearest);
+                    t.set_selected_index(Some(ix), cx);
+                }
+            });
+        }
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
         let target = self.ctx_target.clone();
         let dirs = self.dirs.clone();

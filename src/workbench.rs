@@ -270,6 +270,9 @@ pub struct Workbench {
     // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
+    /// The tab the explorer last showed (its folders opened, scrolled into view): it
+    /// follows the active tab whenever it is on screen.
+    pub(crate) revealed: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
     // search
@@ -448,6 +451,7 @@ impl Workbench {
             collab: crate::collab::Collab::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
+            revealed: RefCell::new(None),
             pending: None,
             name_input,
             search_input,
@@ -568,6 +572,8 @@ impl Workbench {
             let all = crate::quick::file_list(flat, &dirs);
             _ = tree.update(cx, |state, cx| state.set_items(items, cx));
             _ = this.update(cx, |this, cx| {
+                // New items: show the active file again.
+                *this.revealed.borrow_mut() = None;
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
                 this.dirs = Rc::new(dirs);
@@ -2060,6 +2066,42 @@ impl Workbench {
     }
 }
 
+/// Widths of the side bar and the right dock in a window `total` wide, so that all three
+/// columns always fit and the editor keeps room to work: the dock and side bar keep the
+/// widths the user dragged them to while there is room, then give way (side bar first,
+/// down to its minimum, then the dock), and in a very narrow window share what is left.
+/// Nothing is ever pushed out past the window's edge.
+pub(crate) fn fit_columns(total: f32, side: Option<f32>, agent: Option<f32>) -> (f32, f32) {
+    const BAR: f32 = 40. + 8.; // activity bar and the two drag handles
+    const EDITOR: f32 = 320.;
+    const SIDE_MIN: f32 = 170.;
+    const AGENT_MIN: f32 = 260.;
+    let room = (total - BAR - EDITOR).max(0.);
+    let (mut s, mut a) = (side.unwrap_or(0.), agent.unwrap_or(0.));
+    if s + a > room {
+        // The side bar gives way first.
+        if side.is_some() {
+            s = (room - a).max(SIDE_MIN).min(s);
+        }
+        if s + a > room && agent.is_some() {
+            a = (room - s).max(AGENT_MIN).min(a);
+        }
+        // Still too wide (a small window): split what there is, editor included.
+        if s + a > room {
+            let all = (total - BAR).max(0.);
+            let parts = 1. + side.is_some() as u8 as f32 + agent.is_some() as u8 as f32;
+            let each = all / parts;
+            if side.is_some() {
+                s = s.min(each);
+            }
+            if agent.is_some() {
+                a = a.min(each);
+            }
+        }
+    }
+    (s, a)
+}
+
 pub(crate) fn tool_button(
     id: &'static str,
     icon: IconName,
@@ -2215,6 +2257,11 @@ impl Render for Workbench {
             None => self.render_editor_area(window, cx),
         };
         let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
+        let (side_w, agent_w) = fit_columns(
+            f32::from(window.viewport_size().width),
+            self.sidebar_open.then_some(self.sidebar_width),
+            (self.settings.agent_right && self.agent_open && !self.agent_full).then_some(self.agent_width),
+        );
         let editor_and_panel: AnyElement = if self.panel_open {
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(clip(editor_view)))
@@ -2244,7 +2291,7 @@ impl Render for Workbench {
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(div().w(px(self.sidebar_width)).flex_none().h_full().overflow_hidden().child(self.render_side_bar(window, cx)))
+                .child(div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(self.render_side_bar(window, cx)))
                 .child(handle("sidebar-resize", 1, self, cx))
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel))
                 .into_any_element()
@@ -2265,7 +2312,7 @@ impl Render for Workbench {
                 .h_full()
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
                 .child(handle("agent-resize", 2, self, cx))
-                .child(div().w(px(self.agent_width)).flex_none().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)))
+                .child(div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)))
                 .into_any_element()
         } else {
             center
@@ -2465,6 +2512,8 @@ impl Workbench {
 #[derive(Clone)]
 pub(crate) enum ScrollTarget {
     Editor(Entity<EditorState>),
+    // Plain scroll views (the chat used it before it became a virtual list).
+    #[allow(dead_code)]
     Handle(u64, ScrollHandle),
 }
 
@@ -2587,6 +2636,7 @@ impl Workbench {
     }
 
     /// A wheel glide is moving this scroll area right now.
+    #[allow(dead_code)]
     pub(crate) fn smooth_running(&self, key: u64) -> bool {
         self.smooth.as_ref().is_some_and(|s| s.target.key() == key)
     }
@@ -2674,5 +2724,26 @@ impl Workbench {
             },
         )
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::fit_columns;
+
+    #[test]
+    fn columns_always_fit() {
+        // Wide: as dragged.
+        assert_eq!(fit_columns(1900., Some(260.), Some(380.)), (260., 380.));
+        // Medium: the side bar gives way first.
+        let (s, a) = fit_columns(1000., Some(300.), Some(380.));
+        assert_eq!(a, 380.);
+        assert!(s >= 170. && 48. + s + a + 320. <= 1000.01, "{s} {a}");
+        // Narrow: everything fits in the window.
+        for w in [500., 640., 800.] {
+            let (s, a) = fit_columns(w, Some(260.), Some(380.));
+            assert!(48. + s + a <= w, "{w}: {s} {a}");
+        }
+        assert_eq!(fit_columns(1200., None, None), (0., 0.));
     }
 }
