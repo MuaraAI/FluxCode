@@ -383,7 +383,7 @@ impl Workbench {
                     .child(way_row(IconName::House, tr("Same network"), &lan, None, false))
                     .child(way_row(IconName::Router, tr("Router port (UPnP)"), &reach.upnp, None, true))
                     .child(way_row(IconName::Globe, tr("Public IPv6"), &reach.ipv6, Some(tr("For guests with IPv6, when your router lets connections in.")), true))
-                    .child(way_row(IconName::RadioTower, tr("Relay (bore.pub)"), &reach.relay, Some(tr("Works from any network.")), true)),
+                    .child(way_row(IconName::RadioTower, tr("Relay (MuaraAI)"), &reach.relay, Some(tr("Works from any network.")), true)),
             )
             .child(meta(tr("The relay only passes bytes encrypted with the invite code's secret. If someone can't connect straight to you, allow FluxCode through the firewall.").into()))
             .into_any_element()
@@ -392,7 +392,7 @@ impl Workbench {
     fn connection_card(&self, addr: &str) -> AnyElement {
         let (icon, via): (IconName, SharedString) = match super::path_kind(addr) {
             super::Via::Lan => (IconName::House, tr("Straight to the host over your network, encrypted.").into()),
-            super::Via::Relay => (IconName::RadioTower, tr("Through the bore.pub relay, encrypted end to end: the relay can't read it.").into()),
+            super::Via::Relay => (IconName::RadioTower, tr("Through the MuaraAI relay, encrypted end to end: the relay can't read it.").into()),
             super::Via::Internet => (IconName::Globe, tr("Straight to the host over the internet, encrypted.").into()),
         };
         let root = self.collab.root.as_ref().map(|r| r.display().to_string()).unwrap_or_default();

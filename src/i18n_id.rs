@@ -714,7 +714,7 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("People", "Orang"),
     ("Public IPv6", "IPv6 publik"),
-    ("Relay (bore.pub)", "Relay (bore.pub)"),
+    ("Relay (MuaraAI)", "Relay MuaraAI"),
     ("Router port (UPnP)", "Port router (UPnP)"),
     ("Same network", "Jaringan yang sama"),
     (
@@ -745,8 +745,8 @@ pub const ID: &[(&str, &str)] = &[
         "PC ini punya alamat IPv6 publik, tapi sesi tidak bisa mendengarkan di alamat itu.",
     ),
     (
-        "Through the bore.pub relay, encrypted end to end: the relay can't read it.",
-        "Lewat relay bore.pub, terenkripsi ujung ke ujung: relay tidak bisa membacanya.",
+        "Through the MuaraAI relay, encrypted end to end: the relay can't read it.",
+        "Lewat relay MuaraAI, terenkripsi ujung ke ujung: relay tidak bisa membacanya.",
     ),
     ("Ways in", "Jalur masuk"),
     ("Works from any network.", "Bisa dari jaringan mana saja."),
