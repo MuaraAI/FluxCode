@@ -70,6 +70,13 @@ pub struct Settings {
     /// OpenCode docks on the right of the editor (like a chat beside the code)
     /// instead of in the left side bar.
     pub agent_right: bool,
+    /// When the agent edits a file, the editor opens it and shows the change being
+    /// typed in, line by line, with the view following it.
+    pub agent_follow_edits: bool,
+    /// Extra Claude / OpenCode sign-ins (agent/worktree.rs), and the one each uses
+    /// (family → account name; none: the default sign-in).
+    pub agent_accounts: Vec<crate::agent::worktree::Account>,
+    pub agent_account: std::collections::HashMap<String, String>,
     /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id
     /// ("opencode-v2", "mura", ...).
     pub agent_cli: String,
@@ -136,6 +143,9 @@ impl Default for Settings {
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
             agent_right: true,
+            agent_follow_edits: true,
+            agent_accounts: Vec::new(),
+            agent_account: Default::default(),
             agent_cli: "auto".into(),
             agent_idle_min: 10,
             language: "auto".into(),
@@ -635,6 +645,11 @@ impl Workbench {
                 tr("Agent panel on the right"),
                 tr("Dock the agent chat beside the editor instead of in the side bar. The arrow button in its header does the same.").into(),
                 toggle("ar", s.agent_right, |w| w.settings.agent_right = !w.settings.agent_right),
+            ))
+            .child(row(
+                tr("Follow the agent's edits"),
+                tr("When the agent changes a file, it opens in the editor and the change is typed in line by line while the view follows it. Takes under a second and never slows the agent.").into(),
+                toggle("follow", s.agent_follow_edits, |w| w.settings.agent_follow_edits = !w.settings.agent_follow_edits),
             ))
             .child(row(tr("GitHub"), tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), self.render_github(cx)))
             .child(section(tr("Agent instructions (soul files)")))

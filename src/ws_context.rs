@@ -11,7 +11,12 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 /// Cap on the overview, so it never crowds out the question.
-const MAX_CHARS: usize = 6000;
+const MAX_CHARS: usize = 14000;
+/// Of that, the file map (about 2,000 tokens): every file of a small project, the
+/// first ones of each folder in a large one.
+const MAP_CHARS: usize = 7000;
+/// Folders whose files are never worth listing.
+const SKIP_DIRS: &[&str] = &["node_modules", "target", ".git", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".cache", "vendor", ".idea", ".vscode", "out", "coverage"];
 
 fn read_small(p: &Path) -> Option<String> {
     let meta = std::fs::metadata(p).ok()?;
@@ -263,6 +268,55 @@ fn layout(root: &Path, files: &[String]) -> String {
     out
 }
 
+/// Every file under `root`, one line per folder: `src/agent/: activity.rs, menu.rs`.
+/// With it the agent opens the right file at once instead of spending its first turns
+/// listing folders. Over the budget, each folder keeps its first files and says how
+/// many more it has.
+fn file_map(root: &Path, files: &[String], budget: usize) -> String {
+    let rs = root.to_string_lossy().to_string();
+    let mut by_dir: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for f in files {
+        let Some(rest) = f.strip_prefix(&rs) else { continue };
+        let rest = rest.trim_start_matches(['\\', '/']);
+        if rest.is_empty() {
+            continue;
+        }
+        let (dir, name) = match rest.rfind(['\\', '/']) {
+            Some(k) => (&rest[..k], &rest[k + 1..]),
+            None => ("", rest),
+        };
+        if dir.split(['\\', '/']).any(|part| SKIP_DIRS.contains(&part) || (part.starts_with('.') && part != ".github")) {
+            continue;
+        }
+        by_dir.entry(dir.replace('\\', "/")).or_default().push(name);
+    }
+    if by_dir.is_empty() {
+        return String::new();
+    }
+    let total: usize = by_dir.values().map(Vec::len).sum();
+    // Files per folder: all of them if they fit, else as many as the budget allows.
+    let mut per = usize::MAX;
+    loop {
+        let size: usize = by_dir.iter().map(|(d, v)| d.len() + 4 + v.iter().take(per).map(|n| n.len() + 2).sum::<usize>() + 10).sum();
+        if size <= budget || per <= 3 {
+            break;
+        }
+        per = if per == usize::MAX { by_dir.values().map(Vec::len).max().unwrap_or(1) / 2 } else { per * 2 / 3 };
+    }
+    let mut out = format!("  file map ({total} files; open what you need directly, no need to list folders):\n");
+    for (d, mut names) in by_dir {
+        if out.len() > budget {
+            out.push_str("    … (more folders: use your search tools)\n");
+            break;
+        }
+        names.sort_unstable();
+        let shown = first_n(names.iter().map(|n| n.to_string()), per.min(names.len()).max(1));
+        let label = if d.is_empty() { "./".to_string() } else { format!("{d}/") };
+        let _ = writeln!(out, "    {label}: {shown}");
+    }
+    out
+}
+
 /// Counts of files per language (Plain Text left out), largest first.
 fn languages(files: &[String]) -> String {
     let mut by: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -302,6 +356,7 @@ pub fn overview(i: &Inputs) -> String {
             let _ = writeln!(s, "  README: {r}");
         }
         s.push_str(&layout(root, i.files));
+        s.push_str(&file_map(root, i.files, MAP_CHARS / i.roots.len().max(1)));
     }
     let _ = writeln!(s, "\nFiles: {} in total; by language: {}", i.files.len(), languages(i.files));
     if let Some(py) = i.python {
@@ -366,6 +421,8 @@ mod tests {
         let o = overview(&Inputs { roots: &roots, files: &files, git: None, tabs: vec!["src\\app.py (active, line 3)".into()], python: None });
         assert!(o.contains("README: Kopi Aplikasi kasir kopi."), "{o}");
         assert!(o.contains("folders: src/ (1)"), "{o}");
+        assert!(o.contains("    src/: app.py\n"), "{o}");
+        assert!(o.contains("    ./: package.json\n"), "{o}");
         assert!(o.contains("by language: JSON 1, Python 1") || o.contains("by language: Python 1, JSON 1"), "{o}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = PathBuf::new();

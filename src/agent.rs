@@ -43,6 +43,9 @@ enum Req {
 }
 
 mod activity;
+mod follow;
+mod tidy;
+pub(crate) mod worktree;
 mod catalog;
 mod menu;
 mod settings_modal;
@@ -215,6 +218,18 @@ pub struct AgentState {
     pub changes: Vec<Change>,
     /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
+    /// Files the agent finished editing, for the editor to follow (follow.rs).
+    pub follow_q: Vec<PathBuf>,
+    /// The replay on screen: its file and final text; the counter stops older ones.
+    pub replay: Option<(PathBuf, String)>,
+    pub replay_gen: u64,
+    /// The Changes card shows only its header.
+    changes_folded: bool,
+    /// Groups of steps the user opened (by the index of their first item).
+    open_groups: HashSet<usize>,
+    /// The chat's own git worktree, when it has one (worktree.rs).
+    pub worktree: Option<worktree::Worktree>,
+    pub worktree_busy: bool,
     pub(crate) input: Entity<TextareaState>,
     scroll: ScrollHandle,
     /// The chat keeps the newest text in view: off once the reader scrolls up, on again
@@ -465,6 +480,13 @@ impl AgentState {
             perm_queue: Default::default(),
             changes: Vec::new(),
             reloads: Vec::new(),
+            follow_q: Vec::new(),
+            replay: None,
+            replay_gen: 0,
+            changes_folded: false,
+            open_groups: HashSet::new(),
+            worktree: None,
+            worktree_busy: false,
             input,
             scroll: ScrollHandle::new(),
             follow: true,
@@ -802,7 +824,7 @@ impl Workbench {
                 }
                 self.agent.session = None;
                 self.agent.status = Status::Starting;
-                let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                let cwd = self.agent_cwd();
                 self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
             }
             Status::Starting => {}
@@ -864,10 +886,15 @@ impl Workbench {
         cmd.args(self.agent_flag_args());
         cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
         crate::github::apply_env(&mut cmd);
+        // Another account: the CLI reads its sign-in from that account's folder.
+        if let Some(a) = self.agent_account() {
+            let (k, v) = worktree::account_env(&a);
+            cmd.env(k, v);
+        }
         self.agent.status = Status::Starting;
         self.agent.buf.clear();
         self.agent.log_tail.clear();
-        match self.procs.spawn(cmd, self.root.clone().as_deref()) {
+        match self.procs.spawn(cmd, Some(self.agent_cwd().as_path())) {
             Ok(id) => {
                 self.agent.proc_id = Some(id);
                 self.agent_request(
@@ -1090,7 +1117,7 @@ impl Workbench {
                     self.agent.silent_load = false;
                     self.agent.loading_id = None;
                     self.agent.carry = Some(transcript(&self.agent.items));
-                    let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                    let cwd = self.agent_cwd();
                     self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
                 }
                 _ => self.agent.status = Status::Error(m),
@@ -1102,7 +1129,7 @@ impl Workbench {
             Req::Initialize => {
                 self.agent.can_load = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
                 self.agent.can_image = result.pointer("/agentCapabilities/promptCapabilities/image").and_then(Value::as_bool).unwrap_or(false);
-                let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+                let cwd = self.agent_cwd();
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
                     _ => {
@@ -1431,6 +1458,7 @@ impl Workbench {
                     if let Some(ch) = self.agent.changes.iter_mut().find(|ch| ch.path == p) {
                         (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
                     }
+                    self.agent_follow_edit(p.clone());
                     if self.docs.iter().any(|d| d.path == p) {
                         self.agent.reloads.push(p);
                     }
@@ -1462,7 +1490,7 @@ impl Workbench {
         if self.agent.status == Status::Ready && self.agent.proc_id.is_some() {
             self.agent.session = None;
             self.agent.status = Status::Starting;
-            let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+            let cwd = self.agent_cwd();
             self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
         }
         cx.notify();
@@ -1549,13 +1577,16 @@ impl Workbench {
                     .child(self.render_agent_picker(cx))
                     .child(self.render_agent_switch(cx))
                     .child(div().flex_1())
+                    .child(self.render_agent_isolation(cx))
                     .child(self.render_agent_tools(cx))
                     .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
                         this.agent_open = false;
                         cx.notify();
                     })),
             )
-            .child(div().flex_1().min_h_0().child(self.render_agent(window, cx)))
+            .children(self.render_worktree_strip(cx))
+            // Filling the window, the chat keeps a readable width in the middle.
+            .child(h_flex().flex_1().min_h_0().justify_center().child(div().h_full().w_full().when(self.agent_full && self.settings.agent_right, |d| d.max_w(theme::u(860.))).child(self.render_agent(window, cx))))
             .into_any_element()
     }
 
@@ -1799,6 +1830,21 @@ impl Workbench {
                         cx.notify();
                     })),
             )
+            .when(right, |h| {
+                let full = self.agent_full;
+                h.child(
+                    Button::new("ag-full")
+                        .icon(if full { IconName::Minimize } else { IconName::Maximize })
+                        .xsmall()
+                        .ghost()
+                        .selected(full)
+                        .tooltip(if full { crate::i18n::tr("Back beside the editor") } else { crate::i18n::tr("Fill the window") })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.agent_full = !this.agent_full;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 Button::new("ag-dock")
                     .icon(if right { IconName::PanelLeft } else { IconName::PanelRight })
@@ -1922,9 +1968,10 @@ impl Workbench {
         if !matches!(kind, "edit" | "delete" | "move") && !has_diff {
             return;
         }
+        let cwd = self.agent_cwd();
         let abs = |p: &str| -> PathBuf {
             let p = PathBuf::from(p);
-            if p.is_absolute() { p } else { self.root.clone().unwrap_or_default().join(p) }
+            if p.is_absolute() { p } else { cwd.join(p) }
         };
         let mut touched: Vec<PathBuf> = Vec::new();
         for c in u.get("content").and_then(Value::as_array).into_iter().flatten() {
@@ -1961,6 +2008,9 @@ impl Workbench {
                 if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
                     self.agent.changes.remove(ix);
                 }
+            }
+            if self.agent.changes.iter().any(|ch| ch.path == p) {
+                self.agent_follow_edit(p.clone());
             }
             if self.docs.iter().any(|d| d.path == p) && !self.agent.reloads.contains(&p) {
                 self.agent.reloads.push(p);
@@ -2294,6 +2344,14 @@ impl Workbench {
                     };
                     self.agent.ws_sig = crate::ws_context::signature(&inputs);
                     let mut text = crate::ws_context::overview(&inputs);
+                    if let Some(w) = &self.agent.worktree {
+                        text.push_str(&format!(
+                            "\nYou work in a git worktree of this repository: {} (branch {}). Your working directory is there; \
+                             read and edit the files in it, not in the main folder (the user merges the branch when the work is done).\n",
+                            w.path.display(),
+                            w.branch
+                        ));
+                    }
                     if let Some(notes) = self.ext_agent_notes() {
                         text.push_str(&notes);
                     }
@@ -2377,7 +2435,7 @@ impl Workbench {
     // ------------------------------------------------------------ OpenCode / Mura sessions
 
     fn agent_load_session(&mut self, id: String) {
-        let cwd = self.root.clone().unwrap_or_else(|| self.term_cwd.clone());
+        let cwd = self.agent_cwd();
         self.agent.loading_id = Some(id.clone());
         self.agent.status = Status::Starting;
         self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
@@ -2844,6 +2902,22 @@ impl Workbench {
                 .child(who.to_string())
         };
         let mut after_user = true;
+        // Runs of two or more steps (thoughts and tools) in a row: (first, last).
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, item) in a.items.iter().enumerate() {
+            if !is_step(Some(item)) {
+                continue;
+            }
+            match runs.last_mut() {
+                Some(r) if r.1 + 1 == i => r.1 = i,
+                _ => runs.push((i, i)),
+            }
+        }
+        runs.retain(|r| r.1 > r.0);
+        let run_of = |i: usize| runs.iter().copied().find(|r| r.0 <= i && i <= r.1);
+        let busy = a.status == Status::Busy;
+        // The group header sits above the first step of a group, so the rail joins them.
+        let joined_up = |i: usize| is_step(i.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(i).is_some_and(|r| r.0 == i);
         for (i, item) in a.items.iter().enumerate() {
             if matches!(item, Item::Branch(_)) {
                 after_user = true;
@@ -2852,6 +2926,37 @@ impl Workbench {
             if starts_answer {
                 log = log.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
                 after_user = false;
+            }
+            if let Some((first, last)) = run_of(i) {
+                let open = a.open_groups.contains(&first);
+                // While the agent works on the last group, its newest step stays in view.
+                let live_tail = busy && last + 1 == a.items.len();
+                if i == first {
+                    let members = &a.items[first..=last];
+                    let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
+                    let tools = members.len() - thoughts;
+                    let total: std::time::Duration = (first..=last)
+                        .filter_map(|k| {
+                            let key = match &a.items[k] {
+                                Item::Tool { id, .. } => id.clone(),
+                                _ => format!("think-{k}"),
+                            };
+                            a.times.get(&key).and_then(|t| t.1)
+                        })
+                        .sum();
+                    log = log.child(self.render_step_group(activity::Group {
+                        first,
+                        thoughts,
+                        tools,
+                        running: live_tail,
+                        open,
+                        total: (!total.is_zero()).then_some(total),
+                        joined_down: open || live_tail,
+                    }, cx));
+                }
+                if !open && !(live_tail && i == last) {
+                    continue;
+                }
             }
             log = log.child(match item {
                 Item::User(t) => {
@@ -2904,7 +3009,7 @@ impl Workbench {
                         )
                         .into_any_element()
                 }
-                Item::Text(t) => TextView::markdown(("ag-md", i), t.clone())
+                Item::Text(t) => TextView::markdown(("ag-md", i), tidy::answer(t).into_owned())
                     .text_sm()
                     .style(chat_text_style())
                     .code_block_actions(|block, _, _| {
@@ -2948,12 +3053,12 @@ impl Workbench {
                         kind: "think",
                         title: "",
                         status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
-                        joined_up: is_step(i.checked_sub(1).and_then(|j| a.items.get(j))),
+                        joined_up: joined_up(i),
                         joined_down: is_step(a.items.get(i + 1)),
                         live: a.status == Status::Busy,
                         note: (!open).then_some(last),
                         open,
-                        detail: open.then(|| t.trim().to_string()),
+                        detail: open.then(|| tidy::thought(t)),
                     };
                     let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
                         if !this.agent.open_thoughts.remove(&i) {
@@ -2980,7 +3085,7 @@ impl Workbench {
                         kind,
                         title,
                         status,
-                        joined_up: is_step(i.checked_sub(1).and_then(|j| a.items.get(j))),
+                        joined_up: joined_up(i),
                         joined_down: is_step(a.items.get(i + 1)),
                         live: a.status == Status::Busy,
                         note: None,
@@ -3026,6 +3131,7 @@ impl Workbench {
 
         // What the agent changed this turn, like a worktree: each file with its
         // lines added / removed, a diff, and undo.
+        let folded = a.changes_folded;
         let changes = (!a.changes.is_empty()).then(|| {
             let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
             let files = if a.changes.len() == 1 { crate::i18n::tr("1 file").to_string() } else { crate::trf!("{n} files"; n => a.changes.len()) };
@@ -3057,10 +3163,10 @@ impl Workbench {
                             .gap_1p5()
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, w, cx| this.open_file(path.clone(), w, cx)))
-                            .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
-                            .child(div().flex_none().text_color(c(theme::FG)).child(name))
+                            .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(theme::tint(tint)))
+                            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
                             .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
-                            .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
+                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
                     )
                     .child(counts(ch.added, ch.removed))
                     .child(
@@ -3110,13 +3216,27 @@ impl Workbench {
                         .px_2()
                         .h(theme::u(30.))
                         .gap_2()
-                        .border_b_1()
+                        .when(!folded, |h| h.border_b_1())
                         .border_color(c(theme::BORDER))
-                        .child(Icon::new(gpui_kit::assets::IconName::FileDiff).size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
-                        .child(div().flex_none().text_color(c(theme::FG_DIM)).child(files))
-                        .child(counts(add, del))
-                        .child(div().flex_1())
+                        .child(
+                            h_flex()
+                                .id("ag-ch-fold")
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .gap_2()
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.agent.changes_folded = !this.agent.changes_folded;
+                                    cx.notify();
+                                }))
+                                .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).flex_none().size(theme::u(12.)).text_color(c(theme::FG_DIM)))
+                                .child(Icon::new(gpui_kit::assets::IconName::FileDiff).flex_none().size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
+                                .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
+                                .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(files))
+                                .child(counts(add, del))
+                                .child(div().flex_1()),
+                        )
                         .child(change_btn("ag-undo-all", gpui_kit::assets::IconName::Undo2, crate::i18n::tr("Undo all")).on_click(cx.listener(|this, _, _, cx| {
                             for i in (0..this.agent.changes.len()).rev() {
                                 this.agent_undo(i, cx);
@@ -3127,7 +3247,7 @@ impl Workbench {
                             cx.notify();
                         }))),
                 )
-                .child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows))
+                .when(!folded, |v| v.child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows)))
         });
 
         v_flex()

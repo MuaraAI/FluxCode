@@ -13,7 +13,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
-    menu::{DropdownMenu, PopupMenu},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
     tree::TreeState,
     v_flex, Icon, IconName, Sizable, TitleBar,
@@ -193,6 +193,8 @@ pub(crate) struct Doc {
     /// A large Flux document opens drawn with its editor still empty (the text lives in
     /// `flux`); the editor fills the first time Source is shown.
     pub flux_lazy: bool,
+    /// A `.diff` / `.patch` file: drawn with colored lines (diff_view.rs).
+    pub diff: Option<crate::diff_view::DiffDoc>,
 }
 
 impl Doc {
@@ -251,6 +253,8 @@ pub struct Workbench {
     /// Widths of the side bar and that dock (logical px), and which edge is being
     /// dragged: 0 none, 1 side bar, 2 dock.
     pub(crate) agent_width: f32,
+    /// The agent chat fills the window (the editor steps aside until it is turned off).
+    pub(crate) agent_full: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) resizing: u8,
     pub(crate) focus: FocusHandle,
@@ -432,6 +436,7 @@ impl Workbench {
             sidebar_open: true,
             agent_open: false,
             agent_width: 380.,
+            agent_full: false,
             sidebar_width: 260.,
             resizing: 0,
             focus,
@@ -632,6 +637,7 @@ impl Workbench {
             (true, false) => (text.clone(), text),
             _ => (String::new(), text),
         };
+        let diff = (crate::diff_view::is_diff(lang) && !large).then(|| crate::diff_view::parse(&text));
         let file = core::FileText { text, crlf };
         let s = &self.settings;
         let (tab, wrap, dots) = (s.tab_size, s.word_wrap, s.show_whitespace);
@@ -711,7 +717,7 @@ impl Workbench {
             })
             .detach();
         }
-        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy });
+        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy, diff });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }
@@ -739,6 +745,7 @@ impl Workbench {
             flux: None,
             flux_source: false,
             flux_lazy: false,
+            diff: None,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -851,7 +858,11 @@ impl Workbench {
 
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = Some(ix);
-        let handle = self.docs[ix].editor.focus_handle(cx);
+        // A tab that shows no text editor (an image, a drawn Flux document, a diff)
+        // takes the workbench's focus: focusing its hidden editor would leave the keys
+        // with nowhere to go, so Ctrl+W and the other shortcuts stopped working there.
+        let d = &self.docs[ix];
+        let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) { self.focus.clone() } else { d.editor.focus_handle(cx) };
         handle.focus(window, cx);
         cx.notify();
     }
@@ -1714,7 +1725,60 @@ impl Workbench {
                             })),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| this.activate(ix, window, cx)))
+                    .context_menu({
+                        let weak = cx.entity().downgrade();
+                        let path = d.path.clone();
+                        let rel = self.rel_display(&d.path.to_string_lossy());
+                        move |menu, _, _| {
+                            let item = |label: &'static str, f: Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>| {
+                                let weak = weak.clone();
+                                PopupMenuItem::new(tr(label)).on_click(move |_, w, cx| {
+                                    _ = weak.update(cx, |this, cx| f(this, w, cx));
+                                })
+                            };
+                            let (full, rel) = (path.to_string_lossy().into_owned(), rel.clone());
+                            let reveal = path.clone();
+                            menu.item(item("Close", Box::new(move |this, w, cx| this.close(ix, w, cx))))
+                                .item(item("Close Others", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i != ix && !d.dirty))))
+                                .item(item("Close to the Right", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i > ix && !d.dirty))))
+                                .item(item("Close Saved", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
+                                .item(item("Close All", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
+                                .separator()
+                                .item(item("Copy Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone())))))
+                                .item(item("Copy Relative Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(rel.replace('\\', "/"))))))
+                                .separator()
+                                .item(item("Reveal in File Explorer", Box::new(move |_, _, cx| cx.reveal_path(&reveal))))
+                                .item(item("Go to File...", Box::new(|_, w, cx| w.dispatch_action(Box::new(QuickOpenFile), cx))))
+                        }
+                    })
             }))
+    }
+
+    /// Close every tab `keep_out` picks, keeping the active one active when it stays.
+    /// Tabs with unsaved changes are never closed this way (they would lose the edits).
+    pub(crate) fn close_tabs_where(&mut self, window: &mut Window, cx: &mut Context<Self>, close: impl Fn(usize, &Doc) -> bool) {
+        let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
+        let doomed: Vec<usize> = self.docs.iter().enumerate().filter(|(i, d)| close(*i, d)).map(|(i, _)| i).collect();
+        for &i in doomed.iter().rev() {
+            let closed = self.docs.remove(i);
+            if !closed.read_only {
+                self.closed_tabs.retain(|p| *p != closed.path);
+                self.closed_tabs.push(closed.path);
+            }
+        }
+        let n = self.closed_tabs.len();
+        if n > 30 {
+            self.closed_tabs.drain(..n - 30);
+        }
+        self.active = active.and_then(|p| self.docs.iter().position(|d| d.path == p)).or((!self.docs.is_empty()).then(|| self.docs.len() - 1));
+        match self.active {
+            Some(a) => self.activate(a, window, cx),
+            None => {
+                self.focus.focus(window, cx);
+                cx.notify();
+            }
+        }
+        self.save_session(cx);
     }
 
     /// The active file's path below the tabs: folder › folder › file.
@@ -1759,6 +1823,7 @@ impl Workbench {
                 .child(self.render_tabs(cx))
                 .child(self.render_breadcrumbs(ix))
                 .when(self.docs[ix].image.is_some(), |v| v.child(div().flex_1().min_h_0().child(self.render_image(ix, window, cx))))
+                .when(self.docs[ix].diff.as_ref().is_some_and(|d| !d.source), |v| v.child(div().flex_1().min_h_0().child(self.render_diff_doc(ix, cx))))
                 .when_some(self.docs[ix].banner.clone(), |v, b| {
                     v.child(
                         h_flex()
@@ -1784,7 +1849,7 @@ impl Workbench {
                     });
                     v.child(div().flex_1().min_h_0().child(view))
                 })
-                .when(self.docs[ix].image.is_none() && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
+                .when(self.docs[ix].image.is_none() && !self.docs[ix].diff.as_ref().is_some_and(|d| !d.source) && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
                     div()
                         .flex_1()
                         .min_h_0()
@@ -2126,6 +2191,9 @@ impl Render for Workbench {
                 .detach();
             }
         }
+        if !self.agent.follow_q.is_empty() {
+            self.apply_agent_follow(window, cx);
+        }
         if !self.agent.reloads.is_empty() {
             self.apply_agent_reloads(window, cx);
         }
@@ -2187,7 +2255,10 @@ impl Render for Workbench {
         };
         // The right dock is a fixed-width column (dragged by its left edge), so it always
         // fits in the window: the editor side gives up the space, never the dock.
-        let center: AnyElement = if self.settings.agent_right && self.agent_open {
+        let center: AnyElement = if self.settings.agent_right && self.agent_open && self.agent_full {
+            // Full width: the chat in a readable column in the middle of the window.
+            div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_dock(window, cx)).into_any_element()
+        } else if self.settings.agent_right && self.agent_open {
             h_flex()
                 .flex_1()
                 .min_w_0()

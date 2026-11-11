@@ -414,7 +414,9 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
     Sparkles, FolderPlus,
     // Agent panel: usage (and a free model's mark), the settings dialog, permission requests
-    Gauge, BadgeCheck, ShieldCheck, Timer, FilePen, Wrench
+    Gauge, BadgeCheck, ShieldCheck, Timer, FilePen, Wrench,
+    // Agent panel: a folded group of steps, its own worktree, more than one account
+    ListCollapse, GitFork, GitMerge, UserPlus
 ]);
 
 #[cfg(test)]

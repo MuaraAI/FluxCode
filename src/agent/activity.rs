@@ -8,6 +8,10 @@
 //! - when it finishes, the label changes from "Reading" to "Read" with a short
 //!   cross-fade, the sweep is gone, and the time it took appears;
 //! - a new step slides in once, 6 px, in 160 ms.
+//!
+//! Two or more steps in a row fold into one group line ("Worked · 3 thoughts, 5
+//! tools · 12 s") that opens with a click; while the agent is on it, its newest step
+//! shows under the line. Rows have no hover tooltips: the row already says what it is.
 //! Animations run only while something changes, so an idle chat costs nothing.
 //!
 //! References: AI Elements' Reasoning ("Thought for N seconds", shimmer while
@@ -19,7 +23,7 @@ use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{h_flex, v_flex, Icon};
+use gpui_kit::component::{h_flex, text::TextView, v_flex, Icon};
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::time::{Duration, Instant};
 
@@ -79,6 +83,18 @@ pub fn took(d: Duration) -> String {
     } else {
         format!("{} min {} s", (s / 60.) as u64, (s % 60.) as u64)
     }
+}
+
+/// A folded run of steps.
+pub struct Group {
+    /// Index of its first item (its key in `open_groups`).
+    pub first: usize,
+    pub thoughts: usize,
+    pub tools: usize,
+    pub running: bool,
+    pub open: bool,
+    pub total: Option<Duration>,
+    pub joined_down: bool,
 }
 
 /// One step on the rail.
@@ -196,8 +212,15 @@ impl Workbench {
                     .with_animation(SharedString::from(format!("ag-step-sweep-{}", s.key)), Animation::new(Duration::from_millis(1100)).repeat().with_easing(gpui_kit::ease_in_out), |el, t| el.left(relative(-0.3 + t * 1.3))),
             )
         });
-        let tip: SharedString = s.title.to_string().into();
-        let detail = s.detail.map(|t| div().pb_2().pr_4().text_xs().line_height(relative(1.55)).text_color(c(theme::FG_DIM)).child(t));
+        // An opened thought reads as Markdown: paragraphs, lists and code as the agent wrote them.
+        let detail = s.detail.map(|t| {
+            div()
+                .pb_2()
+                .pr_4()
+                .text_xs()
+                .text_color(c(theme::FG_MUTED))
+                .child(TextView::markdown(SharedString::from(format!("ag-thought-{}", s.key)), t).text_xs().selectable(true))
+        });
         let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
@@ -209,10 +232,68 @@ impl Workbench {
             .when(on_click.is_some(), |d| d.cursor_pointer())
             .child(rail)
             .child(body)
-            .when(s.kind != "think" && !s.title.is_empty(), |d| d.tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)))
             .when_some(on_click, |d, f| d.on_click(cx.listener(move |this, _, _, cx| f(this, cx))));
         // A new step slides in once.
         row.with_animation(SharedString::from(format!("ag-step-in-{}", s.key)), Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).ml(px((1. - t) * 6.)))
+            .into_any_element()
+    }
+}
+
+impl Workbench {
+    pub(crate) fn render_step_group(&self, g: Group, cx: &mut Context<Self>) -> AnyElement {
+        let first = g.first;
+        let mut parts: Vec<String> = Vec::new();
+        if g.thoughts > 0 {
+            parts.push(if g.thoughts == 1 { tr("1 thought").to_string() } else { crate::trf!("{n} thoughts"; n => g.thoughts) });
+        }
+        if g.tools > 0 {
+            parts.push(if g.tools == 1 { tr("1 tool").to_string() } else { crate::trf!("{n} tools"; n => g.tools) });
+        }
+        let col = if g.running { theme::ACCENT_TEXT } else { theme::FG_DIM };
+        let rail = v_flex()
+            .flex_none()
+            .w(theme::u(18.))
+            .h_full()
+            .items_center()
+            .child(div().h(theme::u(5.)))
+            .child(
+                div()
+                    .flex_none()
+                    .size(theme::u(18.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_1()
+                    .border_color(c(if g.running { theme::ACCENT_TEXT } else { theme::BORDER }))
+                    .bg(c(theme::BG_ELEVATED))
+                    .child(Icon::new(IconName::ListCollapse).size(theme::u(10.)).text_color(c(col))),
+            )
+            .child(div().w(px(1.)).flex_1().min_h(theme::u(5.)).when(g.joined_down, |d| d.bg(c(theme::BORDER_STRONG))));
+        h_flex()
+            .id(("ag-group", first))
+            .gap_2()
+            .items_stretch()
+            .cursor_pointer()
+            .child(rail)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h(theme::u(28.))
+                    .gap_1p5()
+                    .text_xs()
+                    .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(if g.running { theme::FG_STRONG } else { theme::FG_MUTED })).child(tr(if g.running { "Working" } else { "Worked" })))
+                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(parts.join(", ")))
+                    .child(div().flex_none().min_w(theme::u(40.)).flex().justify_end().text_color(c(theme::FG_DIM)).when_some(g.total.map(took), |d, t| d.child(t)))
+                    .child(div().flex_none().w(theme::u(12.)).flex().justify_center().child(Icon::new(if g.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)))),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.agent.open_groups.remove(&first) {
+                    this.agent.open_groups.insert(first);
+                }
+                cx.notify();
+            }))
             .into_any_element()
     }
 }
