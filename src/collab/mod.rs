@@ -817,7 +817,7 @@ enum Via {
 
 /// How a guest reached the host, from the address it connected to.
 fn path_kind(addr: &str) -> Via {
-    if addr.starts_with(reach::RELAY_HOST) {
+    if reach::is_relay_addr(addr) {
         return Via::Relay;
     }
     match addr.parse::<std::net::SocketAddr>().map(|s| s.ip()) {
