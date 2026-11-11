@@ -1,0 +1,9 @@
+[Unit]
+Description=FluxCode relay bandwidth budget guard
+Documentation=https://github.com/MuaraAI/FluxCode/tree/main/relay
+
+[Service]
+Type=oneshot
+# Optional: set FLUXCODE_RELAY_BUDGET_GB here to change the monthly limit.
+EnvironmentFile=-/etc/bore-relay/budget
+ExecStart=/usr/local/lib/fluxcode-relay/budget-guard.sh

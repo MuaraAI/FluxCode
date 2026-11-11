@@ -1,0 +1,32 @@
+[Unit]
+Description=FluxCode Live Share relay (bore)
+Documentation=https://github.com/MuaraAI/FluxCode/tree/main/relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=borerelay
+Group=borerelay
+EnvironmentFile=/etc/bore-relay/env
+ExecStart=/usr/local/bin/bore server --bind-addr 0.0.0.0 --min-port 20000 --max-port 20049 --secret ${BORE_SECRET}
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+# The relay only needs to accept sockets and forward bytes.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
