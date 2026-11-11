@@ -16,11 +16,27 @@ use gpui_kit::*;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Frames in one replay, and time between them.
+/// Frames in one replay at most, and time between them.
 const FRAMES: usize = 40;
 const FRAME_MS: u64 = 16;
-/// Larger files reload at once (each frame rewrites the whole text).
-const MAX_BYTES: usize = 300 * 1024;
+/// Each frame sets the whole text (and the editor colors it again), so a replay gets a
+/// budget of bytes: a small file is typed in 40 steps, a 50 KB one in 8, and from
+/// ~100 KB on (under 4 steps) the file just reloads. The motion stays smooth because
+/// no frame ever does more work than a 10 KB file's.
+const BYTE_BUDGET: usize = 400 * 1024;
+const MIN_FRAMES: usize = 4;
+/// After the user picks a tab or a file, the editor stays with them this long.
+const HANDS_OFF: Duration = Duration::from_secs(4);
+
+/// Steps a replay of a `len`-byte file gets (0: reload at once).
+pub fn frames_for(len: usize) -> usize {
+    let n = (BYTE_BUDGET / len.max(1)).min(FRAMES);
+    if n < MIN_FRAMES {
+        0
+    } else {
+        n
+    }
+}
 
 impl Workbench {
     /// The agent finished writing `p`: replay it on the next frame.
@@ -36,8 +52,8 @@ impl Workbench {
     pub(crate) fn apply_agent_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(p) = self.agent.follow_q.pop() else { return };
         self.agent.follow_q.clear();
-        // The user is changing the file on screen: leave their view alone.
-        if self.active.is_some_and(|a| self.docs[a].dirty && self.docs[a].path != p) {
+        // The user is changing the file on screen, or just picked one: leave their view alone.
+        if self.active.is_some_and(|a| self.docs[a].dirty && self.docs[a].path != p) || self.agent.user_nav.is_some_and(|t| t.elapsed() < HANDS_OFF) {
             return;
         }
         self.agent_finish_replay(window, cx);
@@ -66,7 +82,8 @@ impl Workbench {
         let Some(ix) = self.docs.iter().position(|d| d.path == p) else { return };
         // Its reload is this replay's last frame.
         self.agent.reloads.retain(|x| *x != p);
-        let frames = if f.text.len() > MAX_BYTES { Vec::new() } else { crate::diff::typing_frames(&before, &f.text, FRAMES) };
+        let steps = frames_for(f.text.len().max(before.len()));
+        let frames = if steps == 0 { Vec::new() } else { crate::diff::typing_frames(&before, &f.text, steps) };
         if frames.is_empty() {
             let line = self.docs[ix].editor.read(cx).cursor_position().line;
             self.docs[ix].editor.update(cx, |s, cx| {
@@ -124,5 +141,17 @@ impl Workbench {
         }
         self.collab_on_path(&p, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frames_for;
+
+    #[test]
+    fn bigger_files_get_fewer_steps() {
+        assert_eq!(frames_for(2_000), 40);
+        assert_eq!(frames_for(51_200), 8);
+        assert_eq!(frames_for(200_000), 0);
     }
 }
