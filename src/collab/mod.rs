@@ -649,7 +649,7 @@ impl Workbench {
         }
         if !self.docs.iter().any(|d| d.path == abs) {
             let keep = self.active;
-            self.open_file(abs.clone(), window, cx);
+            self.open_file_now(abs.clone(), window, cx);
             if let Some(k) = keep {
                 self.activate(k, window, cx);
             }

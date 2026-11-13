@@ -2090,7 +2090,7 @@ impl Workbench {
             if let Some(i) = self.docs.iter().position(|d| d.path == file) {
                 self.close(i, window, cx);
             }
-            self.open_file(file.clone(), window, cx);
+            self.open_file_now(file.clone(), window, cx);
             if let Some(d) = self.docs.iter_mut().find(|d| d.path == file).and_then(|d| d.diff.as_mut()) {
                 d.target = Some(target);
             }

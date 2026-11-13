@@ -196,7 +196,7 @@ impl Workbench {
             push_line(&mut self.term_lines, "", LineKind::Blank);
         }
         let mut prompt = Line::new(typed, LineKind::Cmd);
-        prompt.meta = term::short_cwd(&self.term_cwd, self.root.as_deref()).into();
+        prompt.meta = self.term_meta().into();
         close_line(&mut self.term_lines);
         self.term_lines.push(prompt);
 
@@ -215,7 +215,8 @@ impl Workbench {
         if lower == "cls" || lower == "clear" {
             self.term_lines.clear();
         } else if lower == "pwd" {
-            push_line(&mut self.term_lines, &self.term_cwd.display().to_string(), LineKind::Normal);
+            let meta = self.term_full();
+            push_line(&mut self.term_lines, &meta, LineKind::Normal);
         } else if lower == "cd" || lower.starts_with("cd ") || lower.starts_with("cd\\") || lower.starts_with("cd..") || lower.starts_with("chdir") {
             let arg = cmdline.trim_start_matches(|c: char| c.is_ascii_alphabetic()).trim();
             let arg = arg.strip_prefix("/d").or_else(|| arg.strip_prefix("/D")).unwrap_or(arg).trim().trim_matches('"');
@@ -228,12 +229,25 @@ impl Workbench {
             self.change_dir(&format!("{cmdline}\\"));
         } else {
             let first = cmdline.split_whitespace().next().unwrap_or("");
-            let py = if term::is_python(first) { first.trim_matches('"').to_string() } else { python(self.root.as_deref()) };
+            let py = if term::is_python(first) {
+                first.trim_matches('"').to_string()
+            } else if self.wsl.is_some() {
+                "python3".to_string()
+            } else {
+                python(self.root.as_deref())
+            };
             self.problems.retain(|p| !p.from_terminal);
             self.apply_problems(cx);
-            let mut cmd = proc::shell_command(&cmdline);
+            let mut cmd = match &self.wsl {
+                Some(t) => {
+                    let cwd = t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone());
+                    crate::remote::shell_command(t, &cwd, &cmdline)
+                }
+                None => proc::shell_command(&cmdline),
+            };
             crate::github::apply_env(&mut cmd);
-            match self.procs.spawn(cmd, Some(&self.term_cwd.clone())) {
+            let local_cwd = self.wsl.is_none().then(|| self.term_cwd.clone());
+            match self.procs.spawn(cmd, local_cwd.as_deref()) {
                 Ok(id) => {
                     self.term_proc = Some(id);
                     self.term_run = Some(RunInfo {
@@ -251,7 +265,51 @@ impl Workbench {
         cx.notify();
     }
 
+    /// The terminal's folder as the prompt shows it: the Linux path inside a
+    /// distro, else the short Windows path.
+    fn term_meta(&self) -> String {
+        match &self.wsl {
+            Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
+            None => term::short_cwd(&self.term_cwd, self.root.as_deref()),
+        }
+    }
+
+    /// The terminal's folder in full, for `pwd`.
+    fn term_full(&self) -> String {
+        match &self.wsl {
+            Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
+            None => self.term_cwd.display().to_string(),
+        }
+    }
+
     fn change_dir(&mut self, arg: &str) {
+        if let Some(t) = self.wsl.clone() {
+            let current = t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone());
+            let linux = if arg == "~" {
+                crate::remote::home_dir(&t.distro).unwrap_or_else(|| "/".to_string())
+            } else if arg.starts_with('/') {
+                arg.to_string()
+            } else if arg == ".." {
+                let mut p = current.trim_end_matches('/').to_string();
+                if let Some(i) = p.rfind('/') {
+                    p.truncate(i.max(1));
+                }
+                p
+            } else {
+                format!("{}/{}", current.trim_end_matches('/'), arg)
+            };
+            // `wsl.exe --cd` falls back to `/` when the folder is missing, so ask first.
+            let exists = crate::remote::program_command(&t, "/", "sh", &["-c", r#"test -d "$1""#, "--", &linux])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if exists {
+                self.term_cwd = t.unc_path(&linux);
+            } else {
+                push_line(&mut self.term_lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err);
+            }
+            return;
+        }
         let target = if arg == "~" {
             std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default()
         } else {
@@ -355,11 +413,32 @@ impl Workbench {
             }
         }
         let path = self.docs[ix].path.clone();
-        let Some((program, args)) = run_command_for(&path, self.root.as_deref()) else {
+        let wsl = self.wsl.clone();
+        let Some((mut program, mut args)) = run_command_for(&path, self.root.as_deref()) else {
             self.status = crate::trf!("Don't know how to run {0}"; 0 => self.docs[ix].name).into();
             cx.notify();
             return;
         };
+        if let Some(t) = &wsl {
+            // Windows-only scripts have no meaning inside the distro.
+            if matches!(program.as_str(), "powershell" | "cmd.exe") {
+                self.status = crate::trf!("Don't know how to run {0} in WSL"; 0 => self.docs[ix].name).into();
+                cx.notify();
+                return;
+            }
+            // The program runs inside the distro, so the file argument has to be
+            // the Linux path it knows, not the UNC path Windows opened.
+            let linux = t.linux_path(&path).unwrap_or_else(|| path.display().to_string());
+            let unc = path.to_string_lossy().into_owned();
+            for a in &mut args {
+                if *a == unc {
+                    *a = linux.clone();
+                }
+            }
+            if program == "python" || program == "py" {
+                program = "python3".to_string();
+            }
+        }
         if let Some(id) = self.out_proc.take() {
             self.procs.kill(id);
         }
@@ -374,11 +453,26 @@ impl Workbench {
             .collect();
         let cwd = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut head = Line::new(&shown.join(" "), LineKind::Cmd);
-        head.meta = term::short_cwd(&cwd, self.root.as_deref()).into();
+        head.meta = match &wsl {
+            Some(t) => t.linux_path(&cwd).unwrap_or_else(|| t.linux_root.clone()),
+            None => term::short_cwd(&cwd, self.root.as_deref()),
+        }
+        .into();
         self.out_lines.push(head);
-        let mut cmd = proc::command(&program);
-        cmd.args(&args);
-        match self.procs.spawn(cmd, Some(&cwd)) {
+        let cmd = match &wsl {
+            Some(t) => {
+                let cwd = t.linux_path(&cwd).unwrap_or_else(|| t.linux_root.clone());
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                crate::remote::program_command(t, &cwd, &program, &refs)
+            }
+            None => {
+                let mut c = proc::command(&program);
+                c.args(&args);
+                c
+            }
+        };
+        let local_cwd = wsl.is_none().then(|| cwd.clone());
+        match self.procs.spawn(cmd, local_cwd.as_deref()) {
             Ok(id) => {
                 self.out_proc = Some(id);
                 self.out_run = Some(RunInfo { started: Instant::now(), block: self.out_lines.len(), python: program.clone(), cwd, command: shown.join(" ") });
@@ -515,7 +609,7 @@ impl Workbench {
             cx.notify();
             return;
         }
-        self.open_file(path, window, cx);
+        self.open_file_now(path, window, cx);
         if let Some(ix) = self.active {
             self.docs[ix].editor.update(cx, |ed, cx| {
                 ed.set_cursor_position(Position::new(line.saturating_sub(1), col), window, cx);
@@ -1406,7 +1500,14 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
 }
 
 /// "Python 3.15.0" (+ " · .venv"), for the panel header. Runs a process: call off the UI thread.
-pub(crate) fn detect_python(root: Option<&Path>) -> Option<String> {
+pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::WslTarget>) -> Option<String> {
+    // A WSL workspace's Python lives in the distro; the Windows one is not what
+    // the terminal will run.
+    if let Some(t) = target {
+        let out = crate::remote::program_command(t, &t.linux_root, "python3", &["--version"]).output().ok()?;
+        let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();
+        return text.starts_with("Python").then_some(text);
+    }
     let exe = python(root);
     let out = proc::command(&exe).arg("--version").output().ok()?;
     let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();

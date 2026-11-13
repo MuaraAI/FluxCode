@@ -12,10 +12,10 @@ use futures::StreamExt;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
+    input::{Editor, EditorState, InputEvent, InputState, TabSize},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
-    tree::TreeState,
+    tree::{TreeEvent, TreeState},
     v_flex, Icon, IconName, Sizable, TitleBar,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -26,10 +26,15 @@ use std::rc::Rc;
 /// Files above this size open without syntax highlighting.
 const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
 
+/// Files above this size are read and written off the UI thread. A local disk
+/// answers in well under a millisecond, but a network share or a WSL folder can
+/// take long enough that the window stops drawing while the file is read.
+const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
+
 actions!(
     fluxcode,
     [
-        Save, SaveAll, CloseTab, OpenFolder, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
+        Save, SaveAll, CloseTab, OpenFolder, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
@@ -242,6 +247,10 @@ pub struct Workbench {
     /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
+    /// The explorer's tree, kept so a folder can be read when it is opened.
+    pub(crate) tree_nodes: Vec<crate::files::Node>,
+    /// Folders the user has opened, so a refresh keeps them open.
+    pub(crate) expanded: std::collections::HashSet<String>,
     /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
@@ -288,6 +297,8 @@ pub struct Workbench {
     pub(crate) panel_tab: PanelTab,
     pub(crate) term_lines: Vec<Line>,
     pub(crate) term_cwd: PathBuf,
+    /// Set when the workspace lives inside a WSL2 distro: commands then run there.
+    pub(crate) wsl: Option<crate::remote::WslTarget>,
     pub(crate) term_input: Entity<InputState>,
     /// The prompt has text in it (the panel draws its own placeholder in the UI font).
     pub(crate) term_typed: bool,
@@ -349,6 +360,12 @@ impl Workbench {
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
         crate::boot::mark("  inputs");
         let mut subs = vec![
+            cx.subscribe_in(&tree, window, |this, _, ev: &TreeEvent, _window, cx| match ev {
+                TreeEvent::Expanded(id) => this.tree_expanded(id.to_string(), cx),
+                TreeEvent::Collapsed(id) => {
+                    this.expanded.remove(id.as_ref());
+                }
+            }),
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
                     this.commit_pending(window, cx);
@@ -395,6 +412,7 @@ impl Workbench {
 
         let settings = crate::settings::Settings::load();
         crate::i18n::set(&settings.language);
+        crate::remote::set_helper_enabled(settings.wsl_helper);
         let mut settings = settings;
         if settings.agent_hint < AGENT_HINT_LAUNCHES {
             settings.agent_hint += 1;
@@ -465,6 +483,7 @@ impl Workbench {
             panel_tab: PanelTab::Terminal,
             term_lines: Vec::new(),
             term_cwd,
+            wsl: None,
             term_input,
             term_typed: false,
             term_proc: None,
@@ -489,6 +508,8 @@ impl Workbench {
             ext,
             theme_menu: false,
             quick,
+            tree_nodes: Vec::new(),
+            expanded: std::collections::HashSet::new(),
             all_files: Rc::default(),
             all_lower: Rc::default(),
             preview_server: None,
@@ -530,6 +551,11 @@ impl Workbench {
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = Some(root.clone());
+        // A different distro (or a plain folder) gets its own helper.
+        let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
+        if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
+            crate::remote::drop_client();
+        }
         if !self.term_proc.is_some_and(|id| self.procs.is_running(id)) {
             self.term_cwd = root.clone();
         }
@@ -543,8 +569,9 @@ impl Workbench {
     /// Find the workspace's Python version off the UI thread, for the terminal header.
     pub(crate) fn detect_python(&mut self, cx: &mut Context<Self>) {
         let root = self.root.clone();
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref()) }).await;
+            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref(), wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
                 this.python_version = v.map(Into::into);
                 cx.notify();
@@ -556,28 +583,48 @@ impl Workbench {
     pub(crate) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         let roots = self.roots();
-        let tree = self.tree.clone();
-        // Walk the folder off the UI thread, then hand the items to the tree.
-        // More than one folder: each is a top-level node, open to start with.
+        let multi = roots.len() > 1;
+        let wsl = self.wsl.clone();
+        // One level now: a folder is read when it is opened. In a distro the
+        // listing comes from the helper, so the 9p share is not walked at all.
+        let (root2, roots2) = (root.clone(), roots.clone());
         cx.spawn(async move |this, cx| {
-            let multi = roots.len() > 1;
-            let nodes = cx.background_spawn(async move { if multi { files::scan_roots(&roots) } else { files::scan(&root) } }).await;
-            let mut flat = Vec::new();
-            files::flatten(&nodes, &mut flat);
-            let mut dirs = std::collections::HashSet::new();
-            let mut items = files::to_items(nodes, &mut dirs);
-            if multi {
-                items = items.into_iter().map(|i| i.expanded(true)).collect();
-            }
-            let all = crate::quick::file_list(flat, &dirs);
-            _ = tree.update(cx, |state, cx| state.set_items(items, cx));
+            let listing = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl {
+                        if let Some(nodes) = remote_listing(t, &root2, multi) {
+                            return nodes;
+                        }
+                    }
+                    if multi { files::scan_roots_shallow(&roots2) } else { files::scan_shallow(&root2) }
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
-                // New items: show the active file again.
-                *this.revealed.borrow_mut() = None;
+                this.tree_nodes = merge(this.tree_nodes.clone(), listing);
+                this.set_tree_items(cx);
+            });
+        })
+        .detach();
+        // The file list (Ctrl+P) still wants the whole tree, off the UI thread.
+        // It comes from the helper when there is one, so the 9p share is not walked.
+        let wsl_scan = self.wsl.clone();
+        cx.spawn(async move |this, cx| {
+            let all = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl_scan {
+                        if let Some(paths) = remote_scan(t, &root, files::MAX_ENTRIES) {
+                            return paths;
+                        }
+                    }
+                    let nodes = if multi { files::scan_roots(&roots) } else { files::scan(&root) };
+                    let mut flat = Vec::new();
+                    files::flatten(&nodes, &mut flat);
+                    flat
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
-                this.dirs = Rc::new(dirs);
-                // Which extensions the folder's projects use (and their tasks).
                 this.ext_scan(cx);
                 cx.notify();
             });
@@ -585,20 +632,124 @@ impl Workbench {
         .detach();
     }
 
+    /// Build the tree items from `tree_nodes` and hand them to the tree.
+    fn set_tree_items(&mut self, cx: &mut Context<Self>) {
+        // New items: show the active file again (and retry after a folder loads).
+        *self.revealed.borrow_mut() = None;
+        let mut dirs = std::collections::HashSet::new();
+        let items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
+        self.dirs = Rc::new(dirs);
+        let selected = self.tree.read(cx).selected_item().map(|i| i.id.clone());
+        let tree = self.tree.clone();
+        tree.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            if let Some(id) = selected {
+                if let Some(ix) = state.index_of(&id) {
+                    state.set_selected_index(Some(ix), cx);
+                }
+            }
+        });
+    }
+
+    /// A folder was opened: read it now if it has not been read yet.
+    fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
+        self.expanded.insert(id.clone());
+        let Some(node) = find_node(&mut self.tree_nodes, &id) else { return };
+        if node.loaded {
+            return;
+        }
+        let wsl = self.wsl.clone();
+        let path = PathBuf::from(&id);
+        cx.spawn(async move |this, cx| {
+            let children = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl {
+                        if let Some(nodes) = remote_dir(t, &path) {
+                            return nodes;
+                        }
+                    }
+                    files::scan_dir(&path)
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if let Some(node) = find_node(&mut this.tree_nodes, &id) {
+                    node.children = Some(children);
+                    node.loaded = true;
+                }
+                this.set_tree_items(cx);
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_file_early(path.clone(), window, cx) {
+            return;
+        }
+        // A big file is read off the UI thread; a small one is read here, so the
+        // tab is there the moment the click is handled.
+        if read_off_thread(&path) {
+            let wsl = self.wsl.clone();
+            cx.spawn_in(window, async move |this, cx| {
+                let p = path.clone();
+                let bytes = cx
+                    .background_spawn(async move {
+                        if let Some(t) = &wsl {
+                            if let Some(bytes) = remote_read(t, &p, core::MAX_FILE_BYTES) {
+                                return Ok(bytes);
+                            }
+                        }
+                        read_head(&p)
+                    })
+                    .await;
+                this.update_in(cx, |this, window, cx| this.finish_open_file(path, bytes, window, cx)).ok()
+            })
+            .detach();
+            return;
+        }
+        let bytes = read_head(&path);
+        self.finish_open_file(path, bytes, window, cx);
+    }
+
+    /// Open a file now, reading it on this thread. For the few callers that need
+    /// the tab before they can continue: live share, the agent's diff tab, a
+    /// search hit. They are rare enough that a big file may block here.
+    pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_file_early(path.clone(), window, cx) {
+            return;
+        }
+        let bytes = match &self.wsl {
+            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
+            None => read_head(&path),
+        };
+        self.finish_open_file(path, bytes, window, cx);
+    }
+
+    /// The checks both open paths share: an already-open tab, an image.
+    /// True when the file was handled and the caller should stop.
+    fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // A file opened from anywhere takes the editor area back from an extension's page.
         self.ext.page = None;
         self.whats_new = None;
         self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
-            return;
+            return true;
         }
         if files::is_image(&path) {
             self.open_image(path, window, cx);
+            return true;
+        }
+        false
+    }
+
+    /// The rest of `open_file`, once the bytes are here.
+    fn finish_open_file(&mut self, path: PathBuf, bytes: Result<Vec<u8>, String>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
+            self.activate(ix, window, cx);
             return;
         }
-        let bytes = match read_head(&path) {
+        let bytes = match bytes {
             Ok(b) => b,
             Err(e) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -858,13 +1009,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    pub(crate) fn go_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.active else { return };
-        self.docs[ix].editor.update(cx, |ed, cx| {
-            ed.set_cursor_position(Position::new(line.saturating_sub(1), 0), window, cx);
-        });
-    }
-
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = Some(ix);
         // A tab that shows no text editor (an image, a drawn Flux document, a diff)
@@ -910,12 +1054,55 @@ impl Workbench {
         if self.docs[ix].image.is_some() || self.docs[ix].read_only || self.docs[ix].flux_lazy {
             return true;
         }
-        let doc = &mut self.docs[ix];
-        let text = doc.editor.read(cx).value();
-        match core::write_text(&doc.path, &text, doc.crlf) {
+        let (text, path, crlf, gen, name) = {
+            let doc = &self.docs[ix];
+            (doc.editor.read(cx).value(), doc.path.clone(), doc.crlf, doc.gen, doc.name.clone())
+        };
+        // A big file is written off the UI thread, for the same reason it is read there.
+        if text.len() as u64 > READ_OFF_THREAD_BYTES {
+            let wsl = self.wsl.clone();
+            cx.spawn(async move |this, cx| {
+                let p = path.clone();
+                let r = cx
+                    .background_spawn(async move {
+                        if let Some(t) = &wsl {
+                            let bytes = text.as_bytes();
+                            if let Some(()) = remote_write(t, &p, bytes, crlf) {
+                                return Ok(());
+                            }
+                        }
+                        core::write_text(&p, &text, crlf)
+                    })
+                    .await;
+                _ = this.update(cx, |this, cx| {
+                    this.finish_save(&path, gen, name, r, cx);
+                });
+            })
+            .detach();
+            return true;
+        }
+        let r = match &self.wsl {
+            Some(t) => match remote_write(t, &path, text.as_bytes(), crlf) {
+                Some(()) => Ok(()),
+                None => core::write_text(&path, &text, crlf),
+            },
+            None => core::write_text(&path, &text, crlf),
+        };
+        self.finish_save(&path, gen, name, r, cx)
+    }
+
+    /// The rest of `save_doc`, once the write is done.
+    fn finish_save(&mut self, path: &Path, gen: u64, name: SharedString, r: Result<(), String>, cx: &mut Context<Self>) -> bool {
+        match r {
             Ok(()) => {
-                doc.dirty = false;
-                self.status = crate::trf!("Saved {0}"; 0 => doc.name).into();
+                // Only the latest edit's save clears the dot: an older save that
+                // finished late must not hide newer unsaved text.
+                if let Some(d) = self.docs.iter_mut().find(|d| d.path.as_path() == path) {
+                    if d.gen == gen {
+                        d.dirty = false;
+                    }
+                }
+                self.status = crate::trf!("Saved {0}"; 0 => name).into();
                 if let Some(s) = &self.preview_server {
                     s.reload();
                 }
@@ -944,15 +1131,55 @@ impl Workbench {
     fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
         self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
-        if let Some(root) = s.root.filter(|r| r.is_dir()) {
+        // A saved WSL root is checked by the helper when there is one: over 9p
+        // `is_dir` is the slowest part of restoring a session.
+        let saved_root = s.root.filter(|r| match crate::remote::WslTarget::from_path(r) {
+            Some(t) => remote_is_dir(&t, r).unwrap_or_else(|| r.is_dir()),
+            None => r.is_dir(),
+        });
+        if let Some(root) = saved_root {
             self.open_folder(root, cx);
         }
-        for f in s.files.into_iter().filter(|f| f.is_file()) {
-            self.open_file(f, window, cx);
+        let wsl = self.wsl.clone();
+        let files: Vec<PathBuf> = s
+            .files
+            .into_iter()
+            .filter(|f| match &wsl {
+                Some(t) => remote_is_file(t, f).unwrap_or_else(|| f.is_file()),
+                None => f.is_file(),
+            })
+            .collect();
+        let active = s.active;
+        if files.is_empty() {
+            return;
         }
-        if let Some(a) = s.active.filter(|a| *a < self.docs.len()) {
-            self.activate(a, window, cx);
-        }
+        // Read them together, off the UI thread, then open them in the order they
+        // were saved: a session with a big file in it must not open out of order.
+        cx.spawn_in(window, async move |this, cx| {
+            let reads = files.clone();
+            let all = cx
+                .background_spawn(async move {
+                    reads.iter().map(|p| if files::is_image(p) { Ok(Vec::new()) } else { read_head(p) }).collect::<Vec<_>>()
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                for (p, b) in files.into_iter().zip(all) {
+                    if this.docs.iter().any(|d| d.path == p) {
+                        continue;
+                    }
+                    if files::is_image(&p) {
+                        this.open_image(p, window, cx);
+                    } else {
+                        this.finish_open_file(p, b, window, cx);
+                    }
+                }
+                if let Some(a) = active.filter(|a| *a < this.docs.len()) {
+                    this.activate(a, window, cx);
+                }
+            })
+            .ok()
+        })
+        .detach();
     }
 
     // ----------------------------------------------------------- actions
@@ -995,6 +1222,18 @@ impl Workbench {
             .ok()
         })
         .detach();
+    }
+
+    fn on_open_folder_in_wsl(&mut self, _: &OpenFolderInWsl, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::remote::available() {
+            self.status = tr("WSL is only available on Windows.").into();
+            cx.notify();
+            return;
+        }
+        self.quick.wsl_browse = None;
+        self.quick.wsl_dirs.clear();
+        self.quick.wsl_rows.clear();
+        self.quick_open_with("wsl:", window, cx);
     }
 
     pub(crate) fn on_remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
@@ -1259,6 +1498,7 @@ impl Workbench {
                 m.menu(tr("Go to File..."), Box::new(QuickOpenFile))
                     .menu(tr("Open File..."), Box::new(OpenFile))
                     .menu(tr("Open Folder..."), Box::new(OpenFolder))
+                    .menu(tr("Open Folder in WSL..."), Box::new(OpenFolderInWsl))
                     .separator()
                     .menu(tr("New File..."), Box::new(ExplorerNewFile))
                     .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
@@ -2002,6 +2242,17 @@ impl Workbench {
             .text_xs()
             .text_color(c(theme::FG_MUTED))
             .when_some(folder, |h, f| h.child(seg(f.into()).pl_3().text_color(c(theme::FG))))
+            .when_some(self.wsl.as_ref().map(|w| w.distro.clone()), |h, d| {
+                h.child(
+                    h_flex()
+                        .id("sb-wsl")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child(format!("WSL: {d}")),
+                )
+            })
             .when_some(self.scm.status.branch.clone().filter(|_| self.scm.repo.is_some()), |h, b| {
                 let st = &self.scm.status;
                 let dirty = if st.count() > 0 { "*" } else { "" };
@@ -2402,6 +2653,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_open_folder_in_wsl))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_toggle_sidebar))
@@ -2484,6 +2736,108 @@ fn selection_guard() -> impl IntoElement {
     )
     .absolute()
     .size(px(0.))
+}
+
+/// Whether to read this file off the UI thread: big enough that a slow disk
+/// (a network share, a WSL folder) would show as a frozen window.
+fn read_off_thread(path: &Path) -> bool {
+    std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
+}
+
+/// One level of a folder, read by the helper inside the distro. `None` when the
+/// helper is not available, so the caller uses the UNC path instead.
+fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    let entries = crate::remote::with_client(&distro, |c| c.list(&linux).ok())??;
+    let entries = entries.into_iter().map(|e| (e.name, e.is_dir)).collect();
+    Some(crate::files::nodes_from_remote(path, entries))
+}
+
+/// The workspace roots, the first one through the same helper call.
+fn remote_listing(target: &crate::remote::WslTarget, root: &std::path::Path, multi: bool) -> Option<Vec<crate::files::Node>> {
+    if !multi {
+        return remote_dir(target, root);
+    }
+    // Every extra folder is a Windows path; only the root is in the distro.
+    // A multi-folder workspace with a WSL root still scans the UNC share, which
+    // is correct but slow; handling it is left for later.
+    None
+}
+
+/// A file's bytes, read by the helper inside the distro. `None` when the helper
+/// is not there or the call failed, so the caller reads the UNC path instead.
+fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.read(&linux, limit).ok()).flatten()
+}
+
+/// A file's bytes, written by the helper inside the distro. `None` when the
+/// helper is not there or the call failed; the write is atomic, so a failure
+/// means nothing was written and the UNC path can try.
+fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<()> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
+}
+
+/// Whether a path is a file, answered by the helper when there is one.
+fn remote_is_file(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_file)
+}
+
+/// Every file under the workspace, read by the helper inside the distro. This is
+/// the list behind Ctrl+P, so the 9p share is not walked for it.
+fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(root)?;
+    let paths = crate::remote::with_client(&distro, |c| c.scan(&linux, max).ok()).flatten()?;
+    Some(paths.into_iter().map(|p| target.unc_path(&p).to_string_lossy().into_owned()).collect())
+}
+
+/// Whether a path is a folder, answered by the helper when there is one. The
+/// explorer's `+`/rename checks look before they act, and over 9p that look is
+/// the slow part.
+fn remote_is_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_dir)
+}
+
+/// The node with this id, anywhere in the tree.
+fn find_node<'a>(nodes: &'a mut [crate::files::Node], id: &str) -> Option<&'a mut crate::files::Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(ch) = &mut n.children {
+            if let Some(found) = find_node(ch, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// A fresh one-level listing, keeping the folders that were already read so a
+/// refresh does not close what the user opened.
+fn merge(old: Vec<crate::files::Node>, new: Vec<crate::files::Node>) -> Vec<crate::files::Node> {
+    new.into_iter()
+        .map(|mut n| {
+            if n.children.is_some() && !n.loaded {
+                if let Some(o) = old.iter().find(|o| o.id == n.id) {
+                    if o.loaded {
+                        n.children = o.children.clone();
+                        n.loaded = true;
+                    }
+                }
+            }
+            n
+        })
+        .collect()
 }
 
 /// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.

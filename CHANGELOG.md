@@ -5,6 +5,37 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+<<<<<<< HEAD
+## WSL2 workspaces: the helper inside the distro (13 November 2026)
+
+- A WSL2 folder now reads and writes through a small helper running inside the
+  distro, instead of reaching it over Windows' 9p share. Opening a folder, walking
+  the tree, opening and saving a file, find-in-files and git all go through it.
+  It is off by default: turn it on in **Settings > WSL**.
+- The helper is FluxCode itself, built for Linux, taken from the release of the
+  build that is running: the two are always the same version, and nothing extra
+  ships. It is installed once per build in `~/.fluxcode/helper/<build>/`.
+- If the helper cannot be installed or started, everything falls back to the
+  `\\wsl.localhost\...` path, so a WSL folder still opens and saves.
+
+## WSL2 workspaces (13 November 2026)
+
+- A folder that lives inside a WSL2 distro opens like any other. Files are read and
+  written through `\\wsl.localhost\...`, while the terminal, Run and git run inside the
+  distro, so the paths, line endings and toolchains are the Linux ones.
+- **File > Open Folder in WSL...** lists the installed distros and opens the chosen one's
+  home folder. The status bar says `WSL: Ubuntu` while such a folder is open.
+- What it does not do yet: no language server (FluxCode has none), no interactive terminal
+  (the terminal runs one line at a time), and no file watcher (there is none). A folder
+  under `/mnt/c` works but is slow, so keep the repo in the Linux filesystem.
+
+## Big files no longer freeze the window (13 November 2026)
+
+- Opening or saving a file over 256 KB now happens on a background thread, so the
+  window keeps drawing while a large file, a network share or a slow disk is read.
+  Small files still open the moment you click them, and a save that finishes late
+  no longer hides newer unsaved text.
+=======
 ## Markdown files draw themselves (13 November 2026)
 
 - A Markdown file (README.md first of all) opens as text with a small bar above it:
@@ -17,6 +48,7 @@ page, and installed copies offer it on their own. Newest first.
   real text, so edits land in the drawing when you switch back.
 - Flux documents keep their own Preview and Source, unchanged; the "Save as Markdown"
   button belongs to them alone.
+>>>>>>> upstream/main
 
 ## Pull requests open to everyone, with automatic checks (13 November 2026)
 

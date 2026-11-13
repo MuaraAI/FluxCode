@@ -11,6 +11,73 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-13
+@title en: WSL2 workspaces read through a helper in the distro
+@title id: Workspace WSL2 membaca lewat helper di dalam distro
+@en
+A folder inside a **WSL2 distro** now reads and writes through a small helper
+running **inside the distro**, instead of reaching it over Windows' 9p share.
+Opening a folder, walking the tree, opening and saving a file, find-in-files and
+git all go through it, so a home folder with 70,000 cache entries no longer takes
+seconds to list. It is off by default: turn it on in **Settings > WSL**.
+
+The helper is FluxCode itself, built for Linux, from the release of the build that
+is running: the two are always the same version and nothing extra ships. It is
+installed once per build in `~/.fluxcode/helper/<build>/`. If it cannot be
+installed or started, everything falls back to the `\\wsl.localhost\...` path, so
+the folder still opens and saves.
+@id
+Folder di dalam **distro WSL2** sekarang membaca dan menulis lewat helper kecil
+yang berjalan **di dalam distro**, bukan lewat share 9p Windows. Membuka folder,
+menelusuri tree, membuka dan menyimpan file, find-in-files, dan git semuanya lewat
+helper itu, jadi home folder dengan 70.000 entri cache tidak lagi butuh beberapa
+detik untuk didaftar. Fitur ini mati secara bawaan: nyalakan di **Settings > WSL**.
+
+Helper-nya adalah FluxCode sendiri, dibangun untuk Linux, dari rilis build yang
+sedang berjalan: keduanya selalu versi yang sama dan tidak ada yang perlu diunduh
+terpisah. Ia dipasang sekali per build di `~/.fluxcode/helper/<build>/`. Kalau
+helper gagal dipasang atau dijalankan, semuanya kembali ke path
+`\\wsl.localhost\...`, jadi folder tetap terbuka dan tersimpan.
+
+@release 2026-11-13
+@title en: WSL2 workspaces
+@title id: Workspace WSL2
+@en
+A folder that lives inside a **WSL2 distro** opens like any other. Files are read and
+written through `\\wsl.localhost\...`, while the **terminal**, **Run** and **git** run
+inside the distro, so the paths, line endings and toolchains are the Linux ones. The
+status bar says `WSL: Ubuntu`, and **File > Open Folder in WSL...** lists the distros
+that are installed.
+
+What it does not do yet: no language server (FluxCode has none), no interactive terminal
+(the terminal runs one line at a time), and no file watcher (there is none). A folder
+under `/mnt/c` works but is slow, so keep the repo in the Linux filesystem.
+@id
+Folder yang ada di dalam **distro WSL2** terbuka seperti folder biasa. File dibaca dan
+ditulis lewat `\\wsl.localhost\...`, sementara **terminal**, **Run**, dan **git** berjalan
+di dalam distro, jadi path, line ending, dan toolchain yang dipakai adalah milik Linux.
+Status bar menunjukkan `WSL: Ubuntu`, dan **File > Buka Folder di WSL...** menampilkan
+distro yang terpasang.
+
+Yang belum: belum ada language server (FluxCode memang belum punya), terminal belum
+interaktif (terminal menjalankan satu baris sekaligus), dan belum ada file watcher
+(memang belum ada). Folder di `/mnt/c` bisa dibuka tapi lambat, jadi simpan repo di
+filesystem Linux.
+
+@release 2026-11-13
+@title en: Big files no longer freeze the window
+@title id: File besar tidak lagi membekukan jendela
+@en
+Opening or saving a file over 256 KB now happens on a background thread, so the window
+keeps drawing while a large file, a network share or a slow disk is read. Small files
+still open the moment you click them, and a save that finishes late no longer hides
+newer unsaved text.
+@id
+Membuka atau menyimpan file di atas 256 KB sekarang berjalan di thread latar, jadi
+jendela tetap menggambar saat file besar, folder jaringan, atau disk lambat dibaca.
+File kecil tetap terbuka begitu diklik, dan simpan yang selesai terlambat tidak lagi
+menyembunyikan teks baru yang belum disimpan.
+
+@release 2026-11-13
 @title en: Markdown files draw themselves
 @title id: File Markdown menggambar dirinya sendiri
 @en
