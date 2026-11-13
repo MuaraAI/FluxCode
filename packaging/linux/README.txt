@@ -17,3 +17,6 @@ Without installing: ./fluxcode also runs straight from this folder.
 
 What changed: https://github.com/MuaraAI/FluxCode/blob/main/CHANGELOG.md
 Report a problem: https://github.com/MuaraAI/FluxCode/issues
+
+FluxCode is free software under GPL-3.0-or-later (see LICENSE in the source).
+Copyright (C) 2026 MuaraAI and contributors. https://github.com/MuaraAI/FluxCode

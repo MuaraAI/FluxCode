@@ -287,7 +287,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Mention a file in the project", "Sebut file di project"),
     ("Stop the answer", "Hentikan jawaban"),
     ("FluxCode is open source under the GPL-3.0 license and still in development, so expect rough edges and frequent builds. The code, every build and the issue tracker are on GitHub.", "FluxCode open source dengan lisensi GPL-3.0 dan masih dalam pengembangan, jadi wajar kalau ada yang belum mulus dan build baru sering keluar. Kode, semua build, dan tempat lapor masalah ada di GitHub."),
-    ("A MuaraAI project, built by a first-semester university student in Indonesia.", "Proyek MuaraAI, dibuat oleh mahasiswa semester 1 di Indonesia."),
+    ("A MuaraAI project, built by a first-semester university student in Indonesia. Copyright (C) 2026 MuaraAI and contributors.", "Proyek MuaraAI, dibuat oleh mahasiswa semester 1 di Indonesia. Copyright (C) 2026 MuaraAI dan kontributor."),
     ("Open the repository", "Buka repository"),
     ("Report a problem", "Laporkan masalah"),
     ("What changed", "Yang berubah"),
