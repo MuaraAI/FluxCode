@@ -34,7 +34,7 @@ const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
 actions!(
     fluxcode,
     [
-        Save, SaveAll, CloseTab, OpenFolder, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
+        Save, SaveAll, CloseTab, OpenFolder, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
@@ -293,6 +293,8 @@ pub struct Workbench {
     pub(crate) panel_tab: PanelTab,
     pub(crate) term_lines: Vec<Line>,
     pub(crate) term_cwd: PathBuf,
+    /// Set when the workspace lives inside a WSL2 distro: commands then run there.
+    pub(crate) wsl: Option<crate::remote::WslTarget>,
     pub(crate) term_input: Entity<InputState>,
     /// The prompt has text in it (the panel draws its own placeholder in the UI font).
     pub(crate) term_typed: bool,
@@ -470,6 +472,7 @@ impl Workbench {
             panel_tab: PanelTab::Terminal,
             term_lines: Vec::new(),
             term_cwd,
+            wsl: None,
             term_input,
             term_typed: false,
             term_proc: None,
@@ -535,6 +538,7 @@ impl Workbench {
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = Some(root.clone());
+        self.wsl = crate::remote::WslTarget::from_path(&root);
         if !self.term_proc.is_some_and(|id| self.procs.is_running(id)) {
             self.term_cwd = root.clone();
         }
@@ -1083,6 +1087,15 @@ impl Workbench {
             .ok()
         })
         .detach();
+    }
+
+    fn on_open_folder_in_wsl(&mut self, _: &OpenFolderInWsl, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::remote::available() {
+            self.status = tr("WSL is only available on Windows.").into();
+            cx.notify();
+            return;
+        }
+        self.quick_open_with("wsl:", window, cx);
     }
 
     pub(crate) fn on_remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
@@ -2090,6 +2103,17 @@ impl Workbench {
             .text_xs()
             .text_color(c(theme::FG_MUTED))
             .when_some(folder, |h, f| h.child(seg(f.into()).pl_3().text_color(c(theme::FG))))
+            .when_some(self.wsl.as_ref().map(|w| w.distro.clone()), |h, d| {
+                h.child(
+                    h_flex()
+                        .id("sb-wsl")
+                        .h_full()
+                        .px_2()
+                        .gap_1()
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child(format!("WSL: {d}")),
+                )
+            })
             .when_some(self.scm.status.branch.clone().filter(|_| self.scm.repo.is_some()), |h, b| {
                 let st = &self.scm.status;
                 let dirty = if st.count() > 0 { "*" } else { "" };
@@ -2490,6 +2514,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_open_folder_in_wsl))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_toggle_sidebar))

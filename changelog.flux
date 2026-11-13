@@ -11,6 +11,31 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-13
+@title en: WSL2 workspaces
+@title id: Workspace WSL2
+@en
+A folder that lives inside a **WSL2 distro** opens like any other. Files are read and
+written through `\\wsl.localhost\...`, while the **terminal**, **Run** and **git** run
+inside the distro, so the paths, line endings and toolchains are the Linux ones. The
+status bar says `WSL: Ubuntu`, and **File > Open Folder in WSL...** lists the distros
+that are installed.
+
+What it does not do yet: no language server (FluxCode has none), no interactive terminal
+(the terminal runs one line at a time), and no file watcher (there is none). A folder
+under `/mnt/c` works but is slow, so keep the repo in the Linux filesystem.
+@id
+Folder yang ada di dalam **distro WSL2** terbuka seperti folder biasa. File dibaca dan
+ditulis lewat `\\wsl.localhost\...`, sementara **terminal**, **Run**, dan **git** berjalan
+di dalam distro, jadi path, line ending, dan toolchain yang dipakai adalah milik Linux.
+Status bar menunjukkan `WSL: Ubuntu`, dan **File > Buka Folder di WSL...** menampilkan
+distro yang terpasang.
+
+Yang belum: belum ada language server (FluxCode memang belum punya), terminal belum
+interaktif (terminal menjalankan satu baris sekaligus), dan belum ada file watcher
+(memang belum ada). Folder di `/mnt/c` bisa dibuka tapi lambat, jadi simpan repo di
+filesystem Linux.
+
+@release 2026-11-13
 @title en: Big files no longer freeze the window
 @title id: File besar tidak lagi membekukan jendela
 @en

@@ -5,6 +5,17 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## WSL2 workspaces (13 November 2026)
+
+- A folder that lives inside a WSL2 distro opens like any other. Files are read and
+  written through `\\wsl.localhost\...`, while the terminal, Run and git run inside the
+  distro, so the paths, line endings and toolchains are the Linux ones.
+- **File > Open Folder in WSL...** lists the installed distros and opens the chosen one's
+  home folder. The status bar says `WSL: Ubuntu` while such a folder is open.
+- What it does not do yet: no language server (FluxCode has none), no interactive terminal
+  (the terminal runs one line at a time), and no file watcher (there is none). A folder
+  under `/mnt/c` works but is slow, so keep the repo in the Linux filesystem.
+
 ## Big files no longer freeze the window (13 November 2026)
 
 - Opening or saving a file over 256 KB now happens on a background thread, so the

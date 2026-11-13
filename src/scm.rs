@@ -274,10 +274,29 @@ fn run_step(dir: &Path, step: &Step) -> Result<String, String> {
         Step::Git(a, i) => ("git", a, i.clone()),
         Step::Gh(a) => ("gh", a, None),
     };
-    let mut cmd = proc::command(prog);
-    cmd.args(args)
-        .current_dir(dir)
-        .env("GIT_OPTIONAL_LOCKS", "0")
+    // `git` runs inside the distro for a WSL folder, so it sees Linux paths and
+    // line endings. `gh` stays on Windows: it is a network tool, and it finds the
+    // repo through the UNC path.
+    let target = matches!(step, Step::Git(..)).then(|| crate::remote::WslTarget::from_path(dir)).flatten();
+    let mut cmd = match &target {
+        Some(t) => {
+            let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            crate::remote::program_command_env(
+                t,
+                &cwd,
+                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("NO_COLOR", "1")],
+                prog,
+                &refs,
+            )
+        }
+        None => {
+            let mut c = proc::command(prog);
+            c.args(args).current_dir(dir);
+            c
+        }
+    };
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")
@@ -313,7 +332,13 @@ struct Snapshot {
 }
 
 fn snapshot(dir: &Path, with_log: bool) -> Snapshot {
-    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"])).ok().map(|s| PathBuf::from(s.trim().replace('/', "\\")));
+    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"])).ok().map(|s| {
+        let p = s.trim();
+        match crate::remote::WslTarget::from_path(dir) {
+            Some(t) => t.unc_path(p),
+            None => PathBuf::from(p.replace('/', "\\")),
+        }
+    });
     let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None, incoming: Default::default() } };
     let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"])).map(|s| parse_status(&s)).unwrap_or_default();
     let log = with_log.then(|| {

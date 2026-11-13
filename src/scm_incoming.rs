@@ -28,10 +28,24 @@ pub const MAX_INCOMING: usize = 50;
 
 /// `git` for a background read: no prompts, no locks, no window.
 fn quiet_git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let mut cmd = crate::proc::command("git");
-    cmd.args(args)
-        .current_dir(dir)
-        .env("GIT_OPTIONAL_LOCKS", "0")
+    let mut cmd = match crate::remote::WslTarget::from_path(dir) {
+        Some(t) => {
+            let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
+            crate::remote::program_command_env(
+                &t,
+                &cwd,
+                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never"), ("NO_COLOR", "1")],
+                "git",
+                args,
+            )
+        }
+        None => {
+            let mut c = crate::proc::command("git");
+            c.args(args).current_dir(dir);
+            c
+        }
+    };
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         // Git Credential Manager: never pop a sign-in window for a background fetch.
         .env("GCM_INTERACTIVE", "never")

@@ -34,6 +34,7 @@ mod preview;
 mod preview_ui;
 mod proc;
 mod quick;
+mod remote;
 mod scm;
 mod scm_incoming;
 mod search;
@@ -67,8 +68,16 @@ fn main() {
         .skip(1)
         .filter(|a| !a.to_string_lossy().starts_with('-'))
         .filter_map(|a| PathBuf::from(a).canonicalize().ok())
-        // canonicalize() gives `\\?\C:\...` on Windows; keep the plain form.
-        .map(|p| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\")))
+        // canonicalize() gives `\\?\C:\...` and `\\?\UNC\server\share\...`;
+        // keep the plain form, and keep a WSL root whole.
+        .map(|p| {
+            let s = p.to_string_lossy();
+            let plain = match s.strip_prefix(r"\\?\UNC\") {
+                Some(rest) => format!(r"\\{rest}"),
+                None => s.trim_start_matches(r"\\?\").to_string(),
+            };
+            PathBuf::from(plain)
+        })
         .collect();
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();

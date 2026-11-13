@@ -73,9 +73,14 @@ pub enum Mode {
     Commands,
     /// ":": Go to Line.
     Line,
+    /// "wsl:": pick a WSL2 distro to open.
+    Wsl,
 }
 
 pub fn mode_of(q: &str) -> Mode {
+    if q.starts_with("wsl:") {
+        return Mode::Wsl;
+    }
     match q.chars().next() {
         Some('>') => Mode::Commands,
         Some(':') => Mode::Line,
@@ -90,17 +95,21 @@ pub struct QuickOpen {
     pub hits: Vec<usize>,
     pub sel: usize,
     pub mode: Mode,
+    /// The distros the `wsl:` mode lists, read once.
+    pub wsl: Vec<String>,
+    /// A distro list is being read off the UI thread.
+    pub wsl_loading: bool,
 }
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type part of a file name ( > for commands, : for a line )")));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type part of a file name ( > commands, : a line, wsl: a distro )")));
         let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
             InputEvent::Change => this.quick_filter(cx),
             InputEvent::PressEnter { .. } => this.quick_accept(window, cx),
             _ => {}
         });
-        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files }, sub)
+        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files, wsl: Vec::new(), wsl_loading: false }, sub)
     }
 }
 
@@ -131,6 +140,37 @@ impl Workbench {
             }
             Mode::Line => {
                 self.quick.hits.clear();
+                self.quick.sel = 0;
+                cx.notify();
+                return;
+            }
+            Mode::Wsl => {
+                // `wsl.exe -l` starts the WSL service, so ask off the UI thread.
+                if self.quick.wsl.is_empty() && !self.quick.wsl_loading {
+                    self.quick.wsl_loading = true;
+                    cx.spawn(async move |this, cx| {
+                        let list = cx.background_spawn(async move { crate::remote::distros() }).await;
+                        _ = this.update(cx, |this, cx| {
+                            this.quick.wsl = list;
+                            this.quick.wsl_loading = false;
+                            this.quick_filter(cx);
+                        });
+                    })
+                    .detach();
+                }
+                let query = q.trim_start_matches("wsl:").trim().to_lowercase();
+                let qb = query.as_bytes();
+                let mut scored: Vec<(i32, usize)> = self
+                    .quick
+                    .wsl
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, d)| fuzzy_lower(qb, d.to_lowercase().as_bytes()).map(|s| (s, i)))
+                    .collect();
+                if !query.is_empty() {
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                }
+                self.quick.hits = scored.into_iter().map(|(_, i)| i).collect();
                 self.quick.sel = 0;
                 cx.notify();
                 return;
@@ -228,6 +268,28 @@ impl Workbench {
                 }
                 return;
             }
+            Mode::Wsl => {
+                let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
+                let Some(distro) = self.quick.wsl.get(ix).cloned() else { return };
+                self.quick.open = false;
+                cx.spawn_in(window, async move |this, cx| {
+                    let d = distro.clone();
+                    let home = cx.background_spawn(async move { crate::remote::home_dir(&d) }).await;
+                    this.update_in(cx, |this, _window, cx| match home {
+                        Some(home) => {
+                            let target = crate::remote::WslTarget::new(&distro, &home);
+                            this.open_folder(target.unc_root, cx);
+                        }
+                        None => {
+                            this.status = crate::trf!("Couldn't reach {name}."; name => distro).into();
+                            cx.notify();
+                        }
+                    })
+                    .ok()
+                })
+                .detach();
+                return;
+            }
             Mode::Files => {}
         }
         let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
@@ -286,6 +348,33 @@ impl Workbench {
                     None => crate::trf!("Current line: {cur} of {total}. Type a line number to go there."; cur => cur, total => total),
                 };
                 list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_MUTED)).child(text));
+                return self.quick_frame(list, cx).into_any_element();
+            }
+            Mode::Wsl => {
+                if q.hits.is_empty() {
+                    list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No WSL distro found.")));
+                }
+                for (row, &ix) in q.hits.iter().enumerate() {
+                    let Some(distro) = q.wsl.get(ix) else { continue };
+                    let selected = row == q.sel;
+                    list = list.child(
+                        h_flex()
+                            .id(("quick-wsl", row))
+                            .mx_1()
+                            .px_2()
+                            .h(theme::u(28.))
+                            .gap_2()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .when(selected, |d| d.bg(c(theme::SELECT)))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(distro.clone()))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.quick.sel = row;
+                                this.quick_accept(w, cx);
+                            })),
+                    );
+                }
                 return self.quick_frame(list, cx).into_any_element();
             }
             Mode::Files => {}
@@ -397,6 +486,16 @@ pub fn file_list(paths: Vec<String>, dirs: &std::collections::HashSet<String>) -
 #[cfg(test)]
 mod tests {
     use super::fuzzy;
+
+    #[test]
+    fn the_wsl_prefix_is_its_own_mode() {
+        use super::{mode_of, Mode};
+        assert_eq!(mode_of("wsl:"), Mode::Wsl);
+        assert_eq!(mode_of("wsl:Ubu"), Mode::Wsl);
+        assert_eq!(mode_of(">wsl"), Mode::Commands);
+        assert_eq!(mode_of(":12"), Mode::Line);
+        assert_eq!(mode_of("main.rs"), Mode::Files);
+    }
 
     #[test]
     fn ranks_file_names_first() {
