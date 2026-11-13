@@ -5,6 +5,13 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Big files no longer freeze the window (13 November 2026)
+
+- Opening or saving a file over 256 KB now happens on a background thread, so the
+  window keeps drawing while a large file, a network share or a slow disk is read.
+  Small files still open the moment you click them, and a save that finishes late
+  no longer hides newer unsaved text.
+
 ## Our own Live Share relay, and a README in two languages (11 November 2026)
 
 - Live Share now goes through MuaraAI's own relay at `live.muaraai.com` before it falls

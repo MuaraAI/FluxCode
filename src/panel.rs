@@ -515,7 +515,7 @@ impl Workbench {
             cx.notify();
             return;
         }
-        self.open_file(path, window, cx);
+        self.open_file_now(path, window, cx);
         if let Some(ix) = self.active {
             self.docs[ix].editor.update(cx, |ed, cx| {
                 ed.set_cursor_position(Position::new(line.saturating_sub(1), col), window, cx);

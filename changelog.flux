@@ -10,6 +10,20 @@
 //   @en / @id                the Markdown that follows is English / Indonesian
 // Lines starting with // before the first @release are comments.
 
+@release 2026-11-13
+@title en: Big files no longer freeze the window
+@title id: File besar tidak lagi membekukan jendela
+@en
+Opening or saving a file over 256 KB now happens on a background thread, so the window
+keeps drawing while a large file, a network share or a slow disk is read. Small files
+still open the moment you click them, and a save that finishes late no longer hides
+newer unsaved text.
+@id
+Membuka atau menyimpan file di atas 256 KB sekarang berjalan di thread latar, jadi
+jendela tetap menggambar saat file besar, folder jaringan, atau disk lambat dibaca.
+File kecil tetap terbuka begitu diklik, dan simpan yang selesai terlambat tidak lagi
+menyembunyikan teks baru yang belum disimpan.
+
 @release 2026-11-11
 @title en: Our own Live Share relay, and a README in two languages
 @title id: Relay Live Share sendiri, dan README dalam dua bahasa

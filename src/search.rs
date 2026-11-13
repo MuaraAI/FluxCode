@@ -114,8 +114,7 @@ impl Workbench {
                                             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(hit.line.to_string()))
                                             .child(div().text_color(c(theme::FG)).truncate().child(hit.text.clone()))
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.open_file(path.clone(), window, cx);
-                                                this.go_to_line(line, window, cx);
+                                                this.open_location(path.clone(), line, 0, window, cx);
                                             }))
                                     }
                                 }

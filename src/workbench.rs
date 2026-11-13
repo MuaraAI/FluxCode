@@ -12,7 +12,7 @@ use futures::StreamExt;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
+    input::{Editor, EditorState, InputEvent, InputState, TabSize},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
     tree::TreeState,
@@ -25,6 +25,11 @@ use std::rc::Rc;
 
 /// Files above this size open without syntax highlighting.
 const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Files above this size are read and written off the UI thread. A local disk
+/// answers in well under a millisecond, but a network share or a WSL folder can
+/// take long enough that the window stops drawing while the file is read.
+const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
 
 actions!(
     fluxcode,
@@ -586,19 +591,60 @@ impl Workbench {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_file_early(path.clone(), window, cx) {
+            return;
+        }
+        // A big file is read off the UI thread; a small one is read here, so the
+        // tab is there the moment the click is handled.
+        if read_off_thread(&path) {
+            cx.spawn_in(window, async move |this, cx| {
+                let p = path.clone();
+                let bytes = cx.background_spawn(async move { read_head(&p) }).await;
+                this.update_in(cx, |this, window, cx| this.finish_open_file(path, bytes, window, cx)).ok()
+            })
+            .detach();
+            return;
+        }
+        let bytes = read_head(&path);
+        self.finish_open_file(path, bytes, window, cx);
+    }
+
+    /// Open a file now, reading it on this thread. For the few callers that need
+    /// the tab before they can continue: live share, the agent's diff tab, a
+    /// search hit. They are rare enough that a big file may block here.
+    pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_file_early(path.clone(), window, cx) {
+            return;
+        }
+        let bytes = read_head(&path);
+        self.finish_open_file(path, bytes, window, cx);
+    }
+
+    /// The checks both open paths share: an already-open tab, an image.
+    /// True when the file was handled and the caller should stop.
+    fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // A file opened from anywhere takes the editor area back from an extension's page.
         self.ext.page = None;
         self.whats_new = None;
         self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
-            return;
+            return true;
         }
         if files::is_image(&path) {
             self.open_image(path, window, cx);
+            return true;
+        }
+        false
+    }
+
+    /// The rest of `open_file`, once the bytes are here.
+    fn finish_open_file(&mut self, path: PathBuf, bytes: Result<Vec<u8>, String>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
+            self.activate(ix, window, cx);
             return;
         }
-        let bytes = match read_head(&path) {
+        let bytes = match bytes {
             Ok(b) => b,
             Err(e) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -855,13 +901,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    pub(crate) fn go_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.active else { return };
-        self.docs[ix].editor.update(cx, |ed, cx| {
-            ed.set_cursor_position(Position::new(line.saturating_sub(1), 0), window, cx);
-        });
-    }
-
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = Some(ix);
         // A tab that shows no text editor (an image, a drawn Flux document, a diff)
@@ -907,12 +946,38 @@ impl Workbench {
         if self.docs[ix].image.is_some() || self.docs[ix].read_only || self.docs[ix].flux_lazy {
             return true;
         }
-        let doc = &mut self.docs[ix];
-        let text = doc.editor.read(cx).value();
-        match core::write_text(&doc.path, &text, doc.crlf) {
+        let (text, path, crlf, gen, name) = {
+            let doc = &self.docs[ix];
+            (doc.editor.read(cx).value(), doc.path.clone(), doc.crlf, doc.gen, doc.name.clone())
+        };
+        // A big file is written off the UI thread, for the same reason it is read there.
+        if text.len() as u64 > READ_OFF_THREAD_BYTES {
+            cx.spawn(async move |this, cx| {
+                let p = path.clone();
+                let r = cx.background_spawn(async move { core::write_text(&p, &text, crlf) }).await;
+                _ = this.update(cx, |this, cx| {
+                    this.finish_save(&path, gen, name, r, cx);
+                });
+            })
+            .detach();
+            return true;
+        }
+        let r = core::write_text(&path, &text, crlf);
+        self.finish_save(&path, gen, name, r, cx)
+    }
+
+    /// The rest of `save_doc`, once the write is done.
+    fn finish_save(&mut self, path: &Path, gen: u64, name: SharedString, r: Result<(), String>, cx: &mut Context<Self>) -> bool {
+        match r {
             Ok(()) => {
-                doc.dirty = false;
-                self.status = crate::trf!("Saved {0}"; 0 => doc.name).into();
+                // Only the latest edit's save clears the dot: an older save that
+                // finished late must not hide newer unsaved text.
+                if let Some(d) = self.docs.iter_mut().find(|d| d.path.as_path() == path) {
+                    if d.gen == gen {
+                        d.dirty = false;
+                    }
+                }
+                self.status = crate::trf!("Saved {0}"; 0 => name).into();
                 if let Some(s) = &self.preview_server {
                     s.reload();
                 }
@@ -944,12 +1009,38 @@ impl Workbench {
         if let Some(root) = s.root.filter(|r| r.is_dir()) {
             self.open_folder(root, cx);
         }
-        for f in s.files.into_iter().filter(|f| f.is_file()) {
-            self.open_file(f, window, cx);
+        let files: Vec<PathBuf> = s.files.into_iter().filter(|f| f.is_file()).collect();
+        let active = s.active;
+        if files.is_empty() {
+            return;
         }
-        if let Some(a) = s.active.filter(|a| *a < self.docs.len()) {
-            self.activate(a, window, cx);
-        }
+        // Read them together, off the UI thread, then open them in the order they
+        // were saved: a session with a big file in it must not open out of order.
+        cx.spawn_in(window, async move |this, cx| {
+            let reads = files.clone();
+            let all = cx
+                .background_spawn(async move {
+                    reads.iter().map(|p| if files::is_image(p) { Ok(Vec::new()) } else { read_head(p) }).collect::<Vec<_>>()
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                for (p, b) in files.into_iter().zip(all) {
+                    if this.docs.iter().any(|d| d.path == p) {
+                        continue;
+                    }
+                    if files::is_image(&p) {
+                        this.open_image(p, window, cx);
+                    } else {
+                        this.finish_open_file(p, b, window, cx);
+                    }
+                }
+                if let Some(a) = active.filter(|a| *a < this.docs.len()) {
+                    this.activate(a, window, cx);
+                }
+            })
+            .ok()
+        })
+        .detach();
     }
 
     // ----------------------------------------------------------- actions
@@ -2481,6 +2572,12 @@ fn selection_guard() -> impl IntoElement {
     )
     .absolute()
     .size(px(0.))
+}
+
+/// Whether to read this file off the UI thread: big enough that a slow disk
+/// (a network share, a WSL folder) would show as a frozen window.
+fn read_off_thread(path: &Path) -> bool {
+    std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
 }
 
 /// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.

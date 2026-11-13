@@ -74,7 +74,7 @@ impl Workbench {
         let had = window.focused(cx);
         match open {
             Some(ix) => self.activate(ix, window, cx),
-            None => self.open_file(p.clone(), window, cx),
+            None => self.open_file_now(p.clone(), window, cx),
         }
         if let Some(h) = had.filter(|h| !self.docs.iter().any(|d| d.editor.focus_handle(cx) == *h)) {
             h.focus(window, cx);
