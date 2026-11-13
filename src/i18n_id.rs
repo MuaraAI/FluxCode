@@ -156,6 +156,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Open a file to run it", "Buka file dulu untuk menjalankannya"),
     ("Don't know how to run {0}", "Belum tahu cara menjalankan {0}"),
     ("Don't know how to run {0} in WSL", "Belum tahu cara menjalankan {0} di WSL"),
+    ("A worktree inside a WSL folder isn't supported yet.", "Worktree di dalam folder WSL belum didukung."),
     ("Couldn't start '{program}': {e}", "Gagal menjalankan '{program}': {e}"),
     ("Failed (exit code {c})", "Gagal (exit code {c})"),
     ("{0} doesn't exist", "{0} tidak ada"),
