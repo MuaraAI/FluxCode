@@ -56,6 +56,17 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
+    // `fluxcode --remote-server`: the helper the editor runs inside a distro.
+    // Its protocol is stdin/stdout, so it prints nothing else.
+    if std::env::args().any(|a| a == "--remote-server") {
+        match remote::serve() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("remote server: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     // `fluxcode --flux-to-md README.flux README.md [--check]`: no window.
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("--flux-to-md") {
