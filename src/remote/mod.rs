@@ -8,4 +8,4 @@ mod paths;
 mod wsl;
 
 pub use paths::WslTarget;
-pub use wsl::{available, distros, home_dir, program_command, program_command_env, shell_command};
+pub use wsl::{available, distros, home_dir, list_dirs, program_command, program_command_env, shell_command};

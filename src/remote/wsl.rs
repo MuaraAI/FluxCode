@@ -51,6 +51,23 @@ pub fn home_dir(distro: &str) -> Option<String> {
     (!home.is_empty()).then_some(home)
 }
 
+/// The subfolders of a folder inside the distro, hidden ones included.
+pub fn list_dirs(distro: &str, path: &str) -> Vec<String> {
+    let out = crate::proc::command("wsl.exe")
+        .args(["-d", distro, "--exec", "sh", "-c", r#"cd "$1" || exit 1; shift; ls -1pa"#, "--", path])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.ends_with('/'))
+        .map(|l| l.trim_end_matches('/').to_string())
+        .filter(|l| l != "." && l != "..")
+        .collect()
+}
+
 /// A shell line that runs inside the distro, in `cwd`, with the user's login PATH.
 pub fn shell_command(target: &WslTarget, cwd: &str, line: &str) -> Command {
     let mut cmd = crate::proc::command("wsl.exe");

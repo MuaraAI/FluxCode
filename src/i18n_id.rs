@@ -17,6 +17,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Open Folder...", "Buka Folder..."),
     ("Open Folder in WSL...", "Buka Folder di WSL..."),
     ("No WSL distro found.", "Distro WSL tidak ditemukan."),
+    ("Open this folder", "Buka folder ini"),
     ("WSL is only available on Windows.", "WSL hanya tersedia di Windows."),
     ("Couldn't reach {name}.", "Tidak bisa menghubungi {name}."),
     ("New File...", "File Baru..."),

@@ -1140,6 +1140,9 @@ impl Workbench {
             cx.notify();
             return;
         }
+        self.quick.wsl_browse = None;
+        self.quick.wsl_dirs.clear();
+        self.quick.wsl_rows.clear();
         self.quick_open_with("wsl:", window, cx);
     }
 
