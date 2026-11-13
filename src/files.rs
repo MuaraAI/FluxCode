@@ -19,10 +19,14 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
 const MAX_ENTRIES: usize = 20_000;
 
 /// Plain (Send) folder listing, built on a background thread.
+#[derive(Clone)]
 pub struct Node {
-    id: String,
-    name: String,
-    children: Option<Vec<Node>>,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) children: Option<Vec<Node>>,
+    /// A folder whose contents have been read. A folder that is listed but not
+    /// read yet has `children: Some(vec![])` and `loaded: false`.
+    pub(crate) loaded: bool,
 }
 
 /// Files the image tab shows (GPUI decodes these; SVG is rasterized sharp at any size).
@@ -48,6 +52,54 @@ pub fn scan(root: &Path) -> Vec<Node> {
     walk(root, &mut budget)
 }
 
+/// One level of a folder: folders are listed but not read, so a home folder
+/// with a 70,000-entry cache still shows every folder it has.
+pub fn scan_shallow(root: &Path) -> Vec<Node> {
+    list(root)
+}
+
+/// Several folders, each as a top-level folder node, one level deep.
+pub fn scan_roots_shallow(roots: &[std::path::PathBuf]) -> Vec<Node> {
+    roots
+        .iter()
+        .map(|r| Node {
+            id: r.to_string_lossy().into_owned(),
+            name: r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| r.display().to_string()),
+            children: Some(list(r)),
+            loaded: true,
+        })
+        .collect()
+}
+
+/// The entries of one folder, folders first, each folder unread.
+pub fn scan_dir(dir: &Path) -> Vec<Node> {
+    list(dir)
+}
+
+fn list(dir: &Path) -> Vec<Node> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            (is_dir, e.file_name().to_string_lossy().into_owned(), p)
+        })
+        .collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    entries
+        .into_iter()
+        .map(|(is_dir, name, path)| {
+            let id = path.to_string_lossy().into_owned();
+            if is_dir {
+                Node { id, name, children: Some(Vec::new()), loaded: false }
+            } else {
+                Node { id, name, children: None, loaded: true }
+            }
+        })
+        .collect()
+}
+
 /// Several folders, each as a top-level folder node (a multi-folder workspace).
 pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
     let mut budget = MAX_ENTRIES;
@@ -57,6 +109,7 @@ pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
             id: r.to_string_lossy().into_owned(),
             name: r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| r.display().to_string()),
             children: Some(walk(r, &mut budget)),
+            loaded: true,
         })
         .collect()
 }
@@ -64,13 +117,24 @@ pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
 /// Turn a scan into tree items (UI thread: `TreeItem` is not Send), and collect
 /// every folder's path: the tree only calls an item a folder when it has
 /// children, so empty and skipped folders would otherwise draw as files.
-pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>) -> Vec<TreeItem> {
+pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
     nodes
         .into_iter()
         .map(|n| match n.children {
             Some(ch) => {
                 dirs.insert(n.id.clone());
-                TreeItem::new(n.id, n.name).children(to_items(ch, dirs))
+                let mut item = TreeItem::new(n.id.clone(), n.name);
+                item = if n.loaded {
+                    item.children(to_items(ch, dirs, expanded))
+                } else {
+                    // The tree calls a node a folder only when it has a child, so
+                    // an unread folder gets a placeholder the expand replaces.
+                    item.child(TreeItem::new(format!("{}\u{1}", n.id), "…"))
+                };
+                if expanded.contains(&n.id) {
+                    item = item.expanded(true);
+                }
+                item
             }
             None => TreeItem::new(n.id, n.name),
         })
@@ -103,9 +167,9 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
         let id = path.to_string_lossy().into_owned();
         if is_dir {
             dirs.push((out.len(), name.clone(), path));
-            out.push(Node { id, name, children: Some(Vec::new()) });
+            out.push(Node { id, name, children: Some(Vec::new()), loaded: true });
         } else {
-            out.push(Node { id, name, children: None });
+            out.push(Node { id, name, children: None, loaded: true });
         }
     }
     for (ix, name, path) in dirs {
@@ -460,6 +524,23 @@ mod tests {
         let nodes = walk(&root, &mut budget);
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"z-code"), "{names:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_shallow_scan_lists_folders_without_reading_them() {
+        let root = std::env::temp_dir().join(format!("fluxcode-shallow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("deep.txt"), b"x").unwrap();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let nodes = super::scan_shallow(&root);
+        let sub = nodes.iter().find(|n| n.name == "sub").expect("sub");
+        assert!(!sub.loaded);
+        assert_eq!(sub.children.as_ref().map(Vec::len), Some(0));
+        let file = nodes.iter().find(|n| n.name == "a.txt").expect("a.txt");
+        assert!(file.loaded);
+        assert!(file.children.is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

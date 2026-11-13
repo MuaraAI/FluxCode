@@ -15,7 +15,7 @@ use gpui_kit::component::{
     input::{Editor, EditorState, InputEvent, InputState, TabSize},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
     resizable::{h_resizable, resizable_panel, v_resizable},
-    tree::TreeState,
+    tree::{TreeEvent, TreeState},
     v_flex, Icon, IconName, Sizable, TitleBar,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -247,6 +247,10 @@ pub struct Workbench {
     /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
+    /// The explorer's tree, kept so a folder can be read when it is opened.
+    pub(crate) tree_nodes: Vec<crate::files::Node>,
+    /// Folders the user has opened, so a refresh keeps them open.
+    pub(crate) expanded: std::collections::HashSet<String>,
     /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
@@ -356,6 +360,12 @@ impl Workbench {
         let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
         crate::boot::mark("  inputs");
         let mut subs = vec![
+            cx.subscribe_in(&tree, window, |this, _, ev: &TreeEvent, _window, cx| match ev {
+                TreeEvent::Expanded(id) => this.tree_expanded(id.to_string(), cx),
+                TreeEvent::Collapsed(id) => {
+                    this.expanded.remove(id.as_ref());
+                }
+            }),
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
                     this.commit_pending(window, cx);
@@ -497,6 +507,8 @@ impl Workbench {
             ext,
             theme_menu: false,
             quick,
+            tree_nodes: Vec::new(),
+            expanded: std::collections::HashSet::new(),
             all_files: Rc::default(),
             all_lower: Rc::default(),
             preview_server: None,
@@ -565,30 +577,63 @@ impl Workbench {
     pub(crate) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         let roots = self.roots();
-        let tree = self.tree.clone();
-        // Walk the folder off the UI thread, then hand the items to the tree.
-        // More than one folder: each is a top-level node, open to start with.
+        let multi = roots.len() > 1;
+        // One level now: a folder is read when it is opened, so a home folder
+        // with a 70,000-entry cache still shows every folder it has.
+        let shallow = if multi { files::scan_roots_shallow(&roots) } else { files::scan_shallow(&root) };
+        self.tree_nodes = merge(self.tree_nodes.clone(), shallow);
+        self.set_tree_items(cx);
+        // The file list (Ctrl+P) still wants the whole tree, off the UI thread.
         cx.spawn(async move |this, cx| {
-            let multi = roots.len() > 1;
             let nodes = cx.background_spawn(async move { if multi { files::scan_roots(&roots) } else { files::scan(&root) } }).await;
             let mut flat = Vec::new();
             files::flatten(&nodes, &mut flat);
-            let mut dirs = std::collections::HashSet::new();
-            let mut items = files::to_items(nodes, &mut dirs);
-            if multi {
-                items = items.into_iter().map(|i| i.expanded(true)).collect();
-            }
-            let all = crate::quick::file_list(flat, &dirs);
-            _ = tree.update(cx, |state, cx| state.set_items(items, cx));
+            let all = crate::quick::file_list(flat, &Default::default());
             _ = this.update(cx, |this, cx| {
-                // New items: show the active file again.
-                *this.revealed.borrow_mut() = None;
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
-                this.dirs = Rc::new(dirs);
-                // Which extensions the folder's projects use (and their tasks).
                 this.ext_scan(cx);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Build the tree items from `tree_nodes` and hand them to the tree.
+    fn set_tree_items(&mut self, cx: &mut Context<Self>) {
+        // New items: show the active file again (and retry after a folder loads).
+        *self.revealed.borrow_mut() = None;
+        let mut dirs = std::collections::HashSet::new();
+        let items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
+        self.dirs = Rc::new(dirs);
+        let selected = self.tree.read(cx).selected_item().map(|i| i.id.clone());
+        let tree = self.tree.clone();
+        _ = tree.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            if let Some(id) = selected {
+                if let Some(ix) = state.index_of(&id) {
+                    state.set_selected_index(Some(ix), cx);
+                }
+            }
+        });
+    }
+
+    /// A folder was opened: read it now if it has not been read yet.
+    fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
+        self.expanded.insert(id.clone());
+        let Some(node) = find_node(&mut self.tree_nodes, &id) else { return };
+        if node.loaded {
+            return;
+        }
+        let path = PathBuf::from(&id);
+        cx.spawn(async move |this, cx| {
+            let children = cx.background_spawn(async move { files::scan_dir(&path) }).await;
+            _ = this.update(cx, |this, cx| {
+                if let Some(node) = find_node(&mut this.tree_nodes, &id) {
+                    node.children = Some(children);
+                    node.loaded = true;
+                }
+                this.set_tree_items(cx);
             });
         })
         .detach();
@@ -2604,6 +2649,39 @@ fn selection_guard() -> impl IntoElement {
 /// (a network share, a WSL folder) would show as a frozen window.
 fn read_off_thread(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
+}
+
+/// The node with this id, anywhere in the tree.
+fn find_node<'a>(nodes: &'a mut [crate::files::Node], id: &str) -> Option<&'a mut crate::files::Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(ch) = &mut n.children {
+            if let Some(found) = find_node(ch, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// A fresh one-level listing, keeping the folders that were already read so a
+/// refresh does not close what the user opened.
+fn merge(old: Vec<crate::files::Node>, new: Vec<crate::files::Node>) -> Vec<crate::files::Node> {
+    new.into_iter()
+        .map(|mut n| {
+            if n.children.is_some() && !n.loaded {
+                if let Some(o) = old.iter().find(|o| o.id == n.id) {
+                    if o.loaded {
+                        n.children = o.children.clone();
+                        n.loaded = true;
+                    }
+                }
+            }
+            n
+        })
+        .collect()
 }
 
 /// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.
