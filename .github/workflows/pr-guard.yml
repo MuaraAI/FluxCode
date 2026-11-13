@@ -1,0 +1,127 @@
+# Safety scan of every pull request, before anything from it runs.
+#
+# Runs on pull_request_target, so the workflow and the scanner come from main and the
+# pull request cannot change them. Its files are fetched as git objects and only READ
+# by .github/scripts/pr_scan.py: nothing from the pull request is built, installed or
+# run here. Never add a step that runs, builds or installs the pull request's code to
+# this workflow: it has a token that can write comments and labels.
+#
+# The result: one comment (kept up to date), labels, and a "Safety scan" check that
+# fails on malware-like code, leaked secrets, committed executables, Trojan Source
+# characters, dependencies from outside crates.io, and outside changes to CI, build or
+# packaging files. A maintainer who has read a "high" finding can clear it with the
+# `security-reviewed` label (pr-check.json); "critical" findings cannot be cleared.
+
+name: Pull request guard
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+concurrency:
+  group: pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # main, never the pull request: this is the code that runs.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the pull request as data
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --quiet origin "+refs/pull/$PR/head:refs/remotes/pr/head"
+          test "$(git rev-parse refs/remotes/pr/head)" = "$HEAD_SHA" || git cat-file -e "$HEAD_SHA^{commit}"
+
+      - name: Who opened it
+        id: who
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            let trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association);
+            if (!trusted) {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: pr.user.login });
+                trusted = ['admin', 'maintain', 'write'].includes(data.permission);
+              } catch (e) { core.info(`permission lookup failed: ${e.message}`); }
+            }
+            core.setOutput('outsider', trusted ? 'false' : 'true');
+            core.setOutput('labels', pr.labels.map((l) => l.name).join(','));
+
+      - name: Scan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUTSIDER: ${{ steps.who.outputs.outsider }}
+          LABELS: ${{ steps.who.outputs.labels }}
+        run: |
+          flag=""; [ "$OUTSIDER" = true ] && flag="--outsider"
+          python3 -I .github/scripts/pr_scan.py --repo . --base "$BASE" --head "$HEAD_SHA" \
+            --config .github/pr-check.json $flag --labels "$LABELS" \
+            --out-json "$RUNNER_TEMP/scan.json" --out-md "$RUNNER_TEMP/scan.md"
+          cat "$RUNNER_TEMP/scan.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment, labels and check
+        uses: actions/github-script@v7
+        env:
+          OUTSIDER: ${{ steps.who.outputs.outsider }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const cfg = JSON.parse(fs.readFileSync('.github/pr-check.json', 'utf8'));
+            const r = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/scan.json`, 'utf8'));
+            const scan = fs.readFileSync(`${process.env.RUNNER_TEMP}/scan.md`, 'utf8');
+            const marker = '<!-- fluxcode-pr-guard -->';
+            const outsider = process.env.OUTSIDER === 'true';
+            const lines = [marker];
+            if (outsider) {
+              lines.push(`Thanks for the pull request, @${pr.user.login}! 👋`, '',
+                `Every pull request goes through the checks in [CONTRIBUTING.md](https://github.com/${owner}/${repo}/blob/main/CONTRIBUTING.md#what-the-checks-look-at): `
+                + 'this safety scan first, then the build, tests, code quality and a performance comparison against `main` '
+                + '(those start once a maintainer approves the run, because they execute your code). '
+                + 'A maintainer reviews every pull request before it is merged.', '');
+            }
+            lines.push(scan);
+            const body = lines.join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 });
+            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.startsWith(marker));
+            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+
+            const want = new Set();
+            if (r.needs_review) want.add(cfg.maintainer_review_label);
+            if (r.blocking) want.add('security-blocked');
+            if (outsider) want.add('external');
+            const have = new Set(pr.labels.map((l) => l.name));
+            const add = [...want].filter((l) => !have.has(l));
+            if (add.length) await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: add });
+            if (!r.blocking && have.has('security-blocked')) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: pr.number, name: 'security-blocked' }).catch(() => {});
+            }
+
+            const conclusion = r.blocking ? 'failure' : 'success';
+            const title = r.blocking ? `${r.blocking} blocking finding(s)` : r.needs_review ? 'Passed; a maintainer has to read some lines' : 'Passed';
+            await github.rest.checks.create({
+              owner, repo, name: 'Safety scan', head_sha: pr.head.sha, status: 'completed', conclusion,
+              output: { title, summary: scan.slice(0, 65000) },
+            });
+            if (r.blocking) core.setFailed(title);

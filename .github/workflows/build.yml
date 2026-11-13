@@ -7,7 +7,7 @@ name: Build
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "LICENSE", ".github/ISSUE_TEMPLATE/**", ".github/workflows/issue-*.yml", ".github/workflows/pr-*.yml"]
+    paths-ignore: ["**.md", "LICENSE", ".github/ISSUE_TEMPLATE/**", ".github/workflows/issue-*.yml", ".github/workflows/pr-*.yml", ".github/scripts/**", ".github/pr-check.json", ".github/CODEOWNERS"]
   pull_request:
     paths-ignore: ["**.md", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
   workflow_dispatch:
