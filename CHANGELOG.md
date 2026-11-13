@@ -5,6 +5,20 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Pull requests open to everyone, with automatic checks (13 November 2026)
+
+- Pull requests from outside the MuaraAI organization are no longer closed. Anyone can
+  fork, change and open one; [CONTRIBUTING.md](CONTRIBUTING.md) says how.
+- Every pull request gets a **safety scan** that only reads the diff (malware patterns,
+  leaked secrets, Trojan Source characters, committed executables, dependencies from
+  outside crates.io, outside changes to CI and build files), and a **verdict** that
+  compares it with `main` on the same runner: executable size, run time and peak memory,
+  clippy and rustfmt on the added lines, and new RustSec advisories. Each leaves one
+  comment that updates on every push. Limits live in `.github/pr-check.json` and are
+  always read from `main`.
+- Changes to CI, build, packaging, updater and network code ask the maintainers for a
+  review automatically (`.github/CODEOWNERS`).
+
 ## Two new color themes, FluxMuara and FluxMuara Dark (13 November 2026)
 
 - FluxMuara joins the color themes, with a dark companion. The light one is the Muara

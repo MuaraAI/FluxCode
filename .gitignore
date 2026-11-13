@@ -12,3 +12,4 @@ graphify-out/
 .superpowers/
 superpowers/
 src-tauri/
+__pycache__/

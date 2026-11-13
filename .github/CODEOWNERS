@@ -1,0 +1,14 @@
+# Paths where a change runs with the project's trust (CI, build, installers, updater,
+# network code, dependencies). GitHub asks these people for a review automatically.
+/.github/            @MyKineID @Curzyori
+/.cargo/             @MyKineID @Curzyori
+/build.rs            @MyKineID @Curzyori
+/Cargo.toml          @MyKineID @Curzyori
+/Cargo.lock          @MyKineID @Curzyori
+/vendor/             @MyKineID @Curzyori
+/packaging/          @MyKineID @Curzyori
+/relay/              @MyKineID @Curzyori
+/tools/              @MyKineID @Curzyori
+/src/update.rs       @MyKineID @Curzyori
+/src/proc.rs         @MyKineID @Curzyori
+/src/collab/         @MyKineID @Curzyori
