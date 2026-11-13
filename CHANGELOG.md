@@ -5,6 +5,17 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## WSL2 workspaces: the helper inside the distro (13 November 2026)
+
+- A WSL2 folder now reads and writes through a small helper running inside the
+  distro, instead of reaching it over Windows' 9p share. Opening a folder, walking
+  the tree, opening and saving a file, find-in-files and git all go through it.
+- The helper is FluxCode itself, built for Linux, taken from the release of the
+  build that is running: the two are always the same version, and nothing extra
+  ships. It is installed once per build in `~/.fluxcode/helper/<build>/`.
+- If the helper cannot be installed or started, everything falls back to the
+  `\\wsl.localhost\...` path, so a WSL folder still opens and saves.
+
 ## WSL2 workspaces (13 November 2026)
 
 - A folder that lives inside a WSL2 distro opens like any other. Files are read and

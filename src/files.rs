@@ -54,6 +54,27 @@ pub fn scan(root: &Path) -> Vec<Node> {
 
 /// One level of a folder: folders are listed but not read, so a home folder
 /// with a 70,000-entry cache still shows every folder it has.
+/// A folder listing that came from the helper inside the distro: same shape as
+/// `list`, built without touching the 9p share.
+pub fn nodes_from_remote(dir: &Path, entries: Vec<(String, bool)>) -> Vec<Node> {
+    let mut entries = entries;
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    entries
+        .into_iter()
+        .map(|(name, is_dir)| {
+            // A UNC path on a non-Windows build joins with `/`; the tree ids
+            // must match what the rest of the workbench (Windows-style) uses.
+            let id = dir.join(&name).to_string_lossy().into_owned();
+            let id = if dir.as_os_str().to_string_lossy().starts_with(r"\\") { id.replace('/', r"\") } else { id };
+            if is_dir {
+                Node { id, name, children: Some(Vec::new()), loaded: false }
+            } else {
+                Node { id, name, children: None, loaded: true }
+            }
+        })
+        .collect()
+}
+
 pub fn scan_shallow(root: &Path) -> Vec<Node> {
     list(root)
 }
@@ -542,6 +563,17 @@ mod tests {
         assert!(file.loaded);
         assert!(file.children.is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_remote_listing_has_the_same_shape() {
+        let dir = Path::new(r"\\wsl.localhost\Ubuntu\home\me");
+        let nodes = super::nodes_from_remote(dir, vec![("b.txt".into(), false), ("a-dir".into(), true)]);
+        assert_eq!(nodes[0].name, "a-dir");
+        assert!(nodes[0].children.is_some() && !nodes[0].loaded);
+        assert_eq!(nodes[0].id, r"\\wsl.localhost\Ubuntu\home\me\a-dir");
+        assert_eq!(nodes[1].name, "b.txt");
+        assert!(nodes[1].children.is_none());
     }
 
     #[test]

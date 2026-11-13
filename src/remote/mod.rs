@@ -12,9 +12,6 @@ mod wsl;
 
 pub use client::{drop_client, with_client, RemoteClient};
 pub use paths::WslTarget;
-pub use proto::{
-    DirEntry, FileHitsWire, GitWire, Hello, HitWire, Request, Response, SearchWire, Stat, PROTOCOL_VERSION, FRAME_BYTES, FRAME_JSON,
-    read_frame, write_frame,
-};
+pub use proto::GitWire;
 pub use server::serve;
 pub use wsl::{available, distros, home_dir, list_dirs, program_command, program_command_env, shell_command};

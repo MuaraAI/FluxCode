@@ -129,6 +129,11 @@ impl RemoteClient {
     pub fn git(&mut self, cwd: &str, args: &[String]) -> Result<super::proto::GitWire, String> {
         self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec() })
     }
+
+    /// Whether the helper process has gone away (a distro shutdown, a crash).
+    pub fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+    }
 }
 
 impl Drop for RemoteClient {
@@ -264,7 +269,11 @@ fn slot() -> &'static Mutex<Option<RemoteClient>> {
 /// path instead; the editor works either way.
 pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
     let mut guard = slot().lock().ok()?;
-    if guard.as_ref().map(|c| c.distro != distro).unwrap_or(true) {
+    let stale = guard
+        .as_mut()
+        .map(|c| c.distro != *distro || c.exited())
+        .unwrap_or(true);
+    if stale {
         *guard = RemoteClient::connect(distro).ok();
     }
     let client = guard.as_mut()?;

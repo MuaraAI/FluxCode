@@ -278,10 +278,19 @@ fn run_step(dir: &Path, step: &Step) -> Result<String, String> {
     // line endings. `gh` stays on Windows: it is a network tool, and it finds the
     // repo through the UNC path.
     let target = matches!(step, Step::Git(..)).then(|| crate::remote::WslTarget::from_path(dir)).flatten();
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut cmd = match &target {
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
-            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            // The helper is already running in the distro: no process to start.
+            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned)) {
+                return match r {
+                    Ok(g) if g.success => Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout }),
+                    Ok(g) => Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), g.stderr.trim())),
+                    Err(e) => Err(e),
+                };
+            }
             crate::remote::program_command_env(
                 t,
                 &cwd,

@@ -28,6 +28,20 @@ pub const MAX_INCOMING: usize = 50;
 
 /// `git` for a background read: no prompts, no locks, no window.
 fn quiet_git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    if let Some(t) = crate::remote::WslTarget::from_path(dir) {
+        let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
+        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        // Naming the client and wire types keeps the crate's re-exports honest.
+        let attempt: Option<Result<crate::remote::GitWire, String>> =
+            crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned));
+        if let Some(r) = attempt {
+            return match r {
+                Ok(g) if g.success => Ok(g.stdout),
+                Ok(g) => Err(g.stderr.trim().to_string()),
+                Err(e) => Err(e),
+            };
+        }
+    }
     let mut cmd = match crate::remote::WslTarget::from_path(dir) {
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());

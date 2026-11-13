@@ -550,7 +550,11 @@ impl Workbench {
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = Some(root.clone());
-        self.wsl = crate::remote::WslTarget::from_path(&root);
+        // A different distro (or a plain folder) gets its own helper.
+        let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
+        if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
+            crate::remote::drop_client();
+        }
         if !self.term_proc.is_some_and(|id| self.procs.is_running(id)) {
             self.term_cwd = root.clone();
         }
@@ -578,11 +582,27 @@ impl Workbench {
         let Some(root) = self.root.clone() else { return };
         let roots = self.roots();
         let multi = roots.len() > 1;
-        // One level now: a folder is read when it is opened, so a home folder
-        // with a 70,000-entry cache still shows every folder it has.
-        let shallow = if multi { files::scan_roots_shallow(&roots) } else { files::scan_shallow(&root) };
-        self.tree_nodes = merge(self.tree_nodes.clone(), shallow);
-        self.set_tree_items(cx);
+        let wsl = self.wsl.clone();
+        // One level now: a folder is read when it is opened. In a distro the
+        // listing comes from the helper, so the 9p share is not walked at all.
+        let (root2, roots2) = (root.clone(), roots.clone());
+        cx.spawn(async move |this, cx| {
+            let listing = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl {
+                        if let Some(nodes) = remote_listing(t, &root2, multi) {
+                            return nodes;
+                        }
+                    }
+                    if multi { files::scan_roots_shallow(&roots2) } else { files::scan_shallow(&root2) }
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.tree_nodes = merge(this.tree_nodes.clone(), listing);
+                this.set_tree_items(cx);
+            });
+        })
+        .detach();
         // The file list (Ctrl+P) still wants the whole tree, off the UI thread.
         cx.spawn(async move |this, cx| {
             let nodes = cx.background_spawn(async move { if multi { files::scan_roots(&roots) } else { files::scan(&root) } }).await;
@@ -625,9 +645,19 @@ impl Workbench {
         if node.loaded {
             return;
         }
+        let wsl = self.wsl.clone();
         let path = PathBuf::from(&id);
         cx.spawn(async move |this, cx| {
-            let children = cx.background_spawn(async move { files::scan_dir(&path) }).await;
+            let children = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl {
+                        if let Some(nodes) = remote_dir(t, &path) {
+                            return nodes;
+                        }
+                    }
+                    files::scan_dir(&path)
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 if let Some(node) = find_node(&mut this.tree_nodes, &id) {
                     node.children = Some(children);
@@ -646,9 +676,19 @@ impl Workbench {
         // A big file is read off the UI thread; a small one is read here, so the
         // tab is there the moment the click is handled.
         if read_off_thread(&path) {
+            let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
-                let bytes = cx.background_spawn(async move { read_head(&p) }).await;
+                let bytes = cx
+                    .background_spawn(async move {
+                        if let Some(t) = &wsl {
+                            if let Some(r) = remote_read(t, &p, core::MAX_FILE_BYTES) {
+                                return r;
+                            }
+                        }
+                        read_head(&p)
+                    })
+                    .await;
                 this.update_in(cx, |this, window, cx| this.finish_open_file(path, bytes, window, cx)).ok()
             })
             .detach();
@@ -665,7 +705,13 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        let bytes = read_head(&path);
+        let bytes = match &self.wsl {
+            Some(t) => match remote_read(t, &path, core::MAX_FILE_BYTES) {
+                Some(r) => r,
+                None => read_head(&path),
+            },
+            None => read_head(&path),
+        };
         self.finish_open_file(path, bytes, window, cx);
     }
 
@@ -1001,9 +1047,20 @@ impl Workbench {
         };
         // A big file is written off the UI thread, for the same reason it is read there.
         if text.len() as u64 > READ_OFF_THREAD_BYTES {
+            let wsl = self.wsl.clone();
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
-                let r = cx.background_spawn(async move { core::write_text(&p, &text, crlf) }).await;
+                let r = cx
+                    .background_spawn(async move {
+                        if let Some(t) = &wsl {
+                            let bytes = text.as_bytes();
+                            if let Some(r) = remote_write(t, &p, bytes, crlf) {
+                                return r;
+                            }
+                        }
+                        core::write_text(&p, &text, crlf)
+                    })
+                    .await;
                 _ = this.update(cx, |this, cx| {
                     this.finish_save(&path, gen, name, r, cx);
                 });
@@ -1011,7 +1068,13 @@ impl Workbench {
             .detach();
             return true;
         }
-        let r = core::write_text(&path, &text, crlf);
+        let r = match &self.wsl {
+            Some(t) => match remote_write(t, &path, text.as_bytes(), crlf) {
+                Some(r) => r,
+                None => core::write_text(&path, &text, crlf),
+            },
+            None => core::write_text(&path, &text, crlf),
+        };
         self.finish_save(&path, gen, name, r, cx)
     }
 
@@ -1055,7 +1118,13 @@ impl Workbench {
     fn restore_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
         self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
-        if let Some(root) = s.root.filter(|r| r.is_dir()) {
+        // A saved WSL root is checked by the helper when there is one: over 9p
+        // `is_dir` is the slowest part of restoring a session.
+        let saved_root = s.root.filter(|r| match crate::remote::WslTarget::from_path(r) {
+            Some(t) => remote_is_dir(&t, r).unwrap_or_else(|| r.is_dir()),
+            None => r.is_dir(),
+        });
+        if let Some(root) = saved_root {
             self.open_folder(root, cx);
         }
         let files: Vec<PathBuf> = s.files.into_iter().filter(|f| f.is_file()).collect();
@@ -2652,6 +2721,51 @@ fn selection_guard() -> impl IntoElement {
 /// (a network share, a WSL folder) would show as a frozen window.
 fn read_off_thread(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
+}
+
+/// One level of a folder, read by the helper inside the distro. `None` when the
+/// helper is not available, so the caller uses the UNC path instead.
+fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    let entries = crate::remote::with_client(&distro, |c| c.list(&linux).ok())??;
+    let entries = entries.into_iter().map(|e| (e.name, e.is_dir)).collect();
+    Some(crate::files::nodes_from_remote(path, entries))
+}
+
+/// The workspace roots, the first one through the same helper call.
+fn remote_listing(target: &crate::remote::WslTarget, root: &std::path::Path, multi: bool) -> Option<Vec<crate::files::Node>> {
+    if !multi {
+        return remote_dir(target, root);
+    }
+    // Every extra folder is a Windows path; only the root is in the distro.
+    // A multi-folder workspace with a WSL root still scans the UNC share, which
+    // is correct but slow; handling it is left for later.
+    None
+}
+
+/// A file's bytes, read by the helper inside the distro. `None` when the helper
+/// is not there, so the caller reads the UNC path instead.
+fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Result<Vec<u8>, String>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.read(&linux, limit))
+}
+
+/// A file's bytes, written by the helper inside the distro.
+fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<Result<(), String>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf))
+}
+
+/// Whether a path is a folder, answered by the helper when there is one. The
+/// explorer's `+`/rename checks look before they act, and over 9p that look is
+/// the slow part.
+fn remote_is_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_dir)
 }
 
 /// The node with this id, anywhere in the tree.

@@ -23,11 +23,32 @@ impl Workbench {
         let (case, word) = (self.match_case, self.whole_word);
         self.searching = true;
         cx.notify();
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let mut all = core::SearchResult::default();
                     for r in &roots {
+                        // In a distro the helper searches with ripgrep-speed
+                        // readdir instead of walking the 9p share.
+                        let remote = wsl.as_ref().and_then(|t| {
+                            let distro = t.distro.clone();
+                            let linux = t.linux_path(r)?;
+                            crate::remote::with_client(&distro, |c| c.search(&linux, &query, case, word).ok())?
+                        });
+                        if let Some(wire) = remote {
+                            all.total += wire.total;
+                            all.truncated |= wire.truncated;
+                            for f in wire.files {
+                                // The editor works in Windows paths, so the
+                                // Linux ones come back as UNC.
+                                all.files.push(core::FileHits {
+                                    path: t_unc(&wsl, &f.path),
+                                    hits: f.hits.into_iter().map(|h| core::Hit { line: h.line, text: h.text }).collect(),
+                                });
+                            }
+                            continue;
+                        }
                         let one = core::search(r, &query, case, word);
                         all.total += one.total;
                         all.truncated |= one.truncated;
@@ -126,5 +147,30 @@ impl Workbench {
                 .when(rows == 0, |l| l.h(px(0.))),
             )
             .into_any_element()
+    }
+}
+
+/// A Linux path from the helper as the Windows path the editor uses.
+fn t_unc(wsl: &Option<crate::remote::WslTarget>, linux: &str) -> std::path::PathBuf {
+    match wsl {
+        Some(t) => t.unc_path(linux),
+        None => std::path::PathBuf::from(linux),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::t_unc;
+    use crate::remote::WslTarget;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_linux_hit_becomes_a_windows_path() {
+        let t = WslTarget::new("Ubuntu", "/home/me");
+        assert_eq!(
+            t_unc(&Some(t), "/home/me/src/a.rs"),
+            PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\src\a.rs")
+        );
+        assert_eq!(t_unc(&None, "/tmp/a.rs"), PathBuf::from("/tmp/a.rs"));
     }
 }
