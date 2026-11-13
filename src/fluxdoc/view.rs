@@ -937,6 +937,24 @@ pub fn is_flux(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flux"))
 }
 
+/// What a file draws, from its extension: `Some(true)` for Markdown (drawn through
+/// the shim, Source first), `Some(false)` for Flux (drawn directly, Preview first),
+/// None for everything the plain editor shows.
+pub fn drawable_kind(path: &std::path::Path) -> Option<bool> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "flux" => Some(false),
+        "md" | "markdown" => Some(true),
+        _ => None,
+    }
+}
+
+/// The bar's export-to-Markdown button writes `.md` next to a Flux document; a
+/// Markdown file already is one.
+pub fn shows_md_export(path: &std::path::Path) -> bool {
+    is_flux(path)
+}
+
 /// The interface language, for `@en` / `@id` sections.
 pub fn ui_lang() -> &'static str {
     if crate::i18n::is_id() { "id" } else { "en" }
@@ -981,26 +999,29 @@ impl crate::workbench::Workbench {
                     .child(tab("fx-tab-src", IconName::FileCode, tr("Source"), source, true, cx)),
             )
             .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(if v.pending {
-                crate::i18n::tr("Flux document · reading the rest…").to_string()
+                crate::i18n::tr("Reading the rest…").to_string()
             } else {
                 crate::trf!("{n} blocks · read in {ms} ms · text in {size}"; n => thousands(v.blocks()), ms => format!("{:.1}", v.parsed_ms), size => crate::viewer::human_size(v.kept_bytes() as u64))
             }))
-            .child(
-                h_flex()
-                    .id("fx-to-md")
-                    .gap_1p5()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(5.))
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(c(theme::FG_MUTED))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Write {name} next to it, as GitHub Markdown (flowcharts become Mermaid)"; name => md_name)).build(w, cx))
-                    .child(Icon::new(IconName::Download).size(theme::u(13.)))
-                    .child(tr("Save as Markdown"))
-                    .on_click(cx.listener(move |this, _, _, cx| this.flux_save_markdown(ix, cx))),
-            )
+            // The export belongs to Flux documents only: a Markdown file already is one.
+            .when(shows_md_export(&d.path), |h| {
+                h.child(
+                    h_flex()
+                        .id("fx-to-md")
+                        .gap_1p5()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(5.))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(c(theme::FG_MUTED))
+                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Write {name} next to it, as GitHub Markdown (flowcharts become Mermaid)"; name => md_name)).build(w, cx))
+                        .child(Icon::new(IconName::Download).size(theme::u(13.)))
+                        .child(tr("Save as Markdown"))
+                        .on_click(cx.listener(move |this, _, _, cx| this.flux_save_markdown(ix, cx))),
+                )
+            })
             .into_any_element()
     }
 
@@ -1019,8 +1040,14 @@ impl crate::workbench::Workbench {
             self.flux_load_source(ix, window, cx);
         }
         if !source && self.docs[ix].flux_source {
-            let text = self.docs[ix].editor.read(cx).value().to_string();
-            if let Some(v) = self.docs[ix].flux.as_mut() {
+            let d = &mut self.docs[ix];
+            let mut text = d.editor.read(cx).value().to_string();
+            // A Markdown document draws the shim's output of its text, never the raw
+            // file: rebuild it here, or every Preview click would draw the raw page.
+            if crate::fluxdoc::view::drawable_kind(&d.path) == Some(true) {
+                text = crate::fluxdoc::gfm::to_flux(&text);
+            }
+            if let Some(v) = d.flux.as_mut() {
                 if v.source() != text {
                     v.reload(text, ui_lang());
                 }

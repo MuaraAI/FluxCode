@@ -14,6 +14,7 @@
 //!   on GitHub (flowcharts become Mermaid, callouts GitHub alerts).
 
 pub mod flow;
+pub mod gfm;
 pub mod md;
 pub mod view;
 

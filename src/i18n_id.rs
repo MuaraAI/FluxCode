@@ -1006,7 +1006,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Danger", "Bahaya"),
     ("Details", "Detail"),
     ("{n} blocks · read in {ms} ms · text in {size}", "{n} blok · dibaca dalam {ms} ms · teks {size}"),
-    ("Flux document · reading the rest…", "Dokumen Flux · membaca sisanya…"),
+    ("Reading the rest…", "Membaca sisanya…"),
     ("Still reading the document; Source opens in a moment.", "Dokumen masih dibaca; Sumber terbuka sebentar lagi."),
     ("Note", "Catatan"),
     ("Preview", "Pratinjau"),
