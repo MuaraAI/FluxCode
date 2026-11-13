@@ -223,15 +223,15 @@ Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabai
 yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
 
 @gallery
-@image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."
+@image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings: six color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark), then language and interface size."
 @image assets/screenshots/update-indonesian.png width=49% link=assets/screenshots/update-indonesian.png alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."
 @end
 
 @en
-Four color themes, three interface sizes and your own background image. The interface
+Six color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 @id
-Empat tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
+Enam tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
 juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
 FluxCream.
 
@@ -569,7 +569,7 @@ di atasnya.
 - OpenCode 2 is the registry's native OpenCode build from opencode.ai, which FluxCode
   installs and checks against its SHA-256. A copy of OpenCode on your PATH is no longer
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
-- The color theme's name in the status bar opens the four themes, each shown as a small
+- The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 @id

@@ -116,11 +116,11 @@ Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabai
 yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
 
 <p align="center">
-  <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="49%" alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."></a>
+  <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="49%" alt="Settings: six color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark), then language and interface size."></a>
   <a href="assets/screenshots/update-indonesian.png"><img src="assets/screenshots/update-indonesian.png" width="49%" alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."></a>
 </p>
 
-Empat tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
+Enam tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
 juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
 FluxCream.
 

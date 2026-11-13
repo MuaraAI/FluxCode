@@ -10,6 +10,25 @@
 //   @en / @id                the Markdown that follows is English / Indonesian
 // Lines starting with // before the first @release are comments.
 
+@release 2026-11-13
+@title en: Two new color themes, FluxMuara and FluxMuara Dark
+@title id: Dua tema warna baru, FluxMuara dan FluxMuara Dark
+@en
+**FluxMuara** joins the color themes, with a dark companion. The light one is the Muara
+AI brand palette: a mist water canvas, white surfaces, riverbed ink text and one river
+current blue accent (`#0369A1`). **FluxMuara Dark** is the same river at night: riverbed
+ink surfaces with the accent lifted so it reads on the dark canvas. Pick either from
+the theme menu in the status bar, cycle to them with `Ctrl+K Ctrl+T`, or choose their
+cards in Settings. Every text on both passes the contrast the other themes are held
+to, and a test now keeps every theme to that bar.
+@id
+**FluxMuara** bergabung ke tema warna, bersama versi gelapnya. Yang terang adalah palet
+merek Muara AI: kanvas air berkabut, permukaan putih, teks tinta dasar sungai, dan satu
+aksen biru arus sungai (`#0369A1`). **FluxMuara Dark** adalah sungai yang sama di malam
+hari: permukaan tinta dasar sungai dengan aksen dinaikkan agar terbaca di kanvas gelap.
+Pilih salah satu dari menu tema di status bar, siklus dengan `Ctrl+K Ctrl+T`, atau
+kartunya di Settings. Setiap teks di keduanya lolos kontras yang dipegang tema lain,
+dan sebuah test sekarang menjaga setiap tema di standar itu.
 @release 2026-11-11
 @title en: Our own Live Share relay, and a README in two languages
 @title id: Relay Live Share sendiri, dan README dalam dua bahasa
