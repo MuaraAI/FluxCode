@@ -163,6 +163,11 @@ impl Workbench {
             return;
         }
         let Some(repo) = self.root.clone() else { return };
+        if self.wsl.is_some() {
+            self.agent.items.push(Item::Note(tr("A worktree inside a WSL folder isn't supported yet.").into(), true));
+            cx.notify();
+            return;
+        }
         if self.scm.repo.is_none() {
             self.agent.items.push(Item::Note(tr("A worktree needs a git repository: this folder isn't one yet (Source Control can make it one).").into(), true));
             cx.notify();

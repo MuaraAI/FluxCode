@@ -34,6 +34,7 @@ mod preview;
 mod preview_ui;
 mod proc;
 mod quick;
+mod remote;
 mod scm;
 mod scm_incoming;
 mod search;
@@ -55,6 +56,17 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
+    // `fluxcode --remote-server`: the helper the editor runs inside a distro.
+    // Its protocol is stdin/stdout, so it prints nothing else.
+    if std::env::args().any(|a| a == "--remote-server") {
+        match remote::serve() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("remote server: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     // `fluxcode --flux-to-md README.flux README.md [--check]`: no window.
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("--flux-to-md") {
@@ -67,8 +79,16 @@ fn main() {
         .skip(1)
         .filter(|a| !a.to_string_lossy().starts_with('-'))
         .filter_map(|a| PathBuf::from(a).canonicalize().ok())
-        // canonicalize() gives `\\?\C:\...` on Windows; keep the plain form.
-        .map(|p| PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\")))
+        // canonicalize() gives `\\?\C:\...` and `\\?\UNC\server\share\...`;
+        // keep the plain form, and keep a WSL root whole.
+        .map(|p| {
+            let s = p.to_string_lossy();
+            let plain = match s.strip_prefix(r"\\?\UNC\") {
+                Some(rest) => format!(r"\\{rest}"),
+                None => s.trim_start_matches(r"\\?\").to_string(),
+            };
+            PathBuf::from(plain)
+        })
         .collect();
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();

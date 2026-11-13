@@ -364,16 +364,17 @@ jelas di tabel: belum ada debugger, language server, maupun katalog extension.
 | Agent AI | agent ACP apa pun, tiga tingkat akses, perubahan per giliran dengan undo | agent sendiri dan agent ACP | GitHub Copilot dan extension |
 | File yang bukan teks | hex, PDF, Office, ZIP, SQLite (baca-saja) | gambar | gambar; lebih banyak lewat extension |
 | Kolaborasi real-time | bawaan, lewat PC host (tanpa akun atau server) | bawaan, lewat server Zed | extension Live Share, lewat server Microsoft |
-| Pengembangan jarak jauh | tidak ada | SSH | SSH, container, WSL |
+| Pengembangan jarak jauh | WSL2 (Windows) | SSH | SSH, container, WSL |
 | Bahasa antarmuka | Inggris, Bahasa Indonesia | Inggris | banyak, lewat language pack |
 | Kematangan | build pengembangan | rilis stabil | stabil, dipakai luas |
 | Lisensi | GPL-3.0-or-later | GPL-3.0 (editornya) | MIT untuk Code - OSS; build Microsoft punya lisensi sendiri |
 
 Pilih FluxCode kalau kamu ingin editor kecil dan tenang di Windows, macOS, atau Linux
-dengan agent yang bisa dijaga ketat, dan kamu membuka log, database, serta dokumen di
-samping kode.
+dengan agent yang bisa dijaga ketat, kodemu bisa tinggal di distro WSL2, dan kamu membuka
+log, database, serta dokumen di samping kode.
 Pilih Zed untuk language server yang langsung jalan dan pair programming.
-Pilih VS Code kalau kamu butuh extension tertentu, debugger, atau pengembangan jarak jauh.
+Pilih VS Code kalau kamu butuh extension tertentu, debugger, atau pengembangan jarak jauh
+selain WSL.
 
 ## Editor lain sekilas
 

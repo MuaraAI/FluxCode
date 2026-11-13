@@ -682,15 +682,16 @@ and no extension catalog yet.
 | AI agent | any ACP agent, three access levels, per-turn changes with undo | its own agent and ACP agents | GitHub Copilot and extensions |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
 | Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
-| Remote development | no | SSH | SSH, containers, WSL |
+| Remote development | WSL2 (Windows) | SSH | SSH, containers, WSL |
 | Interface languages | English, Bahasa Indonesia | English | many, through language packs |
 | Maturity | development builds | stable releases | stable, widely used |
 | License | GPL-3.0-or-later | GPL-3.0 (the editor) | MIT for Code - OSS; Microsoft's build has its own license |
 
 Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agent you can
-keep on a short leash, and you open logs, databases and documents next to your code.
+keep on a short leash, your code can live in a WSL2 distro, and you open logs, databases
+and documents next to your code.
 Pick Zed for macOS, language servers out of the box and pair programming.
-Pick VS Code when you need a specific extension, a debugger or remote development.
+Pick VS Code when you need a specific extension, a debugger or remote development beyond WSL.
 
 ## Other editors at a glance
 
@@ -710,6 +711,7 @@ FluxCode sits closest to Lapce and Helix in spirit: a small Rust editor that sta
 of the way. What sets it apart from them is the graphical interface, the VS Code
 layout and keys, and the agent panel. None of the five editors above was measured in
 the benchmark, so do not read this table as a speed ranking.
+
 @id
 ## FluxCode, Zed, dan VS Code
 
@@ -736,16 +738,17 @@ jelas di tabel: belum ada debugger, language server, maupun katalog extension.
 | Agent AI | agent ACP apa pun, tiga tingkat akses, perubahan per giliran dengan undo | agent sendiri dan agent ACP | GitHub Copilot dan extension |
 | File yang bukan teks | hex, PDF, Office, ZIP, SQLite (baca-saja) | gambar | gambar; lebih banyak lewat extension |
 | Kolaborasi real-time | bawaan, lewat PC host (tanpa akun atau server) | bawaan, lewat server Zed | extension Live Share, lewat server Microsoft |
-| Pengembangan jarak jauh | tidak ada | SSH | SSH, container, WSL |
+| Pengembangan jarak jauh | WSL2 (Windows) | SSH | SSH, container, WSL |
 | Bahasa antarmuka | Inggris, Bahasa Indonesia | Inggris | banyak, lewat language pack |
 | Kematangan | build pengembangan | rilis stabil | stabil, dipakai luas |
 | Lisensi | GPL-3.0-or-later | GPL-3.0 (editornya) | MIT untuk Code - OSS; build Microsoft punya lisensi sendiri |
 
 Pilih FluxCode kalau kamu ingin editor kecil dan tenang di Windows, macOS, atau Linux
-dengan agent yang bisa dijaga ketat, dan kamu membuka log, database, serta dokumen di
-samping kode.
+dengan agent yang bisa dijaga ketat, kodemu bisa tinggal di distro WSL2, dan kamu membuka
+log, database, serta dokumen di samping kode.
 Pilih Zed untuk language server yang langsung jalan dan pair programming.
-Pilih VS Code kalau kamu butuh extension tertentu, debugger, atau pengembangan jarak jauh.
+Pilih VS Code kalau kamu butuh extension tertentu, debugger, atau pengembangan jarak jauh
+selain WSL.
 
 ## Editor lain sekilas
 

@@ -324,15 +324,16 @@ and no extension catalog yet.
 | AI agent | any ACP agent, three access levels, per-turn changes with undo | its own agent and ACP agents | GitHub Copilot and extensions |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
 | Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
-| Remote development | no | SSH | SSH, containers, WSL |
+| Remote development | WSL2 (Windows) | SSH | SSH, containers, WSL |
 | Interface languages | English, Bahasa Indonesia | English | many, through language packs |
 | Maturity | development builds | stable releases | stable, widely used |
 | License | GPL-3.0-or-later | GPL-3.0 (the editor) | MIT for Code - OSS; Microsoft's build has its own license |
 
 Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agent you can
-keep on a short leash, and you open logs, databases and documents next to your code.
+keep on a short leash, your code can live in a WSL2 distro, and you open logs, databases
+and documents next to your code.
 Pick Zed for macOS, language servers out of the box and pair programming.
-Pick VS Code when you need a specific extension, a debugger or remote development.
+Pick VS Code when you need a specific extension, a debugger or remote development beyond WSL.
 
 ## Other editors at a glance
 

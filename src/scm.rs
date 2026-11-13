@@ -268,16 +268,47 @@ fn git_step(args: &[&str]) -> Step {
     Step::Git(args.iter().map(|s| s.to_string()).collect(), None)
 }
 
-fn run_step(dir: &Path, step: &Step) -> Result<String, String> {
+fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
     use std::io::Write;
     let (prog, args, input) = match step {
         Step::Git(a, i) => ("git", a, i.clone()),
         Step::Gh(a) => ("gh", a, None),
     };
-    let mut cmd = proc::command(prog);
-    cmd.args(args)
-        .current_dir(dir)
-        .env("GIT_OPTIONAL_LOCKS", "0")
+    // `git` runs inside the distro for a WSL folder, so it sees Linux paths and
+    // line endings. `gh` stays on Windows: it is a network tool, and it finds the
+    // repo through the UNC path.
+    let target = matches!(step, Step::Git(..)).then_some(target).flatten();
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut cmd = match &target {
+        Some(t) => {
+            let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
+            let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            // The helper is already running in the distro: no process to start.
+            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned)) {
+                match r {
+                    Ok(g) if g.success => {
+                        return Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout })
+                    }
+                    Ok(g) => return Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), g.stderr.trim())),
+                    // The helper is gone: run it through wsl.exe instead.
+                    Err(_) => {}
+                }
+            }
+            crate::remote::program_command_env(
+                t,
+                &cwd,
+                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("NO_COLOR", "1")],
+                prog,
+                &refs,
+            )
+        }
+        None => {
+            let mut c = proc::command(prog);
+            c.args(args).current_dir(dir);
+            c
+        }
+    };
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("NO_COLOR", "1")
@@ -312,19 +343,26 @@ struct Snapshot {
     incoming: (Vec<Commit>, Option<String>),
 }
 
-fn snapshot(dir: &Path, with_log: bool) -> Snapshot {
-    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"])).ok().map(|s| PathBuf::from(s.trim().replace('/', "\\")));
+fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget>) -> Snapshot {
+    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"]), target).ok().map(|s| {
+        let p = s.trim();
+        match target {
+            Some(t) => t.unc_path(p),
+            None => PathBuf::from(p.replace('/', "\\")),
+        }
+    });
     let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None, incoming: Default::default() } };
-    let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"])).map(|s| parse_status(&s)).unwrap_or_default();
+    let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"]), target).map(|s| parse_status(&s)).unwrap_or_default();
     let log = with_log.then(|| {
         run_step(
             &repo,
             &git_step(&["-c", "i18n.logOutputEncoding=UTF-8", "log", "-n", "60", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"]),
+            target,
         )
         .map(|s| parse_log(&s))
         .unwrap_or_default()
     });
-    let incoming = if status.behind > 0 { crate::scm_incoming::incoming(&repo) } else { Default::default() };
+    let incoming = if status.behind > 0 { crate::scm_incoming::incoming(&repo, target) } else { Default::default() };
     Snapshot { repo: Some(repo), status, log, incoming }
 }
 
@@ -355,8 +393,9 @@ impl Workbench {
         self.scm.refreshing = true;
         self.scm.last_refresh = Some(std::time::Instant::now());
         let with_log = self.scm.show_graph;
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let snap = cx.background_spawn(async move { snapshot(&root, with_log) }).await;
+            let snap = cx.background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
                 let s = &mut this.scm;
                 s.refreshing = false;
@@ -419,12 +458,13 @@ impl Workbench {
         self.scm.note = None;
         self.scm.confirm_discard = None;
         cx.notify();
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_spawn(async move {
                     let mut last = String::new();
                     for s in &steps {
-                        last = run_step(&dir, s)?;
+                        last = run_step(&dir, s, wsl.as_ref())?;
                     }
                     Ok::<String, String>(last)
                 })
@@ -552,13 +592,15 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let (wf, runs) = cx
                 .background_spawn(async move {
-                    let wf = run_step(&dir, &Step::Gh(["workflow", "list", "--json", "id,name,state"].map(String::from).to_vec()));
+                    let wf = run_step(&dir, &Step::Gh(["workflow", "list", "--json", "id,name,state"].map(String::from).to_vec()), wsl.as_ref());
                     let runs = run_step(
                         &dir,
                         &Step::Gh(["run", "list", "-L", "6", "--json", "displayTitle,workflowName,status,conclusion,headBranch,url"].map(String::from).to_vec()),
+                        wsl.as_ref(),
                     );
                     (wf, runs)
                 })
@@ -662,13 +704,14 @@ impl Workbench {
         args.extend(["--".into(), ch.path.clone()]);
         let untracked = ch.code == 'U';
         let path = ch.path.clone();
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let text = cx
                 .background_spawn(async move {
                     if untracked {
                         std::fs::read_to_string(dir.join(&path)).map(|t| t.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n")).unwrap_or_default()
                     } else {
-                        run_step(&dir, &Step::Git(args, None)).unwrap_or_else(|e| e)
+                        run_step(&dir, &Step::Git(args, None), wsl.as_ref()).unwrap_or_else(|e| e)
                     }
                 })
                 .await;
@@ -706,10 +749,11 @@ impl Workbench {
     /// A commit's summary and changed files in the Output panel.
     fn scm_show_commit(&mut self, hash: String, cx: &mut Context<Self>) {
         let Some(dir) = self.scm.repo.clone() else { return };
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let text = cx
                 .background_spawn(async move {
-                    run_step(&dir, &Step::Git(["show", "--stat", "--format=%h  %s%n%an <%ae>, %ad%n%n%b", "--date=format:%Y-%m-%d %H:%M", &hash].map(String::from).to_vec(), None))
+                    run_step(&dir, &Step::Git(["show", "--stat", "--format=%h  %s%n%an <%ae>, %ad%n%n%b", "--date=format:%Y-%m-%d %H:%M", &hash].map(String::from).to_vec(), None), wsl.as_ref())
                         .unwrap_or_else(|e| e)
                 })
                 .await;

@@ -31,6 +31,7 @@ pub fn commands() -> Vec<Command> {
         cmd!("File: Go to File", "Ctrl+P", QuickOpenFile),
         cmd!("File: Open File", "Ctrl+O", OpenFile),
         cmd!("File: Open Folder", "Ctrl+K Ctrl+O", OpenFolder),
+        cmd!("File: Open Folder in WSL...", "", OpenFolderInWsl),
         cmd!("File: Save", "Ctrl+S", Save),
         cmd!("File: Save All", "Ctrl+K S", SaveAll),
         cmd!("View: Close Editor", "Ctrl+W", CloseTab),
