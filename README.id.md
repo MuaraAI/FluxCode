@@ -116,11 +116,11 @@ Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabai
 yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
 
 <p align="center">
-  <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="49%" alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."></a>
+  <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="49%" alt="Settings: six color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark), then language and interface size."></a>
   <a href="assets/screenshots/update-indonesian.png"><img src="assets/screenshots/update-indonesian.png" width="49%" alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."></a>
 </p>
 
-Empat tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
+Enam tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
 juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
 FluxCream.
 
@@ -440,8 +440,24 @@ lewat [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). Bot memer
 issue baru terhadap laporan lama dengan masalah yang sama dan terhadap build yang sudah
 usang.
 
-Pull request hanya diterima dari anggota organisasi MuaraAI; yang lain ditutup otomatis.
-Rinciannya di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
+Pull request terbuka untuk siapa saja. Fork repositori ini, buat branch dari `main`, lalu
+buka pull request; untuk fitur baru atau dependency baru, buka issue dulu supaya idenya
+disepakati sebelum kodenya ditulis.
+
+Tiap pull request diperiksa otomatis, dan tiap push diperiksa ulang:
+
+| Pemeriksaan | Yang dilihat | Gagal kalau |
+| --- | --- | --- |
+| **Safety scan** | Tiap baris dan file yang ditambahkan, cuma dibaca tanpa dijalankan: pola malware (unduh-lalu-jalankan, reverse shell, miner, pencurian kredensial, injeksi proses), token dan kunci yang bocor, karakter tak terlihat atau kanan-ke-kiri, blob ter-encode, file executable, dependency dari luar crates.io | Ada yang berbahaya atau rahasia, atau orang di luar tim mengubah file CI, build, atau packaging |
+| **Performa** | Pull request dan `main`, dibangun dengan cara yang sama di runner yang sama dan dijalankan 40 kali masing-masing: ukuran executable, waktu start, waktu konversi Markdown, memori puncak, jumlah crate | Ukuran naik lebih dari 10%, sebuah run lebih lambat lebih dari 25%, atau memori naik lebih dari 40% (perubahan lebih kecil ditandai sebagai peringatan) |
+| **Kualitas kode** | Hanya baris yang ditambahkan pull request: clippy, rustfmt, `unwrap()`, `dbg!`, `thread::sleep`, baris dan file yang terlalu panjang | Ada lint clippy `correctness`, `suspicious`, atau `perf`, error kompilasi, atau `dbg!` yang tertinggal |
+| **Dependency** | Database advisory RustSec, lewat cargo-deny | Sebuah dependency membawa advisory yang belum ada di `main` |
+| **Build** | Build Windows, Linux, dan macOS, unit test, pasang dan jalankan | Ada yang tidak bisa di-build, test gagal, atau aplikasinya tidak mau jalan |
+
+Batas-batasnya dibaca dari `main`, jadi pull request tidak bisa melonggarkan batasnya
+sendiri. Pemeriksaan ini membantu, tapi tidak me-merge apa pun: maintainer membaca tiap
+pull request dulu. Daftar lengkapnya, cara menjalankannya di lokal, dan arti tiap
+peringatan ada di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Ikonnya

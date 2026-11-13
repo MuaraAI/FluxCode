@@ -223,15 +223,15 @@ Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabai
 yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
 
 @gallery
-@image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings: four color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed), then language and interface size."
+@image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings: six color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark), then language and interface size."
 @image assets/screenshots/update-indonesian.png width=49% link=assets/screenshots/update-indonesian.png alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."
 @end
 
 @en
-Four color themes, three interface sizes and your own background image. The interface
+Six color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 @id
-Empat tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
+Enam tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
 juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
 FluxCream.
 
@@ -569,7 +569,7 @@ di atasnya.
 - OpenCode 2 is the registry's native OpenCode build from opencode.ai, which FluxCode
   installs and checks against its SHA-256. A copy of OpenCode on your PATH is no longer
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
-- The color theme's name in the status bar opens the four themes, each shown as a small
+- The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 @id
@@ -851,9 +851,25 @@ FluxCode is open source, and issues are open to everyone: report a bug or sugges
 through [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). A bot checks each
 new issue for earlier reports of the same problem and for an outdated build.
 
-Pull requests are accepted only from members of the MuaraAI organization; others are
-closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each
-build: [CHANGELOG.md](CHANGELOG.md).
+Pull requests are welcome from anyone. Fork the repository, branch from `main`, and open
+a pull request; for a new feature or a new dependency, open an issue first so the idea
+can be agreed on before the code is written.
+
+Every pull request is checked automatically, and every push is checked again:
+
+| Check | What it looks at | Fails when |
+| --- | --- | --- |
+| **Safety scan** | Every added line and file, read without running anything: malware patterns (download-and-run, reverse shells, miners, credential theft, process injection), leaked tokens and keys, invisible or right-to-left characters, encoded blobs, committed executables, dependencies from outside crates.io | Anything malicious or secret turns up, or someone outside the team changes CI, build or packaging files |
+| **Performance** | The pull request and `main`, built the same way on the same runner and run 40 times each: executable size, start-up time, Markdown conversion time, peak memory, crate count | Size grows more than 10%, a run gets more than 25% slower, or memory grows more than 40% (smaller changes are flagged as warnings) |
+| **Code quality** | Only the lines the pull request adds: clippy, rustfmt, `unwrap()`, `dbg!`, `thread::sleep`, very long lines and files | A clippy `correctness`, `suspicious` or `perf` lint, a compile error or a leftover `dbg!` |
+| **Dependencies** | The RustSec advisory database, through cargo-deny | A dependency brings in an advisory `main` does not already have |
+| **Build** | Windows, Linux and macOS builds, unit tests, install and start | Anything does not build, a test fails, or the app does not start |
+
+The limits are read from `main`, so a pull request cannot loosen its own. The checks
+help; they do not merge anything: a maintainer reads every pull request first. The full
+list, how to run them locally and what each warning means are in
+[CONTRIBUTING.md](CONTRIBUTING.md). What changed in each build:
+[CHANGELOG.md](CHANGELOG.md).
 @id
 ## Berkontribusi
 
@@ -862,8 +878,24 @@ lewat [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). Bot memer
 issue baru terhadap laporan lama dengan masalah yang sama dan terhadap build yang sudah
 usang.
 
-Pull request hanya diterima dari anggota organisasi MuaraAI; yang lain ditutup otomatis.
-Rinciannya di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
+Pull request terbuka untuk siapa saja. Fork repositori ini, buat branch dari `main`, lalu
+buka pull request; untuk fitur baru atau dependency baru, buka issue dulu supaya idenya
+disepakati sebelum kodenya ditulis.
+
+Tiap pull request diperiksa otomatis, dan tiap push diperiksa ulang:
+
+| Pemeriksaan | Yang dilihat | Gagal kalau |
+| --- | --- | --- |
+| **Safety scan** | Tiap baris dan file yang ditambahkan, cuma dibaca tanpa dijalankan: pola malware (unduh-lalu-jalankan, reverse shell, miner, pencurian kredensial, injeksi proses), token dan kunci yang bocor, karakter tak terlihat atau kanan-ke-kiri, blob ter-encode, file executable, dependency dari luar crates.io | Ada yang berbahaya atau rahasia, atau orang di luar tim mengubah file CI, build, atau packaging |
+| **Performa** | Pull request dan `main`, dibangun dengan cara yang sama di runner yang sama dan dijalankan 40 kali masing-masing: ukuran executable, waktu start, waktu konversi Markdown, memori puncak, jumlah crate | Ukuran naik lebih dari 10%, sebuah run lebih lambat lebih dari 25%, atau memori naik lebih dari 40% (perubahan lebih kecil ditandai sebagai peringatan) |
+| **Kualitas kode** | Hanya baris yang ditambahkan pull request: clippy, rustfmt, `unwrap()`, `dbg!`, `thread::sleep`, baris dan file yang terlalu panjang | Ada lint clippy `correctness`, `suspicious`, atau `perf`, error kompilasi, atau `dbg!` yang tertinggal |
+| **Dependency** | Database advisory RustSec, lewat cargo-deny | Sebuah dependency membawa advisory yang belum ada di `main` |
+| **Build** | Build Windows, Linux, dan macOS, unit test, pasang dan jalankan | Ada yang tidak bisa di-build, test gagal, atau aplikasinya tidak mau jalan |
+
+Batas-batasnya dibaca dari `main`, jadi pull request tidak bisa melonggarkan batasnya
+sendiri. Pemeriksaan ini membantu, tapi tidak me-merge apa pun: maintainer membaca tiap
+pull request dulu. Daftar lengkapnya, cara menjalankannya di lokal, dan arti tiap
+peringatan ada di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
 [CHANGELOG.md](CHANGELOG.md).
 
 @en

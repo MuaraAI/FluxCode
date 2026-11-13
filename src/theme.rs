@@ -137,7 +137,7 @@ impl Palette {
 // state colors are >= 4.5:1 on every surface, and still >= 4.5:1 over a white (dark
 // themes) or black (FluxCream) image pixel at the Balanced strength. Text on accent
 // fills >= 5.1:1.
-pub const PALETTES: [Palette; 4] = [
+pub const PALETTES: [Palette; 6] = [
     Palette {
         id: "flux-dark",
         name: "FluxDark",
@@ -246,7 +246,68 @@ pub const PALETTES: [Palette; 4] = [
         select: 0x3a2a2b,
         selection: 0x55393a,
     },
+
+    Palette {
+        id: "flux-muara",
+        name: "FluxMuara",
+        note: "Mist canvas, river-blue accent",
+        dark: false,
+        // The Muara AI brand palette (DESIGN.md, UBSI-API landing page): mist water
+        // canvas, white crystal surfaces, riverbed ink and one river current blue.
+        title: 0xeaf3f9,
+        side: 0xf0f7fb,
+        editor: 0xffffff,
+        elevated: 0xffffff,
+        hover: 0xf0f7fb,
+        border: 0xd9e5ed,
+        border_strong: 0xb9cfe0,
+        fg: 0x072033,
+        strong: 0x031a28,
+        muted: 0x3b5a70,
+        dim: 0x47627a,
+        accent: 0x0369a1,
+        on_accent: 0xffffff,
+        accent_text: 0x0369a1,
+        blue: 0x075985,
+        green: 0x0f766e,
+        warn: 0x9a3412,
+        danger: 0xbe123c,
+        folder: 0x075985,
+        select: 0xeaf3f9,
+        selection: 0xdcebf5,
+    },
+
+    Palette {
+        id: "flux-muara-dark",
+        name: "FluxMuara Dark",
+        note: "Night water, river-blue accent",
+        dark: true,
+        // The same Muara AI palette at night: riverbed ink surfaces (the design's
+        // code-block colors) with the river current blue lifted for the dark canvas.
+        title: 0x0e1922,
+        side: 0x111e2a,
+        editor: 0x131b26,
+        elevated: 0x1a2836,
+        hover: 0x223140,
+        border: 0x263848,
+        border_strong: 0x354b5e,
+        fg: 0xcdd6f4,
+        strong: 0xe8eefb,
+        muted: 0x9aabc0,
+        dim: 0x8da0b4,
+        accent: 0x358fcc,
+        on_accent: 0x07141f,
+        accent_text: 0x7cc7ef,
+        blue: 0x7dd3fc,
+        green: 0x5fc9ab,
+        warn: 0xe8b06a,
+        danger: 0xef7d92,
+        folder: 0x8fb9d9,
+        select: 0x1a2836,
+        selection: 0x28496b,
+    },
 ];
+
 
 /// How much of the background image reaches the eye through the panels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -489,4 +550,50 @@ pub fn apply(cx: &mut App) {
         st.editor_invisible = Some(c(FG_DIM).opacity(0.32));
         t.highlight_theme = std::sync::Arc::new(hl);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Relative luminance per WCAG 2.1 (sRGB, linearized).
+    fn luminance(h: u32) -> f64 {
+        let channel = |shift: u32| {
+            let c = ((h >> shift) & 0xff) as f64 / 255.;
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    }
+
+    fn contrast(fg: u32, bg: u32) -> f64 {
+        let (a, b) = (luminance(fg), luminance(bg));
+        let (hi, lo) = (a.max(b), a.min(b));
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The contract stated in the palette comment above: text colors reach 4.5:1
+    /// on every surface the UI paints text over, and text on an accent fill is
+    /// even clearer. A new palette must pass this before it ships.
+    #[test]
+    fn every_palette_is_readable_on_every_surface() {
+        let text = [Tok::Fg, Tok::FgStrong, Tok::FgMuted, Tok::FgDim, Tok::AccentText, Tok::Blue, Tok::Green, Tok::Warn, Tok::Danger, Tok::Folder];
+        let surfaces = [Tok::BgTitle, Tok::BgSide, Tok::BgEditor, Tok::BgElevated, Tok::BgHover, Tok::Select];
+        for p in PALETTES.iter() {
+            for t in text {
+                for s in surfaces {
+                    let r = contrast(p.hex(t), p.hex(s));
+                    assert!(r >= 4.5, "{}: {:?} on {:?} is only {r:.2}:1", p.id, t, s);
+                }
+            }
+            let r = contrast(p.hex(Tok::OnAccent), p.hex(Tok::Accent));
+            assert!(r >= 5.1, "{}: OnAccent on Accent is only {r:.2}:1", p.id);
+        }
+    }
+
+    #[test]
+    fn flux_muara_comes_in_light_and_dark() {
+        for id in ["flux-muara", "flux-muara-dark"] {
+            assert!(PALETTES.iter().any(|p| p.id == id), "{id} palette is missing");
+        }
+    }
 }

@@ -34,6 +34,32 @@ page, and installed copies offer it on their own. Newest first.
   Small files still open the moment you click them, and a save that finishes late
   no longer hides newer unsaved text.
 
+## Pull requests open to everyone, with automatic checks (13 November 2026)
+
+- Pull requests from outside the MuaraAI organization are no longer closed. Anyone can
+  fork, change and open one; [CONTRIBUTING.md](CONTRIBUTING.md) says how.
+- Every pull request gets a **safety scan** that only reads the diff (malware patterns,
+  leaked secrets, Trojan Source characters, committed executables, dependencies from
+  outside crates.io, outside changes to CI and build files), and a **verdict** that
+  compares it with `main` on the same runner: executable size, run time and peak memory,
+  clippy and rustfmt on the added lines, and new RustSec advisories. Each leaves one
+  comment that updates on every push. Limits live in `.github/pr-check.json` and are
+  always read from `main`.
+- Changes to CI, build, packaging, updater and network code ask the maintainers for a
+  review automatically (`.github/CODEOWNERS`).
+
+## Two new color themes, FluxMuara and FluxMuara Dark (13 November 2026)
+
+- FluxMuara joins the color themes, with a dark companion. The light one is the Muara
+  AI brand palette: a mist water canvas, white surfaces, riverbed ink text and one
+  river current blue accent (`#0369A1`). FluxMuara Dark is the same river at night:
+  riverbed ink surfaces (the design's code-block colors) with the accent lifted so it
+  reads on the dark canvas. Both appear in the theme menu in the status bar, in
+  `Ctrl+K Ctrl+T` cycling and as cards in Settings.
+- A new test holds every theme to the contrast bar the palette comment states
+  (4.5:1 for text on every surface, 5.1:1 on an accent fill), so a palette that
+  ships unreadable fails the build instead of a reader.
+
 ## Our own Live Share relay, and a README in two languages (11 November 2026)
 
 - Live Share now goes through MuaraAI's own relay at `live.muaraai.com` before it falls

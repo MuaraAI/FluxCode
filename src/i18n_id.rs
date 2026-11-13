@@ -558,6 +558,8 @@ pub const ID: &[(&str, &str)] = &[
     ("Paper and ink, umber accent", "Kertas dan tinta, aksen cokelat umber"),
     ("Grey UI, red only for errors", "Antarmuka abu-abu, merah hanya untuk error"),
     ("Dark oxblood, clay accent", "Merah darah gelap, aksen tanah liat"),
+    ("Mist canvas, river-blue accent", "Kanvas berkabut, aksen biru muara"),
+    ("Night water, river-blue accent", "Air malam, aksen biru muara"),
     ("Before", "Sebelumnya"),
     ("installed now", "terpasang sekarang"),
     ("in the new build", "di build baru"),

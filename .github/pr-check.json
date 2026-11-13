@@ -1,0 +1,67 @@
+{
+  "_comment": "Limits for the pull request checks (.github/scripts). The copy on main is the one that counts: a pull request that edits this file is checked against main's limits.",
+
+  "override_label": "security-reviewed",
+  "maintainer_review_label": "needs-maintainer-review",
+
+  "perf": {
+    "size_warn_pct": 3,
+    "size_fail_pct": 10,
+    "time_warn_pct": 10,
+    "time_fail_pct": 25,
+    "time_min_ms": 2,
+    "rss_warn_pct": 15,
+    "rss_fail_pct": 40,
+    "new_crates_warn": 1,
+    "new_crates_fail": 15
+  },
+
+  "quality": {
+    "fail_lint_groups": ["correctness", "suspicious", "perf"],
+    "max_new_file_lines": 3000,
+    "max_line_length": 200
+  },
+
+  "sensitive_paths": [
+    ".github/",
+    ".cargo/",
+    "build.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "vendor/",
+    "packaging/",
+    "tools/",
+    "relay/",
+    "src/update.rs",
+    "src/proc.rs",
+    "src/collab/",
+    "extensions/",
+    ".gitattributes"
+  ],
+
+  "outsider_blocked_paths": [
+    ".github/",
+    ".cargo/",
+    "build.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "packaging/",
+    "relay/"
+  ],
+
+  "known_domains": [
+    "github.com", "www.github.com", "api.github.com", "raw.githubusercontent.com",
+    "objects.githubusercontent.com", "img.shields.io", "crates.io", "docs.rs",
+    "static.rust-lang.org", "rust-lang.org", "www.rust-lang.org", "doc.rust-lang.org",
+    "bore.pub", "cdn.agentclientprotocol.com", "agentclientprotocol.com",
+    "services.gradle.org", "docs.gradle.org", "repo.maven.apache.org",
+    "repo.papermc.io", "jd.papermc.io", "schemas.xmlsoap.org", "schemas.openxmlformats.org",
+    "www.w3.org", "example.com", "localhost", "127.0.0.1",
+    "www.gnu.org", "gnu.org", "opencode.ai", "pypi.org", "nodejs.org", "go.dev",
+    "learn.microsoft.com", "developer.microsoft.com", "go.microsoft.com"
+  ],
+
+  "allowed_binary_ext": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".icns", ".ttf", ".otf", ".woff", ".woff2"]
+}

@@ -93,7 +93,7 @@ PDF and ZIP files do, instead of an error.
 Source Control stays fast with thousands of new files and offers to ignore the folders
 that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
 
-Four color themes, three interface sizes and your own background image. The interface
+Six color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 
 ## What makes it different
@@ -282,7 +282,7 @@ FluxCode opens it drawn, with Preview and Source above it.
 - OpenCode 2 is the registry's native OpenCode build from opencode.ai, which FluxCode
   installs and checks against its SHA-256. A copy of OpenCode on your PATH is no longer
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
-- The color theme's name in the status bar opens the four themes, each shown as a small
+- The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 
@@ -392,9 +392,25 @@ FluxCode is open source, and issues are open to everyone: report a bug or sugges
 through [Issues](https://github.com/MuaraAI/FluxCode/issues/new/choose). A bot checks each
 new issue for earlier reports of the same problem and for an outdated build.
 
-Pull requests are accepted only from members of the MuaraAI organization; others are
-closed automatically. Details in [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each
-build: [CHANGELOG.md](CHANGELOG.md).
+Pull requests are welcome from anyone. Fork the repository, branch from `main`, and open
+a pull request; for a new feature or a new dependency, open an issue first so the idea
+can be agreed on before the code is written.
+
+Every pull request is checked automatically, and every push is checked again:
+
+| Check | What it looks at | Fails when |
+| --- | --- | --- |
+| **Safety scan** | Every added line and file, read without running anything: malware patterns (download-and-run, reverse shells, miners, credential theft, process injection), leaked tokens and keys, invisible or right-to-left characters, encoded blobs, committed executables, dependencies from outside crates.io | Anything malicious or secret turns up, or someone outside the team changes CI, build or packaging files |
+| **Performance** | The pull request and `main`, built the same way on the same runner and run 40 times each: executable size, start-up time, Markdown conversion time, peak memory, crate count | Size grows more than 10%, a run gets more than 25% slower, or memory grows more than 40% (smaller changes are flagged as warnings) |
+| **Code quality** | Only the lines the pull request adds: clippy, rustfmt, `unwrap()`, `dbg!`, `thread::sleep`, very long lines and files | A clippy `correctness`, `suspicious` or `perf` lint, a compile error or a leftover `dbg!` |
+| **Dependencies** | The RustSec advisory database, through cargo-deny | A dependency brings in an advisory `main` does not already have |
+| **Build** | Windows, Linux and macOS builds, unit tests, install and start | Anything does not build, a test fails, or the app does not start |
+
+The limits are read from `main`, so a pull request cannot loosen its own. The checks
+help; they do not merge anything: a maintainer reads every pull request first. The full
+list, how to run them locally and what each warning means are in
+[CONTRIBUTING.md](CONTRIBUTING.md). What changed in each build:
+[CHANGELOG.md](CHANGELOG.md).
 
 ## The icon
 
