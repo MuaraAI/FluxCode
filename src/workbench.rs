@@ -606,11 +606,22 @@ impl Workbench {
         })
         .detach();
         // The file list (Ctrl+P) still wants the whole tree, off the UI thread.
+        // It comes from the helper when there is one, so the 9p share is not walked.
+        let wsl_scan = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let nodes = cx.background_spawn(async move { if multi { files::scan_roots(&roots) } else { files::scan(&root) } }).await;
-            let mut flat = Vec::new();
-            files::flatten(&nodes, &mut flat);
-            let all = crate::quick::file_list(flat, &Default::default());
+            let all = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl_scan {
+                        if let Some(paths) = remote_scan(t, &root, files::MAX_ENTRIES) {
+                            return paths;
+                        }
+                    }
+                    let nodes = if multi { files::scan_roots(&roots) } else { files::scan(&root) };
+                    let mut flat = Vec::new();
+                    files::flatten(&nodes, &mut flat);
+                    flat
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
                 this.all_files = Rc::new(all);
@@ -684,8 +695,8 @@ impl Workbench {
                 let bytes = cx
                     .background_spawn(async move {
                         if let Some(t) = &wsl {
-                            if let Some(r) = remote_read(t, &p, core::MAX_FILE_BYTES) {
-                                return r;
+                            if let Some(bytes) = remote_read(t, &p, core::MAX_FILE_BYTES) {
+                                return Ok(bytes);
                             }
                         }
                         read_head(&p)
@@ -708,10 +719,7 @@ impl Workbench {
             return;
         }
         let bytes = match &self.wsl {
-            Some(t) => match remote_read(t, &path, core::MAX_FILE_BYTES) {
-                Some(r) => r,
-                None => read_head(&path),
-            },
+            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
             None => read_head(&path),
         };
         self.finish_open_file(path, bytes, window, cx);
@@ -1056,8 +1064,8 @@ impl Workbench {
                     .background_spawn(async move {
                         if let Some(t) = &wsl {
                             let bytes = text.as_bytes();
-                            if let Some(r) = remote_write(t, &p, bytes, crlf) {
-                                return r;
+                            if let Some(()) = remote_write(t, &p, bytes, crlf) {
+                                return Ok(());
                             }
                         }
                         core::write_text(&p, &text, crlf)
@@ -1072,7 +1080,7 @@ impl Workbench {
         }
         let r = match &self.wsl {
             Some(t) => match remote_write(t, &path, text.as_bytes(), crlf) {
-                Some(r) => r,
+                Some(()) => Ok(()),
                 None => core::write_text(&path, &text, crlf),
             },
             None => core::write_text(&path, &text, crlf),
@@ -1129,7 +1137,15 @@ impl Workbench {
         if let Some(root) = saved_root {
             self.open_folder(root, cx);
         }
-        let files: Vec<PathBuf> = s.files.into_iter().filter(|f| f.is_file()).collect();
+        let wsl = self.wsl.clone();
+        let files: Vec<PathBuf> = s
+            .files
+            .into_iter()
+            .filter(|f| match &wsl {
+                Some(t) => remote_is_file(t, f).unwrap_or_else(|| f.is_file()),
+                None => f.is_file(),
+            })
+            .collect();
         let active = s.active;
         if files.is_empty() {
             return;
@@ -2747,18 +2763,36 @@ fn remote_listing(target: &crate::remote::WslTarget, root: &std::path::Path, mul
 }
 
 /// A file's bytes, read by the helper inside the distro. `None` when the helper
-/// is not there, so the caller reads the UNC path instead.
-fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Result<Vec<u8>, String>> {
+/// is not there or the call failed, so the caller reads the UNC path instead.
+fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
-    crate::remote::with_client(&distro, |c| c.read(&linux, limit))
+    crate::remote::with_client(&distro, |c| c.read(&linux, limit).ok()).flatten()
 }
 
-/// A file's bytes, written by the helper inside the distro.
-fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<Result<(), String>> {
+/// A file's bytes, written by the helper inside the distro. `None` when the
+/// helper is not there or the call failed; the write is atomic, so a failure
+/// means nothing was written and the UNC path can try.
+fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<()> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
-    crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf))
+    crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
+}
+
+/// Whether a path is a file, answered by the helper when there is one.
+fn remote_is_file(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(path)?;
+    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_file)
+}
+
+/// Every file under the workspace, read by the helper inside the distro. This is
+/// the list behind Ctrl+P, so the 9p share is not walked for it.
+fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {
+    let distro = target.distro.clone();
+    let linux = target.linux_path(root)?;
+    let paths = crate::remote::with_client(&distro, |c| c.scan(&linux, max).ok()).flatten()?;
+    Some(paths.into_iter().map(|p| target.unc_path(&p).to_string_lossy().into_owned()).collect())
 }
 
 /// Whether a path is a folder, answered by the helper when there is one. The

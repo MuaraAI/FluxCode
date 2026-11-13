@@ -650,11 +650,6 @@ pub fn keys_chips(keys: &'static str) -> Div {
     }))
 }
 
-/// Every file in the explorer's scan, as full paths (folders left out).
-pub fn file_list(paths: Vec<String>, dirs: &std::collections::HashSet<String>) -> Vec<String> {
-    paths.into_iter().filter(|p| !dirs.contains(p)).collect()
-}
-
 /// The folder above `path` inside the distro.
 fn parent_of(path: &str) -> String {
     let p = path.trim_end_matches('/');

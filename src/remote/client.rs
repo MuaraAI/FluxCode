@@ -126,6 +126,12 @@ impl RemoteClient {
         self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
     }
 
+    /// Every file under `root`, read inside the distro. This is the list behind
+    /// Ctrl+P, so the 9p share is not walked for it.
+    pub fn scan(&mut self, root: &str, max: usize) -> Result<Vec<String>, String> {
+        self.json(Request::Scan { root: root.to_string(), max })
+    }
+
     pub fn git(&mut self, cwd: &str, args: &[String]) -> Result<super::proto::GitWire, String> {
         self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec() })
     }
@@ -187,8 +193,9 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
         }
     }
     // The release that carries this build, in the same repository updates come from.
+    let asset = format!("FluxCode-{}-linux-x64.tar.gz", crate::update::BUILD);
     let url = format!(
-        "https://github.com/MuaraAI/FluxCode/releases/download/{build}/FluxCode-{build}-linux-x64.tar.gz",
+        "https://github.com/MuaraAI/FluxCode/releases/download/{build}/{asset}",
         build = crate::update::BUILD
     );
     let mut cmd = crate::proc::command("curl");
@@ -197,8 +204,52 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
     if !out.status.success() || !tmp.is_file() {
         return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
     }
+    // The release records a SHA-256 for every asset. Refuse to run a tarball
+    // that does not match it: a truncated or swapped download must not execute.
+    let want = release_digest(&asset)?;
+    let got = sha256_of(&tmp)?;
+    if got != want {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("the Linux helper for {} does not match the release's SHA-256", crate::update::BUILD));
+    }
     let _ = distro;
     Ok(tmp)
+}
+
+/// The SHA-256 the release records for `asset`, from the GitHub API.
+fn release_digest(asset: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}", crate::update::BUILD);
+    let out = crate::proc::command("curl")
+        .args(["-sSL", "--fail", "-H", "Accept: application/vnd.github+json", &url])
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() {
+        return Err("the release could not be read to check the helper".into());
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let digest = v["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["name"].as_str() == Some(asset)))
+        .and_then(|x| x["digest"].as_str())
+        .ok_or("the release has no SHA-256 for the Linux helper")?;
+    let hex = digest.strip_prefix("sha256:").ok_or("the release's helper digest is not SHA-256")?;
+    Ok(hex.to_ascii_lowercase())
+}
+
+/// SHA-256 of a file, in process: no system tool to find.
+fn sha256_of(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Wrap one binary in a tar.gz laid out like the release archive (one folder,
@@ -311,5 +362,16 @@ mod tests {
         // Off by default: nothing is installed, started or read through it.
         assert!(!helper_enabled());
         assert!(with_client("Ubuntu", |_| ()).is_none());
+    }
+
+    #[test]
+    fn a_file_hashes_to_its_sha256() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-sha-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, b"abc").unwrap();
+        assert_eq!(sha256_of(&f).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

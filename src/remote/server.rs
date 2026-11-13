@@ -76,6 +76,7 @@ fn handle(req: Request, body: Option<Vec<u8>>) -> Result<Answer, String> {
         })),
         Request::Ping => Answer::Json(Response::json(serde_json::json!({"pong": true}))),
         Request::List { path } => Answer::Json(Response::json(list(&path)?)),
+        Request::Scan { root, max } => Answer::Json(Response::json(scan(&root, max))),
         Request::Stat { path } => Answer::Json(Response::json(stat(&path))),
         Request::Read { path, limit } => {
             let bytes = read_file(&path, limit)?;
@@ -115,8 +116,36 @@ fn list(path: &str) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-fn stat(path: &str) -> Stat {
-    match std::fs::metadata(path) {
+/// Every file under `root`, for the Ctrl+P list. Same folder skips as search,
+/// and `max` stops it so a huge tree cannot run away.
+fn scan(root: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                let name = e.file_name();
+                if !SKIP_DIRS.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                    stack.push(e.path());
+                }
+            } else if ft.is_file() {
+                out.push(e.path().to_string_lossy().into_owned());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn stat(path: &str) -> Stat {    match std::fs::metadata(path) {
         Ok(m) => Stat { exists: true, is_dir: m.is_dir(), is_file: m.is_file(), len: m.len() },
         Err(_) => Stat { exists: false, is_dir: false, is_file: false, len: 0 },
     }
@@ -288,6 +317,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "one\ntwo\n");
         write_file(f.to_str().unwrap(), b"three\n").unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "three\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scan_lists_every_file_and_stops_at_the_cap() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), b"x").unwrap();
+        // A folder search skips is not walked.
+        std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+        std::fs::write(dir.join("node_modules").join("c.js"), b"x").unwrap();
+        let all = scan(dir.to_str().unwrap(), 100);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!(all.iter().any(|p| p.ends_with("sub/b.txt")), "{all:?}");
+        assert!(all.iter().all(|p| !p.contains("node_modules")), "{all:?}");
+        assert_eq!(scan(dir.to_str().unwrap(), 1).len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

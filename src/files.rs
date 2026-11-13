@@ -16,7 +16,7 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     ".stack", ".ghcup", ".cabal", ".terraform.d",
 ];
 /// Upper bound so a huge folder can't stall startup.
-const MAX_ENTRIES: usize = 20_000;
+pub(crate) const MAX_ENTRIES: usize = 20_000;
 
 /// Plain (Send) folder listing, built on a background thread.
 #[derive(Clone)]

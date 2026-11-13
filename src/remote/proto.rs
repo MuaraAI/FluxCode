@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped when a request or a response changes shape. The editor replaces a
 /// helper whose version differs, so the two never have to understand each
 /// other across versions.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const FRAME_JSON: u8 = 0;
 pub const FRAME_BYTES: u8 = 1;
@@ -24,6 +24,9 @@ pub enum Request {
     Hello,
     /// One level of a folder.
     List { path: String },
+    /// Every file under `root`, skipping the folders search skips. The answer
+    /// is the file list behind Ctrl+P, so it never walks the 9p share.
+    Scan { root: String, max: usize },
     /// A file's bytes, up to `limit`. The answer is a byte frame.
     Read { path: String, limit: u64 },
     /// A file's bytes, sent as a byte frame after this request.
@@ -166,6 +169,8 @@ mod tests {
         assert_eq!(json, r#"{"m":"read","path":"/a","limit":9}"#);
         let back: Request = serde_json::from_str(r#"{"m":"ping"}"#).unwrap();
         assert_eq!(back, Request::Ping);
+        let scan: Request = serde_json::from_str(r#"{"m":"scan","root":"/a","max":10}"#).unwrap();
+        assert_eq!(scan, Request::Scan { root: "/a".into(), max: 10 });
     }
 
     #[test]

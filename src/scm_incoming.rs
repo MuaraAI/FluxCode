@@ -35,11 +35,12 @@ fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget
         let attempt: Option<Result<crate::remote::GitWire, String>> =
             crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned));
         if let Some(r) = attempt {
-            return match r {
-                Ok(g) if g.success => Ok(g.stdout),
-                Ok(g) => Err(g.stderr.trim().to_string()),
-                Err(e) => Err(e),
-            };
+            match r {
+                Ok(g) if g.success => return Ok(g.stdout),
+                Ok(g) => return Err(g.stderr.trim().to_string()),
+                // The helper is gone: run git through wsl.exe instead.
+                Err(_) => {}
+            }
         }
     }
     let mut cmd = match target {

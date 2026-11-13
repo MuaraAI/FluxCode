@@ -54,6 +54,7 @@ impl Drop for Helper {
 }
 
 #[test]
+#[ignore = "needs FLUXCODE_HELPER_BIN pointing at a built fluxcode: FLUXCODE_HELPER_BIN=target/debug/fluxcode cargo test --bin fluxcode -- --ignored"]
 fn a_helper_answers_over_a_pipe() {
     let Some(mut h) = Helper::start() else {
         eprintln!("FLUXCODE_HELPER_BIN not set; skipping");
@@ -64,6 +65,7 @@ fn a_helper_answers_over_a_pipe() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     std::fs::write(dir.join("a.txt"), b"needle in a haystack\n").unwrap();
+    std::fs::write(dir.join("sub").join("deep.txt"), b"nested\n").unwrap();
     let root = dir.to_str().unwrap().to_string();
 
     let hello = h.ask(&Request::Hello);
@@ -82,6 +84,13 @@ fn a_helper_answers_over_a_pipe() {
     let hits: crate::remote::proto::SearchWire = serde_json::from_value(search.json.unwrap()).unwrap();
     assert_eq!(hits.total, 1);
     assert_eq!(hits.files[0].hits[0].line, 1);
+
+    // The Ctrl+P list comes from the same helper.
+    let scan = h.ask(&Request::Scan { root: root.clone(), max: 100 });
+    assert!(scan.ok, "{scan:?}");
+    let files: Vec<String> = serde_json::from_value(scan.json.unwrap()).unwrap();
+    assert!(files.iter().any(|p| p.ends_with("a.txt")), "{files:?}");
+    assert!(files.iter().any(|p| p.ends_with("sub/deep.txt")), "{files:?}");
 
     assert_eq!(h.read(&format!("{root}/a.txt"), 64), b"needle in a haystack\n");
 
