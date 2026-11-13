@@ -93,6 +93,8 @@ pub fn mode_of(q: &str) -> Mode {
 pub enum WslRow {
     Up,
     Open,
+    /// A path typed into the box, opened as it is.
+    OpenPath(String),
     Dir(String),
 }
 
@@ -116,6 +118,8 @@ pub struct QuickOpen {
     pub wsl_browse: Option<(String, String)>,
     /// The folders of the folder being browsed.
     pub wsl_dirs: Vec<String>,
+    /// The distro's home folder, so `~` can be typed.
+    pub wsl_home: String,
     /// The rows the browse mode shows: up, open this folder, then the folders.
     pub wsl_rows: Vec<WslRow>,
 }
@@ -128,7 +132,7 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.quick_accept(window, cx),
             _ => {}
         });
-        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files, wsl: Vec::new(), wsl_loading: false, wsl_browse: None, wsl_dirs: Vec::new(), wsl_rows: Vec::new() }, sub)
+        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files, wsl: Vec::new(), wsl_loading: false, wsl_browse: None, wsl_dirs: Vec::new(), wsl_home: String::new(), wsl_rows: Vec::new() }, sub)
     }
 }
 
@@ -165,7 +169,23 @@ impl Workbench {
             }
             Mode::Wsl => {
                 if self.quick.wsl_browse.is_some() {
-                    let query = q.trim_start_matches("wsl:").trim().to_lowercase();
+                    let typed = q.trim_start_matches("wsl:").trim();
+                    // A typed path opens as it is, without walking to it.
+                    if typed.starts_with('/') || typed.starts_with('~') {
+                        let path = if typed == "~" {
+                            self.quick.wsl_home.clone()
+                        } else if let Some(rest) = typed.strip_prefix("~/") {
+                            format!("{}/{}", self.quick.wsl_home.trim_end_matches('/'), rest)
+                        } else {
+                            typed.to_string()
+                        };
+                        self.quick.wsl_rows = vec![WslRow::OpenPath(path)];
+                        self.quick.hits = vec![0];
+                        self.quick.sel = 0;
+                        cx.notify();
+                        return;
+                    }
+                    let query = typed.to_lowercase();
                     let mut rows = vec![WslRow::Up, WslRow::Open];
                     rows.extend(
                         self.quick
@@ -351,6 +371,34 @@ impl Workbench {
                             self.quick_filter(cx);
                         }
                         WslRow::Up => self.wsl_browse_to(distro, parent_of(&path), window, cx),
+                        WslRow::OpenPath(path) => {
+                            let d = distro.clone();
+                            let p = path.clone();
+                            cx.spawn_in(window, async move |this, cx| {
+                                let (d2, p2) = (d.clone(), p.clone());
+                                let ok = cx
+                                    .background_spawn(async move {
+                                        let t = crate::remote::WslTarget::new(&d2, "/");
+                                        crate::remote::program_command(&t, "/", "sh", &["-c", r#"test -d "$1""#, "--", &p2])
+                                            .output()
+                                            .map(|o| o.status.success())
+                                            .unwrap_or(false)
+                                    })
+                                    .await;
+                                this.update_in(cx, |this, _window, cx| {
+                                    if ok {
+                                        this.quick.open = false;
+                                        let target = crate::remote::WslTarget::new(&d, &p);
+                                        this.open_folder(target.unc_root, cx);
+                                    } else {
+                                        this.status = crate::trf!("No folder named '{arg}' here."; arg => p).into();
+                                        cx.notify();
+                                    }
+                                })
+                                .ok()
+                            })
+                            .detach();
+                        }
                         WslRow::Open => {
                             self.quick.open = false;
                             let target = crate::remote::WslTarget::new(&distro, &path);
@@ -369,7 +417,10 @@ impl Workbench {
                 cx.spawn_in(window, async move |this, cx| {
                     let home = cx.background_spawn(async move { crate::remote::home_dir(&d) }).await;
                     this.update_in(cx, |this, window, cx| match home {
-                        Some(home) => this.wsl_browse_to(distro, home, window, cx),
+                        Some(home) => {
+                            this.quick.wsl_home = home.clone();
+                            this.wsl_browse_to(distro, home, window, cx)
+                        }
                         None => {
                             this.status = crate::trf!("Couldn't reach {name}."; name => distro).into();
                             cx.notify();
@@ -448,6 +499,7 @@ impl Workbench {
                         let (label, icon) = match item {
                             WslRow::Up => ("..".to_string(), gpui_kit::assets::IconName::ArrowUp),
                             WslRow::Open => (tr("Open this folder").to_string(), crate::files::folder_icon("", true)),
+                            WslRow::OpenPath(path) => (crate::trf!("Open {path}"; path => path), crate::files::folder_icon("", true)),
                             WslRow::Dir(name) => (name.clone(), crate::files::folder_icon(name, false)),
                         };
                         list = list.child(
