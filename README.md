@@ -93,7 +93,7 @@ PDF and ZIP files do, instead of an error.
 Source Control stays fast with thousands of new files and offers to ignore the folders
 that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
 
-Four color themes, three interface sizes and your own background image. The interface
+Six color themes, three interface sizes and your own background image. The interface
 also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 
 ## What makes it different
@@ -282,7 +282,7 @@ FluxCode opens it drawn, with Preview and Source above it.
 - OpenCode 2 is the registry's native OpenCode build from opencode.ai, which FluxCode
   installs and checks against its SHA-256. A copy of OpenCode on your PATH is no longer
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
-- The color theme's name in the status bar opens the four themes, each shown as a small
+- The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 

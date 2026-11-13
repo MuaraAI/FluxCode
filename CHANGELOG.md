@@ -5,6 +5,18 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Two new color themes, FluxMuara and FluxMuara Dark (13 November 2026)
+
+- FluxMuara joins the color themes, with a dark companion. The light one is the Muara
+  AI brand palette: a mist water canvas, white surfaces, riverbed ink text and one
+  river current blue accent (`#0369A1`). FluxMuara Dark is the same river at night:
+  riverbed ink surfaces (the design's code-block colors) with the accent lifted so it
+  reads on the dark canvas. Both appear in the theme menu in the status bar, in
+  `Ctrl+K Ctrl+T` cycling and as cards in Settings.
+- A new test holds every theme to the contrast bar the palette comment states
+  (4.5:1 for text on every surface, 5.1:1 on an accent fill), so a palette that
+  ships unreadable fails the build instead of a reader.
+
 ## Our own Live Share relay, and a README in two languages (11 November 2026)
 
 - Live Share now goes through MuaraAI's own relay at `live.muaraai.com` before it falls
