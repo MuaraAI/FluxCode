@@ -5,6 +5,8 @@
 //! inside the distro, and that is what this module builds.
 
 mod client;
+#[cfg(test)]
+mod e2e;
 mod paths;
 mod proto;
 mod server;
