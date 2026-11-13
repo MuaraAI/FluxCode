@@ -6,7 +6,15 @@ use std::path::Path;
 
 /// Folders that are never worth walking for the explorer. They are still listed
 /// (as folders, dimmed), just not opened.
-pub(crate) const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv"];
+pub(crate) const SKIP_DIRS: &[&str] = &[
+    ".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv",
+    // Caches and tool state: a home folder is mostly these, and walking them
+    // spends the whole budget before the folders a reader came for.
+    ".cache", ".local", ".cargo", ".rustup", ".npm", ".nvm", ".bun", ".pnpm-store", ".yarn",
+    ".deno", ".volta", ".asdf", ".android", ".gradle", ".m2", ".vscode-server", ".ollama",
+    ".oh-my-zsh", ".dotnet", ".nuget", ".conda", ".pyenv", ".sdkman", ".gem", ".pub-cache",
+    ".stack", ".ghcup", ".cabal", ".terraform.d",
+];
 /// Upper bound so a huge folder can't stall startup.
 const MAX_ENTRIES: usize = 20_000;
 
@@ -82,7 +90,11 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
     // Folders first, then case-insensitive by name (like VS Code).
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
 
+    // Every entry of this folder first, then the folders' own contents. Walking
+    // depth-first let one huge folder (a cache, a home directory) spend the whole
+    // budget and hide the rest of the folder it sits in.
     let mut out = Vec::with_capacity(entries.len());
+    let mut dirs: Vec<(usize, String, std::path::PathBuf)> = Vec::new();
     for (is_dir, name, path) in entries {
         if *budget == 0 {
             break;
@@ -90,11 +102,20 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
         *budget -= 1;
         let id = path.to_string_lossy().into_owned();
         if is_dir {
-            let children = if SKIP_DIRS.contains(&name.as_str()) { Vec::new() } else { walk(&path, budget) };
-            out.push(Node { id, name, children: Some(children) });
+            dirs.push((out.len(), name.clone(), path));
+            out.push(Node { id, name, children: Some(Vec::new()) });
         } else {
             out.push(Node { id, name, children: None });
         }
+    }
+    for (ix, name, path) in dirs {
+        if *budget == 0 {
+            break;
+        }
+        if SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        out[ix].children = Some(walk(&path, budget));
     }
     out
 }
@@ -421,8 +442,26 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
 
 #[cfg(test)]
 mod tests {
-    use super::language_for;
+    use super::{language_for, walk};
     use std::path::Path;
+
+    #[test]
+    fn a_huge_folder_does_not_hide_its_siblings() {
+        let root = std::env::temp_dir().join(format!("fluxcode-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a-big")).unwrap();
+        std::fs::create_dir_all(root.join("z-code")).unwrap();
+        for i in 0..50 {
+            std::fs::write(root.join("a-big").join(format!("f{i}.txt")), b"x").unwrap();
+        }
+        std::fs::write(root.join("z-code").join("main.rs"), b"x").unwrap();
+        // A budget the first folder alone would spend if it were walked first.
+        let mut budget = 10;
+        let nodes = walk(&root, &mut budget);
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"z-code"), "{names:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn languages() {
