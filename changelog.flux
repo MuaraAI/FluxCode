@@ -78,6 +78,22 @@ File kecil tetap terbuka begitu diklik, dan simpan yang selesai terlambat tidak 
 menyembunyikan teks baru yang belum disimpan.
 
 @release 2026-11-13
+@title en: Markdown files draw themselves
+@title id: File Markdown menggambar dirinya sendiri
+@en
+A **Markdown** file (README.md first of all) opens as text with a small bar above it:
+**Preview** draws it the way GitHub shows it (headings, tables, lists, local images,
+GitHub's `> [!NOTE]` callouts), **Source** goes back to editing. The editor keeps the
+real text, so edits land in the drawing when you switch back. Flux documents keep their
+own Preview and Source, unchanged.
+@id
+File **Markdown** (README.md yang pertama) terbuka sebagai teks dengan satu bar kecil di
+atasnya: **Preview** menggambarnya seperti yang GitHub tampilkan (judul, tabel, daftar,
+gambar lokal, callout `> [!NOTE]` milik GitHub), **Source** kembali ke penyuntingan.
+Editornya tetap memegang teks aslinya, jadi editanmu muncul di gambar saat berpindah
+kembali. Dokumen Flux tetap punya Preview dan Source sendiri, tidak berubah.
+
+@release 2026-11-13
 @title en: Two new color themes, FluxMuara and FluxMuara Dark
 @title id: Dua tema warna baru, FluxMuara dan FluxMuara Dark
 @en

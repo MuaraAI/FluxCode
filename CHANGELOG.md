@@ -5,6 +5,7 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+<<<<<<< HEAD
 ## WSL2 workspaces: the helper inside the distro (13 November 2026)
 
 - A WSL2 folder now reads and writes through a small helper running inside the
@@ -34,6 +35,20 @@ page, and installed copies offer it on their own. Newest first.
   window keeps drawing while a large file, a network share or a slow disk is read.
   Small files still open the moment you click them, and a save that finishes late
   no longer hides newer unsaved text.
+=======
+## Markdown files draw themselves (13 November 2026)
+
+- A Markdown file (README.md first of all) opens as text with a small bar above it:
+  **Preview** draws it the way GitHub shows it (headings, tables, lists, task boxes,
+  local images, links), **Source** goes back to editing. `![alt](image)` and
+  `[![badge](image)](link)` lines become pictures, GitHub's `> [!NOTE]` / `[!TIP]` /
+  `[!WARNING]` / `[!CAUTION]` quotes become FluxCode's callouts, a YAML front-matter
+  block and loose HTML tags disappear, and code fences are left exactly as they are.
+  Web images stay offline: a badge shows as a chip you can click. The editor keeps the
+  real text, so edits land in the drawing when you switch back.
+- Flux documents keep their own Preview and Source, unchanged; the "Save as Markdown"
+  button belongs to them alone.
+>>>>>>> upstream/main
 
 ## Pull requests open to everyone, with automatic checks (13 November 2026)
 

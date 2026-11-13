@@ -571,6 +571,10 @@ di atasnya.
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
 - The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
+- Markdown files draw themselves: a README opens as text, and an eye icon above it
+  turns it into the drawn page GitHub shows (headings, tables, lists, local images,
+  GitHub's `> [!NOTE]` callouts), with Source to go back. Flux documents keep their
+  own Preview and Source.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 @id
 ## Kemampuan lainnya
@@ -633,8 +637,12 @@ di atasnya.
 - OpenCode 2 adalah build native OpenCode dari opencode.ai di registri, yang dipasang
   FluxCode dan diperiksa terhadap SHA-256-nya. Salinan OpenCode di PATH tidak lagi dipakai,
   dan pilihan OpenCode yang sudah ada berpindah ke OpenCode 2 beserta pengaturannya.
-- Nama tema warna di status bar membuka keempat tema, masing-masing digambar sebagai editor
+- Nama tema warna di status bar membuka enam tema, masing-masing digambar sebagai editor
   kecil dalam warnanya sendiri.
+- File Markdown menggambar dirinya sendiri: README terbuka sebagai teks, dan ikon mata di
+  atasnya mengubahnya menjadi halaman tergambar seperti di GitHub (judul, tabel, daftar,
+  gambar lokal, callout `> [!NOTE]` milik GitHub), dengan Source untuk kembali. Dokumen
+  Flux tetap punya Preview dan Source sendiri.
 - Settings > About FluxCode menautkan ke repositori ini, issue tracker, dan changelog.
 
 @en
@@ -940,8 +948,16 @@ dan FluxCream di aplikasi memakai tiga warna yang sama.
 @en
 ## License
 
-[GPL-3.0-or-later](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 MuaraAI and contributors.
+
+[GPL-3.0-or-later](LICENSE): everyone is free to use, study, change and share
+FluxCode, and every copy carries the same freedom. Third-party components:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 @id
 ## Lisensi
 
-[GPL-3.0-or-later](LICENSE). Komponen pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 MuaraAI dan kontributor.
+
+[GPL-3.0-or-later](LICENSE): semua orang bebas memakai, mempelajari, mengubah, dan
+membagikan FluxCode, dan setiap salinannya membawa kebebasan yang sama. Komponen
+pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -326,8 +326,12 @@ di atasnya.
 - OpenCode 2 adalah build native OpenCode dari opencode.ai di registri, yang dipasang
   FluxCode dan diperiksa terhadap SHA-256-nya. Salinan OpenCode di PATH tidak lagi dipakai,
   dan pilihan OpenCode yang sudah ada berpindah ke OpenCode 2 beserta pengaturannya.
-- Nama tema warna di status bar membuka keempat tema, masing-masing digambar sebagai editor
+- Nama tema warna di status bar membuka enam tema, masing-masing digambar sebagai editor
   kecil dalam warnanya sendiri.
+- File Markdown menggambar dirinya sendiri: README terbuka sebagai teks, dan ikon mata di
+  atasnya mengubahnya menjadi halaman tergambar seperti di GitHub (judul, tabel, daftar,
+  gambar lokal, callout `> [!NOTE]` milik GitHub), dengan Source untuk kembali. Dokumen
+  Flux tetap punya Preview dan Source sendiri.
 - Settings > About FluxCode menautkan ke repositori ini, issue tracker, dan changelog.
 
 ## FluxCode, Zed, dan VS Code
@@ -482,4 +486,8 @@ dan FluxCream di aplikasi memakai tiga warna yang sama.
 
 ## Lisensi
 
-[GPL-3.0-or-later](LICENSE). Komponen pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 MuaraAI dan kontributor.
+
+[GPL-3.0-or-later](LICENSE): semua orang bebas memakai, mempelajari, mengubah, dan
+membagikan FluxCode, dan setiap salinannya membawa kebebasan yang sama. Komponen
+pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
