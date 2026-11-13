@@ -689,7 +689,7 @@ impl Workbench {
                     .gap_2()
                     .text_xs()
                     .child(div().text_color(c(theme::FG)).child(tr("FluxCode is open source under the GPL-3.0 license and still in development, so expect rough edges and frequent builds. The code, every build and the issue tracker are on GitHub.")))
-                    .child(div().text_color(c(theme::FG_MUTED)).child(tr("A MuaraAI project, built by a first-semester university student in Indonesia.")))
+                    .child(div().text_color(c(theme::FG_MUTED)).child(tr("A MuaraAI project, built by a first-semester university student in Indonesia. Copyright (C) 2026 MuaraAI and contributors.")))
                     .child(
                         h_flex()
                             .pt_1()

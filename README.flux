@@ -906,8 +906,16 @@ dan FluxCream di aplikasi memakai tiga warna yang sama.
 @en
 ## License
 
-[GPL-3.0-or-later](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 MuaraAI and contributors.
+
+[GPL-3.0-or-later](LICENSE): everyone is free to use, study, change and share
+FluxCode, and every copy carries the same freedom. Third-party components:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 @id
 ## Lisensi
 
-[GPL-3.0-or-later](LICENSE). Komponen pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Copyright (C) 2026 MuaraAI dan kontributor.
+
+[GPL-3.0-or-later](LICENSE): semua orang bebas memakai, mempelajari, mengubah, dan
+membagikan FluxCode, dan setiap salinannya membawa kebebasan yang sama. Komponen
+pihak ketiga: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
