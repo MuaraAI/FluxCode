@@ -6,7 +6,8 @@
 
 A native code editor for Windows, macOS and Linux, written in Rust and drawn by the GPU.
 One small program with an AI agent panel, a Python-friendly terminal, built-in Source
-Control, and read-only views for files other editors refuse to open. No telemetry.
+Control, and read-only views for files other editors refuse to open. No telemetry. It
+opens its window in 0.22 s and sits at 1.4 MB idle, in one process ([benchmark](#benchmark)).
 
 A [MuaraAI](https://github.com/MuaraAI) project, built by a first-semester university
 student in Indonesia ([MyKineID](https://github.com/MyKineID)). Open source, and still in
@@ -22,6 +23,16 @@ because access is set to Read & write, it has to ask before running a command.
 On one Windows 11 PC, FluxCode put its window on screen in **0.22 s** and sat at **1.4 MB**
 in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code 0.29 s and
 929 MB over nine processes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/benchmark-dark.svg">
+  <img src="assets/benchmarks/benchmark-light.svg" width="100%" alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode 221 ms, Zed 818 ms, VS Code 290 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB.">
+</picture>
+
+The gap is widest where an editor sits all day: idle memory. FluxCode uses 1.4 MB, Zed
+66.2 MB, VS Code 929.2 MB. On disk it is 16 MB against 261 MB and 1,044 MB. Its window
+is on screen in 221 ms, against 818 ms for Zed and 290 ms for VS Code. Lower is better
+in every chart below.
 
 *Median of 5 runs each on a PC with an AMD Ryzen 5 7535HS and 15 GB of RAM, 10 November 2026. Every
 app started from a fresh, empty profile with telemetry and update checks off and no folder
@@ -99,11 +110,11 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
 ## What makes it different
 
 - **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status
-  bar sit where VS Code puts them, and the keys are VS Code's: `Ctrl+Shift+P` opens the
-  Command Palette with every command and its shortcut, `Ctrl+P` finds a file, `Ctrl+G`
-  goes to a line, `Ctrl+/` comments, `Alt+Up` moves a line. If you know VS Code, you
-  already know where things are. It is not a VS Code clone: there is no debugger yet, and
-  the extensions are build tasks rather than a catalog (see the table below).
+  bar sit where VS Code puts them, and the keys are VS Code's: `Ctrl+Shift+P` for the
+  Command Palette, `Ctrl+P` to find a file, `Ctrl+G` to go to a line, `Ctrl+/` to
+  comment, `Alt+Up` to move a line. If you know VS Code, you already know where things
+  are. It is not a VS Code clone: there is no debugger yet, and the extensions are build
+  tasks rather than a catalog (see the table below).
 - **Light like Zed.** The whole editor is one Rust program drawn by the GPU with GPUI,
   the framework Zed is built on. In the [benchmark](#benchmark) it opens its window in
   0.22 s, reserves 72 MB (Zed: 154 MB), and once idle shows 1.4 MB in Task Manager,
@@ -112,8 +123,7 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
   every agent in the ACP registry, each with its own icon. Missing ones install with one
   click into FluxCode's own folder. You choose the model, effort, mode and permissions
   under the message box; the agent can ask you multiple-choice questions and has to ask
-  before it runs a command or changes a file; each turn's file changes can be undone; the
-  agent's instruction files are one click away in Settings.
+  before it runs a command or changes a file; each turn's file changes can be undone.
 - **For beginners and experts.** A beginner can pick an agent from a list, answer its
   questions by clicking, and keep it read-only. An expert gets the palette, the shortcuts,
   per-agent instruction files and every editor option in Settings: font, size, tab size,
@@ -294,6 +304,12 @@ FluxCode opens it drawn, with Preview and Source above it.
 
 All three are good editors made for different people. This is where each stands today.
 
+FluxCode is the lightest of the three by a wide margin, and the gap grows the longer the
+editor stays open. It uses 1.4 MB idle against 66.2 MB for Zed and 929.2 MB for VS Code,
+and takes 16 MB on disk against 261 MB and 1,044 MB. It opens in 221 ms, against 818 ms
+and 290 ms. What it gives up is clear in the table: no debugger, no language servers,
+and no extension catalog yet.
+
 | | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Built with | Rust, GPUI (GPU-drawn) | Rust, GPUI (GPU-drawn) | TypeScript on Electron (Chromium + Node.js) |
@@ -317,6 +333,25 @@ Pick FluxCode if you want a small, quiet editor on Windows or Linux with an agen
 keep on a short leash, and you open logs, databases and documents next to your code.
 Pick Zed for macOS, language servers out of the box and pair programming.
 Pick VS Code when you need a specific extension, a debugger or remote development.
+
+## Other editors at a glance
+
+These editors were not in the benchmark, so this table has no measured numbers for
+them. It compares only what each project documents: what it is built with, where it
+runs, and what ships built in.
+
+| Editor | Built with | Systems | Language servers | Debugger | Extensions | AI agent |
+| --- | --- | --- | --- | --- | --- | --- |
+| Sublime Text | C++ | Windows, macOS, Linux | through the LSP package, not built in | none built in | Python plugins, through Package Control | none built in |
+| Notepad++ | C++ (Win32, Scintilla) | Windows only | through plugins, not built in | none built in | plugins, through Plugin Admin | none built in |
+| Lapce | Rust | Windows, macOS, Linux | built in | none built in | WASI plugins | none built in |
+| Helix | Rust | terminal, on Windows, macOS and Linux | built in | built in, through DAP (experimental) | none yet | none built in |
+| Neovim | C, with Lua | terminal, on Windows, macOS and Linux | built in | through plugins, not built in | Lua plugins, a large ecosystem | none built in, through plugins |
+
+FluxCode sits closest to Lapce and Helix in spirit: a small Rust editor that stays out
+of the way. What sets it apart from them is the graphical interface, the VS Code
+layout and keys, and the agent panel. None of the five editors above was measured in
+the benchmark, so do not read this table as a speed ranking.
 
 ## Privacy
 
