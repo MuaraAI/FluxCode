@@ -1360,6 +1360,7 @@ impl Workbench {
                 m.menu(tr("Go to File..."), Box::new(QuickOpenFile))
                     .menu(tr("Open File..."), Box::new(OpenFile))
                     .menu(tr("Open Folder..."), Box::new(OpenFolder))
+                    .menu(tr("Open Folder in WSL..."), Box::new(OpenFolderInWsl))
                     .separator()
                     .menu(tr("New File..."), Box::new(ExplorerNewFile))
                     .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
