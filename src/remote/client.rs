@@ -1,0 +1,279 @@
+//! The editor's side of the helper inside a distro: installing it, starting it,
+//! and one request at a time over its stdin/stdout.
+//!
+//! The helper is the same program as the editor, built for Linux. It comes from
+//! the release of the build that is running, so the two are always the same
+//! version; a development build can point at a local binary instead with
+//! `FLUXCODE_HELPER`.
+
+use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+use super::proto::{
+    read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, Stat, FRAME_BYTES, FRAME_JSON, PROTOCOL_VERSION,
+};
+use super::WslTarget;
+
+/// Where the helper lives inside the distro, per build.
+fn helper_dir() -> String {
+    format!(".fluxcode/helper/{}", crate::update::BUILD)
+}
+
+pub struct RemoteClient {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    pub build: String,
+    pub platform: String,
+    pub home: String,
+    pub distro: String,
+}
+
+impl RemoteClient {
+    /// Start the helper in `distro`, installing it first if it is not there.
+    pub fn connect(distro: &str) -> Result<Self, String> {
+        let path = install(distro)?;
+        let mut cmd = crate::proc::command("wsl.exe");
+        cmd.args(["-d", distro, "--exec", &path, "--remote-server"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().map_err(|e| format!("the helper could not start: {e}"))?;
+        let stdin = child.stdin.take().ok_or("the helper has no stdin")?;
+        let stdout = BufReader::new(child.stdout.take().ok_or("the helper has no stdout")?);
+        let mut client = Self {
+            child,
+            stdin,
+            stdout,
+            build: String::new(),
+            platform: String::new(),
+            home: String::new(),
+            distro: distro.to_string(),
+        };
+        let hello: Hello = client.json(Request::Hello)?;
+        if hello.protocol != PROTOCOL_VERSION {
+            return Err(format!(
+                "the helper speaks protocol {}, this build speaks {PROTOCOL_VERSION}",
+                hello.protocol
+            ));
+        }
+        client.build = hello.build;
+        client.platform = hello.platform;
+        client.home = hello.home;
+        Ok(client)
+    }
+
+    /// One request, one JSON answer.
+    pub fn json<T: serde::de::DeserializeOwned>(&mut self, req: Request) -> Result<T, String> {
+        let body = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+        write_frame(&mut self.stdin, FRAME_JSON, &body).map_err(|e| e.to_string())?;
+        let value = self.read_json()?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+
+    /// A request whose answer is a JSON header followed by the bytes.
+    pub fn bytes(&mut self, req: Request, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+        write_frame(&mut self.stdin, FRAME_JSON, &payload).map_err(|e| e.to_string())?;
+        if let Some(b) = body {
+            write_frame(&mut self.stdin, FRAME_BYTES, b).map_err(|e| e.to_string())?;
+        }
+        // The header says whether it worked; the bytes follow only when it did.
+        let _header = self.read_json()?;
+        match read_frame(&mut self.stdout).map_err(|e| e.to_string())? {
+            Some((FRAME_BYTES, bytes)) => Ok(bytes),
+            Some(_) => Err("the helper sent something other than bytes".into()),
+            None => Err("the helper closed the connection".into()),
+        }
+    }
+
+    fn read_json(&mut self) -> Result<serde_json::Value, String> {
+        let (kind, payload) = match read_frame(&mut self.stdout).map_err(|e| e.to_string())? {
+            Some(frame) => frame,
+            None => return Err("the helper closed the connection".into()),
+        };
+        if kind != FRAME_JSON {
+            return Err("the helper sent something other than JSON".into());
+        }
+        let r: Response = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
+        if !r.ok {
+            return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
+        }
+        Ok(r.json.unwrap_or(serde_json::Value::Null))
+    }
+
+    // ---- the calls the editor makes -------------------------------------
+
+    pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
+        self.json(Request::List { path: path.to_string() })
+    }
+
+    pub fn stat(&mut self, path: &str) -> Result<Stat, String> {
+        self.json(Request::Stat { path: path.to_string() })
+    }
+
+    pub fn read(&mut self, path: &str, limit: u64) -> Result<Vec<u8>, String> {
+        self.bytes(Request::Read { path: path.to_string(), limit }, None)
+    }
+
+    pub fn write(&mut self, path: &str, bytes: &[u8], crlf: bool) -> Result<(), String> {
+        self.bytes(Request::Write { path: path.to_string(), crlf }, Some(bytes)).map(|_| ())
+    }
+
+    pub fn search(&mut self, root: &str, query: &str, match_case: bool, whole_word: bool) -> Result<SearchWire, String> {
+        self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
+    }
+
+    pub fn git(&mut self, cwd: &str, args: &[String]) -> Result<super::proto::GitWire, String> {
+        self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec() })
+    }
+}
+
+impl Drop for RemoteClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Make sure the helper for this build is in the distro, and return its path.
+fn install(distro: &str) -> Result<String, String> {
+    let dir = helper_dir();
+    let path = format!("{dir}/fluxcode");
+    // `test -x` is the whole version check: the directory carries the build.
+    if runs(distro, &path) {
+        return helper_exe(distro);
+    }
+    let tarball = fetch(distro)?;
+    push(distro, &tarball, &dir)?;
+    if !runs(distro, &path) {
+        return Err("the helper was unpacked but will not run".into());
+    }
+    helper_exe(distro)
+}
+
+/// The helper's absolute path inside the distro: its home plus the relative dir.
+fn helper_exe(distro: &str) -> Result<String, String> {
+    let home = super::home_dir(distro).ok_or("the distro's home folder could not be read")?;
+    Ok(format!("{home}/{}/fluxcode", helper_dir()))
+}
+
+fn runs(distro: &str, path: &str) -> bool {
+    // The helper is relative to the distro's home, which `sh` expands.
+    super::program_command(&WslTarget::new(distro, "/"), "/", "sh", &["-c", &format!("test -x \"$HOME/{path}\"")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// A local Linux binary when one is supplied (a development build), else the
+/// Linux tarball of this build's release.
+fn fetch(distro: &str) -> Result<PathBuf, String> {
+    let tmp = std::env::temp_dir().join(format!("fluxcode-helper-{}.tar.gz", crate::update::BUILD));
+    if let Ok(local) = std::env::var("FLUXCODE_HELPER") {
+        let src = PathBuf::from(&local);
+        // A bare binary is packed here so `push` has one thing to send.
+        if src.is_file() {
+            let bytes = std::fs::read(&src).map_err(|e| e.to_string())?;
+            pack_single(&tmp, &bytes)?;
+            return Ok(tmp);
+        }
+    }
+    // The release that carries this build, in the same repository updates come from.
+    let url = format!(
+        "https://github.com/MuaraAI/FluxCode/releases/download/{build}/FluxCode-{build}-linux-x64.tar.gz",
+        build = crate::update::BUILD
+    );
+    let mut cmd = crate::proc::command("curl");
+    cmd.args(["-sSL", "--fail", "-o"]).arg(&tmp).arg(&url);
+    let out = cmd.output().map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() || !tmp.is_file() {
+        return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
+    }
+    let _ = distro;
+    Ok(tmp)
+}
+
+/// Wrap one binary in a tar.gz laid out like the release archive (one folder,
+/// `fluxcode` inside it), so `push` treats the two the same way.
+fn pack_single(out: &std::path::Path, binary: &[u8]) -> Result<(), String> {
+    let dir = std::env::temp_dir().join(format!("fluxcode-helper-src-{}", std::process::id()));
+    let inner = dir.join(crate::update::BUILD);
+    std::fs::create_dir_all(&inner).map_err(|e| e.to_string())?;
+    std::fs::write(inner.join("fluxcode"), binary).map_err(|e| e.to_string())?;
+    let status = crate::proc::command("tar")
+        .arg("-czf")
+        .arg(out)
+        .arg("-C")
+        .arg(&dir)
+        .arg(crate::update::BUILD)
+        .status()
+        .map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&dir);
+    if status.success() {
+        Ok(())
+    } else {
+        Err("the helper could not be packed".into())
+    }
+}
+
+/// Send the tarball into the distro and unpack it, with no `/mnt` copy: the
+/// share is slow and permissions are unreliable there.
+fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String> {
+    let mut child = super::program_command(
+        &WslTarget::new(distro, "/"),
+        "/",
+        "sh",
+        &["-c", r#"mkdir -p "$HOME/$1" && tar -xzf - -C "$HOME/$1" --strip-components=1 && chmod 755 "$HOME/$1/fluxcode""#, "--", dir],
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| e.to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut f = std::fs::File::open(tarball).map_err(|e| e.to_string())?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            stdin.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        }
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("the helper could not be unpacked: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(())
+}
+
+// ---- one connection per distro, shared by every caller -------------------
+
+static CLIENT: OnceLock<Mutex<Option<RemoteClient>>> = OnceLock::new();
+
+fn slot() -> &'static Mutex<Option<RemoteClient>> {
+    CLIENT.get_or_init(|| Mutex::new(None))
+}
+
+/// Run `f` against the helper for `distro`, connecting it on first use.
+/// `None` means the helper is not available and the caller should use the UNC
+/// path instead; the editor works either way.
+pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
+    let mut guard = slot().lock().ok()?;
+    if guard.as_ref().map(|c| c.distro != distro).unwrap_or(true) {
+        *guard = RemoteClient::connect(distro).ok();
+    }
+    let client = guard.as_mut()?;
+    Some(f(client))
+}
+
+/// Forget the connection (a distro shut down, or a call failed).
+pub fn drop_client() {
+    if let Ok(mut guard) = slot().lock() {
+        *guard = None;
+    }
+}

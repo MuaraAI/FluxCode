@@ -4,11 +4,13 @@
 //! reading and writing them needs no new code. Commands, though, have to run
 //! inside the distro, and that is what this module builds.
 
+mod client;
 mod paths;
 mod proto;
 mod server;
 mod wsl;
 
+pub use client::{drop_client, with_client, RemoteClient};
 pub use paths::WslTarget;
 pub use proto::{
     DirEntry, FileHitsWire, GitWire, Hello, HitWire, Request, Response, SearchWire, Stat, PROTOCOL_VERSION, FRAME_BYTES, FRAME_JSON,
