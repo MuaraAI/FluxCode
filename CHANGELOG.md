@@ -10,6 +10,7 @@ page, and installed copies offer it on their own. Newest first.
 - A WSL2 folder now reads and writes through a small helper running inside the
   distro, instead of reaching it over Windows' 9p share. Opening a folder, walking
   the tree, opening and saving a file, find-in-files and git all go through it.
+  It is off by default: turn it on in **Settings > WSL**.
 - The helper is FluxCode itself, built for Linux, taken from the release of the
   build that is running: the two are always the same version, and nothing extra
   ships. It is installed once per build in `~/.fluxcode/helper/<build>/`.

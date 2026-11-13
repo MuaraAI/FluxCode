@@ -1500,11 +1500,11 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
 }
 
 /// "Python 3.15.0" (+ " · .venv"), for the panel header. Runs a process: call off the UI thread.
-pub(crate) fn detect_python(root: Option<&Path>) -> Option<String> {
+pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::WslTarget>) -> Option<String> {
     // A WSL workspace's Python lives in the distro; the Windows one is not what
     // the terminal will run.
-    if let Some(t) = root.and_then(crate::remote::WslTarget::from_path) {
-        let out = crate::remote::program_command(&t, &t.linux_root, "python3", &["--version"]).output().ok()?;
+    if let Some(t) = target {
+        let out = crate::remote::program_command(t, &t.linux_root, "python3", &["--version"]).output().ok()?;
         let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();
         return text.starts_with("Python").then_some(text);
     }

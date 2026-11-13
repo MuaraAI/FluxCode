@@ -12,7 +12,7 @@ mod proto;
 mod server;
 mod wsl;
 
-pub use client::{drop_client, with_client, RemoteClient};
+pub use client::{drop_client, set_helper_enabled, with_client, RemoteClient};
 pub use paths::WslTarget;
 pub use proto::GitWire;
 pub use server::serve;

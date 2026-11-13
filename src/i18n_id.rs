@@ -19,6 +19,12 @@ pub const ID: &[(&str, &str)] = &[
     ("No WSL distro found.", "Distro WSL tidak ditemukan."),
     ("Open this folder", "Buka folder ini"),
     ("Open {path}", "Buka {path}"),
+    ("WSL", "WSL"),
+    ("Read WSL folders through a helper in the distro", "Baca folder WSL lewat helper di dalam distro"),
+    (
+        "Faster: the helper reads the distro's own disk instead of Windows' 9p share. It is FluxCode itself, built for Linux, taken from this build's release and installed once in ~/.fluxcode/helper. Off: folders are read through \\\\wsl.localhost, which works but is slower.",
+        "Lebih cepat: helper membaca disk distro sendiri, bukan share 9p Windows. Helper-nya adalah FluxCode sendiri, dibangun untuk Linux, diambil dari rilis build ini dan dipasang sekali di ~/.fluxcode/helper. Mati: folder dibaca lewat \\\\wsl.localhost, yang tetap jalan tapi lebih lambat.",
+    ),
     ("WSL is only available on Windows.", "WSL hanya tersedia di Windows."),
     ("Couldn't reach {name}.", "Tidak bisa menghubungi {name}."),
     ("New File...", "File Baru..."),

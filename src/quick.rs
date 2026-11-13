@@ -154,7 +154,7 @@ impl Workbench {
                     })
                     .collect();
                 if !query.is_empty() {
-                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
                 }
                 self.quick.hits = scored.into_iter().map(|(_, i)| i).collect();
                 self.quick.sel = 0;
@@ -224,7 +224,7 @@ impl Workbench {
                     .filter_map(|(i, d)| fuzzy_lower(qb, d.to_lowercase().as_bytes()).map(|s| (s, i)))
                     .collect();
                 if !query.is_empty() {
-                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
                 }
                 self.quick.hits = scored.into_iter().map(|(_, i)| i).collect();
                 self.quick.sel = 0;

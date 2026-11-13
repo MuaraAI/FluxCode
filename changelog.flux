@@ -18,7 +18,7 @@ A folder inside a **WSL2 distro** now reads and writes through a small helper
 running **inside the distro**, instead of reaching it over Windows' 9p share.
 Opening a folder, walking the tree, opening and saving a file, find-in-files and
 git all go through it, so a home folder with 70,000 cache entries no longer takes
-seconds to list.
+seconds to list. It is off by default: turn it on in **Settings > WSL**.
 
 The helper is FluxCode itself, built for Linux, from the release of the build that
 is running: the two are always the same version and nothing extra ships. It is
@@ -30,7 +30,7 @@ Folder di dalam **distro WSL2** sekarang membaca dan menulis lewat helper kecil
 yang berjalan **di dalam distro**, bukan lewat share 9p Windows. Membuka folder,
 menelusuri tree, membuka dan menyimpan file, find-in-files, dan git semuanya lewat
 helper itu, jadi home folder dengan 70.000 entri cache tidak lagi butuh beberapa
-detik untuk didaftar.
+detik untuk didaftar. Fitur ini mati secara bawaan: nyalakan di **Settings > WSL**.
 
 Helper-nya adalah FluxCode sendiri, dibangun untuk Linux, dari rilis build yang
 sedang berjalan: keduanya selalu versi yang sama dan tidak ada yang perlu diunduh

@@ -107,6 +107,9 @@ pub struct Settings {
     pub agent_hint: u8,
     /// Look for new development builds on GitHub at start and every 6 hours.
     pub update_check: bool,
+    /// Read WSL folders through the helper inside the distro instead of the 9p
+    /// share. Off by default: it installs and runs a program in the distro.
+    pub wsl_helper: bool,
     /// The editor's line numbers in the gutter.
     pub line_numbers: bool,
     /// Fold arrows in the gutter for blocks.
@@ -158,6 +161,7 @@ impl Default for Settings {
             extensions: crate::ext::default_installed(),
             agent_hint: 0,
             update_check: true,
+            wsl_helper: false,
             line_numbers: true,
             folding: true,
             auto_close: true,
@@ -282,6 +286,7 @@ impl Session {
 impl Workbench {
     pub(crate) fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.save();
+        crate::remote::set_helper_enabled(self.settings.wsl_helper);
         if self.settings.agent_right && self.view == crate::workbench::SideView::Agent {
             self.view = crate::workbench::SideView::Explorer;
             self.agent_open = true;
@@ -630,6 +635,12 @@ impl Workbench {
                 w.settings.cursor_padding = (w.settings.cursor_padding as i32 + d).clamp(0, 12) as u32
             })))
             .child(row(tr("Scroll past the last line"), tr("Leave room below the end of a file, so its last lines can sit mid-screen.").into(), toggle("spe", s.scroll_past_end, |w| w.settings.scroll_past_end = !w.settings.scroll_past_end)))
+            .child(section(tr("WSL")))
+            .child(row(
+                tr("Read WSL folders through a helper in the distro"),
+                tr("Faster: the helper reads the distro's own disk instead of Windows' 9p share. It is FluxCode itself, built for Linux, taken from this build's release and installed once in ~/.fluxcode/helper. Off: folders are read through \\\\wsl.localhost, which works but is slower.").into(),
+                toggle("wslh", s.wsl_helper, |w| w.settings.wsl_helper = !w.settings.wsl_helper),
+            ))
             .child(section(tr("AI agents and GitHub")))
             .child(row(
                 tr("AI agent: access"),

@@ -166,8 +166,8 @@ fn helper_exe(distro: &str) -> Result<String, String> {
 }
 
 fn runs(distro: &str, path: &str) -> bool {
-    // The helper is relative to the distro's home, which `sh` expands.
-    super::program_command(&WslTarget::new(distro, "/"), "/", "sh", &["-c", &format!("test -x \"$HOME/{path}\"")])
+    // The path is a positional parameter, never spliced into the script.
+    super::program_command(&WslTarget::new(distro, "/"), "/", "sh", &["-c", r#"test -x "$HOME/$1""#, "--", path])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -258,6 +258,18 @@ fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String
 
 // ---- one connection per distro, shared by every caller -------------------
 
+/// Whether the helper may be used at all. Off by default: it installs and runs
+/// a program inside the distro, so the user turns it on in Settings.
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_helper_enabled(on: bool) {
+    ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn helper_enabled() -> bool {
+    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 static CLIENT: OnceLock<Mutex<Option<RemoteClient>>> = OnceLock::new();
 
 fn slot() -> &'static Mutex<Option<RemoteClient>> {
@@ -268,6 +280,9 @@ fn slot() -> &'static Mutex<Option<RemoteClient>> {
 /// `None` means the helper is not available and the caller should use the UNC
 /// path instead; the editor works either way.
 pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
+    if !helper_enabled() {
+        return None;
+    }
     let mut guard = slot().lock().ok()?;
     let stale = guard
         .as_mut()
@@ -284,5 +299,17 @@ pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> O
 pub fn drop_client() {
     if let Ok(mut guard) = slot().lock() {
         *guard = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helper_is_off_until_it_is_turned_on() {
+        // Off by default: nothing is installed, started or read through it.
+        assert!(!helper_enabled());
+        assert!(with_client("Ubuntu", |_| ()).is_none());
     }
 }

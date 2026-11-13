@@ -34,7 +34,7 @@ pub fn distros() -> Vec<String> {
 
 /// `wsl.exe -l` writes UTF-16LE, with a NUL after every ASCII byte.
 fn decode_utf16(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
+    let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
     String::from_utf16_lossy(&units).trim_start_matches('\u{feff}').to_string()
 }
 

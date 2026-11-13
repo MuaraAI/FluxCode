@@ -96,6 +96,24 @@ mod tests {
     }
 
     #[test]
+    fn a_distro_name_may_have_dots_and_dashes() {
+        for (p, distro) in [
+            (r"\\wsl.localhost\Ubuntu-22.04\home\me\proj", "Ubuntu-22.04"),
+            (r"\\wsl$\Ubuntu-22.04\home\me\proj", "Ubuntu-22.04"),
+            (r"\\wsl.localhost\my.distro\home\me", "my.distro"),
+            (r"\\wsl.localhost\Debian-12-bookworm\srv\app", "Debian-12-bookworm"),
+        ] {
+            let t = WslTarget::from_path(Path::new(p)).expect(p);
+            assert_eq!(t.distro, distro, "{p}");
+            assert_eq!(t.linux_path(Path::new(p)).as_deref(), Some(t.linux_root.as_str()), "{p}");
+        }
+        // The distro name is the whole segment, dots and dashes included.
+        let t = WslTarget::from_path(Path::new(r"\\wsl.localhost\Ubuntu-22.04\home\me")).unwrap();
+        assert_eq!(t.linux_root, "/home/me");
+        assert_eq!(t.unc_path("/home/me"), PathBuf::from(r"\\wsl.localhost\Ubuntu-22.04\home\me"));
+    }
+
+    #[test]
     fn the_distro_root_is_slash() {
         let t = WslTarget::from_path(Path::new(r"\\wsl.localhost\Ubuntu")).unwrap();
         assert_eq!(t.linux_root, "/");

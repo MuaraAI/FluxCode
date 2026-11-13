@@ -27,8 +27,8 @@ const EVERY: Duration = Duration::from_secs(300);
 pub const MAX_INCOMING: usize = 50;
 
 /// `git` for a background read: no prompts, no locks, no window.
-fn quiet_git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    if let Some(t) = crate::remote::WslTarget::from_path(dir) {
+fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
+    if let Some(t) = target {
         let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         // Naming the client and wire types keeps the crate's re-exports honest.
@@ -42,11 +42,11 @@ fn quiet_git(dir: &Path, args: &[&str]) -> Result<String, String> {
             };
         }
     }
-    let mut cmd = match crate::remote::WslTarget::from_path(dir) {
+    let mut cmd = match target {
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
             crate::remote::program_command_env(
-                &t,
+                t,
                 &cwd,
                 &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never"), ("NO_COLOR", "1")],
                 "git",
@@ -75,11 +75,12 @@ fn quiet_git(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The upstream's commits this checkout doesn't have, newest first, and the upstream's head.
-pub fn incoming(repo: &Path) -> (Vec<Commit>, Option<String>) {
-    let head = quiet_git(repo, &["rev-parse", "@{u}"]).ok().map(|s| s.trim().to_string());
+pub fn incoming(repo: &Path, target: Option<&crate::remote::WslTarget>) -> (Vec<Commit>, Option<String>) {
+    let head = quiet_git(repo, &["rev-parse", "@{u}"], target).ok().map(|s| s.trim().to_string());
     let log = quiet_git(
         repo,
         &["-c", "i18n.logOutputEncoding=UTF-8", "log", "HEAD..@{u}", "-n", &MAX_INCOMING.to_string(), "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"],
+        target,
     )
     .map(|s| crate::scm::parse_log(&s))
     .unwrap_or_default();
@@ -135,8 +136,9 @@ impl Workbench {
         }
         self.scm.fetching = true;
         self.scm.last_fetch = Some(Instant::now());
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let res = cx.background_spawn(async move { quiet_git(&repo, &["fetch", "--quiet", "--prune"]) }).await;
+            let res = cx.background_spawn(async move { quiet_git(&repo, &["fetch", "--quiet", "--prune"], wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
                 this.scm.fetching = false;
                 // A failed fetch (offline, no access) just leaves the list as it was.
@@ -170,10 +172,11 @@ impl Workbench {
             return;
         }
         let Some(repo) = self.scm.repo.clone() else { return };
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let h = hash.clone();
             let files = cx
-                .background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=", "--name-status", "-z", &h]).map(|s| parse_name_status(&s)).unwrap_or_default() })
+                .background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=", "--name-status", "-z", &h], wsl.as_ref()).map(|s| parse_name_status(&s)).unwrap_or_default() })
                 .await;
             _ = this.update(cx, |this, cx| {
                 this.scm.incoming_files.insert(hash, files);
@@ -186,9 +189,10 @@ impl Workbench {
     /// One file's change in an incoming commit, in the Output panel.
     fn scm_show_incoming_file(&mut self, hash: String, path: String, cx: &mut Context<Self>) {
         let Some(repo) = self.scm.repo.clone() else { return };
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let (h, p) = (hash.clone(), path.clone());
-            let text = cx.background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=%h  %s%n%an, %ar%n", &h, "--", &p]).unwrap_or_else(|e| e) }).await;
+            let text = cx.background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=%h  %s%n%an, %ar%n", &h, "--", &p], wsl.as_ref()).unwrap_or_else(|e| e) }).await;
             _ = this.update(cx, |this, cx| {
                 this.out_lines.clear();
                 let mut head = Line::new(&path, crate::term::LineKind::Cmd);

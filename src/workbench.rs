@@ -412,6 +412,7 @@ impl Workbench {
 
         let settings = crate::settings::Settings::load();
         crate::i18n::set(&settings.language);
+        crate::remote::set_helper_enabled(settings.wsl_helper);
         let mut settings = settings;
         if settings.agent_hint < AGENT_HINT_LAUNCHES {
             settings.agent_hint += 1;
@@ -568,8 +569,9 @@ impl Workbench {
     /// Find the workspace's Python version off the UI thread, for the terminal header.
     pub(crate) fn detect_python(&mut self, cx: &mut Context<Self>) {
         let root = self.root.clone();
+        let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref()) }).await;
+            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref(), wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
                 this.python_version = v.map(Into::into);
                 cx.notify();
@@ -628,7 +630,7 @@ impl Workbench {
         self.dirs = Rc::new(dirs);
         let selected = self.tree.read(cx).selected_item().map(|i| i.id.clone());
         let tree = self.tree.clone();
-        _ = tree.update(cx, |state, cx| {
+        tree.update(cx, |state, cx| {
             state.set_items(items, cx);
             if let Some(id) = selected {
                 if let Some(ix) = state.index_of(&id) {
