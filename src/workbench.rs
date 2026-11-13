@@ -635,11 +635,14 @@ impl Workbench {
             label = "Plain Text";
             self.status = crate::i18n::tr("Large file: syntax colors are off").into();
         }
-        let is_flux = !read_only && crate::fluxdoc::view::is_flux(&path);
-        // A large Flux document: the drawing needs only the text, not an editor full of it.
-        let flux_lazy = is_flux && text.len() > LARGE_FILE_BYTES;
-        let (mut file_text_for_flux, text) = match (is_flux, flux_lazy) {
-            (true, true) => (text, String::new()),
+        let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(&path) };
+        let is_markdown = drawable == Some(true);
+        // A large drawn document: the drawing needs only the text, not an editor full of
+        // it. Markdown draws the shim's output; the editor keeps the original.
+        let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
+        let (mut file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
+            (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
+            (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
             (true, false) => (text.clone(), text),
             _ => (String::new(), text),
         };
@@ -700,7 +703,7 @@ impl Workbench {
         let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
         let lang_ui = crate::fluxdoc::view::ui_lang();
         let mut rest: Option<String> = None;
-        let flux = is_flux.then(|| {
+        let flux = drawable.is_some().then(|| {
             if file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
                 let v = crate::fluxdoc::view::FluxView::first_part(&file_text_for_flux, base.clone(), lang_ui);
                 rest = Some(std::mem::take(&mut file_text_for_flux));
@@ -723,7 +726,7 @@ impl Workbench {
             })
             .detach();
         }
-        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: false, flux_lazy, diff });
+        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: is_markdown, flux_lazy, diff });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }

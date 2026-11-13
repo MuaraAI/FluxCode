@@ -180,6 +180,26 @@ fn both_languages_cover_the_same_sections() {
     }
 }
 
+/// What a file draws: Markdown draws through the shim (Source first), Flux draws
+/// itself (Preview first), everything else stays in the plain editor.
+#[test]
+fn drawable_kinds() {
+    use std::path::Path;
+    for (name, want) in [("a.md", Some(true)), ("a.markdown", Some(true)), ("a.MD", Some(true)), ("a.flux", Some(false)), ("a.txt", None), ("a.rs", None), ("a", None)] {
+        assert_eq!(super::view::drawable_kind(Path::new(name)), want, "{name}");
+    }
+}
+
+/// The tab bar's export button writes `.md` next to a Flux document; a Markdown
+/// file already is one, so the button only belongs to Flux.
+#[test]
+fn the_export_button_belongs_to_flux_only() {
+    use std::path::Path;
+    assert!(super::view::shows_md_export(Path::new("README.flux")));
+    assert!(!super::view::shows_md_export(Path::new("README.md")));
+    assert!(!super::view::shows_md_export(Path::new("notes.txt")));
+}
+
 /// A million lines (text, lists and a 200,000-row table), parsed in one pass.
 /// `cargo test --release --bin fluxcode million_lines -- --ignored --nocapture`
 #[test]

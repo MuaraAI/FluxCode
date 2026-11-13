@@ -284,6 +284,10 @@ FluxCode opens it drawn, with Preview and Source above it.
   used, and an existing OpenCode choice moves to OpenCode 2 with its settings.
 - The color theme's name in the status bar opens the six themes, each shown as a small
   editor in its colors.
+- Markdown files draw themselves: a README opens as text, and an eye icon above it
+  turns it into the drawn page GitHub shows (headings, tables, lists, local images,
+  GitHub's `> [!NOTE]` callouts), with Source to go back. Flux documents keep their
+  own Preview and Source.
 - Settings > About FluxCode links to this repository, the issue tracker and the changelog.
 
 ## FluxCode, Zed and VS Code
