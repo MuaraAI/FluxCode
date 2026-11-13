@@ -112,15 +112,26 @@ jobs:
         with:
           workspaces: pr -> ../target
           shared-key: pr-perf
+      # Both sides are built in ONE folder, switched with git: cargo decides what to
+      # rebuild from file times at a path, so building base/ and pr/ into a shared
+      # target would hand back main's binary for the pull request.
       - name: Build main
         run: |
-          cargo build --release --locked --manifest-path base/Cargo.toml --bin fluxcode
+          git -C pr worktree add --detach ../build HEAD^1
+          cargo build --release --locked --manifest-path build/Cargo.toml --bin fluxcode
           cp target/release/fluxcode "$RUNNER_TEMP/fluxcode-base"
       - name: Build the pull request
         run: |
-          cargo build --release --manifest-path pr/Cargo.toml --bin fluxcode
+          git -C build checkout --quiet --detach "$(git -C pr rev-parse HEAD)"
+          cargo build --release --manifest-path build/Cargo.toml --bin fluxcode
           cp target/release/fluxcode "$RUNNER_TEMP/fluxcode-head"
           strip "$RUNNER_TEMP/fluxcode-base" "$RUNNER_TEMP/fluxcode-head"
+          if cmp -s "$RUNNER_TEMP/fluxcode-base" "$RUNNER_TEMP/fluxcode-head"; then
+            echo "the two binaries are identical"
+            if ! git -C pr diff --quiet HEAD^1 HEAD -- src build.rs Cargo.toml Cargo.lock vendor; then
+              echo "::error::the code changed but the binary did not: the pull request was not rebuilt"; exit 1
+            fi
+          fi
       - name: Measure
         run: |
           mkdir -p out
