@@ -142,8 +142,13 @@ impl Workbench {
                     return delete_row(ix, entry.depth(), p, &view);
                 }
             }
-            let is_open = active_path.as_deref() == Some(id.as_str());
-            let is_sel = selected.as_deref() == Some(id.as_str());
+            // While a name is being typed, no other row looks selected: the
+            // input row is the only highlighted one, like VS Code. Without
+            // this the file that was selected before kept its highlight next
+            // to the input row, so two rows looked selected at once.
+            let naming = pending.is_some();
+            let is_open = !naming && active_path.as_deref() == Some(id.as_str());
+            let is_sel = !naming && selected.as_deref() == Some(id.as_str());
             // Every row: a 12px chevron slot, then one 14px icon from the same outline set.
             let is_dir = entry.is_folder() || dirs.contains(&id);
             // Skipped folders (.git, node_modules, ...) are listed but never opened: dimmed, no chevron.
@@ -175,7 +180,12 @@ impl Workbench {
                 None if dir_dirty => c(theme::WARN),
                 None => c(theme::FG),
             };
-            ListItem::new(ix)
+            // The row's id is its file path, not its position: GPUI tracks
+            // hover by element id, so with a position id the hover tint
+            // stayed on the slot and jumped to the wrong file when the
+            // input row was inserted above it and every row shifted down.
+            // With the path as the id the hover follows the file.
+            ListItem::new(id.clone())
                 .w_full()
                 .h(theme::u(20.))
                 .px_1()
@@ -217,11 +227,41 @@ impl Workbench {
                         });
                     }
                 })
+                .on_mouse_down(MouseButton::Left, {
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        // A press elsewhere ends the name being typed, like VS
+                        // Code. This runs on mouse down, before the click is
+                        // made, so the input row is already gone when the
+                        // click lands: the tree selects the row under the
+                        // mouse with its new index, and the click still
+                        // opens it. Cancelling in the click handler instead
+                        // would leave the tree selecting one row too far
+                        // down, and the click would not fire at all if the
+                        // row still carried its old position id.
+                        view.update(cx, |this, cx| {
+                            if this.pending.is_some() {
+                                this.cancel_pending(window, cx);
+                            }
+                        });
+                    }
+                })
                 .on_mouse_down(MouseButton::Right, {
                     let view = view.clone();
                     let tree_state = tree_state.clone();
                     let item = item.clone();
-                    move |_, _, cx| {
+                    move |_, window, cx| {
+                        // While a name is being typed, a right-click only
+                        // closes the input. The menu stays shut: it is built
+                        // from the row index captured before this press, and
+                        // that index shifts when the input row goes away, so
+                        // the menu would act on the wrong row. One more
+                        // right-click opens it, on the row it names.
+                        if view.read(cx).pending.is_some() {
+                            view.update(cx, |this, cx| this.cancel_pending(window, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
                         // Right-click picks the row first, like VS Code: the
                         // highlight, the tree's own selection, and the action
                         // target all move to it. The menu opens on the same

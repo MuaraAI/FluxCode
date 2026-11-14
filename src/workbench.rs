@@ -659,7 +659,14 @@ impl Workbench {
         // A name being typed gets its own row inside the tree, first in its folder.
         crate::explorer::insert_pending_row(&mut items, self.pending.as_ref(), self.root.as_deref());
         self.dirs = Rc::new(dirs);
-        let selected = self.tree.read(cx).selected_item().map(|i| i.id.clone());
+        // While a name is being typed the tree has no selection: the input
+        // row is the selected one. Restoring the old selection here would
+        // paint a second selected row next to it.
+        let selected = if self.pending.is_none() {
+            self.tree.read(cx).selected_item().map(|i| i.id.clone())
+        } else {
+            None
+        };
         let tree = self.tree.clone();
         tree.update(cx, |state, cx| {
             state.set_items(items, cx);
