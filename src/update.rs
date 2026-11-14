@@ -129,11 +129,15 @@ fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
             let assets = r["assets"].as_array()?;
             let named = |suffix: &str| assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(suffix)));
             let asset = named(XZ_SUFFIX).or_else(|| named(ASSET_SUFFIX))?;
+            let url = asset["browser_download_url"].as_str()?;
+            if !url.starts_with("https://") {
+                return None;
+            }
             Some(Release {
                 tag: tag.to_string(),
                 notes: r["body"].as_str().unwrap_or_default().to_string(),
                 page: r["html_url"].as_str().unwrap_or_default().to_string(),
-                url: asset["browser_download_url"].as_str()?.to_string(),
+                url: url.to_string(),
                 size: asset["size"].as_u64().unwrap_or(0),
                 between: Vec::new(),
             })
@@ -197,9 +201,20 @@ fn plain(s: &str) -> String {
     out.replace("**", "").replace('`', "")
 }
 
+fn staging_dir() -> PathBuf {
+    let dir = crate::settings::config_dir().join("update-staging");
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    dir
+}
+
 fn download_path(r: &Release) -> PathBuf {
     let suffix = if r.url.ends_with(XZ_SUFFIX) { XZ_SUFFIX } else { ASSET_SUFFIX };
-    std::env::temp_dir().join(format!("FluxCode-{}-{suffix}", r.tag))
+    staging_dir().join(format!("FluxCode-{}-{suffix}", r.tag))
 }
 
 /// The executable from an `.update.xz` download (the format checks its own CRC).
@@ -260,7 +275,7 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
 
 #[cfg(not(windows))]
 fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
-    let dir = std::env::temp_dir().join("fluxcode-update");
+    let dir = staging_dir().join(format!("unpack-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let out = std::process::Command::new("tar").arg("-xzf").arg(archive).arg("-C").arg(&dir).output().map_err(|e| format!("tar could not start ({e})"))?;
@@ -675,20 +690,20 @@ mod tests {
     fn prefers_the_xz_file_and_reads_it() {
         let list: serde_json::Value = serde_json::from_str(
             &r#"[{ "tag_name": "BuildDev-2999-01-01-00-00-00", "draft": false, "body": "", "html_url": "p",
-                  "assets": [{ "name": "a-OLD", "browser_download_url": "old", "size": 9 },
-                             { "name": "a-NEW", "browser_download_url": "new", "size": 5 }] }]"#
+                  "assets": [{ "name": "a-OLD", "browser_download_url": "https://example.com/old", "size": 9 },
+                             { "name": "a-NEW", "browser_download_url": "https://example.com/new", "size": 5 }] }]"#
                 .replace("OLD", ASSET_SUFFIX)
                 .replace("NEW", XZ_SUFFIX),
         )
         .unwrap();
         let r = newest(&list, BUILD).unwrap();
-        assert_eq!((r.url.as_str(), r.size), ("new", 5));
+        assert_eq!((r.url.as_str(), r.size), ("https://example.com/new", 5));
         // A release without the xz file: the archive, as before.
         let old: serde_json::Value = serde_json::from_str(
-            &r#"[{ "tag_name": "BuildDev-2999-01-01-00-00-00", "draft": false, "assets": [{ "name": "a-OLD", "browser_download_url": "old", "size": 9 }] }]"#.replace("OLD", ASSET_SUFFIX),
+            &r#"[{ "tag_name": "BuildDev-2999-01-01-00-00-00", "draft": false, "assets": [{ "name": "a-OLD", "browser_download_url": "https://example.com/old", "size": 9 }] }]"#.replace("OLD", ASSET_SUFFIX),
         )
         .unwrap();
-        assert_eq!(newest(&old, BUILD).unwrap().url, "old");
+        assert_eq!(newest(&old, BUILD).unwrap().url, "https://example.com/old");
         let dir = std::env::temp_dir().join(format!("fx-xz-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let f = dir.join("t.update.xz");

@@ -34,6 +34,9 @@ impl PreviewServer {
         });
         Ok(Self { port, root, version })
     }
+    pub fn is_root(&self, root: &Path) -> bool {
+        *self.root.lock().unwrap() == root
+    }
 
     pub fn set_root(&self, root: &Path) {
         *self.root.lock().unwrap() = root.to_path_buf();
