@@ -31,6 +31,10 @@ const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
 /// take long enough that the window stops drawing while the file is read.
 const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
 
+/// Saves go off the UI thread sooner than reads: auto-save fires ~1 s
+/// after every typing pause, and a sync write stalled the window.
+const SAVE_OFF_THREAD_BYTES: u64 = 64 * 1024;
+
 actions!(
     fluxcode,
     [
@@ -178,6 +182,9 @@ impl Line {
 pub(crate) struct Doc {
     pub path: PathBuf,
     pub name: SharedString,
+    /// The tab icon for `name`, worked out once when the tab opens:
+    /// calling `files::icon_for` per tab per frame redid it on every render.
+    pub icon: (gpui_kit::assets::IconName, Option<u32>),
     /// Highlighter token ("python", "kt", "Dockerfile"); "image" for an image tab.
     #[allow(dead_code)]
     pub lang: &'static str,
@@ -258,6 +265,13 @@ pub struct Workbench {
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
     pub(crate) active: Option<usize>,
+    /// When the active tab last changed, and whether that change came hot
+    /// on the heels of the previous one (a rapid switch skips the fade).
+    last_switch: Option<std::time::Instant>,
+    switch_fast: bool,
+    /// A session save is already queued on a timer: `save_session` coalesces
+    /// bursts (one write per 500 ms at most) instead of a sync write per close.
+    session_save_pending: bool,
     pub(crate) view: SideView,
     pub(crate) sidebar_open: bool,
     /// The OpenCode chat docked on the right is showing (settings.agent_right).
@@ -287,6 +301,9 @@ pub struct Workbench {
     pub(crate) revealed: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
+    /// The icon the pending row last showed: the name input's Change
+    /// handler redraws the workbench only when it changes.
+    pub(crate) pending_icon: Option<(gpui_kit::assets::IconName, Option<u32>)>,
     // search
     pub(crate) search_input: Entity<InputState>,
     pub(crate) match_case: bool,
@@ -362,30 +379,43 @@ impl Workbench {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
         // No placeholder of its own: the panel draws one in the UI font (see `render_panel`).
         let term_input = cx.new(|cx| InputState::new(window, cx));
-        let github_input = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder(tr("Personal access token")));
+        let github_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(tr("Personal access token"))
+        });
         crate::boot::mark("  inputs");
         let mut subs = vec![
-            cx.subscribe_in(&tree, window, |this, _, ev: &TreeEvent, _window, cx| match ev {
-                TreeEvent::Expanded(id) => this.tree_expanded(id.to_string(), cx),
-                TreeEvent::Collapsed(id) => {
-                    this.expanded.remove(id.as_ref());
-                }
-            }),
-            cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
-                match ev {
-                    InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
-                    // Redraw while a name is typed: the pending row's icon
-                    // follows the extension being typed, so `file.py` shows
-                    // the Python icon live. Folders keep their folder icon,
-                    // so they need no redraw.
-                    InputEvent::Change => {
-                        if matches!(this.pending, Some(PendingOp::NewFile(_)) | Some(PendingOp::Rename(_))) {
-                            cx.notify();
-                        }
+            cx.subscribe_in(
+                &tree,
+                window,
+                |this, _, ev: &TreeEvent, _window, cx| match ev {
+                    TreeEvent::Expanded(id) => this.tree_expanded(id.to_string(), cx),
+                    TreeEvent::Collapsed(id) => {
+                        this.expanded.remove(id.as_ref());
                     }
-                    _ => {}
-                }
-            }),
+                },
+            ),
+            cx.subscribe_in(
+                &name_input,
+                window,
+                |this, _, ev: &InputEvent, window, cx| {
+                    match ev {
+                        InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
+                        // Redraw only when the pending row's icon changes:
+                        // most keystrokes leave it alone.
+                        InputEvent::Change => {
+                            if let Some(icon) = this.pending_file_icon(cx) {
+                                if this.pending_icon != Some(icon) {
+                                    this.pending_icon = Some(icon);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+            ),
             cx.subscribe_in(&search_input, window, |this, _, ev: &InputEvent, _, cx| {
                 if let InputEvent::PressEnter { .. } = ev {
                     this.run_search(cx);
@@ -483,11 +513,15 @@ impl Workbench {
             settings_open: false,
             whats_new: None,
             closed_tabs: Vec::new(),
+            last_switch: None,
+            switch_fast: false,
+            session_save_pending: false,
             collab: crate::collab::Collab::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
             revealed: RefCell::new(None),
             pending: None,
+            pending_icon: None,
             name_input,
             search_input,
             match_case: false,
@@ -657,7 +691,11 @@ impl Workbench {
         let mut dirs = std::collections::HashSet::new();
         let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
         // A name being typed gets its own row inside the tree, first in its folder.
-        crate::explorer::insert_pending_row(&mut items, self.pending.as_ref(), self.root.as_deref());
+        crate::explorer::insert_pending_row(
+            &mut items,
+            self.pending.as_ref(),
+            self.root.as_deref(),
+        );
         self.dirs = Rc::new(dirs);
         // While a name is being typed the tree has no selection: the input
         // row is the selected one. Restoring the old selection here would
@@ -879,8 +917,10 @@ impl Workbench {
                         .detach();
                     }
                 }
+                // Only an edit needs a whole-window rebuild. (Enter inserts
+                // text, so it still arrives here as a Change.)
+                cx.notify();
             }
-            cx.notify();
         });
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
         let banner = banner.map(SharedString::from);
@@ -912,7 +952,26 @@ impl Workbench {
             })
             .detach();
         }
-        self.docs.push(Doc { path, name, lang, label, read_only, banner, crlf: file.crlf, editor, dirty: false, gen: 0, _sub: sub, image: None, flux, flux_source: is_markdown, flux_lazy, diff });
+        let icon = files::icon_for(&name);
+        self.docs.push(Doc {
+            path,
+            name,
+            icon,
+            lang,
+            label,
+            read_only,
+            banner,
+            crlf: file.crlf,
+            editor,
+            dirty: false,
+            gen: 0,
+            _sub: sub,
+            image: None,
+            flux,
+            flux_source: is_markdown,
+            flux_lazy,
+            diff,
+        });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
     }
@@ -924,9 +983,11 @@ impl Workbench {
         let editor = cx.new(|cx| EditorState::new(window, cx));
         let sub = cx.subscribe(&editor, |_, _, _: &InputEvent, _| {});
         let name: SharedString = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
+        let icon = files::icon_for(&name);
         self.docs.push(Doc {
             path,
             name,
+            icon,
             lang: "image",
             label: "Image",
             read_only: true,
@@ -1045,6 +1106,15 @@ impl Workbench {
     }
 
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // A switch less than 300 ms after the last one is part of a burst
+        // (rapid Ctrl+W, fast tab cycling): the fade in `render_editor_area`
+        // is skipped for it, so the burst costs one render per switch
+        // instead of ~7 animation frames per switch.
+        let now = std::time::Instant::now();
+        self.switch_fast = self
+            .last_switch
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(300));
+        self.last_switch = Some(now);
         self.active = Some(ix);
         // A tab that shows no text editor (an image, a drawn Flux document, a diff)
         // takes the workbench's focus: focusing its hidden editor would leave the keys
@@ -1095,7 +1165,7 @@ impl Workbench {
             (doc.editor.read(cx).value(), doc.path.clone(), doc.crlf, doc.gen, doc.name.clone())
         };
         // A big file is written off the UI thread, for the same reason it is read there.
-        if text.len() as u64 > READ_OFF_THREAD_BYTES {
+        if text.len() as u64 > SAVE_OFF_THREAD_BYTES {
             let wsl = self.wsl.clone();
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
@@ -1154,7 +1224,27 @@ impl Workbench {
 
     // ----------------------------------------------------------- session
 
-    pub(crate) fn save_session(&self, _: &mut Context<Self>) {
+    /// Queue a session save, at most one write per 500 ms: closing tabs in
+    /// a burst used to write session.json synchronously on every close.
+    pub(crate) fn save_session(&mut self, cx: &mut Context<Self>) {
+        if self.session_save_pending {
+            return;
+        }
+        self.session_save_pending = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            _ = this.update(cx, |this, _cx| {
+                this.session_save_pending = false;
+                this.save_session_now();
+            });
+        })
+        .detach();
+    }
+
+    /// Write session.json now (the debounced save lands here; quit too).
+    pub(crate) fn save_session_now(&self) {
         crate::settings::Session {
             root: self.root.clone(),
             extra: self.workspace.extra.clone(),
@@ -1299,6 +1389,9 @@ impl Workbench {
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+        // A debounced save may still be queued: flush it now, or the last
+        // closes of the session would be lost from the restore list.
+        self.save_session_now();
         cx.quit();
     }
 
@@ -1972,7 +2065,7 @@ impl Workbench {
             .overflow_x_scroll()
             .children(self.docs.iter().enumerate().map(|(ix, d)| {
                 let active = self.active == Some(ix);
-                let (icon, tint) = files::icon_for(&d.name);
+                let (icon, tint) = d.icon;
                 h_flex()
                     .id(("tab", ix))
                     .h_full()
@@ -2050,6 +2143,9 @@ impl Workbench {
         for &i in doomed.iter().rev() {
             let closed = self.docs.remove(i);
             if !closed.read_only {
+                // `close` does this too: without it the server keeps the
+                // closed documents in context.
+                self.copilot.did_close(&closed.path);
                 self.closed_tabs.retain(|p| *p != closed.path);
                 self.closed_tabs.push(closed.path);
             }
@@ -2129,31 +2225,61 @@ impl Workbench {
                             .child(div().min_w_0().truncate().child(b)),
                     )
                 })
-                .when(self.docs[ix].flux.is_some(), |v| v.child(self.render_flux_bar(ix, cx)))
-                .when(self.docs[ix].flux.is_some() && !self.docs[ix].flux_source, |v| {
-                    let weak = cx.entity().downgrade();
-                    let view = self.docs[ix].flux.as_ref().unwrap().render(move |cx| {
-                        _ = weak.update(cx, |_, cx| cx.notify());
-                    });
-                    v.child(div().flex_1().min_h_0().child(view))
+                .when(self.docs[ix].flux.is_some(), |v| {
+                    v.child(self.render_flux_bar(ix, cx))
                 })
-                .when(self.docs[ix].image.is_none() && !self.docs[ix].diff.as_ref().is_some_and(|d| !d.source) && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source), |v| v.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .relative()
-                        .child(
-                            Editor::new(&self.docs[ix].editor)
-                                .bordered(false)
-                                .p_0()
-                                .h_full()
-                                .font_family(self.settings.font_family.clone())
-                                .text_size(px(self.settings.font_size)),
-                        )
-                        .child(self.smooth_scroll_layer(ScrollTarget::Editor(self.docs[ix].editor.clone()), cx))
-                        // A file comes in with a short fade (once per switch; nothing runs after).
-                        .with_animation(SharedString::from(format!("doc-in-{}", self.docs[ix].path.display())), Animation::new(std::time::Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(0.4 + 0.6 * t)),
-                ))
+                .when(
+                    self.docs[ix].flux.is_some() && !self.docs[ix].flux_source,
+                    |v| {
+                        let weak = cx.entity().downgrade();
+                        let view = self.docs[ix].flux.as_ref().unwrap().render(move |cx| {
+                            _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                        v.child(div().flex_1().min_h_0().child(view))
+                    },
+                )
+                .when(
+                    self.docs[ix].image.is_none()
+                        && !self.docs[ix].diff.as_ref().is_some_and(|d| !d.source)
+                        && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source),
+                    |v| {
+                        let el = div()
+                            .flex_1()
+                            .min_h_0()
+                            .relative()
+                            .child(
+                                Editor::new(&self.docs[ix].editor)
+                                    .bordered(false)
+                                    .p_0()
+                                    .h_full()
+                                    .font_family(self.settings.font_family.clone())
+                                    .text_size(px(self.settings.font_size)),
+                            )
+                            .child(self.smooth_scroll_layer(
+                                ScrollTarget::Editor(self.docs[ix].editor.clone()),
+                                cx,
+                            ));
+                        // A file comes in with a short fade. Skipped during a
+                        // rapid burst, or it would keep redrawing at frame rate.
+                        // (`.when` cannot wrap it: `with_animation` changes the
+                        // element's type, so the two branches would not match.)
+                        if self.switch_fast {
+                            v.child(el)
+                        } else {
+                            v.child(
+                                el.with_animation(
+                                    SharedString::from(format!(
+                                        "doc-in-{}",
+                                        self.docs[ix].path.display()
+                                    )),
+                                    Animation::new(std::time::Duration::from_millis(120))
+                                        .with_easing(gpui_kit::ease_out_quint()),
+                                    |el, t| el.opacity(0.4 + 0.6 * t),
+                                ),
+                            )
+                        }
+                    },
+                )
                 .into_any_element(),
             // The welcome page: one column, at most 320 wide, that narrows with the editor
             // area and scrolls when the window is short (nothing is cut off at the sides).

@@ -527,8 +527,24 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
 
 #[cfg(test)]
 mod tests {
-    use super::{language_for, walk};
+    use super::{language_for, walk, IconName};
     use std::path::Path;
+
+    #[test]
+    fn typed_names_map_to_their_file_icons() {
+        assert_eq!(
+            super::icon_for("main.py"),
+            (IconName::FileCode, Some(0x4f9fd8))
+        );
+        assert_eq!(
+            super::icon_for("app.ts"),
+            (IconName::FileCode, Some(0x3b8eea))
+        );
+        assert_eq!(
+            super::icon_for("plain.txt"),
+            (IconName::FileText, Some(0x8fb8ff))
+        );
+    }
 
     #[test]
     fn a_huge_folder_does_not_hide_its_siblings() {

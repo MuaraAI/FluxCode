@@ -62,6 +62,20 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }
 
+/// The slice the word-completion scan reads: 64 KB either side of the cursor,
+/// with edges moved to the nearest char boundary.
+fn word_scan_window(text: &str, offset: usize) -> (usize, usize) {
+    let mut start = offset.saturating_sub(64 * 1024);
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (offset + 64 * 1024).min(text.len());
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    (start, end)
+}
+
 fn is_html(lang: &str) -> bool {
     matches!(lang, "html" | "php" | "markdown")
 }
@@ -84,13 +98,16 @@ impl CompletionProvider for Words {
         let path = self.path.clone();
         let language_id = self.language_id.clone();
         let tab_size = self.tab_size;
-        let text = rope.to_string();
+        let rope = rope.clone();
         let trigger_kind = if trigger.trigger_kind == InlineCompletionTriggerKind::Invoked {
             1
         } else {
             2
         };
         cx.background_spawn(async move {
+            // The whole-document copy runs here, on the background
+            // executor, so typing never waits on it.
+            let text = rope.to_string();
             let item = copilot.inline(&path, &language_id, &text, offset, tab_size, trigger_kind);
             Ok(InlineCompletionResponse::Array(item.into_iter().collect()))
         })
@@ -106,10 +123,12 @@ impl CompletionProvider for Words {
     ) -> Task<Result<CompletionResponse>> {
         let lang = self.lang;
         let file = self.file.clone();
-        let text = rope.to_string();
         let start_pos = rope.offset_to_position(offset);
         let rope = rope.clone();
         cx.background_spawn(async move {
+            // The whole-document copy runs here, on the background
+            // executor, so typing never waits on it.
+            let text = rope.to_string();
             let before = &text[..offset.min(text.len())];
             let line = &before[before.rfind('\n').map_or(0, |i| i + 1)..];
             let mut items = Vec::new();
@@ -165,8 +184,13 @@ impl CompletionProvider for Words {
                     }
                 }
                 if prefix.chars().count() >= 2 {
+                    // Words only from near the cursor: scanning the whole
+                    // document on every keystroke made completion O(file).
+                    let (scan_start, scan_end) = word_scan_window(&text, offset);
                     let mut words = BTreeSet::new();
-                    for w in text.split(|c: char| !(is_word(c) || (lang == "css" && c == '-'))) {
+                    for w in text[scan_start..scan_end]
+                        .split(|c: char| !(is_word(c) || (lang == "css" && c == '-')))
+                    {
                         if w.len() > prefix.len() && w.len() < 60 && w.to_lowercase().starts_with(&lower) && !w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                             words.insert(w);
                         }
@@ -717,6 +741,28 @@ fn css_emmet(abbr: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_scan_window_bounds() {
+        let small = "fn main() { let hello = 1; }";
+        assert_eq!(word_scan_window(small, 10), (0, small.len()));
+        let big = "x".repeat(200 * 1024);
+        assert_eq!(
+            word_scan_window(&big, 100 * 1024),
+            (100 * 1024 - 64 * 1024, 100 * 1024 + 64 * 1024)
+        );
+        // A multi-byte character on the edge is never split: the window
+        // moves to the nearest boundary (start back, end forward). "é" is
+        // 2 bytes, so an odd edge lands inside a character.
+        let wide = "é".repeat(200 * 1024);
+        assert_eq!(
+            word_scan_window(&wide, 200 * 1024 + 1),
+            (
+                200 * 1024 + 1 - 64 * 1024 - 1,
+                200 * 1024 + 1 + 64 * 1024 + 1
+            )
+        );
+    }
 
     #[test]
     fn emmet_nesting_and_multiply() {
