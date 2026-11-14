@@ -8,6 +8,8 @@
 # pr-report.yml (which runs from main) turns them into the comment and the
 # "PR verdict" check with main's limits. The scripts it runs are main's copies too
 # (the base/ worktree), so a pull request cannot grade itself by editing them.
+# The apt setup script is the exception: it only installs packages, so the
+# pull request's own copy runs. The grading scripts still come from main.
 
 name: Pull request check
 
@@ -44,7 +46,7 @@ jobs:
           if [ -f base/.github/scripts/pr_quality.py ]; then echo "TRUSTED=$PWD/base/.github" >> "$GITHUB_ENV"
           else echo "TRUSTED=$PWD/pr/.github" >> "$GITHUB_ENV"; fi
       - name: System libraries for GPUI
-              run: sh "$TRUSTED/scripts/setup-apt-gpui.sh"
+        run: sh pr/.github/scripts/setup-apt-gpui.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -92,7 +94,7 @@ jobs:
           if [ -f base/.github/scripts/pr_perf.py ]; then echo "TRUSTED=$PWD/base/.github" >> "$GITHUB_ENV"
           else echo "TRUSTED=$PWD/pr/.github" >> "$GITHUB_ENV"; fi
       - name: System libraries for GPUI
-              run: sh "$TRUSTED/scripts/setup-apt-gpui.sh"
+        run: sh pr/.github/scripts/setup-apt-gpui.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
