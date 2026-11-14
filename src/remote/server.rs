@@ -283,11 +283,25 @@ fn git(cwd: &str, args: &[String], input: Option<&str>) -> GitWire {
         Ok(c) => c,
         Err(e) => return GitWire { success: false, stdout: String::new(), stderr: format!("git could not start: {e}") },
     };
-    // The message goes in verbatim; git applies its own `--file` cleanup.
-    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
-        let _ = stdin.write_all(text.as_bytes());
+    // The message goes in verbatim; git applies its own `--file` cleanup. The
+    // write runs on its own thread: a future caller that sends more than the
+    // pipe buffer while git is already printing cannot then wedge the helper.
+    // A broken pipe (git exited early) loses nothing, because git's own status
+    // and stderr come back through `wait_with_output`.
+    let writer = match (input, child.stdin.take()) {
+        (Some(text), Some(mut stdin)) => {
+            let text = text.to_string();
+            Some(std::thread::spawn(move || {
+                let _ = stdin.write_all(text.as_bytes());
+            }))
+        }
+        _ => None,
+    };
+    let out = child.wait_with_output();
+    if let Some(writer) = writer {
+        let _ = writer.join();
     }
-    match child.wait_with_output() {
+    match out {
         Ok(o) => GitWire {
             success: o.status.success(),
             stdout: String::from_utf8_lossy(&o.stdout).into_owned(),

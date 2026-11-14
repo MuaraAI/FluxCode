@@ -151,5 +151,17 @@ fn a_commit_message_reaches_git_through_the_helper() {
     assert!(subject.success, "{subject:?}");
     assert_eq!(subject.stdout.trim(), "msg via stdin");
 
+    // Amend with no message: no input, the pipe is closed, and git keeps the subject.
+    std::fs::write(dir.join("a.txt"), b"two\n").unwrap();
+    let r = git(&mut h, &["add", "-A"], None);
+    assert!(r.ok, "{r:?}");
+    let r = git(&mut h, &["-c", "commit.gpgsign=false", "commit", "--amend", "--quiet", "--no-edit"], None);
+    assert!(r.ok, "{r:?}");
+    let r = git(&mut h, &["log", "-1", "--format=%s"], None);
+    assert!(r.ok, "{r:?}");
+    let subject: crate::remote::proto::GitWire = serde_json::from_value(r.json.unwrap()).unwrap();
+    assert!(subject.success, "{subject:?}");
+    assert_eq!(subject.stdout.trim(), "msg via stdin");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
