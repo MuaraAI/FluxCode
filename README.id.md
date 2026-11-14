@@ -88,9 +88,12 @@ Ambil build terbaru dari [Releases](https://github.com/MuaraAI/FluxCode/releases
 | Sistem | File | Pemasangan |
 | --- | --- | --- |
 | Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Jalankan. Tanpa hak admin: dipasang untuk akunmu, lengkap dengan pintasan Start Menu dan Desktop. |
-| macOS 11+, Apple silicon dan Intel | `FluxCode-BuildDev-...-macos-universal.dmg` | Buka, lalu tarik FluxCode ke Applications. |
+| macOS 11+, Apple silicon dan Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Buka, lalu tarik FluxCode ke Applications. |
 | Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Ekstrak, jalankan `./install.sh`. Tanpa root. |
 | Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Ekstrak; `FluxCode.exe` langsung jalan dari foldernya (`Install.cmd` memasangnya). |
+
+Build macOS masih preview. Kami belum mengujinya di Mac asli. Silakan coba, dan
+[buka issue](https://github.com/MuaraAI/FluxCode/issues/new) kalau ada yang rusak.
 
 Build macOS belum dinotarisasi Apple (butuh Apple Developer ID), jadi pembukaan pertama
 bertanya sekali: di macOS 15 ke atas, buka aplikasinya, lalu System Settings > Privacy &
