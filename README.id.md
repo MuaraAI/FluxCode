@@ -151,6 +151,12 @@ FluxCream.
   dan izin dipilih di bawah kotak pesan; agent bisa mengajukan pertanyaan pilihan ganda dan
   harus bertanya sebelum menjalankan perintah atau mengubah file; perubahan file tiap
   giliran bisa dibatalkan.
+- **Completion sebaris GitHub Copilot.** Sesaat setelah kamu berhenti mengetik, Copilot
+  menyarankan baris berikutnya sebagai teks abu-abu; Tab menerima, Esc menolak. Server
+  bahasa Copilot berjalan di prosesnya sendiri dan mengerjakan modelnya, jadi editor tetap
+  ringan. Pasang sekali dengan `npm install -g @github/copilot-language-server`, lalu masuk
+  di **Settings > AI agents and GitHub > GitHub Copilot** (perlu paket Copilot; ada paket
+  gratis).
 - **Untuk pemula dan untuk yang sudah ahli.** Pemula bisa memilih agent dari daftar,
   menjawab pertanyaannya dengan klik, dan menjaganya tetap read-only. Yang sudah ahli
   mendapat palette, pintasan, file instruksi per agent, dan semua opsi editor di Settings:

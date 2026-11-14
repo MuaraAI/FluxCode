@@ -127,6 +127,12 @@ also comes in Bahasa Indonesia, shown here with the update card in the FluxCream
   click into FluxCode's own folder. You choose the model, effort, mode and permissions
   under the message box; the agent can ask you multiple-choice questions and has to ask
   before it runs a command or changes a file; each turn's file changes can be undone.
+- **GitHub Copilot inline completions.** A moment after you stop typing, Copilot suggests
+  the next lines as ghost text; Tab accepts, Esc dismisses. The Copilot language server
+  runs as its own process and does the model work, so the editor stays light. Install it
+  once with `npm install -g @github/copilot-language-server`, then sign in under
+  **Settings > AI agents and GitHub > GitHub Copilot** (a Copilot plan is needed; a free
+  plan exists).
 - **For beginners and experts.** A beginner can pick an agent from a list, answer its
   questions by clicking, and keep it read-only. An expert gets the palette, the shortcuts,
   per-agent instruction files and every editor option in Settings: font, size, tab size,
@@ -324,7 +330,7 @@ and no extension catalog yet.
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
 | Extensions | 11 built in (build, run, deploy and pack tasks, as manifests), more from a file | yes | the largest catalog |
-| AI agent | any ACP agent, three access levels, per-turn changes with undo | its own agent and ACP agents | GitHub Copilot and extensions |
+| AI agent | any ACP agent, three access levels, per-turn changes with undo; GitHub Copilot inline completions | its own agent and ACP agents | GitHub Copilot and extensions |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
 | Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
 | Remote development | WSL2 (Windows) | SSH | SSH, containers, WSL |
