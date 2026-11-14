@@ -339,6 +339,8 @@ pub struct Workbench {
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
+    /// The Copilot language server client (a handle; the server runs in its own process).
+    pub(crate) copilot: crate::copilot::Copilot,
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
     #[cfg(not(feature = "embedded-preview"))]
@@ -406,6 +408,7 @@ impl Workbench {
 
         cx.on_app_quit(|this, _| {
             this.procs.kill_all();
+            this.copilot.stop();
             async {}
         })
         .detach();
@@ -413,6 +416,7 @@ impl Workbench {
         let settings = crate::settings::Settings::load();
         crate::i18n::set(&settings.language);
         crate::remote::set_helper_enabled(settings.wsl_helper);
+        let copilot_enabled = settings.copilot;
         let mut settings = settings;
         if settings.agent_hint < AGENT_HINT_LAUNCHES {
             settings.agent_hint += 1;
@@ -515,6 +519,7 @@ impl Workbench {
             preview_server: None,
             github: crate::github::load(),
             github_input,
+            copilot: crate::copilot::Copilot::new(copilot_enabled),
             preview: None,
             update: Default::default(),
             title_menu_end: Rc::default(),
@@ -818,7 +823,15 @@ impl Workbench {
         if read_only {
             editor.update(cx, |e, cx| e.set_readonly(true, cx));
         } else {
-            crate::complete::attach(&editor, lang, &file_name, cx);
+            crate::complete::attach(
+                &editor,
+                lang,
+                &file_name,
+                &path,
+                tab,
+                self.copilot.clone(),
+                cx,
+            );
         }
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
@@ -1026,6 +1039,7 @@ impl Workbench {
         }
         let closed = self.docs.remove(ix);
         if !closed.read_only {
+            self.copilot.did_close(&closed.path);
             self.closed_tabs.retain(|p| *p != closed.path);
             self.closed_tabs.push(closed.path);
             if self.closed_tabs.len() > 30 {

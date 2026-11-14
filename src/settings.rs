@@ -48,6 +48,10 @@ pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gi
 
 const SETTINGS_REV: u32 = 1;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -123,6 +127,10 @@ pub struct Settings {
     pub cursor_padding: u32,
     /// The editor scrolls past its last line.
     pub scroll_past_end: bool,
+    /// GitHub Copilot ghost-text suggestions (the Copilot language server).
+    /// Off means no server runs and no suggestion is ever asked for.
+    #[serde(default = "default_true")]
+    pub copilot: bool,
     /// The build that ran last, so a new one can open its release notes once.
     pub last_build: String,
     /// Settings revision, for one-time changes of defaults on existing installs.
@@ -168,6 +176,7 @@ impl Default for Settings {
             smart_indent: true,
             cursor_padding: 0,
             scroll_past_end: true,
+            copilot: true,
             last_build: String::new(),
             rev: SETTINGS_REV,
         }
@@ -286,6 +295,7 @@ impl Session {
 impl Workbench {
     pub(crate) fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.save();
+        self.copilot.set_enabled(self.settings.copilot);
         crate::remote::set_helper_enabled(self.settings.wsl_helper);
         if self.settings.agent_right && self.view == crate::workbench::SideView::Agent {
             self.view = crate::workbench::SideView::Explorer;
@@ -635,6 +645,11 @@ impl Workbench {
                 w.settings.cursor_padding = (w.settings.cursor_padding as i32 + d).clamp(0, 12) as u32
             })))
             .child(row(tr("Scroll past the last line"), tr("Leave room below the end of a file, so its last lines can sit mid-screen.").into(), toggle("spe", s.scroll_past_end, |w| w.settings.scroll_past_end = !w.settings.scroll_past_end)))
+            .child(row(
+                tr("Copilot suggestions"),
+                tr("Ghost-text completions from GitHub Copilot, a moment after you stop typing. Tab accepts, Esc dismisses. The Copilot language server does the work in its own process, so the editor stays light.").into(),
+                toggle("cpl", s.copilot, |w| w.settings.copilot = !w.settings.copilot),
+            ))
             .child(section(tr("WSL")))
             .child(row(
                 tr("Read WSL folders through a helper in the distro"),
@@ -663,6 +678,11 @@ impl Workbench {
                 toggle("follow", s.agent_follow_edits, |w| w.settings.agent_follow_edits = !w.settings.agent_follow_edits),
             ))
             .child(row(tr("GitHub"), tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), self.render_github(cx)))
+            .child(row(
+                tr("GitHub Copilot"),
+                tr("Sign in so the editor can suggest the next lines of code. Needs the Copilot language server installed once, and a Copilot plan (a free plan exists).").into(),
+                self.render_copilot(cx),
+            ))
             .child(section(tr("Agent instructions (soul files)")))
             .child(
                 div()
@@ -796,6 +816,110 @@ impl Workbench {
             Err(e) => self.status = e.into(),
         }
         cx.notify();
+    }
+
+    fn copilot_signin_result(&mut self, r: Result<String, String>, cx: &mut Context<Self>) {
+        match r {
+            Ok(_) => self.status = tr("Signed in to Copilot").into(),
+            Err(e) => self.status = e.into(),
+        }
+        cx.notify();
+    }
+
+    fn render_copilot(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::copilot::Status;
+        let (text, show_signin, show_signout): (SharedString, bool, bool) = match self.copilot.status() {
+            Status::Off => (tr("Off. Turn Copilot suggestions on in the Editor section.").into(), false, false),
+            Status::Starting => (tr("Starting the Copilot server...").into(), false, false),
+            Status::NotInstalled => (
+                tr("Not installed. Install it once with: npm install -g @github/copilot-language-server (Node.js 20.8 or later).").into(),
+                false,
+                false,
+            ),
+            Status::Ready => (
+                tr("Ready. Suggestions appear as ghost text a moment after you stop typing.").into(),
+                false,
+                true,
+            ),
+            Status::NotSignedIn(m) => (
+                if m.is_empty() { tr("Not signed in to Copilot yet.").into() } else { m.into() },
+                true,
+                false,
+            ),
+            Status::Warning(m) => (
+                if m.is_empty() { tr("Copilot has a temporary problem.").into() } else { m.into() },
+                false,
+                false,
+            ),
+            Status::Inactive => (tr("Copilot ignores this file.").into(), false, false),
+            Status::Error(e) => (e.into(), true, false),
+        };
+        let code = self.copilot.user_code();
+        let mut col = v_flex()
+            .w(px(300.))
+            .gap_1()
+            .text_sm()
+            .child(div().child(text));
+        if let Some(notice) = self.copilot.notice() {
+            col = col.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(notice));
+        }
+        if let Some(code) = code {
+            let copy = code.clone();
+            col = col.child(
+                h_flex()
+                    .gap_1()
+                    .child(div().child(crate::trf!("Your sign-in code: {code}"; code => code)))
+                    .child(
+                        Button::new("cpl-copy")
+                            .label(tr("Copy code"))
+                            .xsmall()
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                            }),
+                    ),
+            );
+        }
+        col = col.child(
+            h_flex()
+                .gap_1()
+                .when(show_signin, |row| {
+                    row.child(
+                        Button::new("cpl-in")
+                            .label(tr("Sign in"))
+                            .xsmall()
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let copilot = this.copilot.clone();
+                                cx.spawn(async move |this, cx| {
+                                    let r =
+                                        cx.background_spawn(async move { copilot.sign_in() }).await;
+                                    _ = this
+                                        .update(cx, |this, cx| this.copilot_signin_result(r, cx));
+                                })
+                                .detach();
+                            })),
+                    )
+                })
+                .when(show_signout, |row| {
+                    row.child(
+                        Button::new("cpl-out")
+                            .label(tr("Sign out"))
+                            .xsmall()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let copilot = this.copilot.clone();
+                                cx.spawn(async move |this, cx| {
+                                    cx.background_spawn(async move { copilot.sign_out() }).await;
+                                    _ = this.update(cx, |this, cx| {
+                                        this.status = tr("Signed out of Copilot").into();
+                                        cx.notify();
+                                    });
+                                })
+                                .detach();
+                            })),
+                    )
+                }),
+        );
+        col.into_any_element()
     }
 
     fn render_github(&self, cx: &mut Context<Self>) -> AnyElement {

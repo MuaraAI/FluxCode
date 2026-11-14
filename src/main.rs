@@ -13,6 +13,7 @@ mod boot;
 mod browser;
 mod collab;
 mod commands;
+mod copilot;
 mod editor_cmds;
 mod agent;
 mod agent_ask;

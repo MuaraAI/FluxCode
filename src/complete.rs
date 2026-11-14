@@ -2,24 +2,47 @@
 //! keywords, and Emmet (HTML + CSS abbreviations), ported from `src/complete/`.
 //! gpui-component's editor has no snippet tab stops, so Emmet output is
 //! inserted as plain text.
+//!
+//! Inline (ghost-text) completions come from GitHub Copilot through
+//! `crate::copilot`: the editor asks for one a short time after typing
+//! stops, shows it dimmed after the cursor, and Tab accepts it. The local
+//! menu above is untouched; Copilot never appears in it.
 
 use anyhow::Result;
 use gpui_kit::component::input::{CompletionProvider, EditorState, Rope, RopeExt};
 use gpui_kit::{App, AppContext, Entity, Task, Window};
 use lsp_types::{
-    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation,
+    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
+    Documentation, InlineCompletionContext, InlineCompletionResponse, InlineCompletionTriggerKind,
     InsertReplaceEdit,
 };
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 
-pub fn attach(editor: &Entity<EditorState>, lang: &'static str, file_name: &str, cx: &mut App) {
+pub fn attach(
+    editor: &Entity<EditorState>,
+    lang: &'static str,
+    file_name: &str,
+    path: &PathBuf,
+    tab_size: usize,
+    copilot: crate::copilot::Copilot,
+    cx: &mut App,
+) {
     if lang == "text" {
         return;
     }
     let file = file_name.to_ascii_lowercase();
+    let language_id = crate::copilot::language_id(lang);
     editor.update(cx, |state, cx| {
-        state.lsp_mut().completion_provider = Some(Rc::new(Words { lang, file }));
+        state.lsp_mut().completion_provider = Some(Rc::new(Words {
+            lang,
+            file,
+            path: path.clone(),
+            language_id,
+            tab_size,
+            copilot,
+        }));
         cx.notify();
     });
 }
@@ -28,6 +51,11 @@ struct Words {
     lang: &'static str,
     /// Lower-cased file name: picks the JSON schema (manifest.json, package.json, ...).
     file: String,
+    /// Full path, for the Copilot server's document sync.
+    path: PathBuf,
+    language_id: String,
+    tab_size: usize,
+    copilot: crate::copilot::Copilot,
 }
 
 fn is_word(c: char) -> bool {
@@ -39,6 +67,35 @@ fn is_html(lang: &str) -> bool {
 }
 
 impl CompletionProvider for Words {
+    /// Copilot ghost text. The editor calls this after a short debounce
+    /// when typing stops, shows the first item dimmed after the cursor,
+    /// and accepts it on Tab. The request runs on a background thread;
+    /// when Copilot is off, unsigned, or the server is missing, this
+    /// quietly returns nothing and the editor behaves as before.
+    fn inline_completion(
+        &self,
+        rope: &Rope,
+        offset: usize,
+        trigger: InlineCompletionContext,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<InlineCompletionResponse>> {
+        let copilot = self.copilot.clone();
+        let path = self.path.clone();
+        let language_id = self.language_id.clone();
+        let tab_size = self.tab_size;
+        let text = rope.to_string();
+        let trigger_kind = if trigger.trigger_kind == InlineCompletionTriggerKind::Invoked {
+            1
+        } else {
+            2
+        };
+        cx.background_spawn(async move {
+            let item = copilot.inline(&path, &language_id, &text, offset, tab_size, trigger_kind);
+            Ok(InlineCompletionResponse::Array(item.into_iter().collect()))
+        })
+    }
+
     fn completions(
         &self,
         rope: &Rope,

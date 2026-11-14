@@ -5,6 +5,27 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## GitHub Copilot inline completions (14 November 2026)
+
+- The editor now suggests the next lines of code as ghost text, from GitHub
+  Copilot through the official Copilot language server. A suggestion appears
+  dimmed after the cursor a moment after you stop typing; Tab accepts it,
+  Esc dismisses it. Turn it on or off in **Settings > Editor > Copilot
+  suggestions**, and sign in in **Settings > AI agents and GitHub > GitHub
+  Copilot**.
+- FluxCode stays a thin client: the server runs as its own process and does
+  the model work, so the editor stays native and light. Install it once with
+  `npm install -g @github/copilot-language-server` (needs Node.js 20.8 or
+  later), then sign in with a Copilot plan (a free plan exists). The GitHub
+  sign-in FluxCode already has is a personal access token for git and the
+  terminal; it is not a Copilot subscription, so it does not unlock this.
+- Only the open file is sent to the server, as the document sync the
+  protocol requires. Next edit suggestions (edits to code that is already
+  there) are not in this version yet; completions are.
+- One limit to know: the editor accepts a suggestion without telling the
+  server, so Copilot's own count of accepted suggestions does not see it.
+  The suggestion itself works the same.
+
 ## Code of Conduct and Security Policy (14 November 2026)
 
 - The repository now has a Code of Conduct and a Security Policy
