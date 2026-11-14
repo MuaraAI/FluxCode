@@ -81,9 +81,12 @@ Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/release
 | System | File | Install |
 | --- | --- | --- |
 | Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run it. No admin rights: it installs for your account, with a Start Menu and a Desktop shortcut. |
-| macOS 11+, Apple silicon and Intel | `FluxCode-BuildDev-...-macos-universal.dmg` | Open it and drag FluxCode to Applications. |
+| macOS 11+, Apple silicon and Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Open it and drag FluxCode to Applications. |
 | Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract, run `./install.sh`. No root. |
 | Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract; `FluxCode.exe` runs from the folder (`Install.cmd` installs it). |
+
+The macOS build is a preview. We have not tested it on a real Mac yet. Try it and
+[open an issue](https://github.com/MuaraAI/FluxCode/issues/new) if something breaks.
 
 The macOS build isn't notarized by Apple yet (that takes an Apple Developer ID), so the
 first open asks once: on macOS 15 and newer, open it, then System Settings > Privacy &
