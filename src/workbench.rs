@@ -37,7 +37,7 @@ actions!(
         Save, SaveAll, CloseTab, OpenFolder, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
-        ExplorerDelete, ExplorerRefresh, CopyPath, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
+        ExplorerDelete, ExplorerRefresh, CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
@@ -96,6 +96,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
+        // Esc drops the name being typed in the Explorer, or the delete confirm.
+        KeyBinding::new("escape", CancelPending, Some("Explorer > Input")),
+        KeyBinding::new("escape", CancelPending, Some("Explorer")),
         // In the code editor Tab accepts the highlighted suggestion; with no
         // suggestion menu open it indents (on_tab_accept falls back to IndentInline).
         KeyBinding::new("tab", TabAccept, Some("Input && mode == editor")),
@@ -638,11 +641,13 @@ impl Workbench {
     }
 
     /// Build the tree items from `tree_nodes` and hand them to the tree.
-    fn set_tree_items(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn set_tree_items(&mut self, cx: &mut Context<Self>) {
         // New items: show the active file again (and retry after a folder loads).
         *self.revealed.borrow_mut() = None;
         let mut dirs = std::collections::HashSet::new();
-        let items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
+        let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
+        // A name being typed gets its own row inside the tree, first in its folder.
+        crate::explorer::insert_pending_row(&mut items, self.pending.as_ref(), self.root.as_deref());
         self.dirs = Rc::new(dirs);
         let selected = self.tree.read(cx).selected_item().map(|i| i.id.clone());
         let tree = self.tree.clone();
@@ -657,7 +662,7 @@ impl Workbench {
     }
 
     /// A folder was opened: read it now if it has not been read yet.
-    fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(crate) fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
         self.expanded.insert(id.clone());
         let Some(node) = find_node(&mut self.tree_nodes, &id) else { return };
         if node.loaded {
@@ -733,8 +738,10 @@ impl Workbench {
     /// The checks both open paths share: an already-open tab, an image.
     /// True when the file was handled and the caller should stop.
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // A file opened from anywhere takes the editor area back from an extension's page.
+        // A file opened from anywhere takes the editor area back from a page
+        // shown there: an extension's page, Settings, What's new, live share.
         self.ext.page = None;
+        self.settings_open = false;
         self.whats_new = None;
         self.collab.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
@@ -779,8 +786,8 @@ impl Workbench {
                 let file = core::decode_text(&bytes);
                 let first = file.text.lines().next().unwrap_or("");
                 let (lang, label) = files::language_for(&path, first);
-                let banner = file.text.is_empty().then(|| crate::i18n::tr("This file is empty. Anything you type is saved to it.").to_string());
-                (file.text, file.crlf, lang, label, banner)
+                // An empty file opens clean: no banner above the editor.
+                (file.text, file.crlf, lang, label, None)
             }
         };
         // Very large files open as plain text, like VS Code's large-file mode:
@@ -840,8 +847,6 @@ impl Workbench {
                 this.collab_on_change(&editor, cx);
                 if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor && !d.read_only) {
                     d.dirty = true;
-                    // The "empty file" note goes once there is text.
-                    d.banner = None;
                     d.gen += 1;
                     let gen = d.gen;
                     if auto {
@@ -2691,6 +2696,8 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_explorer_delete))
             .on_action(cx.listener(Self::on_explorer_refresh))
             .on_action(cx.listener(Self::on_copy_path))
+            .on_action(cx.listener(Self::on_copy_relative_path))
+            .on_action(cx.listener(Self::on_cancel_pending))
             .on_action(cx.listener(Self::on_reveal))
             .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_reload_preview))

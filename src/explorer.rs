@@ -8,13 +8,47 @@ use crate::workbench::*;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
+    input::{Input, InputState},
     list::ListItem,
-    tree::tree,
+    menu::ContextMenuExt,
+    tree::{tree, TreeItem},
     v_flex, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
+
+/// The id of the row a new file or folder is typed into. It starts with a
+/// control character, so it can never be a real path.
+pub(crate) const PENDING_ROW_ID: &str = "\u{1}pending";
+
+/// Put the typing row first inside the folder a new file or folder goes into.
+/// The workspace root itself is not a row when one folder is open, so the row
+/// goes at the top of the list then. Rename and delete type in place, so they
+/// need no row here.
+pub(crate) fn insert_pending_row(items: &mut Vec<TreeItem>, pending: Option<&PendingOp>, root: Option<&Path>) {
+    let Some(dir) = (match pending {
+        Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => Some(d),
+        _ => None,
+    }) else {
+        return;
+    };
+    fn insert_into(items: &mut [TreeItem], dir: &str) -> bool {
+        for it in items.iter_mut() {
+            if it.id.as_ref() == dir {
+                it.children.insert(0, TreeItem::new(PENDING_ROW_ID, "").disabled(true));
+                return true;
+            }
+            if insert_into(&mut it.children, dir) {
+                return true;
+            }
+        }
+        false
+    }
+    let dir_s = dir.to_string_lossy();
+    if !insert_into(items, &dir_s) && Some(dir.as_path()) == root {
+        items.insert(0, TreeItem::new(PENDING_ROW_ID, "").disabled(true));
+    }
+}
 
 impl Workbench {
     pub(crate) fn render_explorer(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -51,14 +85,47 @@ impl Workbench {
         }
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
         let target = self.ctx_target.clone();
+        let root_target = target.clone();
+        let root = self.root.clone();
         let dirs = self.dirs.clone();
         let (marks, dirty_dirs) = (self.scm.marks.clone(), self.scm.dirty_dirs.clone());
         // In a multi-folder workspace the top rows are the folders themselves.
         let multi = !self.workspace.extra.is_empty();
         let extra = self.workspace.extra.clone();
+        let pending = self.pending.clone();
+        let name_input = self.name_input.clone();
+        let tree_state = self.tree.clone();
         let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
             let item = entry.item();
             let id = item.id.to_string();
+            // The row a new name is typed into, and the rows being renamed or deleted:
+            // they draw as an input or a confirm instead of the file's row.
+            if id == PENDING_ROW_ID {
+                let icon = match &pending {
+                    Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true)).size(theme::u(13.)).text_color(c(theme::FOLDER)),
+                    _ => Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED)),
+                };
+                return name_row(ix, entry.depth(), icon, &name_input);
+            }
+            if let Some(PendingOp::Rename(p)) = &pending {
+                if p.to_string_lossy() == id {
+                    let is_dir = entry.is_folder() || dirs.contains(&id);
+                    let icon = if is_dir {
+                        Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
+                            .size(theme::u(13.))
+                            .text_color(c(theme::FOLDER))
+                    } else {
+                        let (ic, tint) = files::icon_for(&item.label);
+                        Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                    };
+                    return name_row(ix, entry.depth(), icon, &name_input);
+                }
+            }
+            if let Some(PendingOp::Delete(p)) = &pending {
+                if p.to_string_lossy() == id {
+                    return delete_row(ix, entry.depth(), p, &view);
+                }
+            }
             let is_open = active_path.as_deref() == Some(id.as_str());
             let is_sel = selected.as_deref() == Some(id.as_str());
             // Every row: a 12px chevron slot, then one 14px icon from the same outline set.
@@ -134,6 +201,25 @@ impl Workbench {
                         });
                     }
                 })
+                .on_mouse_down(MouseButton::Right, {
+                    let view = view.clone();
+                    let tree_state = tree_state.clone();
+                    let item = item.clone();
+                    move |_, _, cx| {
+                        // Right-click picks the row first, like VS Code: the
+                        // highlight, the tree's own selection, and the action
+                        // target all move to it. The menu opens on the same
+                        // press, after this runs, so it acts on this row.
+                        let path = PathBuf::from(item.id.as_ref());
+                        view.update(cx, |this, cx| {
+                            this.selected = Some(path);
+                            cx.notify();
+                        });
+                        tree_state.update(cx, |state, cx| {
+                            state.set_selected_index(Some(ix), cx);
+                        });
+                    }
+                })
         })
         .context_menu(move |_ix, entry, menu, _window, _cx| {
             let path = PathBuf::from(entry.item().id.as_ref());
@@ -151,6 +237,7 @@ impl Workbench {
                 .menu(tr("Delete"), Box::new(ExplorerDelete))
                 .separator()
                 .menu(tr("Copy Path"), Box::new(CopyPath))
+                .menu(tr("Copy Relative Path"), Box::new(CopyRelativePath))
                 .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
         })
         .text_size(theme::u(11.5))
@@ -159,46 +246,23 @@ impl Workbench {
         v_flex()
             .size_full()
             .key_context("Explorer")
-            .when_some(self.pending.clone(), |v, op| v.child(self.render_pending(op, cx)))
+            .context_menu(move |menu, _window, _cx| {
+                // Empty space in the Explorer: the menu acts on the workspace root.
+                // A row's own menu fires first and stops this one, so the two never
+                // both open.
+                if let Some(root) = &root {
+                    *root_target.borrow_mut() = Some(root.clone());
+                }
+                menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
+                    .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
+                    .separator()
+                    .menu(tr("Refresh"), Box::new(ExplorerRefresh))
+                    .separator()
+                    .menu(tr("Copy Path"), Box::new(CopyPath))
+                    .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
+            })
             .child(div().flex_1().min_h_0().child(list))
             .into_any_element()
-    }
-
-    fn render_pending(&self, op: PendingOp, cx: &mut Context<Self>) -> impl IntoElement {
-        let (label, confirm) = match &op {
-            PendingOp::NewFile(d) => (crate::trf!("New file in {0}"; 0 => short(d)), tr("Create")),
-            PendingOp::NewFolder(d) => (crate::trf!("New folder in {0}"; 0 => short(d)), tr("Create")),
-            PendingOp::Rename(p) => (crate::trf!("Rename {0}"; 0 => short(p)), tr("Rename")),
-            PendingOp::Delete(p) => (crate::trf!("Move {0} to the Recycle Bin?"; 0 => short(p)), tr("Delete")),
-        };
-        let ask_name = !matches!(op, PendingOp::Delete(_));
-        v_flex()
-            .m_2()
-            .p_2()
-            .gap_2()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(c(if matches!(op, PendingOp::Delete(_)) { theme::DANGER } else { theme::BORDER_STRONG }))
-            .bg(c(theme::BG_ELEVATED))
-            .text_xs()
-            .child(label)
-            .when(ask_name, |v| v.child(Input::new(&self.name_input).small()))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("pending-ok")
-                            .label(confirm)
-                            .xsmall()
-                            .when(matches!(op, PendingOp::Delete(_)), |b| b.danger())
-                            .when(!matches!(op, PendingOp::Delete(_)), |b| b.primary())
-                            .on_click(cx.listener(|this, _, w, cx| this.commit_pending(w, cx))),
-                    )
-                    .child(Button::new("pending-cancel").label(tr("Cancel")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| {
-                        this.pending = None;
-                        cx.notify();
-                    }))),
-            )
     }
 
     /// Folder an explorer action applies to: the right-clicked / selected
@@ -219,13 +283,40 @@ impl Workbench {
     fn start_pending(&mut self, op: PendingOp, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Explorer;
         self.sidebar_open = true;
+        // A new file or folder types inside its folder: open the folder first, so
+        // the row is on screen. A folder that was never opened loads now.
+        if let PendingOp::NewFile(d) | PendingOp::NewFolder(d) = &op {
+            self.tree_expanded(d.to_string_lossy().into_owned(), cx);
+        }
         self.pending = Some(op);
+        self.set_tree_items(cx);
+        let placeholder: &'static str = match &self.pending {
+            Some(PendingOp::NewFile(_)) => tr("File name"),
+            Some(PendingOp::NewFolder(_)) => tr("Folder name"),
+            Some(PendingOp::Rename(p)) if p.is_dir() => tr("Folder name"),
+            _ => tr("File name"),
+        };
         let value = value.to_string();
         self.name_input.update(cx, |s, cx| {
             s.set_value(value, window, cx);
+            s.set_placeholder(placeholder, window, cx);
             s.focus(window, cx);
         });
         cx.notify();
+    }
+
+    /// Drop the name being typed, or the delete confirm, and put focus back on
+    /// the Explorer.
+    pub(crate) fn cancel_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending.take().is_some() {
+            self.set_tree_items(cx);
+            self.focus.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_cancel_pending(&mut self, _: &CancelPending, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_pending(window, cx);
     }
 
     pub(crate) fn on_explorer_new_file(&mut self, _: &ExplorerNewFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -260,6 +351,13 @@ impl Workbench {
     pub(crate) fn on_copy_path(&mut self, _: &CopyPath, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(p) = self.target_item() {
             cx.write_to_clipboard(ClipboardItem::new_string(p.to_string_lossy().into_owned()));
+        }
+    }
+
+    pub(crate) fn on_copy_relative_path(&mut self, _: &CopyRelativePath, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(p) = self.target_item() {
+            let rel = self.rel_display(&p.to_string_lossy()).replace('\\', "/");
+            cx.write_to_clipboard(ClipboardItem::new_string(rel));
         }
     }
 
@@ -305,7 +403,11 @@ impl Workbench {
             }),
         };
         match result {
-            Ok(()) => self.refresh_tree(cx),
+            Ok(()) => {
+                // The typed row goes at once; the refresh brings the new listing.
+                self.set_tree_items(cx);
+                self.refresh_tree(cx);
+            }
             Err(e) => {
                 self.status = e.into();
                 self.pending = Some(op);
@@ -313,6 +415,77 @@ impl Workbench {
         }
         cx.notify();
     }
+}
+
+/// A tree row with a text input in it, for a new file, a new folder, or a rename.
+/// Exactly one tree row tall: the tree lays its rows out at one height, so a
+/// taller box would paint over its neighbours. The input is the small size,
+/// which is one row tall with its border.
+fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> ListItem {
+    ListItem::new(ix)
+        .w_full()
+        .h(theme::u(20.))
+        .py_0()
+        .px_1()
+        .pl(theme::u(10.) * depth + theme::u(6.))
+        .bg(c(theme::SELECT))
+        // A click here only focuses the input; without this the tree would
+        // also select the row and fold its folder.
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(
+            h_flex()
+                .w_full()
+                .h_full()
+                .gap_1()
+                .items_center()
+                .child(div().w(theme::u(12.)).flex().justify_center())
+                .child(icon)
+                .child(div().flex_1().min_w_0().h_full().flex().items_center().child(Input::new(name_input).xsmall().w_full())),
+        )
+}
+
+/// The row of a file or folder being deleted: its name as a question, with
+/// Delete and Cancel buttons in place of the row. Same height as every row.
+fn delete_row(ix: usize, depth: usize, path: &Path, view: &Entity<Workbench>) -> ListItem {
+    let name = short(path);
+    let del = view.clone();
+    let cancel = view.clone();
+    ListItem::new(ix)
+        .w_full()
+        .h(theme::u(20.))
+        .py_0()
+        .px_1()
+        .pl(theme::u(10.) * depth + theme::u(6.))
+        .bg(c(theme::SELECT))
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(
+            h_flex()
+                .w_full()
+                .h_full()
+                .gap_1()
+                .items_center()
+                .text_size(theme::u(11.5))
+                .child(Icon::new(IconName::Delete).size(theme::u(13.)).text_color(c(theme::DANGER)))
+                .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(crate::trf!("Delete {name}?"; name => name)))
+                .child(
+                    Button::new("pending-del-ok")
+                        .label(tr("Delete"))
+                        .xsmall()
+                        .danger()
+                        .on_click(move |_, window, cx| {
+                            del.update(cx, |this, cx| this.commit_pending(window, cx));
+                        }),
+                )
+                .child(
+                    Button::new("pending-del-cancel")
+                        .label(tr("Cancel"))
+                        .xsmall()
+                        .ghost()
+                        .on_click(move |_, window, cx| {
+                            cancel.update(cx, |this, cx| this.cancel_pending(window, cx));
+                        }),
+                ),
+        )
 }
 
 fn short(p: &Path) -> String {
