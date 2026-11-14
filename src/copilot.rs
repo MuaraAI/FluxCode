@@ -422,6 +422,9 @@ impl Copilot {
     }
 
     /// Send a notification (no answer expected).
+    // This stays synchronous on purpose: `inline` sends didOpen/didChange
+    // and the completion request under one lock, in order. Only didClose
+    // moves off-thread; it has no ordering promise.
     fn notify(&self, method: &str, params: Value) {
         let _io = self.shared.io.lock().unwrap();
         let mut st = self.shared.state.lock().unwrap();
@@ -431,7 +434,9 @@ impl Copilot {
         }
     }
 
-    /// Tell the server a document closed, so it drops it from context.
+    /// The write goes out on its own thread: a pipe write blocks while the
+    /// server is not draining it, so sending it from `close()` stalled the
+    /// UI thread mid-Ctrl+W. A didClose has no ordering promise, so this is safe.
     pub fn did_close(&self, path: &Path) {
         let uri = uri_for_path(path);
         let was_open = self
@@ -443,10 +448,15 @@ impl Copilot {
             .remove(&uri)
             .is_some();
         if was_open {
-            self.notify(
-                "textDocument/didClose",
-                serde_json::json!({"textDocument": {"uri": uri}}),
-            );
+            let shared = Arc::clone(&self.shared);
+            std::thread::spawn(move || {
+                let msg = serde_json::json!({"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": uri}}});
+                let _io = shared.io.lock().unwrap();
+                let mut st = shared.state.lock().unwrap();
+                if let Some(stdin) = st.stdin.as_mut() {
+                    let _ = write_message(stdin, &msg);
+                }
+            });
         }
     }
 

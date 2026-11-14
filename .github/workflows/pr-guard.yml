@@ -94,7 +94,7 @@ jobs:
             const outsider = process.env.OUTSIDER === 'true';
             const lines = [marker];
             if (outsider) {
-              lines.push(`Thanks for the pull request, @${pr.user.login}! 👋`, '',
+              lines.push(`Thanks for the pull request, @${pr.user.login}!`, '',
                 `Every pull request goes through the checks in [CONTRIBUTING.md](https://github.com/${owner}/${repo}/blob/main/CONTRIBUTING.md#what-the-checks-look-at): `
                 + 'this safety scan first, then the build, tests, code quality and a performance comparison against `main` '
                 + '(those start once a maintainer approves the run, because they execute your code). '

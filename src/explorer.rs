@@ -21,6 +21,15 @@ use std::path::{Path, PathBuf};
 /// control character, so it can never be a real path.
 pub(crate) const PENDING_ROW_ID: &str = "\u{1}pending";
 
+/// A stray press ends the name being typed only when there is nothing
+/// to lose: a non-empty name survives it (the press is swallowed).
+fn stray_press_keeps_input(pending: &Option<PendingOp>, typed: &str) -> bool {
+    matches!(
+        pending,
+        Some(PendingOp::NewFile(_)) | Some(PendingOp::NewFolder(_)) | Some(PendingOp::Rename(_))
+    ) && !typed.trim().is_empty()
+}
+
 /// Put the typing row first inside the folder a new file or folder goes into.
 /// The workspace root itself is not a row when one folder is open, so the row
 /// goes at the top of the list then. Rename and delete type in place, so they
@@ -74,10 +83,14 @@ impl Workbench {
             *self.revealed.borrow_mut() = Some(p.clone());
             let id = SharedString::from(p);
             self.tree.update(cx, |t, cx| {
-                if t.index_of(&id).is_none() {
+                // One linear scan in the common case: `index_of` walks every
+                // expanded row, so three calls per switch cost O(entries) x 3.
+                let mut ix = t.index_of(&id);
+                if ix.is_none() {
                     t.reveal_item(&id, ScrollStrategy::Center, cx);
+                    ix = t.index_of(&id);
                 }
-                if let Some(ix) = t.index_of(&id) {
+                if let Some(ix) = ix {
                     t.scroll_to_item(ix, ScrollStrategy::Nearest);
                     t.set_selected_index(Some(ix), cx);
                 }
@@ -95,15 +108,33 @@ impl Workbench {
         let pending = self.pending.clone();
         let name_input = self.name_input.clone();
         let tree_state = self.tree.clone();
-        let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
+        let list = tree(&self.tree, move |ix, entry, _selected, _window, cx| {
             let item = entry.item();
             let id = item.id.to_string();
             // The row a new name is typed into, and the rows being renamed or deleted:
             // they draw as an input or a confirm instead of the file's row.
             if id == PENDING_ROW_ID {
                 let icon = match &pending {
-                    Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true)).size(theme::u(13.)).text_color(c(theme::FOLDER)),
-                    _ => Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED)),
+                    Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true))
+                        .size(theme::u(13.))
+                        .text_color(c(theme::FOLDER)),
+                    // New file: the icon follows what is typed, like VS Code, so
+                    // `file.py` shows the Python icon before Enter is pressed.
+                    // The workbench redraws on every change while a name is
+                    // pending, so this stays live as the user types.
+                    _ => {
+                        let typed = name_input.read(cx).value();
+                        if typed.is_empty() {
+                            Icon::new(IconName::File)
+                                .size(theme::u(13.))
+                                .text_color(c(theme::FG_MUTED))
+                        } else {
+                            let (ic, tint) = files::icon_for(&typed);
+                            Icon::new(ic)
+                                .size(theme::u(13.))
+                                .text_color(theme::tint(tint))
+                        }
+                    }
                 };
                 return name_row(ix, entry.depth(), icon, &name_input);
             }
@@ -115,8 +146,18 @@ impl Workbench {
                             .size(theme::u(13.))
                             .text_color(c(theme::FOLDER))
                     } else {
-                        let (ic, tint) = files::icon_for(&item.label);
-                        Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                        // Rename: the icon follows the typed name too, falling
+                        // back to the file's own icon while the field is empty.
+                        let typed = name_input.read(cx).value();
+                        let name: &str = if typed.is_empty() {
+                            &item.label
+                        } else {
+                            &typed
+                        };
+                        let (ic, tint) = files::icon_for(name);
+                        Icon::new(ic)
+                            .size(theme::u(13.))
+                            .text_color(theme::tint(tint))
                     };
                     return name_row(ix, entry.depth(), icon, &name_input);
                 }
@@ -126,8 +167,11 @@ impl Workbench {
                     return delete_row(ix, entry.depth(), p, &view);
                 }
             }
+            // While a name is being typed, the old selection is hidden.
+            // The file open in the editor keeps its marker.
+            let naming = pending.is_some();
             let is_open = active_path.as_deref() == Some(id.as_str());
-            let is_sel = selected.as_deref() == Some(id.as_str());
+            let is_sel = !naming && selected.as_deref() == Some(id.as_str());
             // Every row: a 12px chevron slot, then one 14px icon from the same outline set.
             let is_dir = entry.is_folder() || dirs.contains(&id);
             // Skipped folders (.git, node_modules, ...) are listed but never opened: dimmed, no chevron.
@@ -159,7 +203,12 @@ impl Workbench {
                 None if dir_dirty => c(theme::WARN),
                 None => c(theme::FG),
             };
-            ListItem::new(ix)
+            // The row's id is its file path, not its position: GPUI tracks
+            // hover by element id, so with a position id the hover tint
+            // stayed on the slot and jumped to the wrong file when the
+            // input row was inserted above it and every row shifted down.
+            // With the path as the id the hover follows the file.
+            ListItem::new(id.clone())
                 .w_full()
                 .h(theme::u(20.))
                 .px_1()
@@ -201,11 +250,61 @@ impl Workbench {
                         });
                     }
                 })
+                .on_mouse_down(MouseButton::Left, {
+                    let view = view.clone();
+                    move |_, window, cx| {
+                        // A press elsewhere ends the name being typed, like VS
+                        // Code. This runs on mouse down, before the click is
+                        // made, so the input row is already gone when the
+                        // click lands: the tree selects the row under the
+                        // mouse with its new index, and the click still
+                        // opens it. Cancelling in the click handler instead
+                        // would leave the tree selecting one row too far
+                        // down, and the click would not fire at all if the
+                        // row still carried its old position id.
+                        // A typed name is not thrown away silently: if the
+                        // field holds a name, the press is swallowed instead.
+                        let keep = {
+                            let w = view.read(cx);
+                            stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                        };
+                        if keep {
+                            cx.stop_propagation();
+                            return;
+                        }
+                        view.update(cx, |this, cx| {
+                            if this.pending.is_some() {
+                                this.cancel_pending(window, cx);
+                            }
+                        });
+                    }
+                })
                 .on_mouse_down(MouseButton::Right, {
                     let view = view.clone();
                     let tree_state = tree_state.clone();
                     let item = item.clone();
-                    move |_, _, cx| {
+                    move |_, window, cx| {
+                        // While a name is being typed, a right-click only
+                        // closes the input. The menu stays shut: it is built
+                        // from the row index captured before this press, and
+                        // that index shifts when the input row goes away, so
+                        // the menu would act on the wrong row. One more
+                        // right-click opens it, on the row it names.
+                        // A typed name survives the press too: the menu stays
+                        // shut and the input stays open.
+                        let keep = {
+                            let w = view.read(cx);
+                            stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                        };
+                        if keep {
+                            cx.stop_propagation();
+                            return;
+                        }
+                        if view.read(cx).pending.is_some() {
+                            view.update(cx, |this, cx| this.cancel_pending(window, cx));
+                            cx.stop_propagation();
+                            return;
+                        }
                         // Right-click picks the row first, like VS Code: the
                         // highlight, the tree's own selection, and the action
                         // target all move to it. The menu opens on the same
@@ -280,6 +379,37 @@ impl Workbench {
         self.ctx_target.borrow_mut().take().or_else(|| self.selected.clone())
     }
 
+    /// The file icon the pending row shows for the name typed so far.
+    /// None for a new folder (fixed icon) and when no name is being typed.
+    pub(crate) fn pending_file_icon(
+        &self,
+        cx: &App,
+    ) -> Option<(gpui_kit::assets::IconName, Option<u32>)> {
+        match &self.pending {
+            Some(PendingOp::NewFile(_)) => {
+                let typed = self.name_input.read(cx).value();
+                Some(if typed.is_empty() {
+                    (gpui_kit::assets::IconName::File, None)
+                } else {
+                    files::icon_for(&typed)
+                })
+            }
+            Some(PendingOp::Rename(p)) => {
+                let typed = self.name_input.read(cx).value();
+                if typed.is_empty() {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    Some(files::icon_for(&name))
+                } else {
+                    Some(files::icon_for(&typed))
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn start_pending(&mut self, op: PendingOp, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Explorer;
         self.sidebar_open = true;
@@ -302,6 +432,9 @@ impl Workbench {
             s.set_placeholder(placeholder, window, cx);
             s.focus(window, cx);
         });
+        // The icon gate starts from what is painted now, so the first
+        // keystroke is judged against the right icon.
+        self.pending_icon = self.pending_file_icon(cx);
         cx.notify();
     }
 
@@ -419,8 +552,11 @@ impl Workbench {
 
 /// A tree row with a text input in it, for a new file, a new folder, or a rename.
 /// Exactly one tree row tall: the tree lays its rows out at one height, so a
-/// taller box would paint over its neighbours. The input is the small size,
-/// which is one row tall with its border.
+/// taller box would paint over its neighbours. The xsmall input is exactly
+/// one row tall, but its focus ring draws outside its own edge, in the ring
+/// colour on top of its ring-coloured border, so a focused input looked like
+/// a thick line sitting on the row below. The ring is off here: the row's
+/// selected background and the input's own thin border mark the focus.
 fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> ListItem {
     ListItem::new(ix)
         .w_full()
@@ -440,7 +576,20 @@ fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>
                 .items_center()
                 .child(div().w(theme::u(12.)).flex().justify_center())
                 .child(icon)
-                .child(div().flex_1().min_w_0().h_full().flex().items_center().child(Input::new(name_input).xsmall().w_full())),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .child(
+                            Input::new(name_input)
+                                .xsmall()
+                                .focus_bordered(false)
+                                .w_full(),
+                        ),
+                ),
         )
 }
 
@@ -490,4 +639,28 @@ fn delete_row(ix: usize, depth: usize, path: &Path, view: &Entity<Workbench>) ->
 
 fn short(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stray_press_keeps_input;
+    use crate::workbench::PendingOp;
+    use std::path::PathBuf;
+
+    #[test]
+    fn stray_press_keeps_a_typed_name() {
+        let new = Some(PendingOp::NewFile(PathBuf::from("/tmp")));
+        assert!(stray_press_keeps_input(&new, "main.py"));
+        assert!(!stray_press_keeps_input(&new, ""));
+        assert!(!stray_press_keeps_input(&new, "   "));
+        assert!(stray_press_keeps_input(
+            &Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))),
+            "b"
+        ));
+        assert!(!stray_press_keeps_input(
+            &Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))),
+            "main.py"
+        ));
+        assert!(!stray_press_keeps_input(&None, "main.py"));
+    }
 }
