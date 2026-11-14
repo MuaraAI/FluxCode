@@ -68,8 +68,8 @@ fn denied_dir(comp: &str) -> bool {
 /// private keys by any common naming scheme. Compared with the same folding as
 /// [`denied_dir`], because Windows resolves `.SSH/config` to the real directory.
 fn denied_name(name: &str) -> bool {
-    let starts = |p: &str| name.len() >= p.len() && folds_to(&name[..p.len()], p);
-    let ends = |p: &str| name.len() >= p.len() && folds_to(&name[name.len() - p.len()..], p);
+    let starts = |p: &str| name.get(..p.len()).is_some_and(|s| folds_to(s, p));
+    let ends = |p: &str| name.len().checked_sub(p.len()).and_then(|i| name.get(i..)).is_some_and(|s| folds_to(s, p));
     if folds_to(name, ".env") || starts(".env.") || folds_to(name, ".envrc") || starts(".envrc.") {
         return true;
     }

@@ -639,6 +639,12 @@ impl Workbench {
         if !resolved.starts_with(&root) {
             return Err(tr("That file is outside the shared folder.").to_string());
         }
+        let canon_rel = resolved
+            .strip_prefix(&root)
+            .map_err(|_| tr("That file is outside the shared folder.").to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        share::ensure_shareable(&canon_rel)?;
         if !resolved.is_file() {
             return Err(tr("That file is not there any more.").to_string());
         }

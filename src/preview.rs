@@ -34,6 +34,9 @@ impl PreviewServer {
         });
         Ok(Self { port, root, version })
     }
+    pub fn is_root(&self, root: &Path) -> bool {
+        *self.root.lock().unwrap() == root
+    }
 
     pub fn set_root(&self, root: &Path) {
         *self.root.lock().unwrap() = root.to_path_buf();
@@ -124,9 +127,18 @@ fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, C
         }
     }
     let head = String::from_utf8_lossy(&buf[..n]);
+    let host_ok = head
+        .lines()
+        .find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("host")).map(|(_, v)| v.trim()))
+        .is_some_and(|h| {
+            let host_only = h.split(':').next().unwrap_or("");
+            host_only.eq_ignore_ascii_case("127.0.0.1") || host_only.eq_ignore_ascii_case("localhost")
+        });
+    if !host_ok {
+        return respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden");
+    }
     let target = head.split_whitespace().nth(1).unwrap_or("/");
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-
     if path == "/__flux/wait" {
         // Long-poll: answer as soon as the version moves past what the page has.
         let seen: u64 = query.strip_prefix("v=").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -144,9 +156,18 @@ fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, C
     if rel_path.components().any(|c| !matches!(c, Component::Normal(_))) {
         return respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden");
     }
-    let mut file = root.lock().unwrap().join(rel_path);
+    let root_dir = root.lock().unwrap().clone();
+    let mut file = root_dir.join(rel_path);
     if file.is_dir() {
         file = file.join("index.html");
+    }
+    let Ok(canon_root) = std::fs::canonicalize(&root_dir) else {
+        return respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden");
+    };
+    if let Ok(canon_file) = std::fs::canonicalize(&file) {
+        if !canon_file.starts_with(&canon_root) {
+            return respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden");
+        }
     }
     match std::fs::read(&file) {
         Ok(mut body) => {
@@ -180,8 +201,12 @@ mod tests {
     use std::io::{Read, Write};
 
     fn get(port: u16, path: &str) -> String {
+        get_with_host(port, path, &format!("127.0.0.1:{port}"))
+    }
+
+    fn get_with_host(port: u16, path: &str, host: &str) -> String {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
         out
@@ -203,6 +228,7 @@ mod tests {
         server.reload();
         assert!(waiter.join().unwrap().ends_with("\r\n\r\n1"));
         assert_eq!(server.url_for(Some(&dir.join("my page.html"))), format!("http://127.0.0.1:{port}/my%20page.html"));
+        assert!(get_with_host(port, "/", "evil.example").starts_with("HTTP/1.1 403"));
     }
 
     #[test]

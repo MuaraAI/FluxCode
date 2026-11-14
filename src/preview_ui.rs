@@ -27,7 +27,7 @@ impl Workbench {
             cx.notify();
             return;
         };
-        if self.preview_server.is_none() {
+        if self.preview_server.as_ref().is_none_or(|s| !s.is_root(&root)) {
             match PreviewServer::start(&root) {
                 Ok(s) => self.preview_server = Some(s),
                 Err(e) => {
@@ -38,7 +38,6 @@ impl Workbench {
             }
         }
         let server = self.preview_server.as_ref().unwrap();
-        server.set_root(&root);
         let html = file.filter(|f| matches!(f.extension().and_then(|e| e.to_str()), Some("html" | "htm")));
         let url = server.url_for(html.as_deref());
         #[cfg(feature = "embedded-preview")]

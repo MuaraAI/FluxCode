@@ -160,16 +160,39 @@ fn read_file(path: &str, limit: u64) -> Result<Vec<u8>, String> {
 }
 
 fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    // Atomic, as `core::write_text`: a sibling temp file, then a rename, so a
-    // crash mid-save never leaves a half-written file.
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let p = Path::new(path);
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = p.with_file_name(format!(".{name}.fluxcode-tmp"));
-    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, p).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    let pid = std::process::id();
+    for _ in 0..16 {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = p.with_file_name(format!(".{name}.fluxcode-tmp-{pid}-{n}"));
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&tmp) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(bytes).and_then(|_| f.sync_all()) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e.to_string());
+                }
+                drop(f);
+                return std::fs::rename(&tmp, p).map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    e.to_string()
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("could not create a unique temp file".into())
 }
 
 fn search(root: &str, query: &str, match_case: bool, whole_word: bool) -> SearchWire {
