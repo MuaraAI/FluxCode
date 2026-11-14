@@ -5,7 +5,14 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
-<<<<<<< HEAD
+## Code of Conduct and Security Policy (14 November 2026)
+
+- The repository now has a Code of Conduct and a Security Policy
+  (`CODE_OF_CONDUCT.md`, `SECURITY.md`). Security problems are reported
+  privately through GitHub Security Advisories, not in a public issue.
+- The changelog had leftover merge conflict markers from the WSL2 and
+  Markdown entries. Both entries are kept, the markers are gone.
+
 ## WSL2 workspaces: the helper inside the distro (13 November 2026)
 
 - A WSL2 folder now reads and writes through a small helper running inside the
@@ -35,7 +42,6 @@ page, and installed copies offer it on their own. Newest first.
   window keeps drawing while a large file, a network share or a slow disk is read.
   Small files still open the moment you click them, and a save that finishes late
   no longer hides newer unsaved text.
-=======
 ## Markdown files draw themselves (13 November 2026)
 
 - A Markdown file (README.md first of all) opens as text with a small bar above it:
@@ -48,7 +54,6 @@ page, and installed copies offer it on their own. Newest first.
   real text, so edits land in the drawing when you switch back.
 - Flux documents keep their own Preview and Source, unchanged; the "Save as Markdown"
   button belongs to them alone.
->>>>>>> upstream/main
 
 ## Pull requests open to everyone, with automatic checks (13 November 2026)
 

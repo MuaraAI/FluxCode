@@ -4,6 +4,10 @@ FluxCode is open source under the [GNU GPL v3.0 or later](LICENSE): you may use,
 study, fork, change and share it, as long as what you distribute stays under the
 same license. Issues and pull requests are open to everyone.
 
+Everyone who takes part follows the [Code of Conduct](CODE_OF_CONDUCT.md). If
+you find a security problem, report it privately as described in the
+[Security Policy](SECURITY.md), not in a public issue.
+
 ## Issues
 
 [Open an issue](https://github.com/MuaraAI/FluxCode/issues/new/choose) for a bug or an
