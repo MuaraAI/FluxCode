@@ -372,8 +372,18 @@ impl Workbench {
                 }
             }),
             cx.subscribe_in(&name_input, window, |this, _, ev: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = ev {
-                    this.commit_pending(window, cx);
+                match ev {
+                    InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
+                    // Redraw while a name is typed: the pending row's icon
+                    // follows the extension being typed, so `file.py` shows
+                    // the Python icon live. Folders keep their folder icon,
+                    // so they need no redraw.
+                    InputEvent::Change => {
+                        if matches!(this.pending, Some(PendingOp::NewFile(_)) | Some(PendingOp::Rename(_))) {
+                            cx.notify();
+                        }
+                    }
+                    _ => {}
                 }
             }),
             cx.subscribe_in(&search_input, window, |this, _, ev: &InputEvent, _, cx| {

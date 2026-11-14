@@ -95,7 +95,7 @@ impl Workbench {
         let pending = self.pending.clone();
         let name_input = self.name_input.clone();
         let tree_state = self.tree.clone();
-        let list = tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
+        let list = tree(&self.tree, move |ix, entry, _selected, _window, cx| {
             let item = entry.item();
             let id = item.id.to_string();
             // The row a new name is typed into, and the rows being renamed or deleted:
@@ -103,7 +103,19 @@ impl Workbench {
             if id == PENDING_ROW_ID {
                 let icon = match &pending {
                     Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true)).size(theme::u(13.)).text_color(c(theme::FOLDER)),
-                    _ => Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED)),
+                    // New file: the icon follows what is typed, like VS Code, so
+                    // `file.py` shows the Python icon before Enter is pressed.
+                    // The workbench redraws on every change while a name is
+                    // pending, so this stays live as the user types.
+                    _ => {
+                        let typed = name_input.read(cx).value();
+                        if typed.is_empty() {
+                            Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED))
+                        } else {
+                            let (ic, tint) = files::icon_for(&typed);
+                            Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                        }
+                    }
                 };
                 return name_row(ix, entry.depth(), icon, &name_input);
             }
@@ -115,7 +127,11 @@ impl Workbench {
                             .size(theme::u(13.))
                             .text_color(c(theme::FOLDER))
                     } else {
-                        let (ic, tint) = files::icon_for(&item.label);
+                        // Rename: the icon follows the typed name too, falling
+                        // back to the file's own icon while the field is empty.
+                        let typed = name_input.read(cx).value();
+                        let name: &str = if typed.is_empty() { &item.label } else { &typed };
+                        let (ic, tint) = files::icon_for(name);
                         Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
                     };
                     return name_row(ix, entry.depth(), icon, &name_input);
@@ -419,8 +435,11 @@ impl Workbench {
 
 /// A tree row with a text input in it, for a new file, a new folder, or a rename.
 /// Exactly one tree row tall: the tree lays its rows out at one height, so a
-/// taller box would paint over its neighbours. The input is the small size,
-/// which is one row tall with its border.
+/// taller box would paint over its neighbours. The xsmall input is exactly
+/// one row tall, but its focus ring draws outside its own edge, in the ring
+/// colour on top of its ring-coloured border, so a focused input looked like
+/// a thick line sitting on the row below. The ring is off here: the row's
+/// selected background and the input's own thin border mark the focus.
 fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> ListItem {
     ListItem::new(ix)
         .w_full()
@@ -440,7 +459,7 @@ fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>
                 .items_center()
                 .child(div().w(theme::u(12.)).flex().justify_center())
                 .child(icon)
-                .child(div().flex_1().min_w_0().h_full().flex().items_center().child(Input::new(name_input).xsmall().w_full())),
+                .child(div().flex_1().min_w_0().h_full().flex().items_center().child(Input::new(name_input).xsmall().focus_bordered(false).w_full())),
         )
 }
 
