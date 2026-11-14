@@ -687,14 +687,8 @@ impl Workbench {
                 continue;
             }
             shown += 1;
-            let used: Vec<&str> = self.ext.found.iter().filter(|p| p.ext == m.id).map(|p| p.name.as_str()).take(2).collect();
             let selected = self.ext.page.as_deref() == Some(m.id.as_str());
             let (id_open, id_install) = (m.id.clone(), m.id.clone());
-            let meta: SharedString = if used.is_empty() {
-                format!("{} · {}", m.publisher, m.category).into()
-            } else {
-                crate::trf!("Used in {names}"; names => used.join(", ")).into()
-            };
             list = list.child(
                 h_flex()
                     .id(("ext-row", i))
@@ -703,31 +697,38 @@ impl Workbench {
                     .min_w_0()
                     .overflow_hidden()
                     .px_3()
-                    .py_2()
-                    .gap_2p5()
-                    .items_start()
+                    .py_1()
+                    .gap_2()
+                    .items_center()
                     .cursor_pointer()
                     .when(selected, |d| d.bg(c(theme::BG_HOVER)))
                     .hover(|d| d.bg(c(theme::BG_HOVER)))
-                    .child(tile(&m.icon, 30.))
+                    .child(tile(&m.icon, 24.))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap_0p5()
                             .child(
                                 h_flex()
                                     .gap_1p5()
                                     .child(div().flex_shrink(1.).min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(m.name.clone()))
                                     .child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(m.version.clone())),
                             )
-                            .child(div().w_full().text_xs().text_color(c(theme::FG_MUTED)).line_clamp(2).text_ellipsis().child(m.summary.clone()))
-                            .child(div().truncate().text_xs().text_color(c(if used.is_empty() { theme::FG_DIM } else { theme::ACCENT_TEXT })).child(meta)),
+                            // One line, cut with an ellipsis at the end, never a
+                            // second line that stops mid-word.
+                            .child(div().w_full().truncate().text_xs().text_color(c(theme::FG_MUTED)).child(m.summary.clone())),
                     )
                     .when(!installed, |h| {
                         h.child(Button::new(("ext-install", i)).label(tr("Install")).xsmall().primary().on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.ext_install(&id_install, cx);
+                        })))
+                    })
+                    .when(installed, |h| {
+                        let id_page = id_open.clone();
+                        h.child(Button::new(("ext-installed", i)).label(tr("Installed")).xsmall().ghost().on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.ext_open_page(&id_page, cx);
                         })))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&id_open, cx))),

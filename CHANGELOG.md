@@ -5,6 +5,31 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Explorer context menu, inline names, compact Extensions (14 November 2026)
+
+- Right-click a file or folder in the Explorer opens a context menu, like VS Code:
+  New File, New Folder, Rename, Delete, Copy Path, Copy Relative Path, Reveal in
+  File Explorer. Right-clicking a row selects it first, so the highlight and the
+  menu act on the same row; right-clicking empty space in the Explorer opens a
+  menu for the workspace root, with Refresh in it.
+- New File, New Folder, and Rename no longer open a box at the top of the
+  Explorer. The name is typed in a row inside the tree itself, first inside the
+  target folder, with the file or folder icon next to it. Enter confirms, Esc
+  cancels, and a bad name still shows its error in the status bar and keeps the
+  row open. Delete asks in the row itself, with Delete and Cancel buttons. The
+  tree lays its rows out at one height, so the typed row is exactly one row
+  tall, with no border box of its own.
+- The Extensions list is compact: a smaller icon, name and version on one line,
+  the description on one line that ends with an ellipsis, and a small Install
+  button, or an Installed button, at the right edge. The search box and the All
+  / Installed / This folder tabs are unchanged.
+- A new empty file opens clean: the bar that said the file is empty is gone.
+  Files that open as a read-only view (PDF, SQLite, ZIP, and the rest) still
+  show their own bar.
+- Clicking a file in the sidebar while Settings is open now shows that file
+  right away, the same way a click already took the editor back from an
+  extension's page or What's new.
+
 ## GitHub Copilot inline completions (14 November 2026)
 
 - The editor now suggests the next lines of code as ghost text, from GitHub
