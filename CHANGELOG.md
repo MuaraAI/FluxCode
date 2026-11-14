@@ -26,6 +26,13 @@ page, and installed copies offer it on their own. Newest first.
   server, so Copilot's own count of accepted suggestions does not see it.
   The suggestion itself works the same.
 
+## WSL2 workspaces: commits keep their message (14 November 2026)
+
+- Committing from Source Control in a WSL2 folder no longer fails with
+  "Aborting commit due to empty commit message" when the helper is on: the
+  message now reaches git through the helper, the same way it already did
+  through `wsl.exe`.
+
 ## Code of Conduct and Security Policy (14 November 2026)
 
 - The repository now has a Code of Conduct and a Security Policy

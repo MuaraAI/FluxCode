@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped when a request or a response changes shape. The editor replaces a
 /// helper whose version differs, so the two never have to understand each
 /// other across versions.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 pub const FRAME_JSON: u8 = 0;
 pub const FRAME_BYTES: u8 = 1;
@@ -35,8 +35,15 @@ pub enum Request {
     Stat { path: String },
     /// The folder's entries, matching `core::search`'s rules.
     Search { root: String, query: String, match_case: bool, whole_word: bool },
-    /// `git` in the distro, so it sees Linux paths and line endings.
-    Git { cwd: String, args: Vec<String> },
+    /// `git` in the distro, so it sees Linux paths and line endings. `input`
+    /// is written to git's stdin, for the commands that read it (a commit
+    /// message through `--file -`); omitted when there is none.
+    Git {
+        cwd: String,
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<String>,
+    },
     /// Keeps a long-lived connection from being reaped.
     Ping,
 }
@@ -171,6 +178,14 @@ mod tests {
         assert_eq!(back, Request::Ping);
         let scan: Request = serde_json::from_str(r#"{"m":"scan","root":"/a","max":10}"#).unwrap();
         assert_eq!(scan, Request::Scan { root: "/a".into(), max: 10 });
+    }
+
+    #[test]
+    fn git_requests_carry_input_only_when_there_is_some() {
+        let with = Request::Git { cwd: "/r".into(), args: vec!["commit".into()], input: Some("hi\n".into()) };
+        assert_eq!(serde_json::to_string(&with).unwrap(), r#"{"m":"git","cwd":"/r","args":["commit"],"input":"hi\n"}"#);
+        let without = Request::Git { cwd: "/r".into(), args: vec!["status".into()], input: None };
+        assert_eq!(serde_json::to_string(&without).unwrap(), r#"{"m":"git","cwd":"/r","args":["status"]}"#);
     }
 
     #[test]

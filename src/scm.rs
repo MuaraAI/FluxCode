@@ -284,7 +284,7 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
             let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             // The helper is already running in the distro: no process to start.
-            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned)) {
+            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned, input.as_deref())) {
                 match r {
                     Ok(g) if g.success => {
                         return Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout })
