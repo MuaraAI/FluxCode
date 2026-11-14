@@ -115,3 +115,41 @@ fn a_helper_answers_over_a_pipe() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+#[ignore = "needs FLUXCODE_HELPER_BIN pointing at a built fluxcode: FLUXCODE_HELPER_BIN=target/debug/fluxcode cargo test --bin fluxcode -- --ignored"]
+fn a_commit_message_reaches_git_through_the_helper() {
+    let Some(mut h) = Helper::start() else {
+        eprintln!("FLUXCODE_HELPER_BIN not set; skipping");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("fluxcode-e2e-git-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.to_str().unwrap().to_string();
+    let git = |h: &mut Helper, args: &[&str], input: Option<&str>| {
+        let req = Request::Git {
+            cwd: root.clone(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            input: input.map(str::to_string),
+        };
+        h.ask(&req)
+    };
+
+    for args in [vec!["init"], vec!["config", "user.email", "t@example.com"], vec!["config", "user.name", "Test"]] {
+        let r = git(&mut h, &args, None);
+        assert!(r.ok, "{args:?}: {r:?}");
+    }
+    std::fs::write(dir.join("a.txt"), b"one\n").unwrap();
+    let r = git(&mut h, &["add", "-A"], None);
+    assert!(r.ok, "{r:?}");
+    let r = git(&mut h, &["-c", "commit.gpgsign=false", "commit", "--quiet", "--file", "-"], Some("msg via stdin\n"));
+    assert!(r.ok, "{r:?}");
+    let r = git(&mut h, &["log", "-1", "--format=%s"], None);
+    assert!(r.ok, "{r:?}");
+    let subject: crate::remote::proto::GitWire = serde_json::from_value(r.json.unwrap()).unwrap();
+    assert!(subject.success, "{subject:?}");
+    assert_eq!(subject.stdout.trim(), "msg via stdin");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

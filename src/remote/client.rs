@@ -132,8 +132,8 @@ impl RemoteClient {
         self.json(Request::Scan { root: root.to_string(), max })
     }
 
-    pub fn git(&mut self, cwd: &str, args: &[String]) -> Result<super::proto::GitWire, String> {
-        self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec() })
+    pub fn git(&mut self, cwd: &str, args: &[String], input: Option<&str>) -> Result<super::proto::GitWire, String> {
+        self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec(), input: input.map(str::to_string) })
     }
 
     /// Whether the helper process has gone away (a distro shutdown, a crash).

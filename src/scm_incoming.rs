@@ -33,7 +33,7 @@ fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         // Naming the client and wire types keeps the crate's re-exports honest.
         let attempt: Option<Result<crate::remote::GitWire, String>> =
-            crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned));
+            crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned, None));
         if let Some(r) = attempt {
             match r {
                 Ok(g) if g.success => return Ok(g.stdout),

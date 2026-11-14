@@ -94,7 +94,7 @@ fn handle(req: Request, body: Option<Vec<u8>>) -> Result<Answer, String> {
             Answer::Json(Response::json(serde_json::json!({"written": bytes.len()})))
         }
         Request::Search { root, query, match_case, whole_word } => Answer::Json(Response::json(search(&root, &query, match_case, whole_word))),
-        Request::Git { cwd, args } => Answer::Json(Response::json(git(&cwd, &args))),
+        Request::Git { cwd, args, input } => Answer::Json(Response::json(git(&cwd, &args, input.as_deref()))),
     })
 }
 
@@ -267,15 +267,27 @@ fn preview(line: &str, match_char: usize) -> String {
     s
 }
 
-fn git(cwd: &str, args: &[String]) -> GitWire {
-    let out = std::process::Command::new("git")
-        .args(args)
+fn git(cwd: &str, args: &[String], input: Option<&str>) -> GitWire {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("NO_COLOR", "1")
-        .output();
-    match out {
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return GitWire { success: false, stdout: String::new(), stderr: format!("git could not start: {e}") },
+    };
+    // The message goes in verbatim; git applies its own `--file` cleanup.
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    match child.wait_with_output() {
         Ok(o) => GitWire {
             success: o.status.success(),
             stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -347,6 +359,40 @@ mod tests {
         let entries = list(dir.to_str().unwrap()).unwrap();
         assert!(entries[0].is_dir, "{entries:?}");
         assert_eq!(entries[1].name, "aaa.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_receives_stdin_when_input_is_given() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-git-in-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = vec!["hash-object".to_string(), "--stdin".to_string()];
+        let out = git(dir.to_str().unwrap(), &args, Some("hello\n"));
+        if !out.success && out.stderr.contains("could not start") {
+            eprintln!("git is not on PATH; skipping");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert!(out.success, "{out:?}");
+        assert_eq!(out.stdout.trim(), "ce013625030ba8dba906f756967f9e9ca394464a");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_with_no_input_sees_eof() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-git-eof-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = vec!["hash-object".to_string(), "--stdin".to_string()];
+        let out = git(dir.to_str().unwrap(), &args, None);
+        if !out.success && out.stderr.contains("could not start") {
+            eprintln!("git is not on PATH; skipping");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        assert!(out.success, "{out:?}");
+        assert_eq!(out.stdout.trim(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
