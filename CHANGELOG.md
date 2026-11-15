@@ -5,6 +5,23 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## What's new shows only what is new (15 November 2026)
+
+- What's new showed the same entry after every update. Two things caused it:
+  the release notes it reads (`changelog.flux`) had not been updated with the
+  latest changes, and when nothing looked new it showed the newest entry again
+  instead of nothing.
+- Both are fixed. `changelog.flux` is now synced with this changelog: ten
+  entries that only lived here (Settings, Explorer, Copilot, the WSL2 commit
+  fix, Code of Conduct, pull requests, the Windows installer, the terminal,
+  the taskbar icon, and the update card) are now in it too. And an entry is
+  only shown when the build that carries it is newer than the one before, so if
+  an update brings no new entry, the page says there are no notes for this
+  build.
+- The build-tag pill on a card no longer shows a tooltip: the chip already
+  shows the full build name, and the tooltip rendered below it, over the title
+  line.
+
 ## Explorer: expanding a folder keeps the view still (15 November 2026)
 
 - Opening a folder no longer moves the view: the folder's row stays where it
