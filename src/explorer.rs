@@ -59,6 +59,20 @@ pub(crate) fn insert_pending_row(items: &mut Vec<TreeItem>, pending: Option<&Pen
     }
 }
 
+/// What a rebuild of the tree items means for showing the active file. The file
+/// is there: a show that gave up may try again. The file is gone: its show is void.
+pub(crate) fn update_reveal_state(
+    shown: bool,
+    revealed: &mut Option<String>,
+    tried: &mut Option<String>,
+) {
+    if shown {
+        *tried = None;
+    } else {
+        *revealed = None;
+    }
+}
+
 impl Workbench {
     pub(crate) fn render_explorer(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.root.is_none() {
@@ -78,11 +92,17 @@ impl Workbench {
         // Follow the active tab: its folders open and its row scrolls into view, like
         // VS Code's "reveal active file". Runs only while the explorer is on screen (so a
         // hidden side bar costs nothing and catches up when shown), once per tab change.
+        // The tab counts as shown only once it is found: an expand rebuilds the
+        // items, and counting it before the find would show it again and move the view.
         let inside = |p: &String| self.roots().iter().any(|r| Path::new(p).starts_with(r));
-        if let Some(p) = active_path.clone().filter(|p| self.revealed.borrow().as_deref() != Some(p.as_str()) && inside(p)) {
-            *self.revealed.borrow_mut() = Some(p.clone());
-            let id = SharedString::from(p);
-            self.tree.update(cx, |t, cx| {
+        let show = active_path.clone().filter(|p| {
+            self.revealed.borrow().as_deref() != Some(p.as_str())
+                && self.reveal_tried.borrow().as_deref() != Some(p.as_str())
+                && inside(p)
+        });
+        if let Some(p) = show {
+            let id = SharedString::from(p.clone());
+            let found = self.tree.update(cx, |t, cx| {
                 // One linear scan in the common case: `index_of` walks every
                 // expanded row, so three calls per switch cost O(entries) x 3.
                 let mut ix = t.index_of(&id);
@@ -93,8 +113,18 @@ impl Workbench {
                 if let Some(ix) = ix {
                     t.scroll_to_item(ix, ScrollStrategy::Nearest);
                     t.set_selected_index(Some(ix), cx);
+                    true
+                } else {
+                    false
                 }
             });
+            if found {
+                *self.revealed.borrow_mut() = Some(p);
+            } else {
+                // Not in the tree (still loading, or never listed): stop trying
+                // until the items change, or every render would redo this scan.
+                *self.reveal_tried.borrow_mut() = Some(p);
+            }
         }
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
         let target = self.ctx_target.clone();
@@ -654,9 +684,36 @@ fn short(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::stray_press_keeps_input;
+    use super::{stray_press_keeps_input, update_reveal_state};
     use crate::workbench::PendingOp;
     use std::path::PathBuf;
+
+    #[test]
+    fn rebuild_that_keeps_the_file_keeps_the_show() {
+        let mut revealed = Some("src/lib.rs".to_string());
+        let mut tried = None;
+        update_reveal_state(true, &mut revealed, &mut tried);
+        assert_eq!(revealed, Some("src/lib.rs".to_string()));
+        assert_eq!(tried, None);
+    }
+
+    #[test]
+    fn rebuild_that_brings_the_file_back_unblocks_the_show() {
+        let mut revealed = Some("src/main.rs".to_string());
+        let mut tried = Some("src/lib.rs".to_string());
+        update_reveal_state(true, &mut revealed, &mut tried);
+        assert_eq!(revealed, Some("src/main.rs".to_string()));
+        assert_eq!(tried, None);
+    }
+
+    #[test]
+    fn rebuild_that_loses_the_file_voids_the_show() {
+        let mut revealed = Some("src/lib.rs".to_string());
+        let mut tried = None;
+        update_reveal_state(false, &mut revealed, &mut tried);
+        assert_eq!(revealed, None);
+        assert_eq!(tried, None);
+    }
 
     #[test]
     fn stray_press_keeps_a_typed_name() {

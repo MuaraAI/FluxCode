@@ -5,6 +5,16 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Explorer: expanding a folder keeps the view still (15 November 2026)
+
+- Opening a folder no longer moves the view: the folder's row stays where it
+  was on screen, and its children appear below it, pushing only the rows
+  underneath down. Collapsing a folder behaves the same way.
+- The cause was the "show the active file" step: every rebuild of the tree
+  re-showed the active file, and when the new children had pushed its row
+  below the viewport, the tree scrolled down to bring it back. The step now
+  runs only once per tab change, and a rebuild on its own never scrolls.
+
 ## Settings page: two panes, one section at a time (15 November 2026)
 
 - Settings is now two panes, like Antigravity: a narrow navigation on the

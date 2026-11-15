@@ -297,9 +297,12 @@ pub struct Workbench {
     // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
-    /// The tab the explorer last showed (its folders opened, scrolled into view): it
-    /// follows the active tab whenever it is on screen.
+    /// The tab the explorer last showed, scrolled into view. Set only once the
+    /// file is found in the tree, so a rebuild (expand, refresh) never re-shows it.
     pub(crate) revealed: RefCell<Option<String>>,
+    /// The tab the explorer gave up showing: not in the tree. Cleared when the
+    /// items change and it is there again, so the show resumes then.
+    pub(crate) reveal_tried: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
     /// The icon the pending row last showed: the name input's Change
@@ -522,6 +525,7 @@ impl Workbench {
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
             revealed: RefCell::new(None),
+            reveal_tried: RefCell::new(None),
             pending: None,
             pending_icon: None,
             name_input,
@@ -688,8 +692,6 @@ impl Workbench {
 
     /// Build the tree items from `tree_nodes` and hand them to the tree.
     pub(crate) fn set_tree_items(&mut self, cx: &mut Context<Self>) {
-        // New items: show the active file again (and retry after a folder loads).
-        *self.revealed.borrow_mut() = None;
         let mut dirs = std::collections::HashSet::new();
         let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
         // A name being typed gets its own row inside the tree, first in its folder.
@@ -716,6 +718,16 @@ impl Workbench {
                 }
             }
         });
+        // A rebuild must not move the view: it keeps the tab already shown, and
+        // only unblocks a show that gave up, when the file is there again.
+        if let Some(p) = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned()) {
+            let shown = self.tree.read(cx).index_of(&SharedString::from(p)).is_some();
+            crate::explorer::update_reveal_state(
+                shown,
+                &mut self.revealed.borrow_mut(),
+                &mut self.reveal_tried.borrow_mut(),
+            );
+        }
     }
 
     /// A folder was opened: read it now if it has not been read yet.
