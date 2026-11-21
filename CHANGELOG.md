@@ -5,6 +5,15 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Saving in a WSL folder no longer hangs (21 November 2026)
+
+- Saving a file through the WSL helper hung the editor: the helper answers a write
+  with one JSON frame, and FluxCode waited for a second frame that a write never sends.
+  The save never returned, so the window stopped responding instead of falling back
+  to the shared folder. A write now reads only the answer it gets and returns.
+- A test starts a mock helper that answers exactly as the real one does for a write,
+  so this stays fixed without a WSL distro on the machine running the tests.
+
 ## Unmatched brackets underlined as you type (19 November 2026)
 
 - A bracket with no partner gets a red underline a moment after you stop typing,

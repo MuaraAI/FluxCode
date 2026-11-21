@@ -74,7 +74,13 @@ impl RemoteClient {
     }
 
     /// A request whose answer is a JSON header followed by the bytes.
+    ///
+    /// Only for reads: the helper answers a `Read` with `Answer::Bytes`, so a
+    /// header and a bytes frame follow. A `Write` is answered with a JSON frame
+    /// alone (see `server::handle` and `remote/e2e.rs`); sending one here waits
+    /// for bytes that never arrive, so it is refused before that wait starts.
     pub fn bytes(&mut self, req: Request, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        read_path_accepts(&req)?;
         let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
         write_frame(&mut self.stdin, FRAME_JSON, &payload).map_err(|e| e.to_string())?;
         if let Some(b) = body {
@@ -90,18 +96,7 @@ impl RemoteClient {
     }
 
     fn read_json(&mut self) -> Result<serde_json::Value, String> {
-        let (kind, payload) = match read_frame(&mut self.stdout).map_err(|e| e.to_string())? {
-            Some(frame) => frame,
-            None => return Err("the helper closed the connection".into()),
-        };
-        if kind != FRAME_JSON {
-            return Err("the helper sent something other than JSON".into());
-        }
-        let r: Response = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
-        if !r.ok {
-            return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
-        }
-        Ok(r.json.unwrap_or(serde_json::Value::Null))
+        read_json_from(&mut self.stdout)
     }
 
     // ---- the calls the editor makes -------------------------------------
@@ -119,11 +114,26 @@ impl RemoteClient {
     }
 
     pub fn write(&mut self, path: &str, bytes: &[u8], crlf: bool) -> Result<(), String> {
-        self.bytes(Request::Write { path: path.to_string(), crlf }, Some(bytes)).map(|_| ())
+        let req = Request::Write {
+            path: path.to_string(),
+            crlf,
+        };
+        write_request(&mut self.stdin, &mut self.stdout, &req, bytes)
     }
 
-    pub fn search(&mut self, root: &str, query: &str, match_case: bool, whole_word: bool) -> Result<SearchWire, String> {
-        self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
+    pub fn search(
+        &mut self,
+        root: &str,
+        query: &str,
+        match_case: bool,
+        whole_word: bool,
+    ) -> Result<SearchWire, String> {
+        self.json(Request::Search {
+            root: root.to_string(),
+            query: query.to_string(),
+            match_case,
+            whole_word,
+        })
     }
 
     /// Every file under `root`, read inside the distro. This is the list behind
@@ -147,6 +157,54 @@ impl Drop for RemoteClient {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// The read path (`bytes`) only makes sense for answers that carry bytes; a
+/// write is answered with one JSON frame, so accepting it here would wait for a
+/// frame that never comes.
+fn read_path_accepts(req: &Request) -> Result<(), String> {
+    if matches!(req, Request::Write { .. }) {
+        return Err("a write is answered with one JSON frame; use write()".into());
+    }
+    Ok(())
+}
+
+/// Read one JSON answer frame and unwrap its `Response` envelope.
+fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
+    let (kind, payload) = match read_frame(stdout).map_err(|e| e.to_string())? {
+        Some(frame) => frame,
+        None => return Err("the helper closed the connection".into()),
+    };
+    if kind != FRAME_JSON {
+        return Err("the helper sent something other than JSON".into());
+    }
+    let r: Response = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
+    if !r.ok {
+        return Err(r
+            .error
+            .unwrap_or_else(|| "the helper refused the request".into()));
+    }
+    Ok(r.json.unwrap_or(serde_json::Value::Null))
+}
+
+/// Send a request that carries a body frame and wait for its answer.
+///
+/// The helper answers a `Write` with one JSON frame (`Answer::Json` in
+/// `server::handle`); no bytes frame follows. Reading one here waits for
+/// bytes that never come, which blocks the caller — and `save_doc` calls
+/// `write` on the UI thread, so the editor hangs instead of reaching the UNC
+/// fallback.
+fn write_request(
+    stdin: &mut impl Write,
+    stdout: &mut impl Read,
+    req: &Request,
+    body: &[u8],
+) -> Result<(), String> {
+    let payload = serde_json::to_vec(req).map_err(|e| e.to_string())?;
+    write_frame(stdin, FRAME_JSON, &payload).map_err(|e| e.to_string())?;
+    write_frame(stdin, FRAME_BYTES, body).map_err(|e| e.to_string())?;
+    read_json_from(stdout)?;
+    Ok(())
 }
 
 /// Make sure the helper for this build is in the distro, and return its path.
@@ -373,5 +431,104 @@ mod tests {
         std::fs::write(&f, b"abc").unwrap();
         assert_eq!(sha256_of(&f).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write is answered with one JSON frame. A client that also waits for a
+    /// bytes frame blocks until the helper goes away, which is the WSL save
+    /// hang: `save_doc` calls `write` on the UI thread.
+    #[test]
+    fn a_write_returns_after_the_single_json_answer() {
+        let (mut server_in, mut client_out) = std::io::pipe().unwrap();
+        let (mut client_in, mut server_out) = std::io::pipe().unwrap();
+        let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+
+        let server = std::thread::spawn(move || {
+            let (kind, payload) = read_frame(&mut server_in).unwrap().unwrap();
+            assert_eq!(kind, FRAME_JSON);
+            let req: Request = serde_json::from_slice(&payload).unwrap();
+            assert!(matches!(req, Request::Write { .. }), "{req:?}");
+            let (kind, body) = read_frame(&mut server_in).unwrap().unwrap();
+            assert_eq!(kind, FRAME_BYTES);
+            assert_eq!(body, b"hello");
+            // Exactly what the helper sends for a write: one JSON frame.
+            let answer = Response::json(serde_json::json!({"written": 5}));
+            write_frame(
+                &mut server_out,
+                FRAME_JSON,
+                &serde_json::to_vec(&answer).unwrap(),
+            )
+            .unwrap();
+            // Keep the connection open so a client waiting for a second frame
+            // would stall here instead of seeing EOF.
+            let _ = hold_rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+
+        let started = std::time::Instant::now();
+        let result = write_request(
+            &mut client_out,
+            &mut client_in,
+            &Request::Write {
+                path: "/w/a.txt".into(),
+                crlf: false,
+            },
+            b"hello",
+        );
+        let waited = started.elapsed();
+        let _ = hold_tx.send(());
+        server.join().unwrap();
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            waited < std::time::Duration::from_secs(1),
+            "write waited {waited:?} for a bytes frame"
+        );
+    }
+
+    /// A refused write still reports the helper's reason from its one frame.
+    #[test]
+    fn a_refused_write_returns_the_error_without_a_second_frame() {
+        let (mut server_in, mut client_out) = std::io::pipe().unwrap();
+        let (mut client_in, mut server_out) = std::io::pipe().unwrap();
+        let server = std::thread::spawn(move || {
+            let _ = read_frame(&mut server_in).unwrap().unwrap();
+            let _ = read_frame(&mut server_in).unwrap().unwrap();
+            let answer = Response::error("no such folder");
+            write_frame(
+                &mut server_out,
+                FRAME_JSON,
+                &serde_json::to_vec(&answer).unwrap(),
+            )
+            .unwrap();
+        });
+        let result = write_request(
+            &mut client_out,
+            &mut client_in,
+            &Request::Write {
+                path: "/nope/a.txt".into(),
+                crlf: false,
+            },
+            b"x",
+        );
+        server.join().unwrap();
+        assert_eq!(result.unwrap_err(), "no such folder");
+    }
+
+    /// The read path refuses a write instead of waiting for a bytes frame the
+    /// helper never sends — a regression here must fail loudly, not hang.
+    #[test]
+    fn the_read_path_refuses_a_write() {
+        let err = read_path_accepts(&Request::Write {
+            path: "/w/a.txt".into(),
+            crlf: false,
+        });
+        assert_eq!(
+            err.unwrap_err(),
+            "a write is answered with one JSON frame; use write()"
+        );
+        assert!(read_path_accepts(&Request::Read {
+            path: "/w/a.txt".into(),
+            limit: 10
+        })
+        .is_ok());
     }
 }

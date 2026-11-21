@@ -10,6 +10,14 @@
 //   @en / @id                the Markdown that follows is English / Indonesian
 // Lines starting with // before the first @release are comments.
 
+@release 2026-11-21
+@title en: Saving in a WSL folder no longer hangs
+@title id: Menyimpan di folder WSL tidak macet lagi
+@en
+Saving a file through the WSL helper hung the editor: the helper answers a write with one JSON frame, and FluxCode waited for a second frame that a write never sends, so the save never came back and the window stopped responding instead of falling back to the shared folder. A write now reads only the answer it gets and returns. A test with a mock helper keeps it that way without needing a WSL distro.
+@id
+Menyimpan file lewat helper WSL membuat editor macet: helper menjawab penulisan dengan satu frame JSON, sementara FluxCode menunggu frame kedua yang tidak pernah dikirim untuk penulisan, jadi penyimpanan tidak pernah kembali dan jendela berhenti merespons alih-alih beralih ke folder bersama. Sekarang penulisan hanya membaca jawaban yang dikirim lalu selesai. Tes dengan helper tiruan menjaganya tetap begitu tanpa perlu distro WSL.
+
 @release 2026-11-19
 @title en: Unmatched brackets underlined as you type
 @title id: Kurung tanpa pasangan digarisbawahi saat mengetik
