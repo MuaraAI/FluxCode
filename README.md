@@ -163,23 +163,6 @@ own colors, so a theme change recolors the scene at once (light themes turn it t
 they fit any window size. Nothing is downloaded. They stand still by default (no CPU
 at all); Background animation makes them move, after checking what your PC can take.
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/python-error.png"><img src="assets/screenshots/python-error.png" width="100%" alt="A Python run fails with ModuleNotFoundError. The Output panel shows a card with the file and line, the code line, a hint, and a Fix button that runs py -m pip install tabulate."></a>
-      <br><sub><b>A Python error as a card</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/sqlite.png"><img src="assets/screenshots/sqlite.png" width="100%" alt="A SQLite database opened as text: each table and view with its CREATE statement and row count, under a line saying the view is read-only."></a>
-      <br><sub><b>SQLite opened as text</b></sub>
-    </td>
-  </tr>
-</table>
-
-A Python error becomes a card with the file, the line and a hint; for a missing module, Fix
-installs it. A SQLite database opens as its tables, SQL and row counts, like Word, Excel,
-PDF and ZIP files do, instead of an error.
-
 ## What makes it different
 
 - **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status

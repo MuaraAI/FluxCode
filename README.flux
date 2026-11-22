@@ -279,21 +279,6 @@ mengubahnya jadi siang), dan pas di ukuran jendela apa pun. Tidak ada yang diund
 Secara default scene-nya diam (tanpa beban CPU); Background animation membuatnya bergerak,
 setelah mengecek apakah PC kamu sanggup.
 
-@all
-@gallery
-@image assets/screenshots/python-error.png width=49% link=assets/screenshots/python-error.png alt="A Python run fails with ModuleNotFoundError. The Output panel shows a card with the file and line, the code line, a hint, and a Fix button that runs py -m pip install tabulate." caption="A Python error as a card" caption-id="Error Python jadi kartu"
-@image assets/screenshots/sqlite.png width=49% link=assets/screenshots/sqlite.png alt="A SQLite database opened as text: each table and view with its CREATE statement and row count, under a line saying the view is read-only." caption="SQLite opened as text" caption-id="SQLite dibuka sebagai teks"
-@end
-
-@en
-A Python error becomes a card with the file, the line and a hint; for a missing module, Fix
-installs it. A SQLite database opens as its tables, SQL and row counts, like Word, Excel,
-PDF and ZIP files do, instead of an error.
-@id
-Error Python menjadi kartu berisi file, baris, dan petunjuk; kalau modulnya tidak ada, Fix
-memasangnya. Database SQLite terbuka sebagai daftar tabel, SQL, dan jumlah barisnya, sama
-seperti file Word, Excel, PDF, dan ZIP, bukan sebagai error.
-
 @en
 ## What makes it different
 

@@ -168,23 +168,6 @@ mengubahnya jadi siang), dan pas di ukuran jendela apa pun. Tidak ada yang diund
 Secara default scene-nya diam (tanpa beban CPU); Background animation membuatnya bergerak,
 setelah mengecek apakah PC kamu sanggup.
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/python-error.png"><img src="assets/screenshots/python-error.png" width="100%" alt="A Python run fails with ModuleNotFoundError. The Output panel shows a card with the file and line, the code line, a hint, and a Fix button that runs py -m pip install tabulate."></a>
-      <br><sub><b>Error Python jadi kartu</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/sqlite.png"><img src="assets/screenshots/sqlite.png" width="100%" alt="A SQLite database opened as text: each table and view with its CREATE statement and row count, under a line saying the view is read-only."></a>
-      <br><sub><b>SQLite dibuka sebagai teks</b></sub>
-    </td>
-  </tr>
-</table>
-
-Error Python menjadi kartu berisi file, baris, dan petunjuk; kalau modulnya tidak ada, Fix
-memasangnya. Database SQLite terbuka sebagai daftar tabel, SQL, dan jumlah barisnya, sama
-seperti file Word, Excel, PDF, dan ZIP, bukan sebagai error.
-
 ## Yang membedakannya
 
 - **Tata letak dan kendali seperti VS Code.** Activity bar, side bar, tab, panel, dan
