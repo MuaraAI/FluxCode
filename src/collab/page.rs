@@ -1,4 +1,3 @@
-//! The Live share page: it opens in the editor area (the people icon in the activity bar).
 
 use super::{my_name, reach, Role};
 use crate::i18n::tr;
@@ -15,7 +14,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
-/// Narrower than this, a card takes the whole row.
 const CARD_MIN: f32 = 260.;
 const MONO: &str = "Cascadia Code";
 
@@ -37,7 +35,6 @@ impl Workbench {
             .id("collab-page")
             .size_full()
             .min_w_0()
-            // A long path must not widen the page past the window.
             .overflow_x_hidden()
             .overflow_y_scroll()
             .bg(theme::editor_wash())
@@ -46,7 +43,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The title, where the session stands, and how to end it.
     fn page_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let state: Option<SharedString> = match &co.role {
@@ -89,12 +85,10 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Before a session: share the open folder.
     fn host_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let folder = self.root.as_ref().map(|r| (r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), r.display().to_string()));
         let on = co.internet;
-        // A typed invite code says what this person came to do: Join is then the one primary button.
         let joining = !co.join_input.read(cx).value().trim().is_empty();
         let Some((name, path)) = folder else {
             return card(IconName::Users, tr("Host this folder"), None, None)
@@ -153,7 +147,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Before a session: join someone else's with the code they sent.
     fn join_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let into_open = co.into_open_folder;
@@ -172,7 +165,6 @@ impl Workbench {
                 .when(on, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                 .when(!on, |d| d.text_color(c(theme::FG_MUTED)).hover(|s| s.text_color(c(theme::FG))))
                 .child(label)
-                // The whole label, when a narrow window cuts it short.
                 .tooltip(move |w, cx| Tooltip::new(label).build(w, cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.collab.into_open_folder = open;
@@ -229,7 +221,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Host: the code to send, front and centre, and who it lets in.
     fn invite_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let code = co.invite.as_ref().map(|i| i.code()).unwrap_or_default();
@@ -301,7 +292,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Host: each way a guest can get in, with a mark; the addresses and reasons fold out.
     fn ways_card(&self, port: u16, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let reach = co.reach.clone().unwrap_or_else(|| reach::Reach::local_only(None));
@@ -310,7 +300,6 @@ impl Workbench {
             None => reach::State::No(tr("No network connection.").into()),
         };
         let open = [&lan, &reach.upnp, &reach.ipv6, &reach.relay].iter().filter(|s| matches!(s, reach::State::Ready(_))).count();
-        // The public relay is not ours, so calling it MuaraAI would be a lie the moment our own relay is off.
         let on_public = matches!(&reach.relay, reach::State::Ready(a) if !reach::is_primary_relay(a));
         let relay_name = if on_public { tr("Relay (public)") } else { tr("Relay (MuaraAI)") };
         let full = co.ways_open;
@@ -323,7 +312,6 @@ impl Workbench {
                 this.collab.ways_open = !this.collab.ways_open;
                 cx.notify();
             }));
-        // Same network only: the three internet ways were never tried, so one line says so.
         let local = [&reach.upnp, &reach.ipv6, &reach.relay].iter().all(|s| matches!(s, reach::State::Off));
         let count = (!local).then(|| format!("{open}/4"));
         card(IconName::Network, tr("Ways in"), count, Some(toggle.into_any_element()))
@@ -359,7 +347,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Guest: how this PC reaches the host.
     fn connection_card(&self, addr: &str) -> AnyElement {
         let (icon, via): (IconName, SharedString) = match super::path_kind(addr) {
             super::Via::Lan => (IconName::House, tr("Straight to the host over your network, encrypted.").into()),
@@ -380,7 +367,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Who is in the session, and the file and line each one is on.
     fn people_card(&self) -> AnyElement {
         let co = &self.collab;
         let mut list = v_flex().gap_0p5();
@@ -427,7 +413,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Guest: the host's files.
     fn files_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let q = co.filter_input.read(cx).value().to_lowercase();
@@ -450,7 +435,6 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
                     .child(Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
-                    // The name first: a long folder path must not hide which file it is.
                     .child(
                         h_flex()
                             .flex_1()
@@ -471,7 +455,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The edits everyone made, newest first; each opens as a diff.
     fn activity_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let co = &self.collab;
         let mut list = v_flex().id("co-feed-list").max_h(theme::u(380.)).overflow_y_scroll();
@@ -516,7 +499,6 @@ impl Workbench {
 }
 
 
-/// What went wrong, in the words of whoever found it (they say the cause and what to do).
 fn error_banner(e: String, cx: &mut Context<Workbench>) -> AnyElement {
     h_flex()
         .gap_2p5()
@@ -537,7 +519,6 @@ fn error_banner(e: String, cx: &mut Context<Workbench>) -> AnyElement {
         .into_any_element()
 }
 
-/// A row of cards that wraps to one per row on a narrow window.
 fn row(cards: [AnyElement; 2], even: bool) -> Div {
     h_flex()
         .w_full()
@@ -545,11 +526,9 @@ fn row(cards: [AnyElement; 2], even: bool) -> Div {
         .gap_4()
         .when(even, |h| h.items_stretch())
         .when(!even, |h| h.items_start())
-        // The basis makes them wrap; shrinking lets one card fit a column narrower than that.
         .children(cards.into_iter().map(|c| v_flex().flex_grow(1.).flex_shrink(1.).flex_basis(theme::u(CARD_MIN)).min_w_0().overflow_hidden().child(c)))
 }
 
-/// A card: a small titled box.
 fn card(icon: IconName, title: &'static str, count: Option<String>, aside: Option<AnyElement>) -> Div {
     v_flex()
         .w_full()
@@ -605,7 +584,6 @@ fn info_line(label: &'static str, value: String, mono: bool) -> Div {
         .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).when(mono, |d| d.font_family(MONO)).child(value))
 }
 
-/// One way in: a mark, its name, and its address or why it isn't open.
 fn way_row(ix: usize, name: &'static str, st: &reach::State, hint: Option<&'static str>, full: bool) -> AnyElement {
     let (detail, mono, mark): (SharedString, bool, AnyElement) = match st {
         reach::State::Trying => (tr("Checking…").into(), false, Spinner::new().icon(IconName::LoaderCircle).small().color(c(theme::FG_MUTED)).into_any_element()),

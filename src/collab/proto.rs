@@ -1,14 +1,10 @@
-//! The messages host and guests exchange (one JSON object per encrypted frame).
 
 use super::ot::Op;
 use serde::{Deserialize, Serialize};
 
-/// Who made an edit with an AI agent: shown next to the edit on every screen.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AiInfo {
-    /// The agent ("Claude Agent", "OpenCode").
     pub agent: String,
-    /// The model as the agent names it ("anthropic/claude-sonnet", "GLM-5.3-Flash").
     #[serde(default)]
     pub model: String,
     #[serde(default)]
@@ -18,7 +14,6 @@ pub struct AiInfo {
 }
 
 impl AiInfo {
-    /// "Claude Agent · claude-sonnet · high effort"
     pub fn line(&self) -> String {
         let mut parts = vec![self.agent.clone()];
         if !self.model.is_empty() {
@@ -37,13 +32,11 @@ impl AiInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peer {
     pub id: u64,
-    /// GitHub login when signed in, else a name the person typed.
     pub name: String,
     #[serde(default)]
     pub github: bool,
     #[serde(default)]
     pub host: bool,
-    /// The file (path relative to the shared folder) and line they are on.
     #[serde(default)]
     pub file: String,
     #[serde(default)]
@@ -60,9 +53,7 @@ pub enum Msg {
     Welcome { you: u64, host: String, folder: String, files: Vec<String>, peers: Vec<Peer> },
     Peers { peers: Vec<Peer> },
     Snapshot { path: String, rev: u64, text: String },
-    /// Someone's edit, as the host applied it (`author` 0 is the host).
     Applied { path: String, rev: u64, op: Op, author: u64, #[serde(default)] ai: Option<AiInfo> },
-    /// The host took your edit; it is now revision `rev`.
     Ack { path: String, rev: u64 },
     Refused { why: String },
     Bye { why: String },

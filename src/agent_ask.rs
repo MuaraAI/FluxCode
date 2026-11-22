@@ -1,4 +1,3 @@
-//! Questions from the agent (ACP `elicitation/create`): the agent asks, the user picks A, B, C... or types an answer of their own, and the answer goes back as the form's content.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -15,10 +14,8 @@ use serde_json::{json, Map, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
-    /// One of the options (`multi`: any number of them).
     Choice { options: Vec<Opt>, multi: bool },
     Bool,
-    /// Typed: `number` / `integer` keep their JSON type in the answer.
     Text { json_type: &'static str },
 }
 
@@ -38,18 +35,14 @@ pub struct Field {
     pub kind: Kind,
 }
 
-/// One question form waiting for the user.
 pub struct Ask {
     pub rpc_id: Value,
     pub message: String,
     pub fields: Vec<Field>,
-    /// Per field: the chosen option indices (`OTHER` = the typed answer).
     pub picked: Vec<Vec<usize>>,
-    /// A URL request: the page to open.
     pub url: Option<String>,
 }
 
-/// The "Type my own answer" pick.
 pub const OTHER: usize = usize::MAX;
 
 fn s(v: &Value, k: &str) -> String {
@@ -82,7 +75,6 @@ fn options_of(p: &Value) -> Option<Vec<Opt>> {
     )
 }
 
-/// The questions of a `requestedSchema`.
 pub fn parse_schema(schema: &Value) -> Vec<Field> {
     let required: Vec<String> = schema.get("required").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     let Some(props) = schema.get("properties").and_then(Value::as_object) else { return Vec::new() };
@@ -109,12 +101,10 @@ pub fn parse_schema(schema: &Value) -> Vec<Field> {
         .collect()
 }
 
-/// A letter for option `i`: A..Z, then AA..
 pub fn letter(i: usize) -> String {
     if i < 26 { ((b'A' + i as u8) as char).to_string() } else { format!("{}{}", letter(i / 26 - 1), letter(i % 26)) }
 }
 
-/// The form's `content`, or the first question still unanswered (its title).
 pub fn answer(fields: &[Field], picked: &[Vec<usize>], typed: &[String]) -> Result<Map<String, Value>, String> {
     let mut out = Map::new();
     for (i, f) in fields.iter().enumerate() {
@@ -153,13 +143,11 @@ pub fn answer(fields: &[Field], picked: &[Vec<usize>], typed: &[String]) -> Resu
 }
 
 impl Workbench {
-    /// An `elicitation/create` request: show its questions (or its URL) above the composer.
     pub(crate) fn agent_on_elicitation(&mut self, id: Value, params: &Value, cx: &mut Context<Self>) {
         let message = s(params, "message");
         let url = (params.get("mode").and_then(Value::as_str) == Some("url")).then(|| s(params, "url")).filter(|u| !u.is_empty());
         let fields = params.get("requestedSchema").map(parse_schema).unwrap_or_default();
         if url.is_none() && fields.is_empty() {
-            // Nothing FluxCode can show: say so instead of leaving the agent waiting.
             self.agent_write(json!({ "jsonrpc": "2.0", "id": id, "result": { "action": "decline" } }));
             return;
         }
@@ -171,7 +159,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Send the answers (`Some(true)` accept, `Some(false)` decline, `None` cancel).
     pub(crate) fn agent_answer_ask(&mut self, accept: Option<bool>, cx: &mut Context<Self>) {
         let Some(ask) = self.agent.ask.as_ref() else { return };
         let result = match accept {
@@ -216,7 +203,6 @@ impl Workbench {
                 h.focus(window, cx);
             }
         }
-        // A single question with a single choice answers on click, as in Claude Code.
         let one_click = ask.fields.len() == 1 && !multi && opt != OTHER;
         cx.notify();
         if one_click {
@@ -367,14 +353,12 @@ impl Workbench {
                                 .child(div().text_sm().text_color(c(theme::FG_STRONG)).child(TextView::markdown("ag-ask-msg", ask.message.clone()))),
                         ),
                 )
-                // Only the questions scroll; the question and the buttons stay in view.
                 .child(div().id("ag-ask-body").flex_1().min_h_0().overflow_y_scroll().child(body))
                 .child(footer)
                 .into_any_element(),
         )
     }
 
-    /// Empty the text boxes for a new form (render has the Window).
     pub(crate) fn apply_ask_clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for i in std::mem::take(&mut self.agent.ask_clear) {
             if let Some(input) = self.agent.ask_inputs.get(i) {
@@ -384,7 +368,6 @@ impl Workbench {
     }
 }
 
-/// Text boxes for typed answers, made once with the panel (a form uses one per question).
 pub fn make_inputs(window: &mut Window, cx: &mut Context<Workbench>) -> Vec<Entity<InputState>> {
     (0..6).map(|_| cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type your answer")))).collect()
 }
@@ -415,7 +398,6 @@ mod tests {
         let idx = |k: &str| f.iter().position(|x| x.key == k).unwrap();
         let mut picked = vec![Vec::new(); 4];
         let mut typed = vec![String::new(); 4];
-        // Required question unanswered.
         assert_eq!(answer(&f, &picked, &typed).unwrap_err(), "Which database?");
         picked[idx("db")] = vec![1];
         picked[idx("tests")] = vec![0];
@@ -427,11 +409,9 @@ mod tests {
         assert_eq!(a["tests"], true);
         assert_eq!(a["extras"], json!(["docker", "k8s"]));
         assert_eq!(a["port"], 8080);
-        // Typed answer instead of an option.
         picked[idx("db")] = vec![OTHER];
         typed[idx("db")] = "DuckDB".into();
         assert_eq!(answer(&f, &picked, &typed).unwrap()["db"], "DuckDB");
-        // A number that isn't one names its question.
         typed[idx("port")] = "eighty".into();
         assert_eq!(answer(&f, &picked, &typed).unwrap_err(), "port");
     }

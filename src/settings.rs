@@ -1,4 +1,3 @@
-//! Settings and session, stored as JSON in the user's config folder (`%APPDATA%\FluxCode-GPUI` on Windows).
 
 use crate::i18n::tr;
 use crate::theme::{self, c, UiSize, Visibility, PALETTES};
@@ -28,7 +27,6 @@ pub(crate) fn config_dir() -> PathBuf {
 }
 
 pub(crate) fn load_json<T: for<'a> Deserialize<'a> + Default>(name: &str) -> T {
-    // A file saved by Notepad or PowerShell can start with a UTF-8 BOM, which serde_json rejects.
     std::fs::read_to_string(config_dir().join(name))
         .ok()
         .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
@@ -43,7 +41,6 @@ pub(crate) fn save_json<T: Serialize>(name: &str, value: &T) {
     }
 }
 
-/// Image formats GPUI can decode for the background.
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
 const SETTINGS_REV: u32 = 1;
@@ -59,99 +56,57 @@ pub struct Settings {
     pub font_family: SharedString,
     pub tab_size: usize,
     pub word_wrap: bool,
-    /// Draw each space as a faint dot, so indentation reads as a level, not a gap.
     pub show_whitespace: bool,
     pub auto_save: bool,
     pub agent_auto_approve: bool,
-    /// Palette id, see `theme::PALETTES` and `theme::all` (installed VS Code themes).
     pub theme: String,
-    /// A picture of the user's choice behind the panels.
     pub bg_image: Option<PathBuf>,
     pub bg_visibility: Visibility,
-    /// Size of the menus, bars, lists and icons (not the editor font).
     pub ui_size: UiSize,
-    /// OpenCode docks on the right of the editor (like a chat beside the code) instead of in the left side bar.
     pub agent_right: bool,
-    /// Views shown in the right side bar instead of the left ("search", "scm", "run", "extensions", "explorer"); the agent's side is `agent_right`.
     pub right_views: Vec<String>,
-    /// Liquid glass: the window takes the system's blur, panels turn translucent over it, and floating cards get a lit edge.
     pub glass: bool,
-    /// Token saver packs on ("caveman", "lean", "quiet") and Caveman's level.
     pub saver_packs: Vec<String>,
     pub saver_level: String,
-    /// Token saver: compact the conversation when the context fills past `saver_compact_at` %.
     pub saver_compact: bool,
     pub saver_compact_at: u8,
-    /// Send the waiting message again by itself when a usage limit resets.
     pub resume_at_reset: bool,
-    /// The animated scene behind the panels (an id of `scene::Scene`, or "none"); a background image takes its place while one is set.
     pub bg_scene: String,
-    /// The scene FluxSky's clouds replaced, given back when another theme is picked.
     pub bg_scene_before_sky: String,
-    /// The scene moves (off, the default: a still picture that costs nothing while you work).
     pub bg_motion: bool,
-    /// When the agent edits a file, the editor opens it and shows the change being typed in, line by line, with the view following it.
     pub agent_follow_edits: bool,
-    /// Extra Claude / OpenCode sign-ins (agent/worktree.rs), and the one each uses (family → account name; none: the default sign-in).
     pub agent_accounts: Vec<crate::agent::worktree::Account>,
     pub agent_account: std::collections::HashMap<String, String>,
-    /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id ("opencode-v2", "mura", ...).
     pub agent_cli: String,
-    /// Turn the agent process off after this many idle minutes (0 = never).
     pub agent_idle_min: u32,
-    /// Interface language: "auto" (Indonesian when Windows is), "en" or "id".
     pub language: String,
-    /// Agent settings picked in the panel (ACP config options such as model, effort and mode), as "harness:option" → value.
     pub agent_options: std::collections::HashMap<String, String>,
-    /// What the agent may do without asking: "read" (read only), "write" (read and edit files; commands ask) or "full".
     pub agent_access: String,
-    /// The level Full access falls back to when it is switched off: "read" or "write".
     pub agent_access_off: String,
-    /// A permission request flashes the taskbar button while FluxCode is in the background.
     pub agent_notify: bool,
-    /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or Chromium), a browser id, or "off".
     pub agent_browser: String,
-    /// Run that browser without a window.
     pub agent_browser_headless: bool,
-    /// Installed extensions (ids; `ext::catalog` has them all).
     pub extensions: Vec<String>,
-    /// Launches that showed the Ctrl+L hint in the status bar (100: shortcut used).
     pub agent_hint: u8,
-    /// How the agent's chat list is grouped (`ChatView::id`).
     pub chat_view: String,
-    /// Agent full screen: the chats and changes columns' widths, as dragged (0: default).
     pub full_left_w: f32,
     pub full_right_w: f32,
-    /// The chat list shows every chat; off (the default) shows only the ones working, open or pinned, with the rest one click away.
     pub chat_show_all: bool,
-    /// Chat list groups folded shut, by heading.
     pub chat_collapsed: Vec<String>,
-    /// Look for new development builds on GitHub at start and every 6 hours.
     pub update_check: bool,
-    /// Read WSL folders through the helper inside the distro instead of the 9p share.
     pub wsl_helper: bool,
-    /// The HTML preview notice: shown before the preview runs its WebView.
     #[cfg(feature = "embedded-preview")]
     #[serde(default = "default_true")]
     pub preview_webview_notice: bool,
-    /// The editor's line numbers in the gutter.
     pub line_numbers: bool,
-    /// Fold arrows in the gutter for blocks.
     pub folding: bool,
-    /// Typing an opening bracket or quote adds the closing one.
     pub auto_close: bool,
-    /// A new line keeps (and after `{` / `:` adds) indentation.
     pub smart_indent: bool,
-    /// Lines kept visible above and below the cursor when it moves (VS Code's cursorSurroundingLines). 0: the editor's default.
     pub cursor_padding: u32,
-    /// The editor scrolls past its last line.
     pub scroll_past_end: bool,
-    /// GitHub Copilot ghost-text suggestions (the Copilot language server).
     #[serde(default = "default_true")]
     pub copilot: bool,
-    /// The build that ran last, so a new one can open its release notes once.
     pub last_build: String,
-    /// Settings revision, for one-time changes of defaults on existing installs.
     #[serde(default)]
     pub rev: u32,
 }
@@ -222,11 +177,9 @@ impl Settings {
         EXISTED.get_or_init(|| config_dir().join("settings.json").is_file());
         let mut s: Self = load_json("settings.json");
         if s.rev < 1 {
-            // 0.9: whitespace dots are off by default (they cluttered long lines); Settings → Whitespace dots turns them back on.
             s.show_whitespace = false;
         }
         if s.agent_cli == "opencode" {
-            // OpenCode became OpenCode 2 (the registry's native build): keep its choices.
             s.agent_cli = "opencode-v2".into();
             s.agent_options = std::mem::take(&mut s.agent_options)
                 .into_iter()
@@ -246,7 +199,6 @@ impl Settings {
     pub fn save(&self) {
         save_json("settings.json", self);
     }
-    /// The agent's access level: "read", "write" or "full".
     pub fn access(&self) -> &str {
         match self.agent_access.as_str() {
             "read" | "write" | "full" => &self.agent_access,
@@ -255,17 +207,14 @@ impl Settings {
         }
     }
 
-    /// What Full access switches back to: read only, or edits with commands asking.
     pub fn access_off(&self) -> &'static str {
         if self.agent_access_off == "read" { "read" } else { "write" }
     }
 
-    /// The background image, if one is set and the file is still there.
     pub fn background(&self) -> Option<&Path> {
         self.bg_image.as_deref().filter(|p| p.is_file())
     }
 
-    /// The animated scene that shows (none while an image is set).
     pub fn scene(&self) -> Option<crate::scene::Scene> {
         if self.background().is_some() {
             return None;
@@ -273,12 +222,10 @@ impl Settings {
         crate::scene::Scene::from_id(&self.bg_scene)
     }
 
-    /// Something shows behind the panels (an image or a scene): they turn translucent.
     pub fn backdrop_visibility(&self) -> Option<Visibility> {
         (self.background().is_some() || self.scene().is_some()).then_some(self.bg_visibility)
     }
 
-    /// Push the backdrop choices to the theme and the scene.
     pub fn apply_backdrop(&self) {
         crate::theme::set(&self.theme, self.backdrop_visibility());
         crate::theme::set_glass(self.glass);
@@ -289,12 +236,10 @@ impl Settings {
 
 static EXISTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-/// settings.json was there when FluxCode started (so this is not a first run).
 pub fn existed_before_start() -> bool {
     EXISTED.get().copied().unwrap_or(false)
 }
 
-/// The editor options from Settings, applied to each open editor and every new one.
 #[derive(Clone, Copy)]
 pub struct EditorOpts {
     pub line_numbers: bool,
@@ -331,7 +276,6 @@ impl EditorOpts {
 #[serde(default)]
 pub struct Session {
     pub root: Option<PathBuf>,
-    /// Folders added next to `root` (a multi-folder workspace).
     pub extra: Vec<PathBuf>,
     pub files: Vec<PathBuf>,
     pub active: Option<usize>,
@@ -346,7 +290,6 @@ impl Session {
     }
 }
 
-/// One page of the Settings UI.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
     Appearance,
@@ -373,7 +316,6 @@ impl SettingsSection {
         SettingsSection::About,
     ];
 
-    /// The full title shown above the section in the main area.
     pub(crate) fn title(self) -> &'static str {
         match self {
             SettingsSection::Appearance => "Appearance",
@@ -388,7 +330,6 @@ impl SettingsSection {
         }
     }
 
-    /// The short label shown in the left navigation.
     pub(crate) fn nav_label(self) -> &'static str {
         match self {
             SettingsSection::SoulFiles => "Agent instructions",
@@ -396,7 +337,6 @@ impl SettingsSection {
         }
     }
 
-    /// One line saying what the section controls.
     pub(crate) fn description(self) -> &'static str {
         match self {
             SettingsSection::Appearance => "Theme, language, interface size, and the picture behind the panels.",
@@ -411,7 +351,6 @@ impl SettingsSection {
         }
     }
 
-    /// True when any setting in this section differs from its default, for the dot on the nav row.
     pub(crate) fn modified(self, w: &Workbench) -> bool {
         let s = &w.settings;
         match self {
@@ -447,7 +386,6 @@ impl SettingsSection {
     }
 }
 
-/// One setting inside a card: title and short description on the left, the control at the right edge.
 fn settings_row(title: &'static str, desc: SharedString, control: AnyElement) -> AnyElement {
     h_flex()
         .w_full()
@@ -455,7 +393,6 @@ fn settings_row(title: &'static str, desc: SharedString, control: AnyElement) ->
         .px_4()
         .gap_4()
         .child(
-            // min_w_0: lets the description wrap instead of pushing the control off screen.
             v_flex()
                 .flex_1()
                 .min_w_0()
@@ -467,7 +404,6 @@ fn settings_row(title: &'static str, desc: SharedString, control: AnyElement) ->
         .into_any_element()
 }
 
-/// A bordered card holding one setting row per child, with a hairline between rows.
 fn settings_card(rows: Vec<AnyElement>) -> AnyElement {
     let n = rows.len();
     v_flex()
@@ -485,7 +421,6 @@ fn settings_card(rows: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-/// The animated backgrounds as a grid of small live previews, each in the active theme's colors; a click shows it behind the panels at once.
 fn scene_cards(current: &str, cx: &mut Context<Workbench>) -> Div {
     h_flex().w_full().flex_wrap().gap_2().children(crate::scene::Scene::ALL.into_iter().map(|sc| {
         let on = current == sc.id();
@@ -515,9 +450,7 @@ fn scene_cards(current: &str, cx: &mut Context<Workbench>) -> Div {
     }))
 }
 
-/// The six theme palettes as a grid of swatch cards.
 fn theme_cards(cx: &mut Context<Workbench>) -> Div {
-    // Theme cards: a strip of the palette's own colors, its name and one line.
     let active_theme = theme::palette().id;
     h_flex().w_full().max_w(theme::u(760.)).flex_wrap().gap_3().py_3().children(theme::all().into_iter().map(|p| {
         let on = p.id == active_theme;
@@ -531,7 +464,6 @@ fn theme_cards(cx: &mut Context<Workbench>) -> Div {
             .cursor_pointer()
             .border_2()
             .border_color(if on { c(theme::ACCENT) } else { c(theme::BORDER) })
-            // One hover style (gpui allows only one): the active card keeps its accent.
             .hover(move |s| s.border_color(c(if on { theme::ACCENT } else { theme::BORDER_STRONG })))
             .on_click(cx.listener(move |this, _, w, cx| this.set_theme(id, w, cx)))
             .child(
@@ -591,7 +523,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Re-apply the palette and image state everywhere (after a theme or background change).
     pub(crate) fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.save();
         theme::set_ui_size(self.settings.ui_size);
@@ -601,7 +532,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Background animation on or off.
     pub(crate) fn toggle_bg_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::motion_check::{self, Check};
         self.settings.bg_motion = !self.settings.bg_motion;
@@ -622,7 +552,6 @@ impl Workbench {
             };
             let specs = cx.background_spawn(async { motion_check::specs() }).await;
             _ = this.update(cx, |this, cx| {
-                // Turned off again while it was measuring: nothing to report.
                 if this.settings.bg_motion && matches!(this.motion_check, Some(Check::Running)) {
                     let (level, text) = motion_check::verdict(pct, specs);
                     this.motion_check = Some(Check::Done(level, text));
@@ -636,7 +565,6 @@ impl Workbench {
     pub(crate) fn set_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let old = theme::palette();
         self.settings.theme = id.into();
-        // FluxSky is the website's dusk: its drifting clouds come with it (unless a picture of your own is set), and the scene they replaced comes back with the next theme.
         let sky = crate::scene::Scene::Sky.id();
         if id == "flux-sky" && old.id != id && self.settings.bg_image.is_none() && self.settings.bg_scene != sky {
             self.settings.bg_scene_before_sky = std::mem::replace(&mut self.settings.bg_scene, sky.into());
@@ -645,7 +573,6 @@ impl Workbench {
         }
         if old.id != id {
             theme::fade_from(old);
-            // One frame per display refresh until the colors have settled.
             cx.spawn_in(window, async move |this, cx| loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
                 let more = theme::fading();
@@ -690,12 +617,10 @@ impl Workbench {
         .detach();
     }
 
-    /// The sections shown on this system (Windows integration means nothing elsewhere).
     fn settings_sections() -> Vec<SettingsSection> {
         SettingsSection::ALL.iter().copied().filter(|s| cfg!(windows) || *s != SettingsSection::Windows).collect()
     }
 
-    /// The section the page is scrolled to: the first one still showing more than a strip under the top edge.
     fn settings_in_view(&self, sections: &[SettingsSection]) -> SettingsSection {
         let h = &self.settings_scroll;
         if h.bounds_for_item(0).is_none() {
@@ -714,7 +639,6 @@ impl Workbench {
         sections[ix]
     }
 
-    /// Settings as one page: the list of sections on the left, and every section, from Appearance down to About, in one scroll on the right.
     pub(crate) fn render_settings(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let sections = Self::settings_sections();
         let active = self.settings_in_view(&sections);
@@ -745,13 +669,11 @@ impl Workbench {
                     .px_10()
                     .pt_8()
                     .children(blocks)
-                    // Room under the last section, so the short ones at the end can come up to the top when picked in the list.
                     .child(div().flex_none().h(theme::u(360.))),
             )
             .into_any_element()
     }
 
-    /// The left list: one row per section, an accent bar on the one in view, and a dot on rows whose section differs from the defaults.
     fn render_settings_nav(&self, sections: &[SettingsSection], active: SettingsSection, cx: &mut Context<Self>) -> AnyElement {
         let close_btn = self.action_button("settings-close", tr("Close"), crate::ui::Kind::Plain, cx, |this, _, cx| {
             this.settings_open = false;
@@ -766,7 +688,6 @@ impl Workbench {
             .border_color(c(theme::BORDER))
             .py_3()
             .px_2()
-            // Room between the rows, so a selected row and a hovered one never touch.
             .gap(px(3.))
             .child(
                 h_flex()
@@ -816,10 +737,8 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Builds the content of one section (the page builds them all, one under another.
     fn settings_section_content(&self, section: SettingsSection, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.settings;
-        // Same behaviour as the old flat page: each control applies the setting and saves it at once.
         let stepper = |id: &'static str, value: String, f: fn(&mut Workbench, i32)| {
             h_flex()
                 .gap_1()
@@ -847,7 +766,6 @@ impl Workbench {
         };
         match section {
             SettingsSection::Appearance => {
-                // Language names stay in their own language, so they can be found in either.
                 let lang = s.language.clone();
                 let lang_controls = h_flex()
                     .gap_1()
@@ -880,7 +798,6 @@ impl Workbench {
                             }))
                     }))
                     .into_any_element();
-                // Background image: choose / remove, and how strongly it shows.
                 let bg_state: (SharedString, bool) = match (&s.bg_image, s.background()) {
                     (None, _) => ("No image. Panels use the theme's solid colors.".into(), false),
                     (Some(p), None) => (crate::trf!("{0} was not found. Choose another image or remove it."; 0 => p.display()).into(), true),
@@ -943,7 +860,6 @@ impl Workbench {
                             .into_any_element(),
                     ),
                 ];
-                // Animated scenes: a card for each, drawn live in the theme's colors, or none.
                 let none_btn = Button::new("sc-none")
                     .label(tr("None"))
                     .xsmall()
@@ -1206,7 +1122,6 @@ impl Workbench {
 }
 
 impl Workbench {
-    /// Every installed agent with its instruction files: where each one is, and Open (or Create, when it isn't there yet).
     fn render_soul_files(&self, cx: &mut Context<Self>) -> AnyElement {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
         let installed = crate::acp::installed();
@@ -1280,7 +1195,6 @@ impl Workbench {
     fn copilot_signin_result(&mut self, r: Result<String, String>, cx: &mut Context<Self>) {
         match r {
             Ok(code) if code.is_empty() => self.status = tr("Signed in to Copilot").into(),
-            // The device code goes on the clipboard: paste it on the GitHub page the browser opened, then Authorize.
             Ok(code) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(code));
                 self.status = tr("Sign-in code copied: paste it on the GitHub page that opened, then click Authorize.").into();
@@ -1380,7 +1294,6 @@ impl Workbench {
                                     })
                                     .ok()
                                     .flatten();
-                                // Start it now, so Settings moves on to the sign-in step instead of waiting for the next suggestion request.
                                 if let Some(copilot) = installed {
                                     let started = cx.background_spawn(async move { copilot.start() }).await;
                                     _ = this.update(cx, |this, cx| {
@@ -1511,7 +1424,6 @@ impl Workbench {
     }
 }
 
-/// While npm installs the Copilot server: a spinner, what is happening and how long it usually takes, and a bar that keeps moving (npm reports no progress to show).
 fn install_progress() -> AnyElement {
     v_flex()
         .w_full()
@@ -1548,7 +1460,6 @@ fn install_progress() -> AnyElement {
 mod tests {
     use super::Settings;
 
-    /// The WebView notice is on unless the user turned it off: a fresh install shows it, and so does a settings file written before it existed.
     #[test]
     #[cfg(feature = "embedded-preview")]
     fn webview_notice_is_on_by_default() {

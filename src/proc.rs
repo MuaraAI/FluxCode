@@ -1,4 +1,3 @@
-//! Child processes with streamed output (ported from `start_process` in `src-tauri/src/lib.rs`).
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::collections::HashMap;
@@ -21,7 +20,6 @@ pub struct Procs {
     running: HashMap<u32, (u32, Option<ChildStdin>)>,
 }
 
-/// `Command` that never flashes a console window on Windows.
 pub fn command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
@@ -30,12 +28,10 @@ pub fn command(program: &str) -> Command {
     cmd
 }
 
-/// One terminal line through `cmd.exe` (Windows) or `sh` (elsewhere).
 pub fn shell_command(line: &str) -> Command {
     #[cfg(windows)]
     {
         let mut c = command("cmd.exe");
-        // /s keeps the line verbatim; chcp 65001 makes cmd's output UTF-8.
         c.raw_arg(format!("/d /s /c \"chcp 65001>nul & {line}\""));
         c
     }
@@ -47,7 +43,6 @@ pub fn shell_command(line: &str) -> Command {
     }
 }
 
-/// Python of the workspace venv if there is one.
 pub fn python(workspace: Option<&Path>) -> String {
     if let Some(ws) = workspace {
         for venv in [".venv", "venv", "env"] {
@@ -89,7 +84,6 @@ impl Procs {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Python: unbuffered + UTF-8 so output streams live and unicode prints work.
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")
@@ -116,7 +110,6 @@ impl Procs {
         Ok(id)
     }
 
-    /// Called when the Exit event is handled.
     pub fn forget(&mut self, id: u32) {
         self.running.remove(&id);
     }
@@ -128,7 +121,6 @@ impl Procs {
         }
     }
 
-    /// Stop every child (app quit), so no agent or command outlives FluxCode.
     pub fn kill_all(&mut self) {
         let ids: Vec<u32> = self.running.keys().copied().collect();
         for id in ids {
@@ -156,7 +148,6 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
                 Ok(n) => n,
             };
             carry.extend_from_slice(&buf[..n]);
-            // Only send complete UTF-8 sequences; keep a split character for the next read.
             let valid = match std::str::from_utf8(&carry) {
                 Ok(_) => carry.len(),
                 Err(e) if e.error_len().is_none() => e.valid_up_to(),
@@ -174,7 +165,6 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
     })
 }
 
-/// Remove ANSI escape sequences (colours, cursor moves) from terminal output.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();
@@ -191,7 +181,6 @@ pub fn strip_ansi(s: &str) -> String {
                     }
                 }
                 Some(']') => {
-                    // OSC ...
                     while let Some(n) = it.next() {
                         if n == '\u{7}' || n == '\u{1b}' {
                             break;

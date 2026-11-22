@@ -1,4 +1,3 @@
-//! Windows title bar behavior that does not depend on GPUI's window-control hit areas.
 
 #[cfg(windows)]
 mod imp {
@@ -21,7 +20,6 @@ mod imp {
     const WM_NCLBUTTONDOWN: u32 = 0x00A1;
     const HTCAPTION: usize = 2;
 
-    /// When we posted the move (ms since start); the mouse-down GPUI reports for our own posted message must not start another one.
     static POSTED_AT: AtomicU64 = AtomicU64::new(0);
 
     fn now_ms() -> u64 {
@@ -30,7 +28,6 @@ mod imp {
         START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
     }
 
-    /// Start moving the window with the mouse (call from a left mouse-down on the bar).
     pub fn begin_move() {
         let posted = POSTED_AT.swap(0, Ordering::Relaxed);
         if posted != 0 && now_ms().saturating_sub(posted) < 500 {
@@ -59,7 +56,6 @@ pub use imp::begin_move;
 #[cfg(not(windows))]
 pub fn begin_move() {}
 
-/// Ask for the user's attention while FluxCode is in the background: the taskbar button flashes until the window comes to the front (an agent waiting for a permission).
 #[cfg(windows)]
 pub fn flash_attention() {
     #[repr(C)]
@@ -85,7 +81,6 @@ pub fn flash_attention() {
     const GW_OWNER: u32 = 4;
     const FLASHW_ALL: u32 = 3;
     const FLASHW_TIMERNOFG: u32 = 12;
-    // The UI thread's visible top-level window: the workbench.
     extern "system" fn pick(hwnd: isize, out: isize) -> i32 {
         unsafe {
             if IsWindowVisible(hwnd) != 0 && GetWindow(hwnd, GW_OWNER) == 0 {

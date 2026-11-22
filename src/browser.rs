@@ -1,11 +1,9 @@
-//! A browser for the agents: the one already on this PC (Chrome first, then Brave, Edge or Chromium), driven through the Chrome DevTools Protocol by Google's `chrome-devtools-mcp`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 pub const PACKAGE: &str = "chrome-devtools-mcp";
-/// Pinned: an update is a deliberate change here.
 pub const VERSION: &str = "1.12.0";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -15,7 +13,6 @@ pub struct Browser {
     pub exe: PathBuf,
 }
 
-/// Browsers found on this PC, in the order `auto` picks them.
 pub fn browsers() -> &'static [Browser] {
     static FOUND: OnceLock<Vec<Browser>> = OnceLock::new();
     FOUND.get_or_init(find)
@@ -61,7 +58,6 @@ fn locate(id: &str) -> Option<PathBuf> {
     names.iter().find_map(|n| crate::acp::which(n))
 }
 
-/// The browser a setting means: "off", "auto" (the first found), or a browser id.
 pub fn chosen(setting: &str) -> Option<&'static Browser> {
     match setting {
         "off" => None,
@@ -74,7 +70,6 @@ fn tools_dir() -> PathBuf {
     crate::acp::agents_dir().parent().map(|p| p.join("tools")).unwrap_or_else(std::env::temp_dir).join("browser")
 }
 
-/// The profile the agents' browser uses (not the user's own).
 pub fn profile_dir() -> PathBuf {
     crate::acp::agents_dir().parent().map(|p| p.join("browser-profile")).unwrap_or_else(|| std::env::temp_dir().join("fluxcode-browser"))
 }
@@ -83,7 +78,6 @@ fn package_dir() -> PathBuf {
     tools_dir().join("node_modules").join(PACKAGE)
 }
 
-/// The installed version of the MCP server, if any.
 pub fn installed() -> Option<String> {
     let pkg = std::fs::read_to_string(package_dir().join("package.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&pkg).ok()?;
@@ -91,7 +85,6 @@ pub fn installed() -> Option<String> {
     package_dir().join("build/src/bin/chrome-devtools-mcp.js").is_file().then_some(version)
 }
 
-/// Node.js, when it is new enough for the MCP server (20.19 or newer).
 pub fn node() -> Result<PathBuf, String> {
     static NODE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     NODE.get_or_init(|| {
@@ -115,7 +108,6 @@ pub fn installing() -> bool {
     INSTALLING.load(Ordering::Relaxed)
 }
 
-/// Install the pinned MCP server (blocking; run it off the UI thread).
 pub fn install() -> Result<(), String> {
     if INSTALLING.swap(true, Ordering::Relaxed) {
         return Err(crate::i18n::tr("The browser tools are already being installed.").into());
@@ -137,7 +129,6 @@ pub fn install() -> Result<(), String> {
     res
 }
 
-/// Where the agents' browser stands, for Settings.
 pub enum State {
     Off,
     NoBrowser,
@@ -164,7 +155,6 @@ pub fn state(setting: &str) -> State {
     }
 }
 
-/// The MCP server to give an agent's session (ACP `mcpServers` entry), when it is ready.
 pub fn mcp_server(setting: &str, headless: bool, workspace: Option<&Path>) -> Option<serde_json::Value> {
     let State::Ready(b, _) = state(setting) else { return None };
     let node = node().ok()?;
@@ -175,12 +165,9 @@ pub fn mcp_server(setting: &str, headless: bool, workspace: Option<&Path>) -> Op
         b.exe.to_string_lossy().into_owned(),
         "--userDataDir".into(),
         profile_dir().to_string_lossy().into_owned(),
-        // FluxCode sends nothing about its user; neither does its browser tool.
         "--usageStatistics=false".into(),
         "--performanceCrux=false".into(),
-        // One agent per session: pages need no id in every call.
         "--pageIdRouting=false".into(),
-        // Screenshots small enough not to flood the agent's context.
         "--screenshotFormat=jpeg".into(),
         "--screenshotMaxWidth=1280".into(),
     ];

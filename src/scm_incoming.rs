@@ -1,4 +1,3 @@
-//! New commits on the remote, before you pull them: Source Control fetches quietly in the background, and when the branch's upstream has commits this checkout doesn't, a card at the top lists each one (title, author, when) with Pull and Not now.
 
 use crate::i18n::tr;
 use crate::scm::{code_color, Commit};
@@ -13,24 +12,19 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// How often the remote is checked.
 const EVERY: Duration = Duration::from_secs(300);
-/// Commits listed at most.
 pub const MAX_INCOMING: usize = 50;
 
-/// `git` for a background read: no prompts, no locks, no window.
 fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
     if let Some(t) = target {
         let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        // Naming the client and wire types keeps the crate's re-exports honest.
         let attempt: Option<Result<crate::remote::GitWire, String>> =
             crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned, None));
         if let Some(r) = attempt {
             match r {
                 Ok(g) if g.success => return Ok(g.stdout),
                 Ok(g) => return Err(g.stderr.trim().to_string()),
-                // The helper is gone: run git through wsl.exe instead.
                 Err(_) => {}
             }
         }
@@ -54,7 +48,6 @@ fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget
     };
     cmd.env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
-        // Git Credential Manager: never pop a sign-in window for a background fetch.
         .env("GCM_INTERACTIVE", "never")
         .env("NO_COLOR", "1")
         .stdin(std::process::Stdio::null());
@@ -67,7 +60,6 @@ fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget
     }
 }
 
-/// The upstream's commits this checkout doesn't have, newest first, and the upstream's head.
 pub fn incoming(repo: &Path, target: Option<&crate::remote::WslTarget>) -> (Vec<Commit>, Option<String>) {
     let head = quiet_git(repo, &["rev-parse", "@{u}"], target).ok().map(|s| s.trim().to_string());
     let log = quiet_git(
@@ -80,14 +72,12 @@ pub fn incoming(repo: &Path, target: Option<&crate::remote::WslTarget>) -> (Vec<
     (log, head)
 }
 
-/// `git show --name-status -z`: (letter, path) per file.
 pub fn parse_name_status(out: &str) -> Vec<(char, String)> {
     let mut it = out.split('\0').filter(|s| !s.is_empty());
     let mut files = Vec::new();
     while let Some(st) = it.next() {
         let st = st.trim_start_matches('\n');
         let code = st.chars().next().unwrap_or('M');
-        // Renames and copies name the old path, then the new one.
         let path = if matches!(code, 'R' | 'C') {
             it.next();
             it.next()
@@ -102,14 +92,12 @@ pub fn parse_name_status(out: &str) -> Vec<(char, String)> {
 }
 
 impl Workbench {
-    /// Start checking the remote every few minutes (once per run).
     pub(crate) fn scm_start_fetching(&mut self, cx: &mut Context<Self>) {
         if self.scm.fetch_loop {
             return;
         }
         self.scm.fetch_loop = true;
         cx.spawn(async move |this, cx| {
-            // A first look soon after the folder opens, then every EVERY.
             cx.background_executor().timer(Duration::from_secs(4)).await;
             loop {
                 if this.update(cx, |this, cx| this.scm_fetch_quietly(cx)).is_err() {
@@ -121,7 +109,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Fetch in the background (no prompts), then re-read the state.
     pub(crate) fn scm_fetch_quietly(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.scm.repo.clone() else { return };
         if self.scm.fetching || self.scm.status.upstream.is_none() || self.scm.busy.is_some() {
@@ -134,7 +121,6 @@ impl Workbench {
             let res = cx.background_spawn(async move { quiet_git(&repo, &["fetch", "--quiet", "--prune"], wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
                 this.scm.fetching = false;
-                // A failed fetch (offline, no access) just leaves the list as it was.
                 _ = res;
                 this.scm_refresh(cx);
             });
@@ -142,14 +128,12 @@ impl Workbench {
         .detach();
     }
 
-    /// The window came back: check the remote if it has been a while.
     pub(crate) fn scm_on_return(&mut self, cx: &mut Context<Self>) {
         if self.scm.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(120)) {
             self.scm_fetch_quietly(cx);
         }
     }
 
-    /// New commits are there and the user hasn't put them aside.
     pub(crate) fn scm_has_incoming(&self) -> bool {
         !self.scm.incoming.is_empty() && self.scm.incoming_dismissed != self.scm.incoming_head
     }
@@ -179,7 +163,6 @@ impl Workbench {
         .detach();
     }
 
-    /// One file's change in an incoming commit, in the Output panel.
     fn scm_show_incoming_file(&mut self, hash: String, path: String, cx: &mut Context<Self>) {
         let Some(repo) = self.scm.repo.clone() else { return };
         let wsl = self.wsl.clone();
@@ -214,7 +197,6 @@ impl Workbench {
         .detach();
     }
 
-    /// The Incoming section at the top of Source Control: what the remote has that you don't.
     pub(crate) fn render_scm_incoming(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.scm_has_incoming() {
             return None;
@@ -260,7 +242,6 @@ impl Workbench {
         for (i, cm) in s.incoming.iter().enumerate() {
             let open = s.incoming_open.as_deref() == Some(cm.hash.as_str());
             let hash = cm.hash.clone();
-            // The same lane as the Graph: a line through hollow dots (not here yet).
             let lane = div()
                 .relative()
                 .w(theme::u(14.))
@@ -310,7 +291,6 @@ impl Workbench {
                             h_flex()
                                 .id(("scm-in-file", i * 1000 + k))
                                 .relative()
-                                // The lane goes on past the files to the next commit.
                                 .when(i < last, |h| h.child(div().absolute().left(theme::u(18.)).top_0().bottom_0().w(px(2.)).bg(c(theme::BLUE).opacity(0.45))))
                                 .h(theme::u(22.))
                                 .pl(pad)

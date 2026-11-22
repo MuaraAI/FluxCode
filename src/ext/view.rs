@@ -1,4 +1,3 @@
-//! The Extensions view (left), an extension's page (editor area), the project tasks in the Run view, and running them.
 
 use super::{Filter, Manifest, Project, Task, Tool};
 use crate::i18n::tr;
@@ -20,7 +19,6 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::Path;
 use std::time::Instant;
 
-/// A manifest's icon name → a Lucide icon.
 pub fn icon(name: &str) -> Ico {
     match name {
         "pickaxe" => Ico::Pickaxe,
@@ -48,7 +46,6 @@ pub fn icon(name: &str) -> Ico {
     }
 }
 
-/// The square tile an extension's icon sits on.
 pub(super) fn tile(name: &str, size: f32) -> Div {
     div()
         .flex_none()
@@ -63,7 +60,6 @@ pub(super) fn tile(name: &str, size: f32) -> Div {
         .child(Icon::new(icon(name)).size(theme::u(size * 0.55)).text_color(c(theme::FG_STRONG)))
 }
 
-/// A section of the extension page: a title, maybe one line under it, then its content (the caller adds it).
 fn page_section(title: SharedString, note: Option<SharedString>) -> Div {
     v_flex()
         .w_full()
@@ -76,15 +72,12 @@ fn page_section(title: SharedString, note: Option<SharedString>) -> Div {
         )
 }
 
-/// Tasks few people need every day: behind More instead of in the list.
 fn rare(t: &Task) -> bool {
     matches!(t.id.as_str(), "clean" | "wrapper")
 }
 
-/// Rows under a project's main button before the rest go behind More.
 const SHOWN: usize = 5;
 
-/// A project's tasks laid out: the main one (the manifest's `primary`, else the first), the ones shown as rows, and the ones behind More (rare ones and any past `SHOWN`).
 pub(crate) fn arrange(tasks: &[Task]) -> (Option<usize>, Vec<usize>, Vec<usize>) {
     let main = tasks.iter().position(|t| t.primary).or(if tasks.is_empty() { None } else { Some(0) });
     let (mut rows, mut more) = (Vec::new(), Vec::new());
@@ -101,7 +94,6 @@ pub(crate) fn arrange(tasks: &[Task]) -> (Option<usize>, Vec<usize>, Vec<usize>)
     (main, rows, more)
 }
 
-/// What a task does, for its tooltip.
 fn task_tip(t: &Task) -> SharedString {
     match (t.line.is_empty(), t.terminal) {
         (true, _) => tr("Done by FluxCode itself").into(),
@@ -110,7 +102,6 @@ fn task_tip(t: &Task) -> SharedString {
     }
 }
 
-/// The main action of a group in the Run view: a full-width button, with a spinner in place of its icon while it runs.
 pub(crate) fn run_main_button(id: ElementId, ic: Ico, label: SharedString, running: bool, accent: bool, tip: SharedString) -> Stateful<Div> {
     let (fg, icon_fg) = if accent { (theme::ON_ACCENT, theme::ON_ACCENT) } else { (theme::FG_STRONG, theme::ACCENT_TEXT) };
     h_flex()
@@ -138,7 +129,6 @@ pub(crate) fn run_main_button(id: ElementId, ic: Ico, label: SharedString, runni
         .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
 }
 
-/// A quiet task row in the Run view; the caller adds what sits at its right end.
 pub(crate) fn run_row(id: ElementId, ic: Ico, label: SharedString, running: bool, tip: SharedString) -> Stateful<Div> {
     h_flex()
         .id(id)
@@ -207,7 +197,6 @@ impl super::Ext {
 }
 
 impl Workbench {
-    /// Every manifest FluxCode has counts as installed: the Extensions view lists the VS Code Marketplace only, so nothing there turns a built-in off any more.
     pub(crate) fn ext_installed(&self, id: &str) -> bool {
         self.ext_manifest(id).is_some() || self.settings.extensions.iter().any(|e| e == id)
     }
@@ -216,7 +205,6 @@ impl Workbench {
         self.ext.catalog.iter().find(|m| m.id == id)
     }
 
-    /// Find the projects each extension is for, off the UI thread.
     pub(crate) fn ext_scan(&mut self, cx: &mut Context<Self>) {
         let roots = self.roots();
         let files: Vec<String> = self.all_files.as_ref().clone();
@@ -240,7 +228,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Work the tasks out again (a wrapper was added, node_modules appeared).
     fn ext_retask(&mut self, cx: &mut Context<Self>) {
         let found = self.ext.found.clone();
         let catalog = self.ext.catalog.clone();
@@ -290,7 +277,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Look the extension's tools up (PATH and the JDK folders), off the UI thread.
     fn ext_check_needs(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(m) = self.ext_manifest(id).cloned() else { return };
         let projects: Vec<Project> = self.ext.found.iter().filter(|p| p.ext == id).cloned().collect();
@@ -305,14 +291,12 @@ impl Workbench {
         .detach();
     }
 
-    /// What the agent is told about the folder's projects (see ws_context).
     pub(crate) fn ext_agent_notes(&self) -> Option<String> {
         let all: Vec<String> = self.ext.catalog.iter().map(|m| m.id.clone()).collect();
         super::agent_notes(&self.ext.catalog, &all, &self.ext.found, &self.roots())
     }
 
 
-    /// Save the open files of a project, like Run's "save before run".
     fn ext_save_under(&mut self, dir: &Path, cx: &mut Context<Self>) {
         for d in self.docs.iter_mut().filter(|d| d.dirty && d.path.starts_with(dir)) {
             let text = d.editor.read(cx).value();
@@ -322,7 +306,6 @@ impl Workbench {
         }
     }
 
-    /// JAVA_HOME and PATH for a Java task: the JDK the project asks for.
     fn ext_java_env(project: &Project) -> Option<super::java::Jdk> {
         super::java::best_jdk(Some(project))
     }
@@ -390,7 +373,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A long-running task (a dev server, `cargo run`, a Minecraft server) in the Terminal: it keeps going and reads what you type there.
     fn ext_run_in_terminal(&mut self, project: &Project, line: &str, jdk: Option<&super::java::Jdk>, cx: &mut Context<Self>) {
         self.panel_open = true;
         self.panel_tab = PanelTab::Terminal;
@@ -428,7 +410,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// FluxCompile: fold Gradle's `> Task ...` lines into one progress line as they come.
     pub(crate) fn ext_fold(&mut self) {
         if self.ext.running.is_none() {
             return;
@@ -457,11 +438,9 @@ impl Workbench {
                 }
             }
         }
-        // The last line may still grow; everything above it is done.
         self.ext.fold_scan = lines.len().saturating_sub(1).max(start);
     }
 
-    /// The Output panel's last task ended: say what FluxCompile built, then run the follow-up step if it succeeded.
     pub(crate) fn ext_after_run(&mut self, code: Option<i32>, cx: &mut Context<Self>) {
         let running = self.ext.running.take();
         if let Some(ix) = self.ext.fold_line.take() {
@@ -510,7 +489,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Steps FluxCode does itself.
     fn ext_native(&mut self, project: &Project, native: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let p = project.clone();
         let roots = self.roots();
@@ -578,7 +556,6 @@ impl Workbench {
         .detach();
     }
 
-    /// New project from a template, in the workspace folder.
     fn ext_create(&mut self, template: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             self.ext.note = Some(tr("Open a folder first: the new project goes into it.").into());
@@ -588,7 +565,6 @@ impl Workbench {
         let roots = self.roots();
         let res = match template {
             "paper" => {
-                // Inside a server's plugin-dev/projects when the workspace is a server like that.
                 let server = super::java::server_at(&root).or_else(|| super::java::find_server(&root.join("x"), &roots));
                 let parent = [root.join("plugin-dev").join("projects"), root.join("plugin-dev")].into_iter().find(|d| d.is_dir()).unwrap_or(root.clone());
                 super::java::new_plugin(&parent, &name, server.as_ref())
@@ -619,7 +595,6 @@ impl Workbench {
     }
 
 
-    /// The Extensions side bar: the VS Code Marketplace (market_view.rs).
     pub(crate) fn render_ext_view(&self, cx: &mut Context<Self>) -> AnyElement {
         self.render_market_view(cx)
     }
@@ -632,7 +607,6 @@ impl Workbench {
         let Some(m) = self.ext_manifest(id).cloned() else { return div().into_any_element() };
         let installed = self.ext_installed(&m.id);
 
-        // Header: icon, name, one meta line and the summary, with the actions on the right.
         let mut meta: Vec<String> = Vec::new();
         if !m.category.is_empty() {
             meta.push(m.category.clone());
@@ -649,7 +623,6 @@ impl Workbench {
         let actions = h_flex()
             .flex_none()
             .gap_1()
-            // Built-ins are always on (see ext_installed): nothing to install or remove.
             .when(!m.builtin(), |h| {
                 h.child(if installed {
                     Button::new("ext-uninstall")
@@ -670,7 +643,6 @@ impl Workbench {
                 this.ext.page = None;
                 cx.notify();
             })));
-        // The title shares its line with the actions; when the two don't fit (the title would get narrower than ~160 px) the actions move under it.
         let title = h_flex()
             .w_full()
             .flex_wrap()
@@ -702,7 +674,6 @@ impl Workbench {
 
         let mut body = v_flex().w_full().max_w(theme::u(760.)).gap(theme::u(28.)).child(head);
 
-        // The folder's projects, with their main task and the rest in a menu.
         let mine: Vec<usize> = self.ext.found.iter().enumerate().filter(|(_, p)| p.ext == m.id).map(|(i, _)| i).collect();
         if !mine.is_empty() {
             let note: SharedString = if installed { tr("Their tasks are in the Run view too (Ctrl+Shift+D).").into() } else { tr("Install the extension to build and run them here.").into() };
@@ -713,7 +684,6 @@ impl Workbench {
             body = body.child(page_section(tr("In this folder").into(), Some(note)).child(list));
         }
 
-        // New project.
         if !m.templates.is_empty() {
             let t = m.templates[0].clone();
             let (what, how): (SharedString, SharedString) = if t == "paper" {
@@ -744,7 +714,6 @@ impl Workbench {
             body = body.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(n.clone()));
         }
 
-        // The tools it needs.
         if !m.needs.is_empty() {
             let checked = self.ext.needs.get(&m.id);
             let mut rows = v_flex().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).overflow_hidden();
@@ -788,7 +757,6 @@ impl Workbench {
             body = body.child(page_section(tr("Needs").into(), None).child(rows));
         }
 
-        // What it adds.
         let mut tasks = v_flex().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).overflow_hidden();
         for (k, t) in m.tasks.iter().enumerate() {
             let flux = t.run.contains("{fluxcompile}");
@@ -805,7 +773,6 @@ impl Workbench {
             } else {
                 tr("Done by FluxCode itself").into()
             };
-            // Two lines at every width: the task, and under it what it runs.
             tasks = tasks.child(
                 h_flex()
                     .px_3()
@@ -862,7 +829,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// One project on the page: its name and folder, its main task as a button and the other tasks in a menu next to it (a row of every task wrapped into a cloud).
     fn render_project_card(&self, pix: usize, installed: bool, divided: bool, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.ext.found[pix];
         let rel = self.rel_display(&p.dir.to_string_lossy());
@@ -881,7 +847,6 @@ impl Workbench {
                 let t = &tasks[mi];
                 let on = running_id.as_deref() == Some(t.id.as_str());
                 let b = Button::new(("ext-main", pix)).icon(Icon::new(icon(&t.icon))).label(t.label.clone()).small();
-                // The accent once on the page: the first project's main task.
                 let b = if divided { b } else { b.primary() };
                 right = right.child(
                     b.loading(on)
@@ -910,7 +875,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// A menu of a project's tasks (and, when `page` names the extension, its page).
     fn tasks_menu(&self, id: ElementId, pix: usize, which: &[usize], page: Option<(String, String)>, labelled: bool, cx: &mut Context<Self>) -> AnyElement {
         let tasks: &[Task] = self.ext.tasks.get(pix).map(|v| v.as_slice()).unwrap_or(&[]);
         let items: Vec<(usize, String, String)> = which.iter().filter_map(|&i| tasks.get(i).map(|t| (i, t.label.clone(), t.icon.clone()))).collect();
@@ -937,7 +901,6 @@ impl Workbench {
     }
 
 
-    /// The project the Run view leads with (its main button gets the accent): the one holding the active file (the innermost), else the first.
     pub(crate) fn ext_lead(&self) -> (Option<usize>, bool) {
         let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
         let ok = |i: usize, p: &Project| self.ext_installed(&p.ext) && self.ext.tasks.get(i).is_some_and(|t| t.len() > 1);
@@ -950,7 +913,6 @@ impl Workbench {
         }
     }
 
-    /// Stop what runs in the Output panel (a task or the file), not the Terminal.
     pub(crate) fn run_stop(&self, id: impl Into<ElementId>, size: f32, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id(id)
@@ -975,7 +937,6 @@ impl Workbench {
             }))
     }
 
-    /// The folder's projects and their tasks, at the top of the Run view: per project a header, its main task as a full-width button, the next few as quiet rows and the rare ones (Clean, Add Gradle wrapper) behind More.
     pub(crate) fn render_ext_run(&self, lead: Option<usize>, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.ext.found.is_empty() {
             return None;
@@ -1053,7 +1014,6 @@ impl Workbench {
             col = col.child(group);
         }
 
-        // Projects an extension would build, not installed yet: one calm line each.
         let mut offered: Vec<&str> = Vec::new();
         let mut offers = v_flex().w_full().gap_0p5();
         for p in &self.ext.found {
@@ -1097,7 +1057,6 @@ impl Workbench {
         any.then(|| col.into_any_element())
     }
 
-    /// Re-read the folder after a new project was written (the tree, then the scan).
     fn ext_refresh_files(&mut self, cx: &mut Context<Self>) {
         self.refresh_tree(cx);
     }
@@ -1105,7 +1064,6 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
     use super::arrange;
     use crate::ext::Task;
 
@@ -1117,7 +1075,6 @@ mod tests {
     fn main_task_rows_and_more() {
         let paper = [t("build", true), t("deploy", false), t("copy", false), t("server", false), t("test", false), t("clean", false), t("wrapper", false)];
         assert_eq!(arrange(&paper), (Some(0), vec![1, 2, 3, 4], vec![5, 6]));
-        // No primary: the first task leads; past SHOWN rows the rest go behind More.
         let many: Vec<Task> = (0..9).map(|i| t(&format!("s{i}"), false)).collect();
         assert_eq!(arrange(&many), (Some(0), vec![1, 2, 3, 4, 5], vec![6, 7, 8]));
         assert_eq!(arrange(&[]), (None, vec![], vec![]));

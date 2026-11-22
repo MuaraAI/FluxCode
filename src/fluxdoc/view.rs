@@ -1,4 +1,3 @@
-//! Drawing a Flux document in FluxCode, light at any size:
 
 use super::{arg, args, cells, flow, inline, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
 use crate::theme::{self, c};
@@ -10,23 +9,15 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// The default width of the text column, in px (`@style width=` changes it).
 const WIDTH: f32 = 860.;
-/// Entries a `@toc` lists at most.
 const TOC_MAX: usize = 300;
-/// Blocks a list entry holds at most.
 const GROUP: u32 = 24;
-/// From this size the text is kept packed.
 pub const PACK_FROM: usize = 1 << 20;
-/// From this size a document opens with its first part, the rest read on another thread.
 pub const PROGRESSIVE_FROM: usize = 256 << 10;
-/// How much of it is read at once: about two screens.
 const FIRST_PART: usize = 32 << 10;
 const FRAME: usize = 64 << 10;
-/// Unpacked frames kept for drawing.
 const FRAMES_KEPT: usize = 6;
 
-/// A document's text: as it is, or packed in frames.
 enum Text {
     Plain(Rc<str>),
     Packed { frames: Vec<Box<[u8]>>, len: usize, cache: RefCell<Vec<(usize, Rc<[u8]>)>> },
@@ -35,7 +26,6 @@ enum Text {
 impl Text {
     fn frame(&self, f: usize) -> Rc<[u8]> {
         let Text::Packed { frames, cache, .. } = self else { return Rc::from(&[][..]) };
-        // Looked up first: the borrow must end before the cache is reordered.
         let hit = cache.borrow().iter().position(|(k, _)| *k == f);
         if let Some(i) = hit {
             let mut c = cache.borrow_mut();
@@ -51,7 +41,6 @@ impl Text {
         data
     }
 
-    /// The text of a span.
     fn get(&self, (a, b): Span) -> String {
         let (a, b) = (a as usize, b as usize);
         match self {
@@ -94,14 +83,12 @@ impl Text {
     }
 }
 
-/// A document read on another thread (`prepare`), ready to show.
 pub struct Prepared {
     doc: Doc,
     text: Result<String, (Vec<Box<[u8]>>, usize)>,
     ms: f32,
 }
 
-/// Read a document and pack its text when it is large.
 pub fn prepare(src: String) -> Prepared {
     let t = std::time::Instant::now();
     let doc = super::parse(&src);
@@ -118,12 +105,9 @@ pub fn prepare(src: String) -> Prepared {
 struct Shared {
     text: Text,
     doc: Doc,
-    /// List entries: (first block, number of blocks), all shown in this language.
     groups: Vec<(u32, u32)>,
-    /// The interface language's tag (1 en, 2 id): blocks tagged 0 or this show.
     want: u8,
     base: PathBuf,
-    /// `@details` boxes the reader opened (by inner index).
     open: Rc<RefCell<HashSet<u32>>>,
 }
 
@@ -133,7 +117,6 @@ impl Shared {
     }
 }
 
-/// Group the blocks shown in a language into list entries.
 fn groups(doc: &Doc, want: u8) -> Vec<(u32, u32)> {
     let mut out: Vec<(u32, u32)> = Vec::new();
     let mut open = false;
@@ -144,7 +127,6 @@ fn groups(doc: &Doc, want: u8) -> Vec<(u32, u32)> {
             continue;
         }
         let alone = matches!(b, Block::Flow(_) | Block::Image(_) | Block::Video(_) | Block::Boxed { .. } | Block::Code(_) | Block::Toc | Block::Title(_));
-        // A heading starts an entry, so the contents can jump straight to it.
         let starts = alone || matches!(b, Block::Heading(..) | Block::Release(_));
         match out.last_mut() {
             Some(g) if open && !starts && g.1 < GROUP => g.1 += 1,
@@ -160,12 +142,10 @@ fn groups(doc: &Doc, want: u8) -> Vec<(u32, u32)> {
     out
 }
 
-/// A parsed document and its scroll position.
 pub struct FluxView {
     shared: Rc<Shared>,
     pub list: ListState,
     pub parsed_ms: f32,
-    /// Only the first part is read; the rest is being read on another thread.
     pub pending: bool,
 }
 
@@ -190,13 +170,11 @@ impl FluxView {
         Self::build(p.doc, text, base, lang, p.ms, open)
     }
 
-    /// The first part of a large document, drawn at once (`install` brings the rest).
     pub fn first_part(src: &str, base: PathBuf, lang: &str) -> Self {
         let mut cut = src.len().min(FIRST_PART);
         while !src.is_char_boundary(cut) {
             cut -= 1;
         }
-        // End at a blank line, so no block is cut in half.
         if let Some(i) = src[..cut].rfind("\n\n") {
             cut = i + 1;
         }
@@ -205,7 +183,6 @@ impl FluxView {
         v
     }
 
-    /// The whole document, read on another thread, in place of its first part.
     pub fn install(&mut self, p: Prepared, lang: &str) {
         let top = self.list.logical_scroll_top();
         let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone());
@@ -213,7 +190,6 @@ impl FluxView {
         *self = v;
     }
 
-    /// Show `src` instead, keeping the place in the document as far as it goes.
     pub fn reload(&mut self, src: String, lang: &str) {
         self.install(prepare(src), lang);
     }
@@ -222,7 +198,6 @@ impl FluxView {
         self.shared.doc.blocks.len()
     }
 
-    /// The text kept for drawing (packed size for a packed one).
     pub fn kept_bytes(&self) -> usize {
         self.shared.text.packed_bytes()
     }
@@ -231,7 +206,6 @@ impl FluxView {
         self.shared.text.full()
     }
 
-    /// The document: a list drawing only what is in view.
     pub fn render(&self, notify: impl Fn(&mut App) + 'static) -> AnyElement {
         let sh = self.shared.clone();
         let state = self.list.clone();
@@ -274,12 +248,10 @@ fn accent(sh: &Shared) -> Hsla {
 }
 
 impl Ctx<'_> {
-    /// The text of a span (unpacked when the document is packed).
     fn t(&self, s: Span) -> String {
         self.sh.text.get(s)
     }
 
-    /// Inline text with its marks, links clickable.
     fn rich(&self, id: ElementId, s: &str, color: Hsla) -> AnyElement {
         let i = inline(s);
         let acc = accent(self.sh);
@@ -333,7 +305,6 @@ impl Ctx<'_> {
         .into_any_element()
     }
 
-    /// One block.
     fn block(&self, b: &Block, bi: usize, pos: usize, next: Option<&Block>, cx: &mut App) -> AnyElement {
         let id = |k: &str| ElementId::Name(format!("fx-{k}-{bi}").into());
         match *b {
@@ -408,7 +379,6 @@ impl Ctx<'_> {
                 .bg(c(theme::BG_EDITOR))
                 .overflow_hidden()
                 .when(!lang.is_empty(), |v| v.child(div().px_3().pt_2().text_xs().text_color(c(theme::FG_DIM)).child(lang)))
-                // Long lines wrap: a sideways scroller here would also catch the wheel while the page is being scrolled past it.
                 .child(
                     div()
                         .px_3()
@@ -444,7 +414,6 @@ impl Ctx<'_> {
         let t = &self.sh.doc.tables[table as usize];
         let (n, header) = t.row(pos);
         let total: f32 = t.widths.iter().map(|w| w.max(4.)).sum::<f32>().max(1.);
-        // The row's own text, and its cells as spans of it.
         let line_text = self.t(line);
         let src: &str = &line_text;
         let cs = cells(src, (0, src.len() as u32), t.pipes);
@@ -452,7 +421,6 @@ impl Ctx<'_> {
         let first = n == 0;
         h_flex()
             .w_full()
-            // Cells as tall as the row, so their dividers run top to bottom.
             .items_stretch()
             .border_l_1()
             .border_r_1()
@@ -483,9 +451,7 @@ impl Ctx<'_> {
         if p.is_absolute() { p } else { self.sh.base.join(p) }
     }
 
-    /// One picture: `width=` in px or %, `dark=` another file for dark themes, `link=` what a click opens.
     fn picture(&self, a: super::Span, id: usize) -> AnyElement {
-        // The directive's own text, and its arguments as spans of it.
         let arg_text = self.t(a);
         let src: &str = &arg_text;
         let a = args(src, (0, src.len() as u32));
@@ -498,7 +464,6 @@ impl Ctx<'_> {
         let width = arg(src, &a, "width").map(|w| w.trim().to_string());
         let link = arg(src, &a, "link").map(String::from);
         if p.starts_with("http://") || p.starts_with("https://") {
-            // Images from the web aren't fetched (documents stay offline): a link to it.
             let url = p.to_string();
             return h_flex()
                 .id(("fx-img-web", id))
@@ -514,7 +479,6 @@ impl Ctx<'_> {
                 .on_click(move |_, _, cx| cx.open_url(&url))
                 .into_any_element();
         }
-        // A share of the page (`60%`), pixels (`96`), or the picture's own size.
         let share = width.as_deref().and_then(|w| w.strip_suffix('%')).and_then(|w| w.parse::<f32>().ok());
         let pixels = width.as_deref().filter(|w| !w.ends_with('%')).and_then(|w| w.trim_end_matches("px").parse::<f32>().ok());
         let mut im = img(self.path(p)).max_w_full().rounded(px(6.)).object_fit(ObjectFit::Contain);
@@ -543,7 +507,6 @@ impl Ctx<'_> {
     }
 
     fn image(&self, a: super::Span, bi: usize) -> AnyElement {
-        // The directive's own text, and its arguments as spans of it.
         let arg_text = self.t(a);
         let src: &str = &arg_text;
         let args_ = args(src, (0, src.len() as u32));
@@ -559,9 +522,7 @@ impl Ctx<'_> {
             .into_any_element()
     }
 
-    /// A video: its poster with a play button; a click plays it in the system's player.
     fn video(&self, a: super::Span, bi: usize) -> AnyElement {
-        // The directive's own text, and its arguments as spans of it.
         let arg_text = self.t(a);
         let src: &str = &arg_text;
         let a = args(src, (0, src.len() as u32));
@@ -615,7 +576,6 @@ impl Ctx<'_> {
         let line_col = c(theme::FG_DIM);
         let back_col = c(theme::FG_DIM).opacity(0.7);
         let max_x = f.size.0;
-        // Decisions are drawn here as diamonds (a box can't be turned); their text sits on top.
         let diamonds: Vec<((f32, f32, f32, f32), Hsla, Hsla)> = f
             .nodes
             .iter()
@@ -649,7 +609,6 @@ impl Ctx<'_> {
                 let (a, z) = (nodes[e.from].rect, nodes[e.to].rect);
                 let mut pts: Vec<(f32, f32)> = Vec::new();
                 if e.back {
-                    // Out of the right side, along the edge of the drawing, back in.
                     let (ax, ay) = (a.0 + a.2, a.1 + a.3 / 2.);
                     let (zx, zy) = (z.0 + z.2, z.1 + z.3 / 2.);
                     let side = max_x + 24.;
@@ -668,7 +627,6 @@ impl Ctx<'_> {
                 let col = if e.back { back_col } else { line_col };
                 let mut pb = PathBuilder::stroke(px(1.5));
                 if e.dashed {
-                    // 6 px on, 4 px off, along every segment.
                     for w in pts.windows(2) {
                         let (a, z) = (w[0], w[1]);
                         let len = ((z.0 - a.0).powi(2) + (z.1 - a.1).powi(2)).sqrt();
@@ -691,7 +649,6 @@ impl Ctx<'_> {
                 if let Ok(p) = pb.build() {
                     window.paint_path(p, col);
                 }
-                // Arrowhead at the end, pointing along the last segment.
                 let (p1, p2) = (pts[pts.len() - 2], pts[pts.len() - 1]);
                 let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
                 let len = (dx * dx + dy * dy).sqrt().max(0.001);
@@ -798,7 +755,6 @@ impl Ctx<'_> {
                 .gap_2()
                 .pb_4()
                 .children(blocks.iter().enumerate().filter_map(|(k, b)| match b {
-                    // Each image with its caption under it, as on GitHub.
                     Block::Image(a) => {
                         let arg_text = self.t(*a);
                         let src: &str = &arg_text;
@@ -878,12 +834,10 @@ impl Ctx<'_> {
 
     fn toc(&self, bi: usize) -> AnyElement {
         let mut v = v_flex().mb_4().px_4().py_3().gap_1().rounded(px(8.)).border_1().border_color(c(theme::BORDER)).child(div().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(crate::i18n::tr("Contents")));
-        // A contents list is for finding your way: past TOC_MAX entries it says how many more.
         let wanted: Vec<u32> = self.sh.doc.headings.iter().copied().filter(|&h| self.sh.shown(h as usize) && matches!(self.sh.doc.blocks[h as usize], Block::Heading(l, _) if l <= 3)).collect();
         let more = wanted.len().saturating_sub(TOC_MAX);
         for (k, &h) in wanted.iter().take(TOC_MAX).enumerate() {
             let Block::Heading(l, s) = self.sh.doc.blocks[h as usize] else { continue };
-            // Headings start list entries, which are in order: find its entry by halving.
             let pos = self.sh.groups.partition_point(|g| g.0 <= h).saturating_sub(1);
             let list = self.list.clone();
             v = v.child(
@@ -904,7 +858,6 @@ impl Ctx<'_> {
     }
 }
 
-/// Highlights may overlap (a link in bold): GPUI wants them sorted and apart, so later ones split earlier ones and the pieces combine.
 fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     if hl.len() < 2 {
         return hl;
@@ -932,12 +885,10 @@ fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops
     out
 }
 
-/// `.flux` files open drawn (FluxCode's own `changelog.flux` too).
 pub fn is_flux(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flux"))
 }
 
-/// What a file draws, from its extension: `Some(true)` for Markdown (drawn through the shim, Source first), `Some(false)` for Flux (drawn directly, Preview first), None for everything the plain editor shows.
 pub fn drawable_kind(path: &std::path::Path) -> Option<bool> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -947,18 +898,15 @@ pub fn drawable_kind(path: &std::path::Path) -> Option<bool> {
     }
 }
 
-/// The bar's export-to-Markdown button writes `.md` next to a Flux document; a Markdown file already is one.
 pub fn shows_md_export(path: &std::path::Path) -> bool {
     is_flux(path)
 }
 
-/// The interface language, for `@en` / `@id` sections.
 pub fn ui_lang() -> &'static str {
     if crate::i18n::is_id() { "id" } else { "en" }
 }
 
 impl crate::workbench::Workbench {
-    /// A drawn document's actions, small enough to sit at the right end of the breadcrumb row instead of taking a row of their own: Preview / Source, and (Flux only) Markdown export.
     pub(crate) fn render_flux_bar(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         use crate::i18n::tr;
         let d = &self.docs[ix];
@@ -999,7 +947,6 @@ impl crate::workbench::Workbench {
                     .child(tab("fx-tab-view", IconName::Eye, tr("Preview"), !source, false, cx))
                     .child(tab("fx-tab-src", IconName::FileCode, tr("Source"), source, true, cx)),
             )
-            // The export belongs to Flux documents only: a Markdown file already is one.
             .when(shows_md_export(&d.path), |h| {
                 h.child(
                     div()
@@ -1020,12 +967,10 @@ impl crate::workbench::Workbench {
             .into_any_element()
     }
 
-    /// Switch a Flux document between its drawing and its source (drawn from the text in the editor, edits and all).
     fn flux_show(&mut self, ix: usize, source: bool, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.docs.len() {
             return;
         }
-        // Only its first part is read yet: its editor would hold a cut copy.
         if source && self.docs[ix].flux.as_ref().is_some_and(|v| v.pending) {
             self.status = crate::i18n::tr("Still reading the document; Source opens in a moment.").into();
             return cx.notify();
@@ -1036,7 +981,6 @@ impl crate::workbench::Workbench {
         if !source && self.docs[ix].flux_source {
             let d = &mut self.docs[ix];
             let mut text = d.editor.read(cx).value().to_string();
-            // A Markdown document draws the shim's output of its text, never the raw file: rebuild it here, or every Preview click would draw the raw page.
             if crate::fluxdoc::view::drawable_kind(&d.path) == Some(true) {
                 text = crate::fluxdoc::gfm::to_flux(&text);
             }
@@ -1050,7 +994,6 @@ impl crate::workbench::Workbench {
         cx.notify();
     }
 
-    /// Put a large Flux document's text into its editor (once).
     pub(crate) fn flux_load_source(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let d = &mut self.docs[ix];
         if !d.flux_lazy {
@@ -1061,7 +1004,6 @@ impl crate::workbench::Workbench {
         d.editor.update(cx, |e, cx| e.set_value(text, window, cx));
     }
 
-    /// `README.flux` -> `README.md`, as GitHub Markdown.
     fn flux_save_markdown(&mut self, ix: usize, cx: &mut Context<Self>) {
         let d = &self.docs[ix];
         let src = d.text(cx);
@@ -1076,7 +1018,6 @@ impl crate::workbench::Workbench {
     }
 }
 
-/// 900004 -> "900,004".
 fn thousands(n: usize) -> String {
     let d = n.to_string();
     let mut out = String::new();
@@ -1096,7 +1037,6 @@ mod tests {
 
     #[test]
     fn packed_text_reads_back_across_frames() {
-        // Multi-byte characters everywhere, so frame edges fall inside some of them.
         let mut src = String::new();
         let mut i = 0;
         while src.len() < PACK_FROM + 1000 {
@@ -1108,7 +1048,6 @@ mod tests {
         let packed: usize = frames.iter().map(|f| f.len()).sum();
         assert!(packed < src.len() / 3, "packed to {packed} of {}", src.len());
         let t = Text::Packed { frames, len, cache: RefCell::new(Vec::new()) };
-        // Spans on character boundaries, some crossing frame edges.
         let starts: Vec<usize> = src.char_indices().map(|(b, _)| b).filter(|b| b % 49_999 < 30).collect();
         for &a in &starts {
             let mut b = (a + 20_000).min(src.len());
@@ -1139,7 +1078,6 @@ mod tests {
     }
 }
 
-/// Bytes kept for a document's text after `prepare` (for the benchmark).
 #[cfg(test)]
 pub fn prepare_size(src: String) -> usize {
     match prepare(src).text {

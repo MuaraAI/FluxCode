@@ -1,4 +1,3 @@
-//! Extensions: what FluxCode can build, run, pack and preview, as small manifests.
 
 pub mod bedrock;
 pub mod compile;
@@ -14,7 +13,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// The built-in catalog, in the order the gallery shows it.
 const BUILTIN: &[&str] = &[
     include_str!("../../extensions/html-preview.json"),
     include_str!("../../extensions/paper.json"),
@@ -31,9 +29,7 @@ const BUILTIN: &[&str] = &[
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Rule {
-    /// A file name or the end of a path (`src/main/resources/plugin.yml`); the last part may be `*.ext`.
     pub file: String,
-    /// Text the file must contain (all of it).
     #[serde(default)]
     pub contains: Vec<String>,
 }
@@ -44,50 +40,36 @@ pub struct TaskDef {
     pub label: String,
     #[serde(default)]
     pub icon: String,
-    /// The command line, run in the project folder.
     #[serde(default)]
     pub run: String,
-    /// A step FluxCode does itself (`paper.deploy`, `bedrock.pack`, ...).
     #[serde(default)]
     pub native: String,
-    /// Shown only when one of these files is in the project folder (`a|b|*.csproj`).
     #[serde(default)]
     pub when: String,
-    /// Hidden when one of these is there.
     #[serde(default)]
     pub unless: String,
-    /// Shown only when the build file (build.gradle.kts, build.gradle, pom.xml or package.json) has this text, like a plugin id.
     #[serde(default)]
     pub uses: String,
-    /// A native step to run after the command succeeds.
     #[serde(default)]
     pub then: String,
-    /// Run with the JDK the project asks for (JAVA_HOME).
     #[serde(default)]
     pub java: bool,
-    /// The project's main button.
     #[serde(default)]
     pub primary: bool,
-    /// Runs in the Terminal (it keeps running and reads what you type).
     #[serde(default)]
     pub terminal: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Need {
-    /// The program looked up on PATH (`java`, `node`, `cargo`).
     pub cmd: String,
     pub label: String,
-    /// `winget install -e --id <this>` installs it on Windows.
     #[serde(default)]
     pub winget: String,
-    /// Where to get it otherwise.
     #[serde(default)]
     pub url: String,
-    /// Only needed when the project has one of these files.
     #[serde(default)]
     pub when: String,
-    /// Not needed when the project has one of these (a wrapper script, say).
     #[serde(default)]
     pub unless: String,
 }
@@ -104,34 +86,26 @@ pub struct Manifest {
     #[serde(default)]
     pub icon: String,
     pub summary: String,
-    /// Markdown for the details page.
     #[serde(default)]
     pub about: String,
     #[serde(default)]
     pub detect: Vec<Rule>,
-    /// Marker files of a project's top folder, most important first: the first one found going up from the matched file decides.
     #[serde(default)]
     pub root: Vec<String>,
-    /// Packs found side by side become one project (a Bedrock add-on).
     #[serde(default)]
     pub group_siblings: bool,
-    /// Extensions this one stands in for on the same folder (Paper over plain Gradle).
     #[serde(default)]
     pub replaces: Vec<String>,
     #[serde(default)]
     pub tasks: Vec<TaskDef>,
     #[serde(default)]
     pub needs: Vec<Need>,
-    /// New-project templates FluxCode can write (`paper`, `bedrock`).
     #[serde(default)]
     pub templates: Vec<String>,
-    /// What an AI agent should know about such a project.
     #[serde(default)]
     pub agent: String,
-    /// Installed on a fresh setup.
     #[serde(default)]
     pub default: bool,
-    /// Where an installed-from-file manifest lives (None: built in).
     #[serde(skip)]
     pub source: Option<PathBuf>,
 }
@@ -153,17 +127,14 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
     Ok(m)
 }
 
-/// The user's home folder.
 pub fn home() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default()
 }
 
-/// `~/.fluxcode/extensions`.
 pub fn user_dir() -> PathBuf {
     home().join(".fluxcode").join("extensions")
 }
 
-/// The built-in manifests, then the ones installed from files.
 pub fn catalog() -> Vec<Manifest> {
     let mut all: Vec<Manifest> = BUILTIN.iter().map(|t| parse(t).expect("built-in extension manifest")).collect();
     if let Ok(rd) = std::fs::read_dir(user_dir()) {
@@ -188,7 +159,6 @@ pub fn remove_file(m: &Manifest) {
 }
 
 
-/// A folder an extension is for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
     pub ext: String,
@@ -196,14 +166,12 @@ pub struct Project {
     pub name: String,
 }
 
-/// Build output and dependency folders: never a project's own files.
 const SKIP: &[&str] = &["node_modules", "build", "target", ".gradle", ".git", "dist", "out", "bin", "obj", ".venv", "venv", "__pycache__", "libraries", "cache"];
 
 fn skipped(path: &str) -> bool {
     path.split(['/', '\\']).any(|seg| SKIP.iter().any(|s| seg.eq_ignore_ascii_case(s)))
 }
 
-/// Does `path` (any separators) end with `pattern` (`/`, last part may be `*.ext`)?
 pub fn matches(path: &str, pattern: &str) -> bool {
     let segs: Vec<&str> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     let pat: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
@@ -217,7 +185,6 @@ pub fn matches(path: &str, pattern: &str) -> bool {
     })
 }
 
-/// Files in `dir` matching one of `a|b|*.x`.
 pub fn has_any(dir: &Path, alts: &str) -> bool {
     alts.split('|').map(str::trim).filter(|a| !a.is_empty()).any(|a| match a.strip_prefix('*') {
         Some(suffix) => std::fs::read_dir(dir)
@@ -242,7 +209,6 @@ fn rule_hits(rule: &Rule, path: &str) -> bool {
     rule.contains.iter().all(|c| text.contains(c.as_str()))
 }
 
-/// The project folder for a matched file: the first root marker found going up (inside `top`), else the file's own folder.
 fn project_dir(m: &Manifest, file: &Path, top: &Path) -> PathBuf {
     let start = file.parent().unwrap_or(file);
     for marker in &m.root {
@@ -260,7 +226,6 @@ fn project_dir(m: &Manifest, file: &Path, top: &Path) -> PathBuf {
     start.to_path_buf()
 }
 
-/// Every project each extension is for, from the workspace's file list.
 pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<Project> {
     let mut found: Vec<Project> = Vec::new();
     for m in catalog {
@@ -292,7 +257,6 @@ pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<
         }
         found.extend(mine);
     }
-    // Paper over plain Gradle on the same folder, and so on.
     let shadowed: Vec<(String, PathBuf)> = found
         .iter()
         .flat_map(|p| catalog.iter().find(|m| m.id == p.ext).map(|m| m.replaces.iter().map(|r| (r.clone(), p.dir.clone())).collect::<Vec<_>>()).unwrap_or_default())
@@ -301,7 +265,6 @@ pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<
     found
 }
 
-/// Packs in the same folder become one project named after that folder.
 fn group(list: Vec<Project>) -> Vec<Project> {
     let mut out: Vec<Project> = Vec::new();
     for p in &list {
@@ -319,13 +282,11 @@ fn group(list: Vec<Project>) -> Vec<Project> {
 }
 
 
-/// A task ready to run for one project.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
     pub id: String,
     pub label: String,
     pub icon: String,
-    /// The command line, filled in (empty for a native step).
     pub line: String,
     pub native: String,
     pub then: String,
@@ -347,7 +308,6 @@ fn wrapper(dir: &Path, name: &str, fallback: &str) -> String {
     }
 }
 
-/// npm, pnpm, yarn or bun, from the lock file.
 pub fn package_manager(dir: &Path) -> &'static str {
     if dir.join("pnpm-lock.yaml").exists() {
         "pnpm"
@@ -369,7 +329,6 @@ fn fill(line: &str, p: &Project) -> String {
         .replace("{name}", &p.name)
 }
 
-/// A build file in `dir` (or a folder right inside it) mentions `text`.
 pub fn uses(dir: &Path, text: &str) -> bool {
     let files = ["build.gradle.kts", "build.gradle", "pom.xml", "package.json", "settings.gradle.kts", "gradle/libs.versions.toml"];
     let mut dirs = vec![dir.to_path_buf()];
@@ -379,14 +338,12 @@ pub fn uses(dir: &Path, text: &str) -> bool {
     dirs.iter().any(|d| files.iter().any(|f| std::fs::read_to_string(d.join(f)).is_ok_and(|t| t.contains(text))))
 }
 
-/// `package.json` scripts, in file order.
 pub fn npm_scripts(dir: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else { return Vec::new() };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
     v.get("scripts").and_then(|s| s.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
 }
 
-/// The tasks a project gets from its extension (checks files on disk: off the UI thread when there are many).
 pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
     let mut out = Vec::new();
     for t in &m.tasks {
@@ -433,7 +390,6 @@ pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
 }
 
 
-/// A program on PATH (with PATHEXT on Windows), without starting a process.
 pub fn which(cmd: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
@@ -452,14 +408,12 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
     None
 }
 
-/// Where a needed tool is, or why it isn't there.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tool {
     Found(String),
     Missing,
 }
 
-/// Look up an extension's tools (for the projects it is for, when it has any).
 pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
     m.needs
         .iter()
@@ -470,7 +424,6 @@ pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
         .map(|n| {
             let mut need = n.clone();
             let found = if n.cmd == "java" {
-                // The version the folder's projects ask for, when one does: that JDK, and its installer.
                 match projects.iter().find_map(|p| java::wanted(&p.dir).map(|w| (w, *p))) {
                     Some((w, p)) => {
                         need.label = format!("Java {w} (JDK)");
@@ -488,7 +441,6 @@ pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
 }
 
 
-/// What the agent is told about the projects installed extensions are for: which tool builds each, with which command, and the extension's notes.
 pub fn agent_notes(catalog: &[Manifest], installed: &[String], found: &[Project], top: &[PathBuf]) -> Option<String> {
     let mut s = String::new();
     let mut noted: Vec<&str> = Vec::new();
@@ -528,43 +480,31 @@ pub fn agent_notes(catalog: &[Manifest], installed: &[String], found: &[Project]
     Some(out)
 }
 
-/// Installed ids, the defaults on a fresh setup.
 pub fn default_installed() -> Vec<String> {
     BUILTIN.iter().filter_map(|t| parse(t).ok()).filter(|m| m.default).map(|m| m.id).collect()
 }
 
-/// UI state of the Extensions view and page.
 pub struct Ext {
     pub catalog: Vec<Manifest>,
     pub found: Vec<Project>,
-    /// Tasks per found project (same order), worked out off the UI thread.
     pub tasks: Vec<Vec<Task>>,
     pub query: gpui_kit::Entity<gpui_kit::component::input::InputState>,
-    /// The name box of the details page's New project.
     pub new_name: gpui_kit::Entity<gpui_kit::component::input::InputState>,
     pub filter: Filter,
-    /// The details page in the editor area.
     pub page: Option<String>,
     pub needs: HashMap<String, Vec<(Need, Tool)>>,
-    /// A native step to run when the running task succeeds.
     pub after: Option<(Project, String)>,
-    /// The folder the last task ran in (links in its output resolve there).
     pub last_cwd: Option<PathBuf>,
     pub scanning: bool,
     pub note: Option<String>,
-    /// (project, task id) running in the Output panel.
     pub running: Option<(usize, String)>,
-    /// FluxCompile's folding of Gradle's task lines: where the scan is, how many were folded, and the progress line that stands for them.
     pub fold_scan: usize,
     pub fold_count: usize,
     pub fold_line: Option<usize>,
-    /// The VS Code Marketplace list and the extensions installed from it.
     pub market: market::Market,
-    /// Searches the Marketplace as the query changes.
     pub _query_sub: gpui_kit::Subscription,
 }
 
-/// The Extensions view's tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Filter {
     Market,
@@ -613,14 +553,12 @@ mod tests {
         let files = vec![module.join("plugin.yml").to_string_lossy().into_owned(), root.join("proj").join("settings.gradle.kts").to_string_lossy().into_owned()];
         let cat = catalog();
         let found = detect(&cat, std::slice::from_ref(&root), &files);
-        // Paper takes the folder; plain Gradle steps aside for it.
         let paper: Vec<&Project> = found.iter().filter(|p| p.ext == "paper").collect();
         assert_eq!(paper.len(), 1, "{found:?}");
         assert_eq!(paper[0].dir, root.join("proj"));
         assert!(!found.iter().any(|p| p.ext == "java-gradle" && p.dir == root.join("proj")));
         let t = tasks(cat.iter().find(|m| m.id == "paper").unwrap(), paper[0]);
         assert!(t.iter().any(|t| t.primary), "{t:?}");
-        // The agent is told what it is and how it builds, only once it's installed.
         assert_eq!(agent_notes(&cat, &[], &found, std::slice::from_ref(&root)), None);
         let notes = agent_notes(&cat, &["paper".to_string()], &found, std::slice::from_ref(&root)).unwrap();
         assert!(notes.contains("Paper Plugins") && notes.contains("build -x test") && notes.contains("plugin.yml: name X"), "{notes}");

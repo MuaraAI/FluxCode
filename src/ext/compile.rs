@@ -1,16 +1,13 @@
-//! FluxCompile: how FluxCode builds a Java project.
 
 use super::java::{self, Server};
 use super::Project;
 use std::path::{Path, PathBuf};
 
-/// `key=value` from a project's gradle.properties.
 fn gradle_property(dir: &Path, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(dir.join("gradle.properties")).ok()?;
     text.lines().map(str::trim).find_map(|l| l.strip_prefix(key).and_then(|r| r.trim_start().strip_prefix('=')).map(|v| v.trim().to_string()))
 }
 
-/// Flags FluxCompile adds to a Gradle build in `dir`: the local build cache unless the project turns it off, plain console output.
 pub fn gradle_flags(dir: &Path) -> String {
     let mut f = Vec::new();
     if gradle_property(dir, "org.gradle.caching").as_deref() != Some("false") {
@@ -20,10 +17,8 @@ pub fn gradle_flags(dir: &Path) -> String {
     f.join(" ")
 }
 
-/// What FluxCompile does, for the extension page.
 pub const ABOUT: &str = "the project's JDK, Gradle's local build cache (unless the project turns it off), the project's own parallel and configuration-cache settings, the output folded";
 
-/// `name` and `version` from the plugin.yml (or paper-plugin.yml) inside a jar.
 pub fn jar_plugin(jar: &Path) -> Option<(String, String)> {
     let bytes = std::fs::read(jar).ok()?;
     let yml = ["paper-plugin.yml", "plugin.yml", "velocity-plugin.json", "bungee.yml"].iter().find_map(|n| super::zip::read_entry(&bytes, n))?;
@@ -37,13 +32,11 @@ pub fn jar_plugin(jar: &Path) -> Option<(String, String)> {
     Some((get("name")?, get("version").unwrap_or_default()))
 }
 
-/// `KiwEssentials`, `0.1.0-SNAPSHOT` → `KiwEssentials-0.1.0-SNAPSHOT.jar`.
 pub fn jar_name(name: &str, version: &str) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || "._-+".contains(c) { c } else { '_' }).collect::<String>();
     if version.is_empty() || version.contains("${") { format!("{}.jar", safe(name)) } else { format!("{}-{}.jar", safe(name), safe(version)) }
 }
 
-/// The plugin's name as it calls itself: from the built jar, else its plugin.yml.
 pub fn plugin_name(dir: &Path) -> Option<String> {
     let yml = java::plugin_yml(dir);
     let built = java::built_jar(dir, yml.as_ref().map(|y| y.name.as_str()).unwrap_or("")).and_then(|j| jar_plugin(&j)).map(|(n, _)| n);
@@ -55,7 +48,6 @@ fn short(p: &Path, base: &Path) -> String {
     p.strip_prefix(parent).map(|r| r.display().to_string()).unwrap_or_else(|_| p.display().to_string())
 }
 
-/// After a build: what was built, from the jar (for the Output panel).
 pub fn summary(p: &Project, took: &str) -> Option<String> {
     let yml = java::plugin_yml(&p.dir);
     let jar = java::built_jar(&p.dir, yml.as_ref().map(|y| y.name.as_str()).unwrap_or(""))?;
@@ -69,7 +61,6 @@ pub fn summary(p: &Project, took: &str) -> Option<String> {
     Some(format!("{what} · {kb} KB · {took} · {rel}"))
 }
 
-/// Copy the built plugin into the server's plugins folder as `<Name>-<version>.jar`, replacing every other jar there that is the same plugin (by the name inside it).
 pub fn deploy(project: &Project, roots: &[PathBuf]) -> Result<Vec<String>, String> {
     let yml = java::plugin_yml(&project.dir);
     let declared = yml.as_ref().map(|y| y.name.clone()).unwrap_or_default();
@@ -104,7 +95,6 @@ pub fn deploy(project: &Project, roots: &[PathBuf]) -> Result<Vec<String>, Strin
     Ok(lines)
 }
 
-/// The jar says it uses Mojang's names, so Paper loads it without remapping.
 pub fn mojang_mapped(jar: &Path) -> bool {
     std::fs::read(jar)
         .ok()
@@ -112,12 +102,10 @@ pub fn mojang_mapped(jar: &Path) -> bool {
         .is_some_and(|m| String::from_utf8_lossy(&m).contains("paperweight-mappings-namespace"))
 }
 
-/// Gradle's per-task lines are folded into one progress line while a build runs.
 pub fn is_task_line(t: &str) -> bool {
     t.starts_with("> Task ") && !t.contains("FAILED")
 }
 
-/// `> Task :main:compileJava UP-TO-DATE` → `:main:compileJava`.
 pub fn task_name(t: &str) -> &str {
     t.trim_start_matches("> Task ").split_whitespace().next().unwrap_or("")
 }

@@ -1,4 +1,3 @@
-//! Find in files side bar (Ctrl+Shift+F).
 
 use crate::i18n::tr;
 use crate::core;
@@ -15,19 +14,14 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Bumped by every search and keystroke: a walk whose number is no longer current stops at the next folder, and its results are dropped.
 static GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Pause after the last keystroke before searching: short enough to feel live, long enough that a word typed at speed costs one walk, not one per letter.
 const TYPE_PAUSE: Duration = Duration::from_millis(140);
 
-/// Lines shown per file before a "N more" row: a file with hundreds of matches no longer pushes every other file off the list.
 const FOLD: usize = 6;
-/// The hit index that stands for a file's "N more" row.
 const MORE: usize = usize::MAX;
 
 impl Workbench {
-    /// The query changed: search once typing pauses (Enter still searches at once).
     pub(crate) fn search_soon(&mut self, cx: &mut Context<Self>) {
         let gen = GEN.fetch_add(1, Ordering::Relaxed) + 1;
         if self.search_input.read(cx).value().is_empty() {
@@ -65,7 +59,6 @@ impl Workbench {
                         if stale() {
                             break;
                         }
-                        // In a distro the helper searches with ripgrep-speed readdir instead of walking the 9p share.
                         let remote = wsl.as_ref().and_then(|t| {
                             let distro = t.distro.clone();
                             let linux = t.linux_path(r)?;
@@ -75,7 +68,6 @@ impl Workbench {
                             all.total += wire.total;
                             all.truncated |= wire.truncated;
                             for f in wire.files {
-                                // The editor works in Windows paths, so the Linux ones come back as UNC.
                                 all.files.push(core::FileHits {
                                     path: t_unc(&wsl, &f.path),
                                     hits: f.hits.into_iter().map(|h| core::Hit { line: h.line, text: h.text }).collect(),
@@ -106,7 +98,6 @@ impl Workbench {
         .detach();
     }
 
-    /// The rows the list shows: each file, then its first `FOLD` lines unless the user opened it all, then a "N more" row.
     pub(crate) fn rebuild_search_rows(&mut self) {
         let mut rows = Vec::new();
         for (f, fh) in self.search.files.iter().enumerate() {
@@ -231,7 +222,6 @@ impl Workbench {
     }
 }
 
-/// Byte ranges of `query` in `text`, to tint in a result row.
 fn match_ranges(text: &str, query: &str, case: bool) -> Vec<std::ops::Range<usize>> {
     if query.is_empty() {
         return Vec::new();
@@ -251,7 +241,6 @@ fn match_ranges(text: &str, query: &str, case: bool) -> Vec<std::ops::Range<usiz
     out
 }
 
-/// A Linux path from the helper as the Windows path the editor uses.
 fn t_unc(wsl: &Option<crate::remote::WslTarget>, linux: &str) -> std::path::PathBuf {
     match wsl {
         Some(t) => t.unc_path(linux),

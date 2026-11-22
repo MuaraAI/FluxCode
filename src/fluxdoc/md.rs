@@ -1,13 +1,10 @@
-//! A Flux document as GitHub Markdown, so a `README.flux` can show on GitHub as the `README.md` made from it.
 
 use super::{arg, args, cells, flow, text, Align, Block, Doc, Kind};
 
-/// The first line of a Markdown file made from a Flux one.
 pub fn banner(input: &str, output: &str) -> String {
     format!("<!-- Made from {input} by FluxCode (fluxcode --flux-to-md {input} {output}). Edit {input}, not this file. -->")
 }
 
-/// `src` as GitHub Markdown, with the sections for `lang` ("en" or "id").
 pub fn to_markdown(doc: &Doc, src: &str, lang: &str, banner: Option<&str>) -> String {
     let mut out = String::new();
     if let Some(b) = banner {
@@ -26,7 +23,6 @@ pub fn to_markdown(doc: &Doc, src: &str, lang: &str, banner: Option<&str>) -> St
     out
 }
 
-/// GitHub's anchor for a heading.
 pub fn slug(title: &str) -> String {
     let mut s = String::new();
     for c in super::inline(title).text.chars().flat_map(char::to_lowercase) {
@@ -39,14 +35,12 @@ pub fn slug(title: &str) -> String {
     s
 }
 
-/// Inline Flux marks that Markdown lacks, rewritten; the rest stays as written.
 pub fn inline_md(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find(['{', '=', '`']) {
         out.push_str(&rest[..i]);
         let r = &rest[i..];
-        // Code stays exactly as written.
         if r.starts_with('`') {
             let n = r.bytes().take_while(|&b| b == b'`').count();
             let fence = &r[..n];
@@ -106,10 +100,8 @@ fn line(out: &mut String, prefix: &str, s: &str) {
 }
 
 fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, want: u8) {
-    // Rows of one table come one after another: their number counts up from 0.
     let mut row_n = 0u32;
     for (bi, b) in blocks.iter().enumerate() {
-        // List items run on after list items, and rows after rows of the same table; everything else is a paragraph of its own.
         let runs_on = match (bi.checked_sub(1).map(|p| &blocks[p]), b) {
             (Some(Block::Item { .. }), Block::Item { .. }) => true,
             (Some(Block::Row { table: a, .. }), Block::Row { table: z, .. }) => a == z,
@@ -145,7 +137,6 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
                 let (n, header) = (row_n, t.header && row_n == 0);
                 let cs: Vec<String> = cells(src, l, t.pipes).iter().map(|c| inline_md(text(src, *c))).collect();
                 if n == 0 && !header {
-                    // GitHub tables need a header row: an empty one.
                     line(out, prefix, &format!("|{}", " |".repeat(t.cols)));
                     line(out, prefix, &sep(t));
                 }
@@ -189,7 +180,6 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
                     }
                     Kind::Columns => emit(doc, src, inner, out, prefix, want),
                     Kind::Gallery => {
-                        // A table keeps the images in line at any page width, and gives each its caption right under it.
                         let imgs: Vec<super::Span> = inner.iter().filter_map(|b| if let Block::Image(a) = b { Some(*a) } else { None }).collect();
                         let share = 100 / imgs.len().max(1);
                         line(out, prefix, "<table>");
@@ -226,7 +216,6 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
             }
             Block::ColBreak => {}
             Block::Toc => {
-                // Only the headings this language shows: a bilingual document would otherwise list every section twice.
                 for &h in &doc.headings {
                     if !matches!(doc.lang.get(h as usize), Some(&l) if l == 0 || l == want) {
                         continue;
@@ -245,12 +234,10 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
     }
 }
 
-/// An image in GitHub Markdown: `![alt](path)` when that says it all, else HTML for a width, alignment, link or dark-theme version (`<picture>`).
 fn image_md(src: &str, a: super::Span) -> String {
     image_md_width(src, a, None)
 }
 
-/// `image_md` with its width replaced (a gallery's images fill their cells).
 fn image_md_width(src: &str, a: super::Span, width: Option<&str>) -> String {
     let a = args(src, a);
     let path = arg(src, &a, "").unwrap_or("");
@@ -287,7 +274,6 @@ fn sep(t: &super::Table) -> String {
     format!("| {} |", cols.join(" | "))
 }
 
-/// `fluxcode --flux-to-md IN.flux OUT.md [--lang en|id] [--check]`: write OUT.md, or with `--check` only say whether it is up to date (exit code 1 when not).
 pub fn cli(args: &[String]) -> i32 {
     let mut files: Vec<&String> = Vec::new();
     let (mut check, mut lang) = (false, "en");

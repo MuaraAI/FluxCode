@@ -1,4 +1,3 @@
-//! Token saver: response-style packs that make the agent spend fewer tokens.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -11,7 +10,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
-/// Sent again after this many turns with the same packs.
 const REMIND_EVERY: u32 = 8;
 
 pub const PACKS: [(&str, &str, &str); 3] = [
@@ -22,20 +20,15 @@ pub const PACKS: [(&str, &str, &str); 3] = [
 
 pub const LEVELS: [(&str, &str); 3] = [("lite", "Lite"), ("full", "Full"), ("ultra", "Ultra")];
 
-/// Auto compact's marks: how full the context gets before it is compacted (percent).
 pub const COMPACT_AT: [u8; 3] = [50, 70, 85];
 
-/// The context window assumed when the agent doesn't say (most of today's models have 200K or more).
 const DEFAULT_WINDOW: u64 = 200_000;
 
 #[derive(Default)]
 pub struct SaverState {
     pub open: bool,
-    /// (session, packs key) the guidance last went out for.
     sent: Option<(String, String)>,
-    /// Turns sent since then.
     turns: u32,
-    /// When the packs last changed, for the panel's "since" line.
     pub changed: Option<std::time::Instant>,
 }
 
@@ -55,7 +48,6 @@ fn pack_line(id: &str) -> &'static str {
     }
 }
 
-/// The guidance for these packs, or None when every pack is off.
 pub fn guidance(packs: &[String], level: &str) -> Option<String> {
     let mut lines = Vec::new();
     for (id, ..) in PACKS {
@@ -72,7 +64,6 @@ pub fn guidance(packs: &[String], level: &str) -> Option<String> {
     ))
 }
 
-/// Rough share of output tokens the packs save (shown as a hint, not a measurement).
 pub fn estimate(packs: &[String], level: &str) -> f32 {
     let keep = packs.iter().fold(1.0f32, |k, p| {
         let s = match p.as_str() {
@@ -100,7 +91,6 @@ impl Workbench {
         }
     }
 
-    /// The text block to send with this message, if any (see the module notes).
     pub(crate) fn agent_saver_block(&mut self) -> Option<String> {
         let session = self.agent.session.clone().unwrap_or_default();
         let key = self.saver_key();
@@ -112,7 +102,6 @@ impl Workbench {
                 return None;
             }
         } else if key.is_empty() {
-            // All off: cancel only guidance this session has actually seen.
             let had = st.sent.as_ref().is_some_and(|(s, k)| *s == session && !k.is_empty());
             if !had {
                 st.sent = Some((session, key));
@@ -135,7 +124,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The leaf button under the message box, with the number of packs on.
     pub(crate) fn render_saver_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let n = self.settings.saver_packs.len();
         let open = self.agent.saver.open;
@@ -163,7 +151,6 @@ impl Workbench {
             .when(n > 0, |d| d.child(n.to_string()))
     }
 
-    /// How full the context is (0..1): the agent's own count when it sends one, else an estimate (about 4 characters a token, over a 200K window) of what was said since the last compaction.
     pub(crate) fn agent_context_fill(&self) -> f32 {
         if let Some(l) = self.agent.usage.live.as_ref().filter(|l| l.size > 0 && l.used > 0) {
             return l.used as f32 / l.size as f32;
@@ -179,7 +166,6 @@ impl Workbench {
         chars as f32 / 4. / DEFAULT_WINDOW as f32
     }
 
-    /// After a turn: when auto compact is on and the context is past its mark, compact it.
     pub(crate) fn agent_auto_compact(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.settings.saver_compact || self.agent.compacting {
             return false;
@@ -193,7 +179,6 @@ impl Workbench {
         if let Some(l) = self.agent.usage.live.as_mut() {
             l.used = 0;
         }
-        // Claude Agent calls it `compact`; OpenCode also answers to `summarize`.
         let cmd = self.agent.commands.iter().find(|c| c.name == "compact" || c.name == "summarize").map(|c| format!("/{}", c.name));
         if let Some(cmd) = cmd {
             self.agent.compacting = true;
@@ -209,7 +194,6 @@ impl Workbench {
         true
     }
 
-    /// `/compact` finished: say so where the "compacting" note was.
     pub(crate) fn agent_compact_done(&mut self, ok: bool) {
         let text = if ok { crate::i18n::tr("Context compacted: the conversation continues with a summary, using fewer tokens.").to_string() } else { crate::i18n::tr("Couldn't compact the context this time; it will try again after the next answer.").to_string() };
         if let Some(super::Item::Note(t, err)) = self.agent.items.iter_mut().rev().find(|i| matches!(i, super::Item::Note(..))) {
@@ -218,7 +202,6 @@ impl Workbench {
         }
     }
 
-    /// The token saver panel, floating over the chat above the message box.
     pub(crate) fn render_saver_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.agent.saver.open {
             return None;
@@ -230,7 +213,6 @@ impl Workbench {
         let (panel_top, composer_top) = self.agent.geom.get();
         let room = if composer_top > panel_top + 120. { composer_top - panel_top - 24. } else { 420. };
 
-        // One option: a line icon, the name, its switch.
         let row = |key: &'static str, icon: Ico, title: &'static str, tip: SharedString, checked: bool, cx: &mut Context<Self>, set: fn(&mut Workbench, bool, &mut Context<Workbench>)| {
             h_flex()
                 .id(SharedString::from(format!("sv-row-{key}")))
@@ -241,7 +223,6 @@ impl Workbench {
                 .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(if checked { theme::FG_STRONG } else { theme::FG_MUTED })).child(tr(title)))
                 .child(Switch::new(SharedString::from(format!("sv-{key}"))).checked(checked).small().on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))))
         };
-        // A small segmented control under its option, lined up with the option's name.
         let seg = |id: &'static str, opts: Vec<(SharedString, bool, Box<dyn Fn(&mut Workbench)>)>, cx: &mut Context<Self>| {
             let mut h = h_flex().flex_1().min_w_0().p(px(2.)).gap(px(2.)).rounded(px(8.)).bg(c(theme::FG_DIM).opacity(0.12));
             for (k, (label, picked, f)) in opts.into_iter().enumerate() {
@@ -294,7 +275,6 @@ impl Workbench {
             .child(row("lean", Ico::Code, "Lean code", tr("Shows changed lines or a small diff, never whole files again.").into(), on("lean"), cx, |w, v, cx| w.saver_set("lean", v, cx)))
             .child(row("quiet", Ico::SquareTerminal, "Quiet tools", tr("Reads only the lines it needs and keeps command output short.").into(), on("quiet"), cx, |w, v, cx| w.saver_set("quiet", v, cx)));
 
-        // Auto compact, with how full the context is now beside its mark.
         let fill = self.agent_context_fill().clamp(0., 1.);
         let at = s.saver_compact_at;
         let meter = if fill * 100. >= at as f32 { theme::WARN } else { theme::GREEN };

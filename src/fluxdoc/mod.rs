@@ -1,11 +1,9 @@
-//! Flux documents (`.flux`): Markdown's text, plus blocks for what Markdown leaves to HTML or doesn't have: tables with column alignment, images and GIFs with a size, videos, flowcharts, callouts, collapsible sections, columns, a table of contents, sections per interface language and per-document styling.
 
 pub mod flow;
 pub mod gfm;
 pub mod md;
 pub mod view;
 
-/// A byte range of the source.
 pub type Span = (u32, u32);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -16,41 +14,26 @@ pub enum Kind {
     Danger,
     Details,
     Columns,
-    /// `@gallery`: images side by side.
     Gallery,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Block {
-    /// `@title`: the document's title.
     Title(Span),
     Heading(u8, Span),
-    /// One or more lines of text.
     Para(Span),
-    /// A list item: ordered (its number), nesting depth, task box (0 none, 1 open, 2 done).
     Item { num: u32, depth: u8, check: u8, text: Span },
-    /// One or more `>` lines.
     Quote(Span),
-    /// A code block, by index in `Doc::codes` (its language and lines: rare enough to keep out of every other block's size).
     Code(u32),
     Rule,
-    /// A table row: which table, and its line.
     Row { table: u32, line: Span },
-    /// `@image`: its arguments (path, alt, width, caption), read when drawn.
     Image(Span),
-    /// `@video`: its arguments (path, poster, alt).
     Video(Span),
-    /// `@flow`: a flowchart, by index.
     Flow(u32),
-    /// A box around other blocks (`inner` indexes `Doc::inner`).
     Boxed { kind: Kind, title: Span, inner: u32 },
-    /// `@col` inside `@columns`: the next column starts.
     ColBreak,
-    /// `@toc`: the headings, as links.
     Toc,
-    /// `@release DATE` (changelog.flux): a release starts.
     Release(Span),
-    /// A directive this version doesn't know: shown as is, never an error.
     Unknown(Span),
 }
 
@@ -65,25 +48,20 @@ pub enum Align {
 pub struct Table {
     pub cols: usize,
     pub align: Vec<Align>,
-    /// Relative column widths (from `widths=` or measured on the first rows).
     pub widths: Vec<f32>,
-    /// Rows are `| a | b |` (GitHub style) rather than `a | b`.
     pub pipes: bool,
     pub rows: u32,
-    /// The first row's index among the blocks around it, and whether it is a header.
     pub first: u32,
     pub header: bool,
 }
 
 impl Table {
-    /// Row `pos` (an index among the blocks around the table): its number, and header or not.
     pub fn row(&self, pos: usize) -> (u32, bool) {
         let n = (pos as u32).saturating_sub(self.first);
         (n, self.header && n == 0)
     }
 }
 
-/// The per-document look (`@style key=value ...`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Style {
     pub accent: Option<u32>,
@@ -95,20 +73,16 @@ pub struct Style {
 #[derive(Default)]
 pub struct Doc {
     pub blocks: Vec<Block>,
-    /// The interface language each top-level block is for: 0 all, 1 English, 2 Indonesian.
     pub lang: Vec<u8>,
     pub tables: Vec<Table>,
     pub flows: Vec<flow::Flow>,
     pub inner: Vec<Vec<Block>>,
-    /// Code blocks: (language, lines).
     pub codes: Vec<(Span, Span)>,
     pub style: Style,
-    /// Indices of the headings in `blocks` (for `@toc` and the outline).
     pub headings: Vec<u32>,
 }
 
 impl Doc {
-    /// The blocks to show for an interface language ("en" or "id").
     pub fn visible(&self, lang: &str) -> Vec<u32> {
         let want = if lang == "id" { 2 } else { 1 };
         (0..self.blocks.len() as u32).filter(|&i| matches!(self.lang[i as usize], 0) || self.lang[i as usize] == want).collect()
@@ -119,7 +93,6 @@ pub fn text(src: &str, s: Span) -> &str {
     src.get(s.0 as usize..s.1 as usize).unwrap_or("")
 }
 
-/// Lines with their byte offsets (`\r` dropped).
 struct Lines<'a> {
     src: &'a str,
     pos: usize,
@@ -154,7 +127,6 @@ fn sp(a: usize, b: usize) -> Span {
     (a as u32, b as u32)
 }
 
-/// What starts a new block (ends a paragraph).
 fn starts_block(line: &str) -> bool {
     let t = line.trim_start();
     t.starts_with('#') && heading_level(t).is_some()
@@ -177,7 +149,6 @@ fn is_rule(t: &str) -> bool {
     t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*') || t.bytes().all(|b| b == b'_'))
 }
 
-/// A list item: (depth, number (0 for bullets), offset of its text in the line, task box).
 fn list_marker(line: &str) -> Option<(u8, u32, usize, u8)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     let t = &line[indent..];
@@ -202,7 +173,6 @@ fn list_marker(line: &str) -> Option<(u8, u32, usize, u8)> {
     Some((depth, num, line.len() - after.len(), check))
 }
 
-/// `key=value` arguments of a directive, with the first bare word as `""`.
 pub fn args(src: &str, s: Span) -> Vec<(String, Span)> {
     let line = text(src, s);
     let base = s.0 as usize;
@@ -261,7 +231,6 @@ pub fn arg<'a>(src: &'a str, a: &[(String, Span)], key: &str) -> Option<&'a str>
     a.iter().find(|(k, _)| k == key).map(|(_, s)| text(src, *s))
 }
 
-/// An image's caption in a language (`want`: 1 English, 2 Indonesian): `caption-id=` for Indonesian when there is one, else `caption=`.
 pub fn caption<'a>(src: &'a str, a: &[(String, Span)], want: u8) -> Option<&'a str> {
     if want == 2 {
         if let Some(c) = arg(src, a, "caption-id") {
@@ -284,15 +253,11 @@ fn hex(s: &str) -> Option<u32> {
     }
 }
 
-/// Why `parse_into` stopped.
 enum Stop {
     Eof,
     End,
-    /// `@en`, `@id`, `@all`: what follows is for that language (0 all, 1 en, 2 id).
     Lang(u8),
-    /// `@release DATE`: a new release; languages start over.
     Release(Span),
-    /// `@title en: ...`: a title for one language.
     TitleFor(u8, Span),
 }
 
@@ -327,14 +292,12 @@ pub fn parse(src: &str) -> Doc {
         }
     }
     doc.blocks = out;
-    // Grown by doubling: give back what is left over (up to half of each).
     doc.blocks.shrink_to_fit();
     doc.lang.shrink_to_fit();
     doc.headings.shrink_to_fit();
     doc
 }
 
-/// Parse blocks into `out` until the end, `@end`, or (at the top level) a language or release marker.
 fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>, top: bool) -> Stop {
     while let Some((s, e)) = lines.next() {
         let line = &src[s..e];
@@ -343,7 +306,6 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
         if t.is_empty() || t.starts_with("//") {
             continue;
         }
-        // Code fence.
         if let Some(rest) = t.strip_prefix("```") {
             let lang_s = sp(ts + 3, ts + 3 + rest.trim_end().len());
             let body_start = lines.pos;
@@ -370,7 +332,6 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
                 "all" if top => return Stop::Lang(0),
                 "release" if top => return Stop::Release(rest),
                 "title" => {
-                    // changelog.flux: `@title en: ...` titles one language.
                     let r = text(src, rest);
                     let (l, body) = match r.split_once(':') {
                         Some((k, v)) if matches!(k.trim(), "en" | "id") => (if k.trim() == "en" { 1 } else { 2 }, v),
@@ -464,7 +425,6 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
             continue;
         }
         if let Some((depth, num, off, check)) = list_marker(line) {
-            // The item goes on over indented lines that start nothing else.
             let mut end = e;
             while let Some((ns, ne)) = lines.peek() {
                 let next = &src[ns..ne];
@@ -477,7 +437,6 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
             out.push(Block::Item { num, depth, check, text: sp(s + off, end) });
             continue;
         }
-        // A paragraph: this line and the next ones up to a blank line or a block.
         let mut end = e;
         while let Some((ns, ne)) = lines.peek() {
             let next = &src[ns..ne];
@@ -492,7 +451,6 @@ fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>,
     Stop::Eof
 }
 
-/// Split a table row into its cells (byte spans).
 pub fn cells(src: &str, line: Span, pipes: bool) -> Vec<Span> {
     let l = text(src, line);
     let base = line.0 as usize;
@@ -514,7 +472,6 @@ pub fn cells(src: &str, line: Span, pipes: bool) -> Vec<Span> {
         if at_end || (b[i] == b'|' && (i == 0 || b[i - 1] != b'\\')) {
             let cell = &body[st..i];
             let lead = cell.len() - cell.trim_start().len();
-            // An empty cell (only spaces) is an empty span where its text would start.
             out.push(sp(off + st + lead, off + st + cell.trim_end().len().max(lead)));
             st = i + 1;
         }
@@ -574,7 +531,6 @@ fn parse_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>
     doc.tables.push(t);
 }
 
-/// `| a | b |` lines, GitHub style: the second line (`|---|:--:|`) gives the alignment.
 fn parse_pipe_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>, first: (usize, usize)) {
     let ti = doc.tables.len() as u32;
     let mut t = Table { pipes: true, ..Default::default() };
@@ -625,7 +581,6 @@ fn parse_pipe_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<B
 }
 
 
-/// How a piece of inline text looks.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Marks {
     pub bold: bool,
@@ -638,7 +593,6 @@ pub struct Marks {
     pub color: Option<u32>,
 }
 
-/// Inline text, worked out: the plain text, styled ranges of it, and links.
 #[derive(Debug, Default, PartialEq)]
 pub struct Inline {
     pub text: String,
@@ -646,7 +600,6 @@ pub struct Inline {
     pub links: Vec<(std::ops::Range<usize>, String)>,
 }
 
-/// Bold `**x**`, italic `*x*` / `_x_`, code `` `x` ``, strike `~~x~~`, highlight `==x==`, links `[x](url)` and bare `https://...`, keys `{kbd Ctrl+S}`, badges `{badge New}` and color `{color=#d0a070 x}`.
 pub fn inline(s: &str) -> Inline {
     let mut out = Inline::default();
     let mut m = Marks::default();
@@ -782,7 +735,6 @@ fn closes_italic(s: &str, i: usize) -> bool {
     i > 0 && !s.as_bytes()[i - 1].is_ascii_whitespace()
 }
 
-/// A paragraph or quote's lines folded into one, `>` marks dropped.
 pub fn join_lines(s: &str, quote: bool) -> String {
     let mut out = String::new();
     for l in s.lines() {

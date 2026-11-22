@@ -1,4 +1,3 @@
-//! What the agent is doing, as one connected timeline: thinking, reading, editing, running a command, searching.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -8,10 +7,8 @@ use gpui_kit::component::{h_flex, text::TextView, v_flex, Icon};
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::time::{Duration, Instant};
 
-/// When a step started, and how long it took once it ended.
 pub type Times = std::collections::HashMap<String, (Instant, Option<Duration>)>;
 
-/// The words for a kind of step: while it runs, and once it is done.
 pub fn verbs(kind: &str) -> (&'static str, &'static str, IconName) {
     match kind {
         "read" => ("Reading", "Read", IconName::FileText),
@@ -26,7 +23,6 @@ pub fn verbs(kind: &str) -> (&'static str, &'static str, IconName) {
     }
 }
 
-/// Agents that send web tools as kind `other` with the tool's bare name (OpenCode's `websearch`, `webfetch`): the kind they mean, and what the row says they worked on.
 pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str)> {
     if !matches!(kind, "other" | "") {
         return None;
@@ -38,7 +34,6 @@ pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str
     }
 }
 
-/// What a step works on, from its title: "Read src/main.rs" → "src/main.rs" (the verb is said by the row), "`cargo build`" → "cargo build" (shown as code).
 pub fn target(title: &str, kind: &str) -> (String, bool) {
     let t = title.trim();
     if let Some(cmd) = t.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
@@ -52,7 +47,6 @@ pub fn target(title: &str, kind: &str) -> (String, bool) {
     (t.to_string(), kind == "execute")
 }
 
-/// "0.4 s", "12 s", "1 min 5 s".
 pub fn took(d: Duration) -> String {
     let s = d.as_secs_f32();
     if s < 10. {
@@ -64,9 +58,7 @@ pub fn took(d: Duration) -> String {
     }
 }
 
-/// A folded run of steps.
 pub struct Group {
-    /// Index of its first item (its key in `open_groups`).
     pub first: usize,
     pub last: usize,
     pub thoughts: usize,
@@ -77,22 +69,16 @@ pub struct Group {
     pub joined_down: bool,
 }
 
-/// One step on the rail.
 pub struct Step<'a> {
     pub key: String,
     pub kind: &'a str,
     pub title: &'a str,
-    /// pending, in_progress, completed, failed.
     pub status: &'a str,
-    /// The step above and the one below are steps too (the rail connects them).
     pub joined_up: bool,
     pub joined_down: bool,
-    /// The agent is still on this turn (a pending step left when it stopped is not running).
     pub live: bool,
-    /// A thought: its last line, shown dim after the label.
     pub note: Option<String>,
     pub open: bool,
-    /// An opened thought's full text: it sits inside the step, so the rail runs down beside it to the next step.
     pub detail: Option<String>,
 }
 
@@ -112,7 +98,6 @@ impl Workbench {
         let time = self.agent.times.get(&s.key).and_then(|(_, d)| *d).map(took);
         let col = if failed { theme::DANGER } else if running { theme::ACCENT_TEXT } else { theme::FG_DIM };
 
-        // The rail: a line from the step above, the icon, a line to the step below.
         let rail = v_flex()
             .flex_none()
             .w(theme::u(18.))
@@ -134,7 +119,6 @@ impl Workbench {
             )
             .child(div().w(px(1.)).flex_1().min_h(theme::u(5.)).when(s.joined_down, |d| d.bg(c(theme::BORDER_STRONG))));
 
-        // The label changes with a cross-fade when the step's state does.
         let state_key: SharedString = format!("ag-step-{}-{}", s.key, if running { "run" } else { s.status }).into();
         let head = h_flex()
             .min_h(theme::u(28.))
@@ -159,7 +143,6 @@ impl Workbench {
                 })
             })
             .when(what.is_empty(), |h| h.child(div().flex_1()))
-            // Time and chevron sit in fixed columns, so every row's time lines up on the right whether the row opens or not.
             .child(
                 div()
                     .flex_none()
@@ -177,7 +160,6 @@ impl Workbench {
                     .justify_center()
                     .when(s.kind == "think", |d| d.child(Icon::new(if s.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)))),
             );
-        // While it runs: the sweep under the label (the one thing that keeps moving).
         let sweep = running.then(|| {
             div().relative().h(px(2.)).mr_2().rounded_full().bg(c(theme::BG_HOVER)).overflow_hidden().child(
                 div()
@@ -190,7 +172,6 @@ impl Workbench {
                     .with_animation(SharedString::from(format!("ag-step-sweep-{}", s.key)), Animation::new(Duration::from_millis(1100)).repeat().with_easing(gpui_kit::ease_in_out), |el, t| el.left(relative(-0.3 + t * 1.3))),
             )
         });
-        // An opened thought reads as Markdown: paragraphs, lists and code as the agent wrote them.
         let detail = s.detail.map(|t| {
             div()
                 .pb_2()
@@ -202,7 +183,6 @@ impl Workbench {
         let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
-            // The chat puts 8 px between items: a step joined to the one above eats it, so the rail runs on without a gap.
             .when(s.joined_up, |d| d.mt(px(-8.)))
             .gap_2()
             .items_stretch()
@@ -210,7 +190,6 @@ impl Workbench {
             .child(rail)
             .child(body)
             .when_some(on_click, |d, f| d.on_click(cx.listener(move |this, _, _, cx| f(this, cx))));
-        // A new step slides in once.
         row.with_animation(SharedString::from(format!("ag-step-in-{}", s.key)), Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).ml(px((1. - t) * 6.)))
             .into_any_element()
     }
@@ -269,7 +248,6 @@ impl Workbench {
                 if !this.agent.open_groups.remove(&first) {
                     this.agent.open_groups.insert(first);
                 }
-                // Its steps appear or fold away.
                 this.agent.remeasure.borrow_mut().push(first..last + 1);
                 cx.notify();
             }))

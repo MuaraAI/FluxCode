@@ -1,11 +1,9 @@
-//! VS Code's commands and shortcuts that FluxCode adds on top of the editor's own: line editing (Ctrl+/, Alt+Up/Down, Shift+Alt+Up/Down, Ctrl+Shift+K, Ctrl+Enter), Go to Line (Ctrl+G), the Command Palette (Ctrl+Shift+P, F1), zoom, reopening a closed tab and closing all of them, and the word-wrap toggle (Alt+Z).
 
 use crate::editor_cmds::{self, Edit};
 use crate::workbench::*;
 use gpui_kit::component::input::Position;
 use gpui_kit::*;
 
-/// One palette entry: its name (translated when shown), the shortcut as VS Code writes it, and the action it runs.
 pub struct Command {
     pub label: &'static str,
     pub keys: &'static str,
@@ -18,7 +16,6 @@ macro_rules! cmd {
     };
 }
 
-/// Every command the palette offers, in VS Code's category order.
 pub fn commands() -> Vec<Command> {
     vec![
         cmd!("File: Go to File", "Ctrl+P", QuickOpenFile),
@@ -68,7 +65,6 @@ pub fn commands() -> Vec<Command> {
 }
 
 impl Workbench {
-    /// Run a line edit on the active editor as one Undo step.
     fn edit_active(&mut self, window: &mut Window, cx: &mut Context<Self>, f: impl FnOnce(&str, std::ops::Range<usize>, &str) -> Option<Edit>) {
         let Some(ix) = self.active else { return };
         let Some(d) = self.docs.get(ix) else { return };
@@ -112,7 +108,6 @@ impl Workbench {
         self.edit_active(w, cx, |t, sel, _| Some(editor_cmds::insert_line(t, sel, true)));
     }
 
-    /// Alt+Z: wrap this file's lines or not, for this file only (as in VS Code; the default for every file is the setting in Settings > Editor).
     pub(crate) fn on_toggle_word_wrap(&mut self, _: &ToggleWordWrap, w: &mut Window, cx: &mut Context<Self>) {
         self.toggle_wrap(w, cx);
     }
@@ -159,7 +154,6 @@ impl Workbench {
         }
     }
 
-    /// Ctrl+G: the quick-open box with ":" typed, as in VS Code.
     pub(crate) fn on_go_to_line(&mut self, _: &GoToLine, w: &mut Window, cx: &mut Context<Self>) {
         if self.active.is_none() {
             return;
@@ -167,12 +161,10 @@ impl Workbench {
         self.quick_open_with(":", w, cx);
     }
 
-    /// Ctrl+Shift+P / F1: the quick-open box with ">" typed.
     pub(crate) fn on_command_palette(&mut self, _: &CommandPalette, w: &mut Window, cx: &mut Context<Self>) {
         self.quick_open_with(">", w, cx);
     }
 
-    /// Jump to `line` (1-based, clamped) in the active editor, and to column `col`.
     pub(crate) fn go_to_line_col(&mut self, line: u32, col: u32, w: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else { return };
         let editor = self.docs[ix].editor.clone();
@@ -186,7 +178,6 @@ impl Workbench {
     }
 }
 
-/// ":12" or ":12:5" or ":12,5" -> (line, column).
 pub fn parse_line_query(q: &str) -> Option<(u32, u32)> {
     let rest = q.strip_prefix(':')?.trim();
     let mut parts = rest.split([':', ',']);

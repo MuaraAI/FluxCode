@@ -1,4 +1,3 @@
-//! A real helper, over a real pipe: the client's framing against the server's answers, without a distro.
 
 use std::io::BufReader;
 use std::path::Path;
@@ -62,7 +61,6 @@ fn a_helper_answers_over_a_pipe() {
         eprintln!("FLUXCODE_HELPER_BIN not set; skipping");
         return;
     };
-    // A temp folder to list, read and write in.
     let dir = std::env::temp_dir().join(format!("fluxcode-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
@@ -87,7 +85,6 @@ fn a_helper_answers_over_a_pipe() {
     assert_eq!(hits.total, 1);
     assert_eq!(hits.files[0].hits[0].line, 1);
 
-    // The Ctrl+P list comes from the same helper.
     let scan = h.ask(&Request::Scan {
         root: root.clone(),
         max: 100,
@@ -114,7 +111,6 @@ fn a_helper_answers_over_a_pipe() {
     let stat: crate::remote::proto::Stat = serde_json::from_value(stat.json.unwrap()).unwrap();
     assert!(stat.exists && stat.is_dir && !stat.is_file);
 
-    // A write travels as a second frame after the request.
     let body = serde_json::to_vec(&Request::Write { path: format!("{root}/b.txt"), crlf: false }).unwrap();
     write_frame(&mut h.stdin, FRAME_JSON, &body).unwrap();
     write_frame(&mut h.stdin, FRAME_BYTES, b"written by the editor\n").unwrap();
@@ -124,7 +120,6 @@ fn a_helper_answers_over_a_pipe() {
     assert!(r.ok, "{r:?}");
     assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "written by the editor\n");
 
-    // A bad path says why instead of hanging up.
     let bad = h.ask(&Request::List { path: "/nope/not/here".into() });
     assert!(!bad.ok);
     assert!(bad.error.is_some());

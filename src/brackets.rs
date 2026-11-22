@@ -1,22 +1,15 @@
-//! Live bracket check (issue #105): the first unmatched or mismatched `()[]{}` in a file, underlined as you type.
 
-/// Files bigger than this are not checked (the scan runs on the UI thread).
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 
 struct Syntax {
-    /// Line comment starts.
     line: &'static [&'static str],
-    /// `/* ... */` comments.
     block: bool,
-    /// Characters that open and close a string.
     quotes: &'static [u8],
-    /// Rust raw strings, `r"..."` and `r#"..."#`, with quotes and no escapes inside.
     raw: bool,
 }
 
 const C_LIKE: Syntax = Syntax { line: &["//"], block: true, quotes: b"\"", raw: false };
 
-/// Languages where brackets always pair up.
 fn syntax(lang: &str) -> Option<Syntax> {
     Some(match lang {
         "python" => Syntax { line: &["#"], block: false, quotes: b"\"'", raw: false },
@@ -24,16 +17,13 @@ fn syntax(lang: &str) -> Option<Syntax> {
         "go" => Syntax { quotes: b"\"`", ..C_LIKE },
         "dart" | "json" => Syntax { quotes: b"\"'", ..C_LIKE },
         "php" => Syntax { line: &["//", "#"], block: true, quotes: b"\"'", raw: false },
-        // No `//` comment in CSS, and `url(http://...)` must not start one.
         "css" | "scss" | "less" => Syntax { line: &[], block: true, quotes: b"\"'", raw: false },
         "rust" => Syntax { raw: true, ..C_LIKE },
-        // `'` is a char literal (or a Rust lifetime), not a string.
         "c" | "cpp" | "java" | "cs" | "kt" | "scala" | "swift" => C_LIKE,
         _ => return None,
     })
 }
 
-/// Walks the text byte by byte, keeping the 0-based row and the column in characters (what `Position` uses).
 struct Cursor<'a> {
     b: &'a [u8],
     i: usize,
@@ -51,7 +41,6 @@ impl Cursor<'_> {
         self.i += 1;
     }
 
-    /// Whether the cursor follows a name (`bar"` is not `r"`; the `b` of `br"` doesn't count).
     fn after_ident(&self) -> bool {
         let ident = |j: usize| self.b[j].is_ascii_alphanumeric() || self.b[j] == b'_';
         match self.i {
@@ -66,7 +55,6 @@ impl Cursor<'_> {
         self.b[self.i..].starts_with(s.as_bytes())
     }
 
-    /// Step past the next `end` (or to the end of the text).
     fn skip_past(&mut self, end: &str) {
         while self.i < self.b.len() && !self.at(end) {
             self.step();
@@ -76,7 +64,6 @@ impl Cursor<'_> {
         }
     }
 
-    /// Step past a string opened by the quote under the cursor.
     fn skip_string(&mut self) {
         let q = self.b[self.i];
         self.step();
@@ -92,7 +79,6 @@ impl Cursor<'_> {
     }
 }
 
-/// The first bracket problem in `text`: its row, column (in characters) and message.
 pub(crate) fn first_problem(text: &str, lang: &str) -> Option<(u32, u32, String)> {
     let syn = syntax(lang)?;
     if text.len() > MAX_BYTES {
@@ -123,7 +109,6 @@ pub(crate) fn first_problem(text: &str, lang: &str) -> Option<(u32, u32, String)
             continue;
         }
         if c == b'\'' {
-            // A char literal like '{' or '\n'; a lone ' (a lifetime) is skipped.
             match (cur.b.get(cur.i + 1), cur.b.get(cur.i + 2)) {
                 (Some(b'\\'), _) => {
                     cur.step();
@@ -174,7 +159,6 @@ mod tests {
 
     #[test]
     fn extra_closing_brace_is_found() {
-        // The example from the issue: {...}}
         let (row, col, msg) = first_problem("fn a() {\n    x();\n}}\n", "rust").unwrap();
         assert_eq!((row, col), (2, 1));
         assert_eq!(msg, "Unmatched }");

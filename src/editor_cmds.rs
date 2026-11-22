@@ -1,8 +1,6 @@
-//! VS Code's line commands, as pure text edits: given the text and the selection (UTF-8 byte offsets), each returns the byte range to replace, the new text for it, and where the selection goes afterwards.
 
 use std::ops::Range;
 
-/// One edit: replace `range` with `text`, then select `select` (in the new text).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Edit {
     pub range: Range<usize>,
@@ -10,7 +8,6 @@ pub struct Edit {
     pub select: Range<usize>,
 }
 
-/// Byte range of the whole lines the selection touches, without the last newline.
 fn line_block(text: &str, sel: &Range<usize>) -> Range<usize> {
     let start = text[..sel.start.min(text.len())].rfind('\n').map_or(0, |i| i + 1);
     let mut end_at = sel.end.min(text.len());
@@ -21,7 +18,6 @@ fn line_block(text: &str, sel: &Range<usize>) -> Range<usize> {
     start..end.max(start)
 }
 
-/// The line-comment marker for a file name, or None for formats without one.
 pub fn comment_prefix(file_name: &str) -> Option<&'static str> {
     let lower = file_name.to_ascii_lowercase();
     let ext = lower.rsplit('.').next().unwrap_or("");
@@ -38,7 +34,6 @@ pub fn comment_prefix(file_name: &str) -> Option<&'static str> {
     })
 }
 
-/// Toggle a line comment on every line the selection touches.
 pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> Edit {
     let block = line_block(text, &sel);
     let lines: Vec<&str> = text[block.clone()].split('\n').collect();
@@ -64,7 +59,6 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> Edit {
         .collect();
     let new = out.join("\n");
     let delta = new.len() as isize - (block.end - block.start) as isize;
-    // Keep the caret on the same text: shift by what changed on its own line.
     let shift = |pos: usize| -> usize {
         if lines.len() == 1 {
             let d = new.len() as isize - lines[0].len() as isize;
@@ -82,7 +76,6 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> Edit {
     Edit { range: block, text: new, select }
 }
 
-/// Move the touched lines one line up (`up`) or down.
 pub fn move_lines(text: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
     let block = line_block(text, &sel);
     let body = &text[block.clone()];
@@ -107,7 +100,6 @@ pub fn move_lines(text: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
     }
 }
 
-/// Duplicate the touched lines above (`up`, the selection stays on the upper copy) or below (the selection moves to the lower copy).
 pub fn copy_lines(text: &str, sel: Range<usize>, up: bool) -> Edit {
     let block = line_block(text, &sel);
     let body = &text[block.clone()];
@@ -116,7 +108,6 @@ pub fn copy_lines(text: &str, sel: Range<usize>, up: bool) -> Edit {
     Edit { range: block, text: new, select: sel.start + shift..sel.end + shift }
 }
 
-/// Delete the touched lines, newline included; the caret goes to the start of the line that takes their place.
 pub fn delete_lines(text: &str, sel: Range<usize>) -> Edit {
     let block = line_block(text, &sel);
     let (range, caret) = if block.end < text.len() {
@@ -130,7 +121,6 @@ pub fn delete_lines(text: &str, sel: Range<usize>) -> Edit {
     Edit { range, text: String::new(), select: caret..caret }
 }
 
-/// A new line below (or above) the caret's line, with the same indentation, and the caret on it.
 pub fn insert_line(text: &str, sel: Range<usize>, above: bool) -> Edit {
     let block = line_block(text, &(sel.start..sel.start));
     let line = &text[block.clone()];
@@ -146,7 +136,6 @@ pub fn insert_line(text: &str, sel: Range<usize>, above: bool) -> Edit {
     }
 }
 
-/// Apply an edit to a string (for tests).
 #[cfg(test)]
 pub fn apply(text: &str, e: &Edit) -> String {
     format!("{}{}{}", &text[..e.range.start], e.text, &text[e.range.end..])
@@ -192,7 +181,6 @@ mod tests {
     #[test]
     fn a_selection_ending_at_a_line_start_leaves_that_line() {
         let t = "a\nb\nc";
-        // "a\n" selected: only line a moves.
         let e = move_lines(t, 0..2, false).unwrap();
         assert_eq!(apply(t, &e), "b\na\nc");
     }

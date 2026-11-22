@@ -1,4 +1,3 @@
-//! Left and right side bars: any view (Explorer, Search, Source Control, Run, Extensions, the agent) can live on either side, as in VS Code's secondary side bar.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -46,7 +45,6 @@ impl SideView {
 }
 
 impl Workbench {
-    /// The view lives in the right side bar.
     pub(crate) fn on_right(&self, view: SideView) -> bool {
         match view {
             SideView::Agent => self.settings.agent_right,
@@ -54,33 +52,27 @@ impl Workbench {
         }
     }
 
-    /// A popover closed by a click outside it: remember which, for `pop_reopens`.
     pub(crate) fn pop_closed_outside(&mut self, key: &'static str) {
         self.pop_shut = Some((key, std::time::Instant::now()));
     }
 
-    /// The popover's button was clicked: false when that same press just closed it from outside (mouse down closes it, the click would open it again).
     pub(crate) fn pop_may_open(&mut self, key: &'static str) -> bool {
         !matches!(self.pop_shut.take(), Some((k, at)) if k == key && at.elapsed().as_millis() < 400)
     }
 
-    /// The right dock is on screen (whatever view it shows).
     pub(crate) fn right_dock_on(&self) -> bool {
         self.agent_open && self.on_right(self.right_view)
     }
 
-    /// The agent chat is the view the right dock is showing.
     pub(crate) fn agent_docked_visible(&self) -> bool {
         self.right_dock_on() && self.right_view == SideView::Agent
     }
 
-    /// The view's icon is lit: it shows on its side and settings is not over it.
     pub(crate) fn view_shown(&self, view: SideView) -> bool {
         !self.settings_open
             && if self.on_right(view) { self.right_dock_on() && self.right_view == view } else { self.sidebar_open && self.view == view }
     }
 
-    /// Show a view on its side (without toggling it off).
     pub(crate) fn reveal_view(&mut self, view: SideView, cx: &mut Context<Self>) {
         self.settings_open = false;
         if self.on_right(view) {
@@ -93,7 +85,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// An activity bar click: show the view, or hide its side bar when it already shows.
     pub(crate) fn toggle_view(&mut self, view: SideView, cx: &mut Context<Self>) {
         if self.view_shown(view) {
             if self.on_right(view) {
@@ -106,7 +97,6 @@ impl Workbench {
         self.reveal_view(view, cx);
     }
 
-    /// Move a view to the other side bar and show it there.
     pub(crate) fn move_view(&mut self, view: SideView, right: bool, cx: &mut Context<Self>) {
         if self.on_right(view) == right {
             return self.reveal_view(view, cx);
@@ -118,7 +108,6 @@ impl Workbench {
         }
         self.settings.save();
         if right && self.view == view {
-            // The left bar shows the first view still on the left, or closes.
             match SideView::ALL.into_iter().find(|v| !self.on_right(*v)) {
                 Some(v) => self.view = v,
                 None => self.sidebar_open = false,
@@ -134,7 +123,6 @@ impl Workbench {
         self.reveal_view(view, cx);
     }
 
-    /// Right-click menu of an activity bar icon.
     pub(crate) fn view_side_menu(&self, view: SideView, menu: PopupMenu, cx: &mut Context<Self>) -> PopupMenu {
         let weak = cx.entity().downgrade();
         let right = self.on_right(view);
@@ -144,7 +132,6 @@ impl Workbench {
         }))
     }
 
-    /// The right side bar: the agent's own dock, or any other view with a tab strip of the views that live on the right.
     pub(crate) fn render_right_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.right_view == SideView::Agent {
             return self.render_agent_dock(window, cx);
@@ -152,7 +139,6 @@ impl Workbench {
         self.render_view_panel(self.right_view, true, window, cx)
     }
 
-    /// Icon tabs for the views on the right, shown in the right dock's header when more than one view lives there.
     pub(crate) fn render_right_tabs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let views: Vec<SideView> = SideView::ALL.into_iter().filter(|v| self.on_right(*v)).collect();
         if views.len() < 2 {
@@ -184,7 +170,6 @@ impl Workbench {
         Some(row.into_any_element())
     }
 
-    /// Hide-the-right-dock button for its header.
     pub(crate) fn right_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         crate::workbench::tool_button("rd-close", gpui_kit::component::IconName::Close, tr("Hide"), cx, |this, _, cx| {
             this.agent_open = false;

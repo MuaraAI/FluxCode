@@ -1,31 +1,23 @@
-//! The animated backgrounds, drawn live in the theme's own colors.
 
 use crate::theme::{self, mix, Tok};
 use gpui_kit::*;
 use std::f32::consts::TAU;
 
-/// The scene's colors, taken from the theme.
 #[derive(Clone, Copy)]
 pub struct Mood {
     pub dark: bool,
-    /// The deepest tone (night ground, the far top of the sky).
     ink: u32,
-    /// Sky: top, middle, and the band over the horizon.
     top: u32,
     mid: u32,
     low: u32,
-    /// The sun's color (the theme's accent).
     glow: u32,
-    /// Land: farthest, middle, nearest.
     far: u32,
     hill: u32,
     near: u32,
-    /// Stars, the moon, foam, snow.
     light: u32,
     cool: u32,
     green: u32,
     accent: u32,
-    /// The surface the panels are drawn in, for the scrim.
     base: u32,
 }
 
@@ -56,7 +48,6 @@ pub fn mood() -> Mood {
             base: editor,
         }
     } else {
-        // Day: pale sky and land, a few steps off the paper, never dark enough to fight the text drawn over the panels.
         let b = editor;
         Mood {
             dark: false,
@@ -64,7 +55,6 @@ pub fn mood() -> Mood {
             top: mix(b, blue, 0.30),
             mid: mix(b, blue, 0.13),
             low: mix(b, accent, 0.26),
-            // A day sun: the accent's warmth, mostly light.
             glow: mix(accent, 0xffffff, 0.6),
             far: mix(b, blue, 0.20),
             hill: mix(b, muted, 0.20),
@@ -78,7 +68,6 @@ pub fn mood() -> Mood {
     }
 }
 
-/// A stable pseudo-random 0..1 for (`i`, `k`).
 fn hash(i: u32, k: u32) -> f32 {
     let mut x = i.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B) ^ 0x68E3_1DA4;
     x ^= x >> 15;
@@ -89,12 +78,10 @@ fn hash(i: u32, k: u32) -> f32 {
     (x & 0xFFFF) as f32 / 65535.
 }
 
-/// A smooth back-and-forth (-1..1) with this period in seconds.
 fn sway(t: f32, period: f32, phase: f32) -> f32 {
     (t / period * TAU + phase).sin()
 }
 
-/// The same hue, its saturation times `k` (themes' colors are muted on purpose.
 fn vivid(hex: u32, k: f32) -> u32 {
     let mut c = Hsla::from(rgb(hex));
     c.s = (c.s * k).min(1.);
@@ -109,15 +96,11 @@ fn col(hex: u32, a: f32) -> Hsla {
 
 #[derive(Clone, Copy)]
 enum Ridge {
-    /// Rolling hills, dunes.
     Smooth,
-    /// Mountain ridges with sharp peaks.
     Peaks,
-    /// A line of pines over low ground.
     Pines,
 }
 
-/// One drawing: the area, the time and the colors.
 struct Art<'a> {
     win: &'a mut Window,
     x: f32,
@@ -126,13 +109,10 @@ struct Art<'a> {
     h: f32,
     t: f32,
     m: Mood,
-    /// How many particles, stars and windows compared with a 1400 x 900 window.
     density: f32,
-    /// Static layers are drawn once into pictures and reused (the backdrop).
     cached: bool,
 }
 
-/// What a ridge picture was drawn for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct RidgeKey {
     kind: u8,
@@ -145,12 +125,10 @@ struct RidgeKey {
 }
 
 thread_local! {
-    /// The ridge pictures of the frames being drawn, with the frame that last used each.
     static RIDGES: std::cell::RefCell<Vec<(RidgeKey, std::sync::Arc<RenderImage>, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
     static FRAME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// The picture of a ridge: `top(xf)` is where the land starts at `xf` (0..1 across), as a fraction of the picture's height.
 fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc<RenderImage>> {
     let frame = FRAME.with(|f| f.get());
     if let Some(img) = RIDGES.with(|r| {
@@ -172,7 +150,6 @@ fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc
                 continue;
             }
             let i = (y * w + x) * 4;
-            // GPUI's images are BGRA.
             px[i..i + 4].copy_from_slice(&[cb, cg, cr, (cov * 255.).round() as u8]);
         }
     }
@@ -182,7 +159,6 @@ fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc
     Some(img)
 }
 
-/// After a cached frame: let go of the pictures it didn't use (another scene, size or theme), out of the GPU atlas too.
 fn sweep(window: &mut Window) {
     let frame = FRAME.with(|f| f.get());
     let old: Vec<_> = RIDGES.with(|r| {
@@ -215,14 +191,12 @@ impl Art<'_> {
         self.win.paint_quad(quad(r, px(radius), c, px(0.), transparent_black(), BorderStyle::default()));
     }
 
-    /// A vertical gradient over `from..to` (fractions of the height), through `stops` (positions 0..1 within that range).
     fn grad(&mut self, from: f32, to: f32, stops: &[(f32, Hsla)]) {
         let (x, w) = (self.x, self.w);
         for p in stops.windows(2) {
             let ((a, ca), (z, cz)) = (p[0], p[1]);
             let y0 = self.y + self.h * (from + (to - from) * a);
             let y1 = self.y + self.h * (from + (to - from) * z);
-            // A pixel of overlap hides the seams between bands.
             self.fill(x, y0 - 0.5, w, y1 - y0 + 1., linear_gradient(180., linear_color_stop(ca, 0.), linear_color_stop(cz, 1.)));
         }
     }
@@ -232,7 +206,6 @@ impl Art<'_> {
         self.grad(0., 1., &s);
     }
 
-    /// A soft shape: a blurred rounded box, `w` x `h` around (`cx`, `cy`).
     fn blob(&mut self, cx: f32, cy: f32, w: f32, h: f32, c: Hsla, blur: f32) {
         let r = self.rect(cx - w / 2., cy - h / 2., w, h);
         let radius = px(w.min(h) / 2.);
@@ -243,7 +216,6 @@ impl Art<'_> {
         );
     }
 
-    /// A glow: soft ovals, wider and fainter outward.
     fn glow(&mut self, cx: f32, cy: f32, rw: f32, rh: f32, c: u32, a: f32) {
         for k in 0..3 {
             let f = 1. + k as f32 * 0.9;
@@ -251,15 +223,12 @@ impl Art<'_> {
         }
     }
 
-    /// A sun or moon with its halo.
     fn disc(&mut self, cx: f32, cy: f32, r: f32, c: u32, halo: f32) {
         self.glow(cx, cy, r * 3.2, r * 3.2, c, halo);
         self.round(cx - r, cy - r, r * 2., r * 2., r, col(c, 0.92));
-        // A softer, cooler side so it reads as a sphere, not a coin.
         self.blob(cx + r * 0.35, cy + r * 0.35, r * 1.3, r * 1.3, col(self.m.ink, 0.12), r * 0.5);
     }
 
-    /// Stars down to `bottom` (fraction of the height), fading toward it, each twinkling.
     fn stars(&mut self, count: f32, bottom: f32, seed: u32) {
         let c = if self.m.dark { self.m.light } else { self.m.ink };
         let strength = if self.m.dark { 1. } else { 0.25 };
@@ -273,7 +242,6 @@ impl Art<'_> {
         }
     }
 
-    /// The height (0..1) of a ridge at `xf` (0..1 across).
     fn profile(kind: Ridge, xf: f32, seed: u32) -> f32 {
         let s = |k: u32| hash(seed, k) * TAU;
         match kind {
@@ -290,7 +258,6 @@ impl Art<'_> {
                 let ground = 0.2 * Self::profile(Ridge::Smooth, xf, seed + 7);
                 let sp = 0.016;
                 let i = (xf / sp).floor() as i32;
-                // (Negative positions from a ridge sliding left hash like any other.)
                 let mut tree = 0f32;
                 for k in i - 1..=i + 1 {
                     let ku = (k + 10_000) as u32;
@@ -307,7 +274,6 @@ impl Art<'_> {
         }
     }
 
-    /// Land up to a ridge: its foot at `base`, peaks up to `amp` higher (fractions of the height), in `c`.
     fn ridge(&mut self, kind: Ridge, base: f32, amp: f32, seed: u32, c: u32) {
         let top = self.y + self.h * (base - amp) - 2.;
         let band = self.y + self.h - top;
@@ -335,12 +301,10 @@ impl Art<'_> {
         }
     }
 
-    /// A band of mist: clear above, `c` at `a` at its foot.
     fn mist(&mut self, from: f32, to: f32, c: u32, a: f32) {
         self.grad(from, to, &[(0., col(c, 0.)), (0.65, col(c, a)), (1., col(c, 0.))]);
     }
 
-    /// Mist that drifts: soft long shapes sliding along a band.
     fn fog(&mut self, y: f32, c: u32, a: f32, speed: f32, seed: u32) {
         for i in 0..5u32 {
             let span = self.w * 1.6;
@@ -350,9 +314,7 @@ impl Art<'_> {
         }
     }
 
-    /// A cloud: soft puffs in a dome, shaded underneath and lit on top.
     fn cloud(&mut self, cx: f32, cy: f32, size: f32, shade: u32, lit: u32, a: f32, seed: u32) {
-        // The body: wide, soft puffs heaped into a low dome, darker underneath.
         let n = 11;
         for i in 0..n {
             let dx = (i as f32 / (n - 1) as f32 - 0.5) * 2. + (hash(i, seed) - 0.5) * 0.25;
@@ -362,7 +324,6 @@ impl Art<'_> {
             let y = cy - size * 0.35 * lift - r * 0.15 * hash(i, seed + 2);
             self.blob(x, y + r * 0.3, r * 3.2, r * 1.5, col(shade, a * 0.8), r * 0.32);
         }
-        // Light on the upper side: the same puffs, smaller and higher.
         for i in 0..n {
             let dx = (i as f32 / (n - 1) as f32 - 0.5) * 1.8 + (hash(i, seed + 9) - 0.5) * 0.25;
             let lift = 1. - dx.abs().powf(1.5);
@@ -373,7 +334,6 @@ impl Art<'_> {
         }
     }
 
-    /// A band of clouds across the width, drifting.
     fn bank(&mut self, y: f32, size: f32, count: u32, shade: u32, lit: u32, a: f32, drift: f32, seed: u32) {
         for i in 0..count {
             let base = (i as f32 + 0.5 + (hash(i, seed) - 0.5) * 0.6) / count as f32;
@@ -384,7 +344,6 @@ impl Art<'_> {
         }
     }
 
-    /// Water from `top` down: a gradient, the light's path at `lx`, and moving ripples.
     fn water(&mut self, top: f32, upper: u32, lower: u32, light: u32, lx: f32, sheen: f32) {
         self.grad(top, 1., &[(0., col(upper, 1.)), (1., col(lower, 1.))]);
         let (y0, depth) = (self.y + self.h * top, self.h * (1. - top));
@@ -397,7 +356,6 @@ impl Art<'_> {
             let hh = 1.2 + 2.2 * f;
             self.round(x, y, wide, hh, hh / 2., col(light, sheen * (0.95 - 0.6 * f)));
         }
-        // Ripples: short light dashes sliding across, nearer ones longer.
         let rows = self.n(14.).min(22);
         for r in 0..rows {
             let f = (r as f32 + 0.5) / rows as f32;
@@ -411,7 +369,6 @@ impl Art<'_> {
         }
     }
 
-    /// Falling things: rain streaks or snowflakes.
     fn fall(&mut self, count: f32, snow: bool, c: u32, seed: u32) {
         for i in 0..self.n(count) {
             let speed = if snow { 0.025 + 0.03 * hash(i, seed) } else { 0.9 + 0.5 * hash(i, seed) };
@@ -433,7 +390,6 @@ impl Art<'_> {
         }
     }
 
-    /// Small lights that wander and pulse (fireflies, embers).
     fn sparks(&mut self, count: f32, from: f32, to: f32, c: u32, seed: u32) {
         for i in 0..self.n(count) {
             let xf = hash(i, seed) + 0.03 * sway(self.t, 9. + 6. * hash(i, seed + 1), hash(i, seed + 2) * TAU);
@@ -445,7 +401,6 @@ impl Art<'_> {
         }
     }
 
-    /// Now and then a shooting star crosses the upper sky.
     fn meteor(&mut self, every: f32) {
         let k = (self.t / every).floor();
         let local = self.t / every - k;
@@ -468,7 +423,6 @@ impl Art<'_> {
         }
     }
 
-    /// A city skyline from `base` up, with lit windows that change now and then.
     fn city(&mut self, base: f32, tall: f32, c: u32, windows: bool, seed: u32) {
         let unit = (self.w / 1400.).clamp(0.12, 1.4);
         let mut x = 0.;
@@ -493,7 +447,6 @@ impl Art<'_> {
                 }
             }
             if windows && hash(i, seed + 4) > 0.82 {
-                // A blinking light on the roof.
                 let on = sway(self.t, 2.2, i as f32) > 0.4;
                 self.round(self.x + x + bw / 2. - 1.5, top - 4., 3., 3., 1.5, col(self.m.accent, if on { 0.9 } else { 0.15 }));
             }
@@ -503,7 +456,6 @@ impl Art<'_> {
     }
 }
 
-/// The scenes, by id (see `scene::Scene`).
 pub fn paint(id: &str, b: Bounds<Pixels>, t: f32, cached: bool, window: &mut Window) {
     let m = mood();
     let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
@@ -530,7 +482,6 @@ pub fn paint(id: &str, b: Bounds<Pixels>, t: f32, cached: bool, window: &mut Win
         "space" => galaxy(&mut a),
         _ => {}
     }
-    // A light scrim in the panels' own color: the brightest spots never fight the text.
     let scrim = if m.dark { col(0x000000, 0.16) } else { col(m.base, 0.18) };
     let r = a.rect(cx, cy, w, h);
     a.win.paint_quad(fill(r, scrim));
@@ -539,7 +490,6 @@ pub fn paint(id: &str, b: Bounds<Pixels>, t: f32, cached: bool, window: &mut Win
     }
 }
 
-/// The website's dusk: stars, a glow where the sun went down, and banks of cloud drifting at their own depths.
 fn clouds(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.3, m.top), (0.55, m.mid), (0.7, m.low), (0.86, mix(m.low, m.ink, 0.5)), (1., m.ink)]);
@@ -554,7 +504,6 @@ fn clouds(a: &mut Art) {
     a.bank(0.9, 0.16, 4, mix(shade, m.ink, 0.35), lit, 0.95, 0.0012, 300);
 }
 
-/// Night sea: the moon, its path on the water, ripples.
 fn ocean(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.4, m.top), (0.56, mix(m.mid, m.cool, 0.12))]);
@@ -569,7 +518,6 @@ fn ocean(a: &mut Art) {
     a.mist(0.5, 0.58, m.mid, 0.4);
 }
 
-/// A lake between hills under a dusk sky.
 fn lake(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.top), (0.45, m.mid), (0.62, m.low)]);
@@ -583,7 +531,6 @@ fn lake(a: &mut Art) {
     a.ridge(Ridge::Pines, 0.98, 0.16, 5, m.near);
 }
 
-/// Sunset over the sea: the sun half under the horizon, waves on the sand.
 fn beach(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.top), (0.3, m.mid), (0.5, m.low), (0.6, mix(m.low, m.glow, 0.35))]);
@@ -592,7 +539,6 @@ fn beach(a: &mut Art) {
     a.disc(sx, sy, a.h * 0.09, mix(m.glow, m.light, 0.25), 0.22);
     a.bank(0.34, 0.055, 4, mix(m.mid, m.low, 0.4), mix(m.glow, m.light, 0.3), 0.55, 0.0015, 600);
     a.water(0.6, mix(m.low, m.top, 0.5), mix(m.top, m.ink, 0.4), mix(m.glow, m.light, 0.35), 0.5, 0.55);
-    // The shore: wet sand that the waves wash up and back.
     let sand = mix(m.low, m.near, 0.45);
     let step = (a.w / 700.).max(1.5);
     let n = (a.w / step).ceil() as u32 + 1;
@@ -607,7 +553,6 @@ fn beach(a: &mut Art) {
     a.grad(0.8, 1., &[(0., col(m.ink, 0.)), (1., col(m.ink, 0.35))]);
 }
 
-/// Mountain ranges in layers with fog drifting between them.
 fn mountains(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.35, m.top), (0.6, m.mid), (0.75, m.low)]);
@@ -623,7 +568,6 @@ fn mountains(a: &mut Art) {
     a.ridge(Ridge::Smooth, 1.0, 0.14, 16, m.near);
 }
 
-/// A city at dusk: two skylines, windows going on and off.
 fn city(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.top), (0.35, m.mid), (0.62, m.low), (0.72, mix(m.low, m.glow, 0.3))]);
@@ -635,7 +579,6 @@ fn city(a: &mut Art) {
     a.city(1.0, 0.42, m.near, true, 80);
 }
 
-/// The northern lights over snowy ridges.
 fn aurora(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.5, m.top), (0.8, mix(m.top, m.cool, 0.15))]);
@@ -658,7 +601,6 @@ fn aurora(a: &mut Art) {
             let al = (0.12 + 0.4 * on) * strength;
             let x = a.x + i as f32 * step;
             a.fill(x, y0, step + 0.5, hh, linear_gradient(180., linear_color_stop(col(c, 0.), 0.), linear_color_stop(col(c, al), 1.)));
-            // The bright lower hem of the curtain.
             a.fill(x, y0 + hh - 3., step + 0.5, 3., col(mix(c, m.light, 0.3), al * 0.9));
         }
     }
@@ -667,7 +609,6 @@ fn aurora(a: &mut Art) {
     a.ridge(Ridge::Pines, 1.0, 0.12, 23, m.near);
 }
 
-/// A rainy night: low clouds, rain, the hills in the wet.
 fn rain(a: &mut Art) {
     let m = a.m;
     let grey = mix(m.mid, m.ink, 0.25);
@@ -680,7 +621,6 @@ fn rain(a: &mut Art) {
     a.fall(220., false, m.light, 33);
 }
 
-/// Snow falling on quiet hills.
 fn snow(a: &mut Art) {
     let m = a.m;
     let pale = mix(m.mid, m.light, if m.dark { 0.08 } else { 0.4 });
@@ -694,7 +634,6 @@ fn snow(a: &mut Art) {
     a.fall(170., true, m.light, 45);
 }
 
-/// Dunes under a low sun, sand drifting off their crests.
 fn dunes(a: &mut Art) {
     let m = a.m;
     let warm = mix(m.low, m.glow, 0.25);
@@ -706,7 +645,6 @@ fn dunes(a: &mut Art) {
     a.mist(0.5, 0.66, warm, 0.3);
     a.ridge(Ridge::Smooth, 0.78, 0.12, 52, sand(0.5));
     a.ridge(Ridge::Smooth, 0.92, 0.12, 53, sand(0.75));
-    // Sand blowing low across the ground.
     for i in 0..a.n(60.) {
         let xf = (hash(i, 54) + a.t * (0.01 + 0.02 * hash(i, 55))).rem_euclid(1.);
         let yf = 0.72 + 0.26 * hash(i, 56);
@@ -715,7 +653,6 @@ fn dunes(a: &mut Art) {
     }
 }
 
-/// A pine forest at night: mist between the trees, fireflies.
 fn forest(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.4, m.top), (0.7, mix(m.mid, m.green, 0.12))]);
@@ -729,7 +666,6 @@ fn forest(a: &mut Art) {
     a.sparks(36., 0.55, 0.95, mix(m.green, m.glow, 0.5), 65);
 }
 
-/// Deep space: nebulae, a ringed planet, many stars, meteors.
 fn galaxy(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.5, mix(m.ink, m.top, 0.6)), (1., m.ink)]);
@@ -743,17 +679,13 @@ fn galaxy(a: &mut Art) {
         a.blob(x, y, bw, bh, col(*c, strength), bh * 0.7);
     }
     a.stars(320., 1., 77);
-    // The galaxy's band: a long soft streak of light across the sky.
     a.blob(a.x + a.w * 0.5, a.y + a.h * 0.42, a.w * 1.2, a.h * 0.16, col(vivid(mix(m.cool, m.light, 0.3), 1.3), 0.12), a.h * 0.1);
     a.meteor(9.);
-    // A planet with a lit edge.
     let (px_, py_, r) = (a.x + a.w * 0.8, a.y + a.h * 0.72, a.h * 0.11);
     a.glow(px_, py_, r * 2.2, r * 2.2, vivid(m.cool, 1.5), 0.12);
-    // Lit from the upper left: a colored face with a soft highlight.
     a.round(px_ - r, py_ - r, r * 2., r * 2., r, col(vivid(mix(m.mid, m.cool, 0.45), 1.5), 1.));
     a.blob(px_ - r * 0.35, py_ - r * 0.35, r * 1.2, r * 1.2, col(m.light, 0.2), r * 0.45);
     a.blob(px_ + r * 0.45, py_ + r * 0.45, r * 1.6, r * 1.6, col(m.ink, 0.55), r * 0.4);
-    // A thin ring.
     a.blob(px_, py_ + r * 0.1, r * 3.2, r * 0.18, col(mix(m.light, m.cool, 0.4), 0.3), r * 0.05);
 }
 

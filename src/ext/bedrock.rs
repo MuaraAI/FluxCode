@@ -1,4 +1,3 @@
-//! Minecraft Bedrock add-ons: check the manifests, pack `.mcpack` / `.mcaddon`, copy the packs into the game's development folders, and write a new add-on.
 
 use super::Project;
 use serde_json::Value;
@@ -22,7 +21,6 @@ pub struct Pack {
     pub manifest: Value,
 }
 
-/// Bedrock reads manifests with `//` and `/* */` comments: drop them (not inside strings).
 pub fn strip_comments(s: &str) -> String {
     let b = s.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(b.len());
@@ -57,7 +55,6 @@ pub fn strip_comments(s: &str) -> String {
             i += 1;
         }
     }
-    // Only ASCII bytes were dropped, so the rest is still UTF-8.
     String::from_utf8(out).unwrap_or_default()
 }
 
@@ -81,7 +78,6 @@ fn kind_of(m: &Value) -> Kind {
     }
 }
 
-/// `§l§6My Pack` → `My Pack`.
 pub fn plain_name(s: &str) -> String {
     let mut out = String::new();
     let mut skip = false;
@@ -97,7 +93,6 @@ pub fn plain_name(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// The packs of an add-on: the folder itself, or the packs right inside it.
 pub fn packs(dir: &Path) -> Vec<Pack> {
     let mut dirs = vec![dir.to_path_buf()];
     if !dir.join("manifest.json").is_file() {
@@ -109,7 +104,6 @@ pub fn packs(dir: &Path) -> Vec<Pack> {
             let m = read_manifest(&d)?;
             let header = m.get("header")?;
             let mut name = plain_name(header.get("name").and_then(|v| v.as_str()).unwrap_or(""));
-            // `pack.name` is a key in texts/en_US.lang.
             if name == "pack.name" {
                 name = std::fs::read_to_string(d.join("texts").join("en_US.lang"))
                     .ok()
@@ -139,7 +133,6 @@ fn version_ok(v: &Value) -> bool {
     }
 }
 
-/// Problems in an add-on's manifests: (pack folder, message).
 pub fn validate(list: &[Pack]) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     let mut seen: Vec<(String, PathBuf)> = Vec::new();
@@ -243,7 +236,6 @@ fn file_name(s: &str) -> String {
     if n.is_empty() { "addon".into() } else { n }
 }
 
-/// Pack an add-on into `<dir>/dist`: one `.mcpack`, or a `.mcaddon` with every pack.
 pub fn pack(project: &Project) -> Result<Vec<String>, String> {
     let list = packs(&project.dir);
     if list.is_empty() {
@@ -269,7 +261,6 @@ pub fn pack(project: &Project) -> Result<Vec<String>, String> {
     Ok(vec![format!("Packed {} files into {shown} ({} KB). Double-click it to import into Minecraft.", files, bytes.len() / 1024 + 1)])
 }
 
-/// The game's com.mojang folders, newest layout first (the GDK build since 1.21.120 keeps them under %APPDATA%\Minecraft Bedrock.
 pub fn com_mojang() -> Vec<PathBuf> {
     let mut c = Vec::new();
     if cfg!(windows) {
@@ -307,7 +298,6 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<usize> {
     Ok(n)
 }
 
-/// Copy each pack into development_behavior_packs / development_resource_packs, so the game loads the current files (reopen the world to see changes).
 pub fn deploy(project: &Project) -> Result<Vec<String>, String> {
     let list = packs(&project.dir);
     let base = com_mojang().into_iter().next().ok_or("Minecraft Bedrock's data folder (com.mojang) isn't on this PC: start the game once, then try again.")?;
@@ -332,7 +322,6 @@ pub fn deploy(project: &Project) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-/// For the agent: the packs, their kind and how they depend on each other.
 pub fn facts(p: &Project) -> String {
     let list = packs(&p.dir);
     if list.is_empty() {
@@ -360,7 +349,6 @@ pub fn facts(p: &Project) -> String {
 }
 
 
-/// A random version 4 UUID.
 pub fn uuid4() -> String {
     let mut b: [u8; 16] = crate::collab::net::random();
     b[6] = (b[6] & 0x0f) | 0x40;
@@ -369,7 +357,6 @@ pub fn uuid4() -> String {
     format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
-/// Write `parent/<Name>/BP` and `RP`: a behavior pack that needs its resource pack, a function to try (`/function hello`), and the pack names in en_US.lang.
 pub fn new_addon(parent: &Path, name: &str) -> Result<PathBuf, String> {
     let name = name.trim();
     if name.is_empty() {

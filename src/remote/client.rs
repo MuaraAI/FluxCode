@@ -1,4 +1,3 @@
-//! The editor's side of the helper inside a distro: installing it, starting it, and one request at a time over its stdin/stdout.
 
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
@@ -10,7 +9,6 @@ use super::proto::{
 };
 use super::WslTarget;
 
-/// Where the helper lives inside the distro, per build.
 fn helper_dir() -> String {
     format!(".fluxcode/helper/{}", crate::update::BUILD)
 }
@@ -26,7 +24,6 @@ pub struct RemoteClient {
 }
 
 impl RemoteClient {
-    /// Start the helper in `distro`, installing it first if it is not there.
     pub fn connect(distro: &str) -> Result<Self, String> {
         let path = install(distro)?;
         let mut cmd = crate::proc::command("wsl.exe");
@@ -59,7 +56,6 @@ impl RemoteClient {
         Ok(client)
     }
 
-    /// One request, one JSON answer.
     pub fn json<T: serde::de::DeserializeOwned>(&mut self, req: Request) -> Result<T, String> {
         let body = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
         write_frame(&mut self.stdin, FRAME_JSON, &body).map_err(|e| e.to_string())?;
@@ -67,7 +63,6 @@ impl RemoteClient {
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
-    /// A request whose answer is a JSON header followed by the bytes.
     pub fn bytes(&mut self, req: Request, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
         read_path_accepts(&req)?;
         let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
@@ -75,7 +70,6 @@ impl RemoteClient {
         if let Some(b) = body {
             write_frame(&mut self.stdin, FRAME_BYTES, b).map_err(|e| e.to_string())?;
         }
-        // The header says whether it worked; the bytes follow only when it did.
         let _header = self.read_json()?;
         match read_frame(&mut self.stdout).map_err(|e| e.to_string())? {
             Some((FRAME_BYTES, bytes)) => Ok(bytes),
@@ -113,7 +107,6 @@ impl RemoteClient {
         self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
     }
 
-    /// Every file under `root`, read inside the distro.
     pub fn scan(&mut self, root: &str, max: usize) -> Result<Vec<String>, String> {
         self.json(Request::Scan { root: root.to_string(), max })
     }
@@ -122,7 +115,6 @@ impl RemoteClient {
         self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec(), input: input.map(str::to_string) })
     }
 
-    /// Whether the helper process has gone away (a distro shutdown, a crash).
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
     }
@@ -135,7 +127,6 @@ impl Drop for RemoteClient {
     }
 }
 
-/// The read path (`bytes`) only makes sense for answers that carry bytes.
 fn read_path_accepts(req: &Request) -> Result<(), String> {
     if matches!(req, Request::Write { .. }) {
         return Err("a write is answered with one JSON frame; use write()".into());
@@ -143,7 +134,6 @@ fn read_path_accepts(req: &Request) -> Result<(), String> {
     Ok(())
 }
 
-/// Read one JSON answer frame and unwrap its `Response` envelope.
 fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
     let (kind, payload) = match read_frame(stdout).map_err(|e| e.to_string())? {
         Some(frame) => frame,
@@ -161,7 +151,6 @@ fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
     Ok(r.json.unwrap_or(serde_json::Value::Null))
 }
 
-/// Send a request that carries a body frame and wait for its answer.
 fn write_path_accepts(req: &Request) -> Result<(), String> {
     if !matches!(req, Request::Write { .. }) {
         return Err("only a write sends a body frame; use write()".into());
@@ -183,11 +172,9 @@ fn write_request(
     Ok(())
 }
 
-/// Make sure the helper for this build is in the distro, and return its path.
 fn install(distro: &str) -> Result<String, String> {
     let dir = helper_dir();
     let path = format!("{dir}/fluxcode");
-    // `test -x` is the whole version check: the directory carries the build.
     if runs(distro, &path) {
         return helper_exe(distro);
     }
@@ -199,33 +186,28 @@ fn install(distro: &str) -> Result<String, String> {
     helper_exe(distro)
 }
 
-/// The helper's absolute path inside the distro: its home plus the relative dir.
 fn helper_exe(distro: &str) -> Result<String, String> {
     let home = super::home_dir(distro).ok_or("the distro's home folder could not be read")?;
     Ok(format!("{home}/{}/fluxcode", helper_dir()))
 }
 
 fn runs(distro: &str, path: &str) -> bool {
-    // The path is a positional parameter, never spliced into the script.
     super::program_command(&WslTarget::new(distro, "/"), "/", "sh", &["-c", r#"test -x "$HOME/$1""#, "--", path])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-/// A local Linux binary when one is supplied (a development build), else the Linux tarball of this build's release.
 fn fetch(distro: &str) -> Result<PathBuf, String> {
     let tmp = std::env::temp_dir().join(format!("fluxcode-helper-{}.tar.gz", crate::update::BUILD));
     if let Ok(local) = std::env::var("FLUXCODE_HELPER") {
         let src = PathBuf::from(&local);
-        // A bare binary is packed here so `push` has one thing to send.
         if src.is_file() {
             let bytes = std::fs::read(&src).map_err(|e| e.to_string())?;
             pack_single(&tmp, &bytes)?;
             return Ok(tmp);
         }
     }
-    // The release that carries this build, in the same repository updates come from.
     let asset = format!("FluxCode-{}-linux-x64.tar.gz", crate::update::BUILD);
     let url = format!(
         "https://github.com/MuaraAI/FluxCode/releases/download/{build}/{asset}",
@@ -237,7 +219,6 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
     if !out.status.success() || !tmp.is_file() {
         return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
     }
-    // The release records a SHA-256 for every asset.
     let want = release_digest(&asset)?;
     let got = sha256_of(&tmp)?;
     if got != want {
@@ -248,7 +229,6 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
     Ok(tmp)
 }
 
-/// The SHA-256 the release records for `asset`, from the GitHub API.
 fn release_digest(asset: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}", crate::update::BUILD);
     let out = crate::proc::command("curl")
@@ -268,7 +248,6 @@ fn release_digest(asset: &str) -> Result<String, String> {
     Ok(hex.to_ascii_lowercase())
 }
 
-/// SHA-256 of a file, in process: no system tool to find.
 fn sha256_of(path: &std::path::Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -284,7 +263,6 @@ fn sha256_of(path: &std::path::Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// Wrap one binary in a tar.gz laid out like the release archive (one folder, `fluxcode` inside it), so `push` treats the two the same way.
 fn pack_single(out: &std::path::Path, binary: &[u8]) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("fluxcode-helper-src-{}", std::process::id()));
     let inner = dir.join(crate::update::BUILD);
@@ -306,7 +284,6 @@ fn pack_single(out: &std::path::Path, binary: &[u8]) -> Result<(), String> {
     }
 }
 
-/// Send the tarball into the distro and unpack it, with no `/mnt` copy: the share is slow and permissions are unreliable there.
 fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String> {
     let mut child = super::program_command(
         &WslTarget::new(distro, "/"),
@@ -338,7 +315,6 @@ fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String
 }
 
 
-/// Whether the helper may be used at all.
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_helper_enabled(on: bool) {
@@ -355,7 +331,6 @@ fn slot() -> &'static Mutex<Option<RemoteClient>> {
     CLIENT.get_or_init(|| Mutex::new(None))
 }
 
-/// Run `f` against the helper for `distro`, connecting it on first use.
 pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
     if !helper_enabled() {
         return None;
@@ -372,7 +347,6 @@ pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> O
     Some(f(client))
 }
 
-/// Forget the connection (a distro shut down, or a call failed).
 pub fn drop_client() {
     if let Ok(mut guard) = slot().lock() {
         *guard = None;
@@ -385,7 +359,6 @@ mod tests {
 
     #[test]
     fn the_helper_is_off_until_it_is_turned_on() {
-        // Off by default: nothing is installed, started or read through it.
         assert!(!helper_enabled());
         assert!(with_client("Ubuntu", |_| ()).is_none());
     }
@@ -401,7 +374,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A write is answered with one JSON frame.
     #[test]
     fn a_write_returns_after_the_single_json_answer() {
         let (mut server_in, mut client_out) = std::io::pipe().unwrap();
@@ -416,7 +388,6 @@ mod tests {
             let (kind, body) = read_frame(&mut server_in).unwrap().unwrap();
             assert_eq!(kind, FRAME_BYTES);
             assert_eq!(body, b"hello");
-            // Exactly what the helper sends for a write: one JSON frame.
             let answer = Response::json(serde_json::json!({"written": 5}));
             write_frame(
                 &mut server_out,
@@ -424,7 +395,6 @@ mod tests {
                 &serde_json::to_vec(&answer).unwrap(),
             )
             .unwrap();
-            // Keep the connection open so a client waiting for a second frame would stall here instead of seeing EOF.
             let _ = hold_rx.recv_timeout(std::time::Duration::from_secs(5));
         });
 
@@ -443,14 +413,12 @@ mod tests {
         server.join().unwrap();
 
         assert!(result.is_ok(), "{result:?}");
-        // Looser than a local 1s bound so a loaded CI runner is less likely to flake, but still well under the mock's 5s hold, so a hang still fails.
         assert!(
             waited < std::time::Duration::from_secs(3),
             "write waited {waited:?} for a bytes frame"
         );
     }
 
-    /// A refused write still reports the helper's reason from its one frame.
     #[test]
     fn a_refused_write_returns_the_error_without_a_second_frame() {
         let (mut server_in, mut client_out) = std::io::pipe().unwrap();
@@ -479,7 +447,6 @@ mod tests {
         assert_eq!(result.unwrap_err(), "no such folder");
     }
 
-    /// The read path refuses a write instead of waiting for a bytes frame the helper never sends: a regression here must fail loudly, not hang.
     #[test]
     fn the_read_path_refuses_a_write() {
         let err = read_path_accepts(&Request::Write {
@@ -497,7 +464,6 @@ mod tests {
         .is_ok());
     }
 
-    /// The write path refuses a read instead of sending a body frame the helper would not expect for that request.
     #[test]
     fn the_write_path_refuses_a_read() {
         let err = write_path_accepts(&Request::Read {

@@ -1,4 +1,3 @@
-//! Bottom panel: Terminal (one command at a time, like the Tauri app's Flux Terminal) and Output (Run File).
 
 use crate::i18n::tr;
 use crate::proc::{self, python};
@@ -15,26 +14,20 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// One running (or last run) command of a panel, for its status line and error card.
 pub(crate) struct RunInfo {
     pub started: Instant,
-    /// Index in the panel's lines where this command's output starts.
     pub block: usize,
-    /// The Python that ran it (for the `-m pip install` fix).
     pub python: String,
     pub cwd: PathBuf,
-    /// The command line that ran (to build a corrected one for the fix button).
     pub command: String,
 }
 
-/// One visual row of a panel: a whole line, or one wrapped piece of it.
 pub(crate) struct Row {
     pub line: usize,
     pub text: SharedString,
     pub first: bool,
 }
 
-/// Text selected with the mouse in a panel's log: from the row and character the press was on to where the pointer is (or was let go), counted in wrapped rows.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct PanelSel {
     pub terminal: bool,
@@ -51,7 +44,6 @@ impl PanelSel {
         self.anchor == self.head
     }
 
-    /// The characters selected on row `i` (of `len` characters), when any.
     fn on_row(&self, i: usize, len: usize) -> Option<(usize, usize)> {
         if self.is_empty() {
             return None;
@@ -62,20 +54,16 @@ impl PanelSel {
         }
         let a = if i == r0 { c0.min(len) } else { 0 };
         let b = if i == r1 { c1.min(len) } else { len };
-        // A row the selection only passes through is in it even when it is empty.
         (b > a || i != r1).then_some((a, b.max(a)))
     }
 }
 
-/// Rows drawn in the log's fixed-width font, selectable by the character.
 fn mono_kind(k: LineKind) -> bool {
     matches!(k, LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk | LineKind::Code | LineKind::Caret | LineKind::Blank)
 }
 
-/// (lines fingerprint, rows) for one panel; see `wrapped_rows`.
 pub(crate) type WrapCache = std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
 
-/// A Python error to show in the editor (wavy underline + hover message).
 #[derive(Clone)]
 pub(crate) struct Problem {
     pub from_terminal: bool,
@@ -127,14 +115,12 @@ impl Workbench {
         });
     }
 
-    /// Enter in the terminal prompt: run a command, or feed stdin of the running one.
     pub(crate) fn terminal_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let line = self.term_input.read(cx).value().to_string();
         self.term_input.update(cx, |s, cx| s.set_value("", window, cx));
         self.term_typed = false;
         self.term_hist_ix = None;
         if let Some(id) = self.term_proc.filter(|id| self.procs.is_running(*id)) {
-            // Echo into the program's own prompt line ("Name: " + what was typed).
             push_text(&mut self.term_lines, &format!("{line}\n"), false);
             self.procs.write_stdin(id, &format!("{line}\n"));
             self.term_scroll.scroll_to_bottom();
@@ -151,7 +137,6 @@ impl Workbench {
         self.run_in_terminal(&typed, cx);
     }
 
-    /// Run one command line in the terminal panel (typed, or a fix from an error card).
     pub(crate) fn run_in_terminal(&mut self, typed: &str, cx: &mut Context<Self>) {
         if !self.term_lines.is_empty() {
             push_line(&mut self.term_lines, "", LineKind::Blank);
@@ -226,7 +211,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The terminal's folder as the prompt shows it: the Linux path inside a distro, else the short Windows path.
     fn term_meta(&self) -> String {
         match &self.wsl {
             Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
@@ -234,7 +218,6 @@ impl Workbench {
         }
     }
 
-    /// The terminal's folder in full, for `pwd`.
     fn term_full(&self) -> String {
         match &self.wsl {
             Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
@@ -258,7 +241,6 @@ impl Workbench {
             } else {
                 format!("{}/{}", current.trim_end_matches('/'), arg)
             };
-            // `wsl.exe --cd` falls back to `/` when the folder is missing, so ask first.
             let exists = crate::remote::program_command(&t, "/", "sh", &["-c", r#"test -d "$1""#, "--", &linux])
                 .output()
                 .map(|o| o.status.success())
@@ -328,7 +310,6 @@ impl Workbench {
         }
     }
 
-    /// Ctrl+C in the prompt: copy when text is selected, else stop the running command.
     pub(crate) fn on_term_interrupt(&mut self, _: &TermInterrupt, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel_sel.is_some_and(|s| s.terminal && !s.is_empty()) {
             self.panel_copy(cx);
@@ -355,7 +336,6 @@ impl Workbench {
     }
 
 
-    /// F5: run the active file and stream its output to the Output panel.
     pub(crate) fn on_run_file(&mut self, _: &RunFile, _: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else {
             self.status = tr("Open a file to run it").into();
@@ -363,7 +343,6 @@ impl Workbench {
             return;
         };
         if self.docs[ix].dirty {
-            // Run what is on screen, like VS Code's "save before run".
             let doc = &mut self.docs[ix];
             let text = doc.editor.read(cx).value();
             if crate::core::write_text(&doc.path, &text, doc.crlf).is_ok() {
@@ -378,13 +357,11 @@ impl Workbench {
             return;
         };
         if let Some(t) = &wsl {
-            // Windows-only scripts have no meaning inside the distro.
             if matches!(program.as_str(), "powershell" | "cmd.exe") {
                 self.status = crate::trf!("Don't know how to run {0} in WSL"; 0 => self.docs[ix].name).into();
                 cx.notify();
                 return;
             }
-            // The program runs inside the distro, so the file argument has to be the Linux path it knows, not the UNC path Windows opened.
             let linux = t.linux_path(&path).unwrap_or_else(|| path.display().to_string());
             let unc = path.to_string_lossy().into_owned();
             for a in &mut args {
@@ -448,7 +425,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A terminal command or a Run File process ended: status line, then the error card if Python reported an error.
     pub(crate) fn finish_run(&mut self, terminal: bool, code: Option<i32>, cx: &mut Context<Self>) {
         let (lines, run) = if terminal { (&mut self.term_lines, self.term_run.take()) } else { (&mut self.out_lines, self.out_run.take()) };
         close_line(lines);
@@ -466,11 +442,9 @@ impl Workbench {
         }
         let output = lines[from..].iter().filter(|l| !l.text.trim().is_empty()).count();
         let spent = run.as_ref().map(|r| r.started.elapsed());
-        // In the terminal a quick success needs no end line: the next prompt says it's done.
         let quiet = terminal && code == Some(0) && error.is_none() && spent.is_some_and(|d| d < std::time::Duration::from_secs(1));
         match (&error, &run) {
             (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
-            // A little air between a long output and its outcome.
             _ if !quiet && output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
             _ => {}
         }
@@ -487,7 +461,6 @@ impl Workbench {
             lines.push(status);
         }
         if let Some(r) = reason {
-            // "C:\long\path\Main.java:12: error: ..." reads as "Main.java:12: error: ..."; the link keeps the full path.
             let link = term::parse_path_line(&r);
             let shown = match &link {
                 Some((p, _)) => match (r.find(p.as_str()), Path::new(p).file_name()) {
@@ -525,14 +498,12 @@ impl Workbench {
         }
     }
 
-    /// Show the current problems as underlines in the open editors.
     pub(crate) fn apply_problems(&mut self, cx: &mut Context<Self>) {
         for ix in 0..self.docs.len() {
             self.apply_problems_to(ix, cx);
         }
     }
 
-    /// The underlines for one open editor: problems from the last run, plus the first unmatched bracket as you type (brackets.rs).
     pub(crate) fn apply_problems_to(&self, ix: usize, cx: &mut Context<Self>) {
         let Some(d) = self.docs.get(ix) else { return };
         let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
@@ -571,7 +542,6 @@ impl Workbench {
         });
     }
 
-    /// Open `path` at `line` (from a traceback link or the status bar).
     pub(crate) fn open_location(&mut self, path: PathBuf, line: u32, col: u32, window: &mut Window, cx: &mut Context<Self>) {
         if !path.is_file() {
             self.status = crate::trf!("{0} doesn't exist"; 0 => path.display()).into();
@@ -593,7 +563,6 @@ impl Workbench {
         }
     }
 
-    /// Click on a traceback frame or a card's file:line.
     fn open_link(&mut self, path: &str, line: u32, terminal: bool, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let p = PathBuf::from(path);
@@ -606,7 +575,6 @@ impl Workbench {
         self.open_location(full, line, 0, window, cx);
     }
 
-    /// The fix button on an error card: run it in the terminal.
     fn run_fix(&mut self, command: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.panel_open = true;
         self.panel_tab = PanelTab::Terminal;
@@ -623,14 +591,11 @@ impl Workbench {
     }
 
 
-    /// One visual row.
     #[allow(clippy::too_many_arguments)]
     fn render_line(&self, i: usize, ix: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, m: Metrics, cx: &mut Context<Self>) -> AnyElement {
-        // The selection behind the text: the characters on a log row, or the whole row.
         let mono = mono_kind(l.kind);
         let text_left = theme::u(12.) + if first { px(0.) } else { px(m.em * 2.) };
         let span = self.panel_sel.filter(|s| s.terminal == terminal).and_then(|s| s.on_row(i, shown.chars().count()));
-        // Log text gets it under the characters (an empty part, a blank line or the line break, still shows one cell).
         let highlight = span.filter(|_| mono).map(|(a, b)| div().absolute().top_0().bottom_0().bg(c(theme::SELECT)).left(text_left + px(a as f32 * m.em)).w(px((b - a).max(1) as f32 * m.em)));
         let over = span.filter(|_| !mono).map(|_| div().absolute().top_0().bottom_0().left(theme::u(8.)).right(theme::u(8.)).rounded(px(3.)).bg(c(theme::SELECT).opacity(0.6)));
         let base = h_flex()
@@ -652,21 +617,16 @@ impl Workbench {
                     return;
                 }
                 let Some(sel) = this.panel_sel.filter(|s| s.terminal == terminal) else { return };
-                // A row in the interface font is taken whole, in the drag's direction.
                 let col = if mono { this.panel_col(ev.position.x, text_left, m) } else if i >= sel.anchor.0 { usize::MAX } else { 0 };
                 if sel.head != (i, col) {
                     this.panel_sel = Some(PanelSel { head: (i, col), ..sel });
                     cx.notify();
                 }
             }));
-        // Program output keeps the mono font; what FluxCode itself says uses the UI font.
         let text = |s: &SharedString, col: theme::Tok| div().text_color(c(col)).child(s.clone());
         let ui = |s: &SharedString, col: theme::Tok| div().font_family(UI_FONT).text_color(c(col)).child(s.clone());
-        // Wrapped rows hang two characters in, so a continued line reads as one.
         let hang = theme::u(12.) + px(m.em * 2.);
-        // One callout across several fixed-height rows: one faintly red band, so its rows read as a block apart from the program's own output (no edge stripe: the red icon on its title already says what kind of block it is).
         let card = |row: Stateful<Div>, inner: Div| {
-            // Edge to edge, so its icons line up with the status mark under it.
             row.px_0().child(
                 inner
                     .flex_1()
@@ -690,7 +650,6 @@ impl Workbench {
         };
         let el = match l.kind {
             LineKind::Blank => base.into_any_element(),
-            // Terminal: the command echoed as the prompt it was typed at (`folder ❯ dir`), drawn exactly like the live prompt row, so a block starts where a prompt is.
             LineKind::Cmd if terminal => {
                 let place: SharedString = prompt_place(&l.meta, self.panel_size.get().0).into();
                 let full = l.meta.clone();
@@ -708,7 +667,6 @@ impl Workbench {
                 .child(text(&l.text, theme::FG_STRONG).min_w_0().truncate())
                 .into_any_element()
             }
-            // Output: the block header: what ran, where, and how it ended.
             LineKind::Cmd => {
                 let lines = &self.out_lines;
                 let (status, last) = block_status(lines, ix);
@@ -741,7 +699,6 @@ impl Workbench {
                         .rounded(px(4.))
                         .bg(c(theme::BG_ELEVATED))
                         .child(text(&"❯".into(), theme::FG_DIM).flex_none())
-                        // The command keeps its room; the place gives way first.
                         .child(text(&l.text, theme::FG_STRONG).flex_none().max_w(relative(0.6)).truncate())
                         .child(div().flex_1())
                         .when(!l.meta.is_empty(), |h| h.child(ui(&l.meta, theme::FG_DIM).min_w_0().truncate()))
@@ -753,7 +710,6 @@ impl Workbench {
                 .child(ui(&tr("↳ auto-corrected").into(), theme::BLUE).flex_none())
                 .child(text(&l.text, theme::FG_MUTED).min_w_0().truncate())
                 .into_any_element(),
-            // The outcome: a clear mark, the word, the time.
             LineKind::Status => {
                 let stopped = l.err && l.text.as_ref() == tr("Stopped");
                 let (icon, col) = match (l.err, stopped) {
@@ -766,7 +722,6 @@ impl Workbench {
                     (false, false) => crate::trf!("in {0}"; 0 => l.meta).into(),
                     (false, true) => format!("· {}", l.meta).into(),
                 };
-                // In the terminal a success only ends a long block (the header already says it), so it stays quiet; a failure reads the same as in Output.
                 let quiet = terminal && !l.err;
                 base.font_family(UI_FONT)
                     .child(Icon::new(icon).size(theme::u(if quiet { 12. } else { 14. })).text_color(c(col)))
@@ -785,7 +740,6 @@ impl Workbench {
                     .when(!took.is_empty(), |h| h.child(text(&took, theme::FG_MUTED)))
                     .into_any_element()
             }
-            // Under the status: why it failed (a link when it names a file:line)...
             LineKind::Result if l.err => {
                 let row = base.pl(theme::u(34.)).font_family(UI_FONT);
                 match l.link.clone() {
@@ -803,7 +757,6 @@ impl Workbench {
                 }
                 .into_any_element()
             }
-            // ...or what was built: "KiwEssentials 0.1.0 · 609 KB · 2.9s · build\libs\x.jar".
             LineKind::Result => {
                 let parts: Vec<&str> = l.text.split(" · ").collect();
                 let row = base.pl(theme::u(34.)).font_family(UI_FONT);
@@ -818,7 +771,6 @@ impl Workbench {
                     _ => row.child(text(&l.text, theme::FG_STRONG).min_w_0().truncate()).into_any_element(),
                 }
             }
-            // Traceback frames and `file.py:12:` warnings: the whole line opens the file there.
             LineKind::Frame | LineKind::Warn | LineKind::Err if l.link.is_some() => {
                 let (path, line) = l.link.clone().unwrap_or_default();
                 let col = match l.kind {
@@ -856,7 +808,6 @@ impl Workbench {
                     .child(div().flex_none().text_color(c(theme::BORDER_STRONG)).child("│"))
                     .child(text(&l.text, theme::FG).min_w_0().truncate()),
             ),
-            // Wrapped hint rows: the icon only on the first one.
             LineKind::CardHint => card(
                 base,
                 h_flex()
@@ -908,13 +859,11 @@ impl Workbench {
         }
     }
 
-    /// The character under the pointer's `x` on a log row whose text starts `text_left` into the row (between two characters, the nearer edge).
     fn panel_col(&self, x: Pixels, text_left: Pixels, m: Metrics) -> usize {
         let from = f32::from(x) - self.panel_left.get() - f32::from(text_left);
         (from / m.em).round().max(0.) as usize
     }
 
-    /// A left press on row `i`: start a selection there.
     #[allow(clippy::too_many_arguments)]
     fn panel_sel_press(&mut self, terminal: bool, i: usize, col: usize, mono: bool, clicks: usize, shift: bool, cx: &mut Context<Self>) {
         let old = self.panel_sel.filter(|s| s.terminal == terminal);
@@ -939,12 +888,10 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The rows the panel drew last (wrapped to its width).
     fn panel_rows(&self, terminal: bool) -> std::rc::Rc<Vec<Row>> {
         (if terminal { &self.term_wrap } else { &self.out_wrap }).borrow().1.clone()
     }
 
-    /// The selected text, as the program wrote it: whole lines keep their exact text, a part of a line is cut from the rows on screen.
     pub(crate) fn panel_sel_text(&self) -> Option<String> {
         let sel = self.panel_sel.filter(|s| !s.is_empty())?;
         let rows = self.panel_rows(sel.terminal);
@@ -986,7 +933,6 @@ impl Workbench {
         Some(out.join("\n"))
     }
 
-    /// Copy the selection; false when nothing is selected.
     pub(crate) fn panel_copy(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(text) = self.panel_sel_text() else { return false };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -995,7 +941,6 @@ impl Workbench {
         true
     }
 
-    /// The panel's lines as visual rows (wrapped to `cols`), cached per panel.
     fn wrapped_rows(&self, terminal: bool, cols: Cols) -> std::rc::Rc<Vec<Row>> {
         let (lines, cache) = if terminal { (&self.term_lines, &self.term_wrap) } else { (&self.out_lines, &self.out_wrap) };
         let key = (
@@ -1011,9 +956,7 @@ impl Workbench {
         }
         let mut rows = Vec::with_capacity(lines.len() + 8);
         for (ix, l) in lines.iter().enumerate() {
-            // A code line with a ^^^ line under it stays one row, so the marks line up.
             let marked = l.kind == LineKind::Code && lines.get(ix + 1).is_some_and(|n| n.kind == LineKind::Caret);
-            // Columns left after the row's own indent (card edge, status icon), and how many fewer the continuation rows get (log text hangs two characters in).
             let (width, hang) = match l.kind {
                 LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk => (cols.mono, 2),
                 LineKind::Code if !marked => (cols.mono, 2),
@@ -1045,7 +988,6 @@ impl Workbench {
         rows
     }
 
-    /// Whether the newest command in these lines ran Python (or pip), so the header's Python version is about what is on screen.
     fn ran_python(lines: &[Line]) -> bool {
         lines.iter().rev().find(|l| l.kind == LineKind::Cmd).is_some_and(|l| {
             let mut words = l.text.split_whitespace();
@@ -1062,7 +1004,6 @@ impl Workbench {
     pub(crate) fn render_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = |id: &'static str, label: &'static str, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
             let on = this.panel_tab == which;
-            // A 1px underline on the open tab, sentence case like the rest of the app.
             div()
                 .id(id)
                 .px_1()
@@ -1127,7 +1068,6 @@ impl Workbench {
 
         let count = shown_lines.len();
         let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
-        // Log text: the editor's font, a little smaller, normal weight, roomy rows.
         let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
         let m = {
             let ts = window.text_system();
@@ -1135,12 +1075,10 @@ impl Workbench {
             let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
             Metrics { row: px((f32::from(font_size) * 1.6).round()), em }
         };
-        // Long lines wrap to the panel's width instead of being cut off.
         let (width, height) = self.panel_size.get();
         let cols = if width <= 0. {
             Cols { mono: 160, card: 160, result: 160 }
         } else {
-            // Interface-font rows (card text, failure reason) by the font's average letter, with a little slack so a run of wide letters still fits.
             let avg = {
                 let ts = window.text_system();
                 let id = ts.resolve_font(&font(UI_FONT));
@@ -1152,10 +1090,8 @@ impl Workbench {
             Cols { mono: fit(f32::from(theme::u(12.)), m.em).max(24), card: fit(f32::from(theme::u(46.)) + 2., avg), result: fit(f32::from(theme::u(34.)), avg) }
         };
         let rows = self.wrapped_rows(terminal, cols);
-        // The list is a whole number of rows tall, so the top row is never cut in half.
         let gap = 4.;
         let row = f32::from(m.row);
-        // Terminal: the prompt is the line right after the output, with the same gap a finished command leaves above the next one.
         let measured = height > 0.;
         let air = terminal && count > 0 && height > gap + row * 3.;
         let prompt_rows = if !terminal { 0. } else if air { 2. } else { 1. };
@@ -1205,7 +1141,6 @@ impl Workbench {
                     let old = cell.get();
                     if (old.0 - size.0).abs() > 0.5 || (old.1 - size.1).abs() > 0.5 {
                         cell.set(size);
-                        // After this frame: the rows are re-wrapped to the new width first.
                         let bottom = bottom.clone();
                         cx.defer(move |cx| {
                             bottom.scroll_to_bottom();
@@ -1218,7 +1153,6 @@ impl Workbench {
             .absolute()
             .size_full()
         };
-        // Panel width last frame (0 before the first one): what fits on the prompt line.
         let narrow = width > 0. && width < 480.;
         let body = div()
             .relative()
@@ -1244,7 +1178,6 @@ impl Workbench {
                     .flex_1()
                     .min_h_0()
                     .when(empty, |v| {
-                        // Plain words first, then the extras; a short panel clips the extras.
                         v.child(
                             v_flex()
                                 .flex_shrink(1.)
@@ -1264,7 +1197,6 @@ impl Workbench {
                         )
                     })
                     .child(body)
-                    // A click anywhere in the terminal puts the caret at the prompt (links stop the click first, see `open_link`).
                     .when(terminal, |v| {
                         v.cursor_text().on_click(cx.listener(|this, _, window, cx| {
                             let h = this.term_input.focus_handle(cx);
@@ -1274,7 +1206,6 @@ impl Workbench {
             )
     }
 
-    /// The prompt: the line after the output, drawn like the command lines above it (`folder ❯ ` then what you type, mono like the log).
     fn render_prompt(&self, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
         let busy = self.term_running();
         let short = term::short_cwd(&self.term_cwd, self.root.as_deref());
@@ -1310,7 +1241,6 @@ impl Workbench {
                 .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).child("❯"))
             })
             .child(
-                // The input pads its text by 8px: pulled back so typed text starts where a command starts on the lines above.
                 div()
                     .relative()
                     .flex_1()
@@ -1322,7 +1252,6 @@ impl Workbench {
                     .key_context("Terminal")
                     .child(Input::new(&self.term_input).appearance(false).with_size(px(f32::from(font_size) / 0.875)))
                     .when(hint, |d| {
-                        // Drawn over the empty input; it takes no clicks, so the input still gets focus.
                         d.child(
                             div()
                                 .absolute()
@@ -1344,7 +1273,6 @@ impl Workbench {
     }
 }
 
-/// How many characters fit on a row: mono log text, error-card text, the failure reason.
 #[derive(Clone, Copy)]
 struct Cols {
     mono: usize,
@@ -1352,14 +1280,12 @@ struct Cols {
     result: usize,
 }
 
-/// Row height and character width of the panel's log, for one frame.
 #[derive(Clone, Copy)]
 struct Metrics {
     row: Pixels,
     em: f32,
 }
 
-/// The folder part of a prompt for a panel `width` px wide (0 = not measured yet): about a quarter of the row, cut from the left.
 fn prompt_place(short: &str, width: f32) -> String {
     if width <= 0. {
         return term::fit_path_left(short, 40);
@@ -1369,10 +1295,8 @@ fn prompt_place(short: &str, width: f32) -> String {
     if narrow { term::fit_path_left(term::last_folder(short), budget.max(6)) } else { term::fit_path_left(short, budget.max(10)) }
 }
 
-/// What GPUI calls the platform's interface font (Segoe UI on Windows).
 const UI_FONT: &str = ".SystemUIFont";
 
-/// The status line that ends the block starting at `cmd`, and whether that block is the last one (still running when it has no status yet).
 fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
     for l in lines.iter().skip(cmd + 1) {
         match l.kind {
@@ -1384,7 +1308,6 @@ fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
     (None, true)
 }
 
-/// The error card's rows (fixed-height rows; the message and hint wrap to the panel).
 fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     push_line(lines, "", LineKind::Blank);
     let mut head = Line::new(&e.kind, LineKind::CardHead);
@@ -1414,15 +1337,12 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     }
 }
 
-/// The file extensions `run_command_for` knows (a test keeps the two in step).
 const RUNNABLE: &[&str] = &["py", "pyw", "js", "mjs", "cjs", "ts", "mts", "ps1", "bat", "cmd", "sh", "rs", "go", "php", "lua", "rb"];
 
-/// Can F5 run this file? Cheap enough for a render: it only looks at the extension.
 pub(crate) fn can_run(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// How to run a file, by extension (same choices as the Tauri app's Run).
 fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<String>)> {
     let p = path.to_string_lossy().into_owned();
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
@@ -1442,9 +1362,7 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
     })
 }
 
-/// "Python 3.15.0" (+ " · .venv"), for the panel header.
 pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::WslTarget>) -> Option<String> {
-    // A WSL workspace's Python lives in the distro; the Windows one is not what the terminal will run.
     if let Some(t) = target {
         let out = crate::remote::program_command(t, &t.linux_root, "python3", &["--version"]).output().ok()?;
         let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();
@@ -1465,22 +1383,18 @@ pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: the gpui prelude there has a `test` macro that shadows `#[test]`.
     use super::{can_run, run_command_for, PanelSel};
     use std::path::Path;
 
     #[test]
     fn a_selection_covers_its_rows_in_either_direction() {
         let s = PanelSel { terminal: true, anchor: (3, 10), head: (1, 4) };
-        // Dragged upwards: the first row from where it started, the last up to the press.
         assert_eq!(s.on_row(0, 20), None);
         assert_eq!(s.on_row(1, 20), Some((4, 20)));
         assert_eq!(s.on_row(2, 0), Some((0, 0)), "an empty row in between is selected");
         assert_eq!(s.on_row(3, 20), Some((0, 10)));
         assert_eq!(s.on_row(4, 20), None);
-        // Past the end of a short row: cut to the row.
         assert_eq!(PanelSel { terminal: true, anchor: (0, 2), head: (0, usize::MAX) }.on_row(0, 5), Some((2, 5)));
-        // A click without a drag selects nothing.
         assert!(PanelSel { terminal: true, anchor: (2, 3), head: (2, 3) }.on_row(2, 9).is_none());
     }
 

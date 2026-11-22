@@ -1,4 +1,3 @@
-//! Isolation for the agent, so agents (and the user) don't run into each other.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -20,19 +19,16 @@ use super::{agent_id, Item, Status};
 pub struct Worktree {
     pub path: PathBuf,
     pub branch: String,
-    /// The checkout it was made from (where Merge lands).
     pub repo: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct Account {
     pub name: String,
-    /// "claude" or "opencode".
     pub family: String,
     pub dir: PathBuf,
 }
 
-/// Which sign-in folder an agent reads, or None for agents without accounts here.
 pub fn family(id: &str) -> Option<&'static str> {
     if id.starts_with("claude") {
         Some("claude")
@@ -43,7 +39,6 @@ pub fn family(id: &str) -> Option<&'static str> {
     }
 }
 
-/// The account's folder holds a sign-in: Claude's credentials file (or an OAuth account or API key in its config), OpenCode's auth database with at least one provider.
 pub fn signed_in(a: &Account) -> bool {
     let has = |p: PathBuf, any: &[&str]| std::fs::read_to_string(p).is_ok_and(|s| any.iter().any(|k| s.contains(k)));
     match a.family.as_str() {
@@ -52,7 +47,6 @@ pub fn signed_in(a: &Account) -> bool {
     }
 }
 
-/// Drop added accounts that were never signed in to (their folders too), and a choice that pointed at one.
 pub fn prune_accounts(s: &mut crate::settings::Settings) {
     let (keep, gone): (Vec<Account>, Vec<Account>) = s.agent_accounts.drain(..).partition(signed_in);
     s.agent_accounts = keep;
@@ -67,14 +61,12 @@ pub fn prune_accounts(s: &mut crate::settings::Settings) {
     s.save();
 }
 
-/// Delete an added account's sign-in folder: only one FluxCode made itself (under its `accounts` folder), never a folder a hand-edited setting points at.
 fn forget_dir(a: &Account) {
     if a.dir.parent().and_then(Path::file_name).is_some_and(|n| n == "accounts") {
         let _ = std::fs::remove_dir_all(&a.dir);
     }
 }
 
-/// The environment that makes a run use `a`.
 pub fn account_env(a: &Account) -> (&'static str, PathBuf) {
     match a.family.as_str() {
         "claude" => ("CLAUDE_CONFIG_DIR", a.dir.clone()),
@@ -99,13 +91,11 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Make the worktree (runs off the UI thread).
 fn create(repo: &Path) -> Result<Worktree, String> {
     let top = PathBuf::from(git(repo, &["rev-parse", "--show-toplevel"])?);
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let branch = format!("fluxcode/agent-{stamp}");
     let path = top.join(".fluxcode").join("worktrees").join(&stamp);
-    // Never shows up as a change in the user's checkout.
     if let Ok(common) = git(&top, &["rev-parse", "--git-common-dir"]) {
         let common = if Path::new(&common).is_absolute() { PathBuf::from(common) } else { top.join(common) };
         let exclude = common.join("info").join("exclude");
@@ -117,7 +107,6 @@ fn create(repo: &Path) -> Result<Worktree, String> {
     }
     let p = path.to_string_lossy().into_owned();
     git(&top, &["worktree", "add", "-b", &branch, &p, "HEAD"])?;
-    // Ignored files the project needs to run (.env, .env.local, ...).
     if let Ok(rd) = std::fs::read_dir(&top) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
@@ -129,7 +118,6 @@ fn create(repo: &Path) -> Result<Worktree, String> {
     Ok(Worktree { path, branch, repo: top })
 }
 
-/// Commit what the agent did on its branch and merge the branch into the user's checkout.
 fn merge(w: &Worktree, title: &str) -> Result<String, String> {
     let wt = &w.path;
     git(wt, &["add", "-A"])?;
@@ -150,7 +138,6 @@ fn remove(w: &Worktree) -> Result<(), String> {
 }
 
 impl Workbench {
-    /// Where the agent works: its worktree, else the open folder.
     pub(crate) fn agent_cwd(&self) -> PathBuf {
         match &self.agent.worktree {
             Some(w) => w.path.clone(),
@@ -158,7 +145,6 @@ impl Workbench {
         }
     }
 
-    /// Work in `folder` (None: the folder open in the editor).
     pub(crate) fn agent_use_folder(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
         let folder = folder.or_else(|| self.root.clone());
         if folder == self.agent.folder {
@@ -179,7 +165,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Pick the chat's folder with the system dialog.
     pub(crate) fn agent_pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(tr("Work in this folder").into()) });
         let key = self.agent.key;
@@ -193,12 +178,10 @@ impl Workbench {
         .detach();
     }
 
-    /// The chat works somewhere other than the open folder.
     pub(crate) fn agent_other_folder(&self) -> Option<PathBuf> {
         self.agent.folder.clone().filter(|f| self.agent.worktree.is_none() && Some(f) != self.root.as_ref())
     }
 
-    /// Restart the agent in a new place (or as another account); the chat goes on.
     fn agent_restart_here(&mut self, cx: &mut Context<Self>) {
         let was_on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
         if self.agent.items.iter().any(|i| matches!(i, Item::User(_))) {
@@ -296,17 +279,14 @@ impl Workbench {
         .detach();
     }
 
-    /// Accounts for the running agent's family.
     fn agent_accounts(&self) -> (Option<&'static str>, Vec<Account>) {
         let fam = family(&agent_id());
         let list = fam.map(|f| self.settings.agent_accounts.iter().filter(|a| a.family == f).cloned().collect()).unwrap_or_default();
         (fam, list)
     }
 
-    /// The account the next run uses (None: the default sign-in).
     pub(crate) fn agent_account(&self) -> Option<Account> {
         let f = family(&agent_id())?;
-        // The chat's own pick first, then the one set for new chats.
         let name = match &self.agent.account {
             Some(n) if n.is_empty() => return None,
             Some(n) => n,
@@ -317,7 +297,6 @@ impl Workbench {
 
     fn agent_use_account(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
-        // This chat signs in with it; new chats start with it too.
         self.agent.account = Some(name.clone().unwrap_or_default());
         match name {
             Some(n) => self.settings.agent_account.insert(f.to_string(), n),
@@ -333,7 +312,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A new sign-in folder with a console to sign in to it.
     fn agent_add_account(&mut self, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
         if self.agent.account_wait.is_some() {
@@ -350,7 +328,6 @@ impl Workbench {
         self.agent.account_wait = Some(acc.clone());
         cx.notify();
         cx.spawn(async move |this, cx| {
-            // Up to 15 minutes for the browser sign-in, looked at every 2 seconds.
             for _ in 0..450 {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
                 let Ok(waiting) = this.update(cx, |this, _| this.agent.account_wait.as_ref() == Some(&acc)) else { return };
@@ -373,11 +350,9 @@ impl Workbench {
         .detach();
     }
 
-    /// Stop waiting for a sign-in: the folder goes, the account never joins the list.
     fn agent_cancel_account(&mut self, cx: &mut Context<Self>) {
         let Some(a) = self.agent.account_wait.take() else { return };
         if signed_in(&a) {
-            // Signed in after all, just now: keep it.
             self.settings.agent_accounts.push(a.clone());
             return self.agent_use_account(Some(a.name), cx);
         }
@@ -386,7 +361,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Sign out of an added account: its sign-in folder is deleted and the default account is used again.
     fn agent_sign_out(&mut self, name: String, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
         let Some(pos) = self.settings.agent_accounts.iter().position(|a| a.family == f && a.name == name) else { return };
@@ -399,7 +373,6 @@ impl Workbench {
         if was_current {
             self.agent.items.push(Item::Branch(crate::trf!("Signed out of {name}; using the default account."; name => name)));
             self.agent_restart_here(cx);
-            // The agent that ran as it may still hold files in the folder: delete it once that process is gone.
             cx.background_spawn(async move {
                 std::thread::sleep(std::time::Duration::from_secs(4));
                 forget_dir(&a);
@@ -412,7 +385,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The header's one "more" button: the harness's mode (Claude's permission modes: ask, accept edits, bypass, plan), its own worktree, the account, the side it docks on, and its settings.
     pub(crate) fn render_agent_more(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on = self.agent.worktree.is_some();
         let (fam, accounts) = self.agent_accounts();
@@ -422,7 +394,6 @@ impl Workbench {
         let right = self.settings.agent_right;
         let other = self.agent_other_folder();
         let open_name = self.root.as_ref().map(|r| super::chats::folder_name(&r.display().to_string()));
-        // A mode that skips the questions shows on the button, so it is never on unnoticed.
         let risky = mode.as_ref().is_some_and(|m| {
             let c = m.current.to_ascii_lowercase();
             c.contains("bypass") || c.contains("yolo") || c.contains("dontask") || c.contains("dont_ask")
@@ -508,7 +479,6 @@ impl Workbench {
             })
     }
 
-    /// The strip under the header while the chat has a worktree: where, Merge, Remove.
     pub(crate) fn render_worktree_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(f) = self.agent_other_folder() {
             let open = f.clone();
@@ -566,14 +536,12 @@ impl Workbench {
     }
 }
 
-/// A console window that signs `a` in (the CLIs' login flows need a real terminal).
 fn open_login(a: &Account) {
     let (var, dir) = account_env(a);
     let login = if a.family == "claude" { "claude /login" } else { "opencode auth login" };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // Passed as typed: cmd's quoting is not the C runtime's.
         let line = format!("/c start \"FluxCode sign-in\" cmd /k \"set \"{var}={}\" && {login}\"", dir.display());
         let _ = Command::new("cmd").raw_arg(line).spawn();
     }
@@ -602,7 +570,6 @@ mod tests {
         let open = Account { family: "opencode".into(), ..claude.clone() };
         assert!(!signed_in(&claude));
         assert!(!signed_in(&open));
-        // Claude writes its config before the login finishes; only an account in it counts.
         std::fs::write(dir.join(".claude.json"), r#"{"numStartups":1}"#).unwrap();
         assert!(!signed_in(&claude));
         std::fs::write(dir.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"x"}}"#).unwrap();

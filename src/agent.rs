@@ -1,4 +1,3 @@
-//! The agent panel, over the Agent Client Protocol (ACP): newline-delimited JSON-RPC on the agent's stdio.
 
 use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
@@ -35,7 +34,6 @@ pub(crate) enum Req {
     LoadSession,
     Prompt,
     SetOption,
-    /// A command run quietly for the usage panel (`/usage`, `/context`): its reply goes there, not into the chat.
     Probe,
 }
 
@@ -56,19 +54,15 @@ mod usage;
 mod web;
 pub(crate) use menu::Menu;
 
-/// Stands for the older ACP session modes (`modes`, `session/set_mode`) among the config options.
 const MODE_ID: &str = "__mode";
-/// Settings FluxCode passes on the agent's command line (`acp::flag_opts`) have ids starting with this; changing one restarts the agent.
 const FLAG_PREFIX: &str = "__flag:";
 
-/// One setting the harness offers for the session (ACP `configOptions`): model, effort (thought_level), mode, or anything else it adds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfigOpt {
     pub id: String,
     pub name: String,
     pub category: String,
     pub current: String,
-    /// (value, name, description)
     pub choices: Vec<(String, String, String)>,
 }
 
@@ -78,7 +72,6 @@ impl ConfigOpt {
     }
 }
 
-/// Models grouped for the picker: free ones first, then one group per provider.
 pub fn model_groups(choices: &[(String, String, String)]) -> Vec<(String, Vec<(String, String)>)> {
     let mut free = Vec::new();
     let mut by: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -108,19 +101,14 @@ pub enum Item {
     User(String),
     Text(String),
     Thought(String),
-    /// `kind` is ACP's tool kind: read, edit, delete, move, search, execute, think, fetch, other.
     Tool { id: String, title: String, status: String, kind: String },
     Plan(Vec<(String, String)>),
     Note(String, bool),
-    /// The chat continues with another harness from here (a branch, not a new chat).
     Branch(String),
-    /// A web search or a page read, with its sources.
     Web(web::Web),
-    /// Pictures a tool took or the agent sent (screenshots), shown as previews.
     Images { tool: Option<String>, shots: Vec<shots::Shot>, hidden: bool },
 }
 
-/// A message typed while the agent was busy (or not running yet), with its attachments.
 pub struct Queued {
     pub text: String,
     pub files: Vec<PathBuf>,
@@ -130,48 +118,34 @@ pub struct Permission {
     rpc_id: Value,
     title: String,
     options: Vec<(String, String, String)>, // (id, name, kind)
-    /// ACP's tool kind: execute, edit, read, fetch, ...
     kind: String,
-    /// The command or path, when the title doesn't already show it.
     detail: Option<String>,
 }
 
-/// One saved conversation (user and agent messages only), in `agent-history.json`.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Chat {
     pub id: u64,
     pub title: String,
-    /// The user renamed it: new messages keep that title.
     #[serde(default)]
     pub renamed: bool,
-    /// Unix time in ms of the last message.
     pub updated: u64,
-    /// (role, text) with role "user", "agent" or "note".
     pub messages: Vec<(String, String)>,
-    /// In the archive: out of the list, kept (see `chats::auto_archive`).
     #[serde(default)]
     pub archived: bool,
-    /// Taken back out of the archive by the user: never archived on its own again.
     #[serde(default)]
     pub keep: bool,
-    /// The folder open when the chat was saved.
     #[serde(default)]
     pub folder: Option<String>,
-    /// The agent that answered (its ACP id).
     #[serde(default)]
     pub agent: Option<String>,
-    /// The account it signed in with ("" the default one), when one was picked for it.
     #[serde(default)]
     pub account: Option<String>,
-    /// The agent's session id, to resume it when the chat is opened again (when the harness can load sessions).
     #[serde(default)]
     pub session: Option<String>,
-    /// Pinned to the top of the chat list (and never archived on its own).
     #[serde(default)]
     pub pinned: bool,
 }
 
-/// When a chat last changed, as a clock time: "14.32" today, "Yesterday 09.10", "12 Nov 14.32" this year, "12 Nov 2025" before.
 fn when_label(ms: u64) -> String {
     use chrono::{Datelike, Local, TimeZone};
     let Some(t) = Local.timestamp_millis_opt(ms as i64).single() else { return String::new() };
@@ -189,16 +163,13 @@ fn when_label(ms: u64) -> String {
 }
 
 const HISTORY_FILE: &str = "agent-history.json";
-/// How far back a tool's update is looked for (an agent runs a few tools at a time).
 const RECENT: usize = 4096;
-/// Chats kept, the archive included.
 const HISTORY_MAX: usize = 200;
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// "just now", "12 min ago", "3 h ago", "yesterday", "5 days ago", "12 weeks ago".
 fn ago(ms: u64) -> String {
     let s = now_ms().saturating_sub(ms) / 1000;
     match s {
@@ -211,7 +182,6 @@ fn ago(ms: u64) -> String {
     }
 }
 
-/// The last messages of a chat as plain text, for a fresh session to read.
 fn transcript(items: &[Item]) -> String {
     let mut lines: Vec<String> = items
         .iter()
@@ -226,110 +196,66 @@ fn transcript(items: &[Item]) -> String {
     lines.join("\n\n")
 }
 
-/// A file the agent wrote, with what was there before (None = new file).
 pub struct Change {
     pub path: PathBuf,
-    /// The file before the agent touched it (None: the agent created it).
     pub before: Option<String>,
-    /// Lines added and removed so far (counted when an edit finishes).
     pub added: usize,
     pub removed: usize,
-    /// The counts are known (the edit finished): until then the card shows a dot, not "+0 -0".
     pub counted: bool,
 }
 
 pub struct AgentState {
-    /// The chat on screen and its agent.
     pub(crate) run: Run,
-    /// Chats whose agent keeps working while another chat is on screen.
     pub(crate) runs: Vec<Run>,
-    /// A background chat is swapped in for a moment (`agent_with_run`): the editor doesn't follow its edits.
     pub(crate) bg: bool,
-    /// The message box shows another agent's name now (set on the next frame).
     pub(crate) placeholder_dirty: bool,
-    /// Files attached to the message being typed.
     pub attachments: Vec<PathBuf>,
-    /// The row of attachment and context chips above the message, when it is wider than the box.
     chips_scroll: ScrollHandle,
-    /// Open editors to reload from disk after the agent wrote them (needs a Window).
     pub reloads: Vec<PathBuf>,
-    /// Files the agent finished editing, for the editor to follow (follow.rs).
     pub follow_q: Vec<PathBuf>,
-    /// When the user last picked a tab or file themselves: the editor doesn't jump to the agent's edits for a moment after (follow.rs).
     pub(crate) user_nav: Option<std::time::Instant>,
-    /// The replay on screen: its file and final text; the counter stops older ones.
     pub replay: Option<(PathBuf, String)>,
     pub replay_gen: u64,
-    /// An account whose sign-in console is open: it joins the list only once signed in.
     pub account_wait: Option<worktree::Account>,
     pub(crate) input: Entity<TextareaState>,
-    /// Saved chats, newest first.
     pub history: Vec<Chat>,
     pub show_history: bool,
-    /// `@file` being typed: (offset of `@`, matching files, selected row).
     pub mention: Option<(usize, Vec<usize>, usize)>,
-    /// Context chips the user switched off: "file", "sel", "err", "out", or "@path".
     pub off_ctx: HashSet<String>,
-    /// Sessions OpenCode / Mura saved for this folder: 0 not loaded, 1 loading, 2 loaded.
     pub remote: Vec<RemoteSession>,
     pub remote_state: u8,
     pub remote_err: Option<String>,
-    /// `/command` list while a `/` is being typed: (matches, selected row).
     pub slash: Option<(Vec<SlashCmd>, usize)>,
-    /// The settings view (model, effort, mode) is showing instead of the chat.
     pub show_options: bool,
-    /// Editing an earlier message (index in `items`): Enter restarts from there.
     pub editing: Option<usize>,
-    /// An agent being installed: its id and what the installer is doing.
     pub installing: Option<(String, crate::acp::Tracker, Entity<crate::flux_anim::InstallAnim>)>,
-    /// Text boxes for typed answers, one per question of a form.
     pub ask_inputs: Vec<Entity<InputState>>,
-    /// Boxes to empty before the next frame (a new form arrived).
     pub ask_clear: Vec<usize>,
-    /// The first required question still unanswered, after Send.
     pub ask_missing: Option<String>,
-    /// Removing an agent: its id, while the user types its name twice.
     pub uninstall: Option<String>,
     pub uninstall_inputs: [Entity<InputState>; 2],
-    /// The last install that failed: the agent's id, why, and its stopped animation.
     pub install_err: Option<(String, String, Option<Entity<crate::flux_anim::InstallAnim>>)>,
-    /// Installed agents with a newer version in the registry (updates.rs).
     pub(crate) updates: Vec<updates::Pending>,
-    /// The update cards were closed; a check that finds something new shows them again.
     pub(crate) updates_hidden: bool,
-    /// The agent, model, mode or permission menu that is open.
     pub menu: menu::MenuState,
     pub saver: saver::SaverState,
     pub full: full::FullState,
-    /// A picture open full screen (see `shots`).
     pub lightbox: Option<shots::Lightbox>,
-    /// Where the effort slider's handle was before the last change (it slides from there).
     pub effort_from: std::cell::Cell<Option<f32>>,
-    /// The effort handle is held: where it is on the rail (0..1).
     pub effort_drag: std::cell::Cell<Option<f32>>,
-    /// Bumped on each pick, so the handle glides even onto the level it was on.
     pub effort_gen: std::cell::Cell<u32>,
-    /// The panel's top and the message box's top, in window pixels, as last drawn: the menus above the box get exactly the room between them.
     pub geom: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
-    /// The message box's width as last drawn: below `NARROW` the bottom row compacts.
     pub compose_w: std::rc::Rc<std::cell::Cell<f32>>,
-    /// The settings dialog's open section, and its focus (for Esc and Tab).
     pub settings_tab: settings_modal::Tab,
     pub settings_focus: FocusHandle,
     _sub: Subscription,
-    /// Redraws the removal page as its two name boxes change.
     _sub_un: Vec<Subscription>,
 }
 
-/// One chat's agent: its process, ACP session, status, queue and what it said.
 pub struct Run {
-    /// Stable for the run's life (a chat gets its id only once saved).
     pub(crate) key: u64,
-    /// The agent it runs: "auto" or an ACP id (as `Settings::agent_cli`).
     pub(crate) agent: String,
-    /// Where the agent works (None: the open folder).
     pub(crate) folder: Option<PathBuf>,
-    /// The account it signs in with: a name, "" for the default sign-in, None for the one picked in settings.
     pub(crate) account: Option<String>,
     pub(crate) status: Status,
     pub(crate) proc_id: Option<u32>,
@@ -338,81 +264,45 @@ pub struct Run {
     pub(crate) next_id: u64,
     pub(crate) pending: HashMap<u64, Req>,
     pub(crate) session: Option<String>,
-    /// Messages waiting for the agent: sent together when the current answer ends.
     pub(crate) queue: Vec<Queued>,
-    /// The user asked to interrupt the answer and send the queue now.
     pub(crate) steer: bool,
-    /// Thinking blocks the user expanded.
     pub(crate) open_thoughts: HashSet<usize>,
-    /// The agent accepts image blocks (ACP promptCapabilities.image).
     pub(crate) can_image: bool,
     pub(crate) items: Vec<Item>,
     pub(crate) permission: Option<Permission>,
-    /// Requests that came while one was on screen (an agent running two tools at once): each is shown in turn, none is dropped.
     pub(crate) perm_queue: std::collections::VecDeque<Permission>,
     pub(crate) changes: Vec<Change>,
-    /// The files each edit tool touched, so its "done" update (which often names no file) still gets its lines counted.
     pub(crate) tool_paths: HashMap<String, Vec<PathBuf>>,
-    /// The Changes card shows only its header.
     pub(crate) changes_folded: bool,
-    /// Groups of steps the user opened (by the index of their first item).
     pub(crate) open_groups: HashSet<usize>,
-    /// The chat's own git worktree, when it has one (worktree.rs).
     pub(crate) worktree: Option<worktree::Worktree>,
     pub(crate) worktree_busy: bool,
-    /// The chat log as a virtual list: only the messages on screen are laid out, so a chat of a million items costs a frame what one of twenty does.
     pub(crate) list: ListState,
-    /// What the list was last told (see `agent_sync_list`).
     pub(crate) list_seen: std::cell::RefCell<ListSeen>,
-    /// The first item in the list.
     pub(crate) view_start: std::cell::Cell<usize>,
-    /// Items whose height changed by a click (a thought or a group opened).
     pub(crate) remeasure: std::cell::RefCell<Vec<std::ops::Range<usize>>>,
-    /// The chat keeps the newest text in view: off once the reader scrolls up, on again when they scroll back to the bottom or send a message.
     pub(crate) follow: bool,
-    /// The chat on screen, once it has been saved.
     pub(crate) chat_id: Option<u64>,
-    /// An earlier chat reopened from history: sent with the next message so a fresh OpenCode session knows what was said.
     pub(crate) carry: Option<String>,
-    /// The harness can resume an old session (ACP `loadSession`).
     pub(crate) can_load: bool,
-    /// Resume this session once the agent has started.
     pub(crate) pending_load: Option<String>,
-    /// Replaying this session's history right now.
     pub(crate) loading_id: Option<String>,
-    /// The language note went out in this session.
     pub(crate) hinted: bool,
-    /// Signature of the workspace overview the agent has (0: none yet this session).
     pub(crate) ws_sig: u64,
-    /// Commands the agent announced for this session.
     pub(crate) commands: Vec<SlashCmd>,
-    /// Settings the harness offers for this session (model, effort, mode, ...).
     pub(crate) config: Vec<ConfigOpt>,
-    /// The next answer that ends was cancelled on purpose (an edit): no "cancelled" note.
     pub(crate) quiet_stop: bool,
-    /// The token saver is compacting the context (`/compact` running quietly).
     pub(crate) compacting: bool,
-    /// Items before this index were compacted away (the context estimate skips them).
     pub(crate) compact_from: usize,
-    /// Stamp of the last finished turn; the idle timer only fires if it's unchanged.
     pub(crate) last_active: Option<std::time::Instant>,
-    /// Resuming after an idle stop: the replayed history is already on screen.
     pub(crate) silent_load: bool,
-    /// The session to resume on the next message after an idle stop.
     pub(crate) resume_id: Option<String>,
-    /// A question the agent asked (elicitation), waiting for the user.
     pub(crate) ask: Option<crate::agent_ask::Ask>,
-    /// A command-line setting changed while the agent answered: restart it after the turn.
     pub(crate) relaunch: bool,
-    /// Usage and limits: live numbers and the usage panel.
     pub(crate) usage: usage::UsageState,
-    /// Web searches whose every source is shown.
     pub(crate) web_open: HashSet<String>,
-    /// When each step (tool call, thought) started and how long it took.
     pub(crate) times: activity::Times,
-    /// Usage limit banner (limit.rs), token saver (saver.rs), full-screen columns (full.rs).
     pub(crate) limit: limit::LimitState,
-    /// The thought being written now (its key in `times`).
     pub(crate) open_thought: Option<String>,
 }
 
@@ -479,12 +369,10 @@ impl Run {
         }
     }
 
-    /// The agent process is up (starting, idle or answering).
     pub(crate) fn live(&self) -> bool {
         self.proc_id.is_some()
     }
 
-    /// Answering now, or waiting for the user to allow a step.
     pub(crate) fn working(&self) -> bool {
         self.status == Status::Busy || self.permission.is_some() || self.ask.is_some()
     }
@@ -503,11 +391,9 @@ impl std::ops::DerefMut for AgentState {
     }
 }
 
-/// MuaraAI's Mura harness (`mura`, one Rust binary, github.com/MuaraAI/Mura-Harness), installed on its own next to FluxCode (its README puts it in ~/.local/bin).
 pub(crate) fn find_mura() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "mura.exe" } else { "mura" };
     let mut candidates: Vec<PathBuf> = Vec::new();
-    // Windows' PATH as it is now (registry included), not only FluxCode's own copy.
     candidates.extend(std::env::split_paths(&crate::acp::fresh_path()).map(|d| d.join(exe)));
     for var in ["USERPROFILE", "HOME"] {
         if let Ok(base) = std::env::var(var) {
@@ -520,7 +406,6 @@ pub(crate) fn find_mura() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The agent picked in the panel's title menu: "auto" or an agent id (`crate::acp`).
 static CHOICE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 pub fn set_choice(cli: &str) {
@@ -529,7 +414,6 @@ pub fn set_choice(cli: &str) {
     }
 }
 
-/// The agent the panel runs: the one picked, or with "auto" the first installed one in the known list (Mura, then OpenCode, ...).
 pub(crate) fn full_bounds() -> (f32, f32) {
     (full::MIN_W, full::MAX_W)
 }
@@ -539,17 +423,14 @@ pub fn agent_id() -> String {
     if !c.is_empty() && c != "auto" {
         return c;
     }
-    // An agent still being built (Mura) is never picked for you, even when it is installed.
     crate::acp::installed().into_iter().find(|id| !crate::acp::experimental(id)).unwrap_or_else(|| "opencode-v2".into())
 }
 
-/// A `/command`: FluxCode's own, or one the agent announced (ACP available_commands_update).
 #[derive(Clone)]
 pub struct SlashCmd {
     pub name: String,
     pub desc: String,
     pub builtin: bool,
-    /// Needs text after the name: Enter fills it in instead of sending.
     pub takes_input: bool,
 }
 
@@ -562,7 +443,6 @@ fn builtin_commands() -> Vec<SlashCmd> {
     ]
 }
 
-/// The running agent's display name.
 pub fn agent_name() -> &'static str {
     static NAMES: std::sync::Mutex<Option<HashMap<String, &'static str>>> = std::sync::Mutex::new(None);
     let id = agent_id();
@@ -576,7 +456,6 @@ pub fn agent_name() -> &'static str {
     name
 }
 
-/// Where the OpenCode CLI lives (same search as the Tauri app).
 pub(crate) fn find_opencode() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     {
@@ -605,12 +484,10 @@ pub(crate) fn find_opencode() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// The command line that starts the running agent in ACP mode.
 fn agent_cmd() -> Option<std::process::Command> {
     crate::acp::locate(&agent_id()).map(|l| l.command())
 }
 
-/// Mura and OpenCode list their saved sessions (`<cli> session list`); others don't.
 fn sessions_cmd() -> Option<std::process::Command> {
     let id = agent_id();
     if id != "mura" && !crate::acp::is_opencode(&id) {
@@ -623,7 +500,6 @@ fn sessions_cmd() -> Option<std::process::Command> {
 
 impl AgentState {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> Self {
-        // Grows with the text (1 to 8 lines); Enter sends, Shift+Enter starts a new line.
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
@@ -696,7 +572,6 @@ impl AgentState {
         }
     }
 
-    /// Save the chat on screen into the history (newest first), with the folder it belongs to and the agent that answered.
     fn save_chat(&mut self, folder: Option<String>) {
         let messages: Vec<(String, String)> = self
             .items
@@ -713,7 +588,6 @@ impl AgentState {
         }
         let id = *self.chat_id.get_or_insert_with(now_ms);
         let old = self.history.iter().find(|c| c.id == id);
-        // Only switching away from a chat: it keeps its place and its time (moving it to the top would shift the list under the pointer and stamp every chat "just now").
         if old.is_some_and(|c| c.messages == messages) {
             return;
         }
@@ -732,7 +606,6 @@ impl AgentState {
                 .unwrap_or_default(),
         };
         self.history.retain(|c| c.id != id);
-        // A new message brings an archived chat back.
         self.history.insert(0, Chat { id, title, renamed: renamed.is_some(), updated: now_ms(), messages, archived: false, keep, folder, agent: Some(agent_id()), account, session, pinned });
         self.history.truncate(HISTORY_MAX);
         crate::settings::save_json(HISTORY_FILE, &self.history);
@@ -742,12 +615,10 @@ impl AgentState {
         self.proc_id == Some(id)
     }
 
-    /// The background chat whose agent is process `id`.
     pub fn run_of(&self, id: u32) -> Option<u64> {
         self.runs.iter().find(|r| r.proc_id == Some(id)).map(|r| r.key)
     }
 
-    /// Saved chats answering right now (on screen or in the background).
     pub(crate) fn working_ids(&self) -> Vec<u64> {
         std::iter::once(&self.run).chain(&self.runs).filter(|r| r.working()).filter_map(|r| r.chat_id).collect()
     }
@@ -768,18 +639,15 @@ impl AgentState {
 }
 
 impl Workbench {
-    /// The title of the chat `self.agent` holds now (for a background chat's notices).
     fn agent_chat_title(&self) -> String {
         self.agent.chat_id.and_then(|id| self.agent.history.iter().find(|c| c.id == id)).map(|c| c.title.clone()).unwrap_or_default()
     }
 
-    /// Save the chat on screen, with the folder its agent works in.
     pub(crate) fn agent_save(&mut self) {
         let folder = self.agent.folder.clone().or_else(|| self.root.clone()).map(|r| r.display().to_string());
         self.agent.save_chat(folder);
     }
 
-    /// Run `f` with the chat runtime `key` as the panel's own (`self.agent.*`): the one on screen as it is, a background one swapped in for the call (its agent is the current one meanwhile).
     pub(crate) fn agent_with_run(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>)) -> bool {
         if self.agent.run.key == key {
             f(self, cx);
@@ -796,12 +664,10 @@ impl Workbench {
             std::mem::swap(&mut self.agent.run, &mut self.agent.runs[ix]);
         }
         set_choice(&self.agent.run.agent);
-        // A background chat whose agent stopped (the idle timer) is saved with its session: it needs no memory until it is opened again.
         self.agent.runs.retain(|r| r.live() || r.status != Status::Off);
         true
     }
 
-    /// Put `next` on screen.
     fn agent_switch_to(&mut self, mut next: Run, new_session: bool, cx: &mut Context<Self>) -> bool {
         self.agent_save();
         let next_cwd = match &next.worktree {
@@ -831,7 +697,6 @@ impl Workbench {
             next.commands = r.commands.clone();
             next.config = r.config.clone();
             next.folder = Some(next_cwd);
-            // The chat left behind continues its session when it is opened again.
             if r.can_load {
                 r.resume_id = r.session.take();
             } else {
@@ -847,11 +712,9 @@ impl Workbench {
         self.agent.mention = None;
         self.agent.slash = None;
         let mut old = std::mem::replace(&mut self.agent.run, next);
-        // A first message still waiting for its agent to start keeps the chat going.
         if old.chat_id.is_none() && old.live() && !old.queue.is_empty() {
             old.chat_id = Some(now_ms());
         }
-        // Kept in the background: a chat whose agent is up, or one that stopped with an error (shown when it is opened).
         if old.chat_id.is_some() && (old.live() || matches!(old.status, Status::Error(_))) {
             self.agent.runs.push(old);
         } else if let Some(id) = old.proc_id {
@@ -864,7 +727,6 @@ impl Workbench {
             if !new_session {
                 self.agent.status = Status::Ready;
             } else if let Some(id) = resume.clone().filter(|_| self.agent.can_load) {
-                // The chat's own session, without replaying it (it is on screen).
                 self.agent.silent_load = true;
                 self.agent_load_session(id);
             } else {
@@ -889,7 +751,6 @@ impl Workbench {
         }
     }
 
-    /// The "model" select from ACP `configOptions` (session/new, session/load, set_config_option results and config_option_update notifications).
     fn agent_take_config(&mut self, v: &Value) {
         let Some(opts) = v.get("configOptions").and_then(Value::as_array) else { return };
         let str_of = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -909,7 +770,6 @@ impl Workbench {
             })
             .filter(|o| !o.id.is_empty() && !o.choices.is_empty())
             .map(|mut o| {
-                // Harnesses that leave out `category` (Mura) still name their options plainly.
                 if o.category.is_empty() {
                     o.category = match o.id.as_str() {
                         "model" => "model",
@@ -922,7 +782,6 @@ impl Workbench {
                 o
             })
             .collect();
-        // The older ACP way to offer modes: `modes.availableModes`, switched with session/set_mode.
         if let Some(m) = v.get("modes").filter(|m| m.is_object()) {
             if !self.agent.config.iter().any(|o| o.category == "mode") {
                 let choices: Vec<(String, String, String)> = m
@@ -937,7 +796,6 @@ impl Workbench {
         }
     }
 
-    /// Change one session setting (model, effort, mode, ...).
     pub(crate) fn agent_set_option(&mut self, id: &str, value: String, remember: bool, cx: &mut Context<Self>) {
         if remember {
             let key = format!("{}:{id}", self.agent.agent);
@@ -947,7 +805,6 @@ impl Workbench {
             }
         }
         if let Some(flag) = id.strip_prefix(FLAG_PREFIX) {
-            // Always kept: the agent reads it from its command line at the next start.
             let key = format!("{}:{FLAG_PREFIX}{flag}", self.agent.agent);
             self.settings.agent_options.insert(key, value);
             self.settings.save();
@@ -967,7 +824,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The session's settings as the panel shows them: the agent's own, plus those FluxCode passes on its command line when the agent doesn't offer them over ACP.
     pub(crate) fn agent_config_view(&self) -> Vec<ConfigOpt> {
         let cli = self.agent.agent.clone();
         let agent = agent_id();
@@ -986,7 +842,6 @@ impl Workbench {
         v
     }
 
-    /// The command-line flags for the saved command-line settings.
     fn agent_flag_args(&self) -> Vec<String> {
         let cli = &self.agent.agent;
         crate::acp::flag_opts(&agent_id())
@@ -999,7 +854,6 @@ impl Workbench {
             .collect()
     }
 
-    /// Restart the agent so a command-line setting takes effect, in the same chat: the session is resumed when the agent can, else it gets the chat as context.
     fn agent_relaunch(&mut self, cx: &mut Context<Self>) {
         match self.agent.status {
             Status::Busy => {
@@ -1033,7 +887,6 @@ impl Workbench {
         }
         self.settings.agent_access = level.into();
         self.settings.save();
-        // A request waiting now is answered by the new level when it covers it.
         if level == "full" {
             while let Some(p) = &self.agent.permission {
                 let Some(oid) = p.options.iter().find(|o| o.2.starts_with("allow_once")).or_else(|| p.options.iter().find(|o| o.2.starts_with("allow"))).map(|o| o.0.clone()) else { break };
@@ -1043,7 +896,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The Full access switch: on, or back to the level it was switched on from.
     pub(crate) fn agent_toggle_full(&mut self, on: bool, cx: &mut Context<Self>) {
         let level = if on { "full" } else { self.settings.access_off() };
         self.agent_set_access(level, cx);
@@ -1053,7 +905,6 @@ impl Workbench {
         self.agent_open_options(window, cx);
     }
 
-    /// The agent's settings: a dialog over the window, so the chat stays where it was.
     pub(crate) fn agent_open_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.show_options = true;
         self.agent.menu.open = None;
@@ -1071,7 +922,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Start editing an earlier message: its text goes back into the input.
     fn agent_edit(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Item::User(t)) = self.agent.items.get(ix) else { return };
         let t = t.clone();
@@ -1093,7 +943,6 @@ impl Workbench {
         }
     }
 
-    /// Send an edited message: the chat goes back to just before it, and a fresh session gets everything said up to there as context, then the new text.
     fn agent_send_edit(&mut self, ix: usize, text: String, cx: &mut Context<Self>) {
         let files = std::mem::take(&mut self.agent.attachments);
         self.agent.items.truncate(ix);
@@ -1136,13 +985,11 @@ impl Workbench {
         self.agent_write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
     }
 
-    /// MCP servers every agent session gets: the browser, when it is set up.
     fn agent_mcp_servers(&self) -> Value {
         let s = &self.settings;
         Value::Array(crate::browser::mcp_server(&s.agent_browser, s.agent_browser_headless, self.root.as_deref()).into_iter().collect())
     }
 
-    /// Set up the agents' browser tools in the background (once), when a browser is chosen and Node.js is there.
     pub(crate) fn agent_browser_setup(&mut self, cx: &mut Context<Self>) {
         if !matches!(crate::browser::state(&self.settings.agent_browser), crate::browser::State::NotInstalled(_)) {
             return;
@@ -1167,7 +1014,6 @@ impl Workbench {
             return;
         }
         self.agent_browser_setup(cx);
-        // The chat keeps working where it started, whatever folder opens later.
         if self.agent.folder.is_none() {
             self.agent.folder = self.root.clone();
         }
@@ -1183,7 +1029,6 @@ impl Workbench {
         cmd.args(self.agent_flag_args());
         cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
         crate::github::apply_env(&mut cmd);
-        // Another account: the CLI reads its sign-in from that account's folder.
         if let Some(a) = self.agent_account() {
             let (k, v) = worktree::account_env(&a);
             cmd.env(k, v);
@@ -1199,7 +1044,6 @@ impl Workbench {
                     "initialize",
                     json!({
                         "protocolVersion": 1,
-                        // Elicitation: the agent may ask the user questions (agent_ask.rs).
                         "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": false, "elicitation": { "form": {}, "url": {} } },
                         "clientInfo": { "name": "FluxCode", "version": crate::update::BUILD }
                     }),
@@ -1254,11 +1098,9 @@ impl Workbench {
         self.agent_to_end();
         match (&self.agent.status, &self.agent.session) {
             (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
-            // Still answering: the message waits in the queue (Send now interrupts).
             (Status::Busy, _) | (Status::Starting, _) => {}
             _ => {
                 if let Some(id) = self.agent.resume_id.take() {
-                    // Stopped while idle: continue the same session without replaying it.
                     self.agent.pending_load = Some(id);
                     self.agent.silent_load = true;
                 }
@@ -1268,7 +1110,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Send everything queued as one message (the agent sees it in order, in the same session, so it keeps the context of what came before).
     fn agent_flush_queue(&mut self, cx: &mut Context<Self>) {
         if self.agent.queue.is_empty() || self.agent.session.is_none() {
             return;
@@ -1288,7 +1129,6 @@ impl Workbench {
         self.agent_prompt(text, files, cx);
     }
 
-    /// Interrupt the current answer and send the queue now (it keeps the context).
     fn agent_steer(&mut self, cx: &mut Context<Self>) {
         if self.agent.status == Status::Busy {
             self.agent.steer = true;
@@ -1319,7 +1159,6 @@ impl Workbench {
         self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
     }
 
-    /// The thought being written ended (something else came, or the turn did).
     fn agent_close_thought(&mut self) {
         if let Some(k) = self.agent.open_thought.take() {
             if let Some((start, end @ None)) = self.agent.times.get_mut(&k) {
@@ -1328,7 +1167,6 @@ impl Workbench {
         }
     }
 
-    /// Run one of the agent's own commands without showing it in the chat.
     fn agent_send_probe(&mut self, command: &str) {
         let Some(session) = self.agent.session.clone() else { return };
         self.agent.status = Status::Busy;
@@ -1349,7 +1187,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Stdout/stderr of the agent process (called from `on_proc_event`).
     pub(crate) fn agent_on_output(&mut self, text: &str, err: bool, cx: &mut Context<Self>) {
         if err {
             for l in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -1461,7 +1298,6 @@ impl Workbench {
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
                 self.agent_take_config(&result);
-                // What was picked last time (model, effort, mode), when the harness still offers it.
                 let harness = self.agent.agent.clone();
                 let wanted: Vec<(String, String)> = self
                     .agent
@@ -1475,7 +1311,6 @@ impl Workbench {
                 for (id, v) in wanted {
                     self.agent_set_option(&id, v, false, cx);
                 }
-                // Effort starts at medium: good results with fewer tokens.
                 let effort = self
                     .agent
                     .config
@@ -1517,7 +1352,6 @@ impl Workbench {
                     self.agent_check_limit(&t, cx);
                 }
                 self.agent_save();
-                // A chat in the background finished: the status bar says which.
                 if self.agent.bg && self.agent.queue.is_empty() {
                     self.status = crate::trf!("{name} finished in “{chat}”."; name => agent_name(), chat => self.agent_chat_title()).into();
                 }
@@ -1567,11 +1401,9 @@ impl Workbench {
             self.agent.usage.live.get_or_insert_with(Default::default).take(u);
             return;
         }
-        // The token saver's /compact runs quietly: its reply is not part of the chat.
         if self.agent.compacting {
             return;
         }
-        // A quiet command's reply goes to the usage panel.
         if let Some((_, buf)) = self.agent.usage.probe.as_mut() {
             if u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk") {
                 buf.push_str(u.pointer("/content/text").and_then(Value::as_str).unwrap_or(""));
@@ -1603,7 +1435,6 @@ impl Workbench {
         self.agent_take_images(u);
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
             "agent_message_chunk" => self.agent.append(false, &text(u)),
-            // Only while an old session replays; live prompts are shown when sent.
             "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
             "agent_thought_chunk" => {
                 self.agent.append(true, &text(u));
@@ -1613,7 +1444,6 @@ impl Workbench {
             }
             "tool_call" if web::hidden_tool(u) => {}
             "tool_call" if web::is_web(u) => self.agent.items.push(Item::Web(web::Web::new(u))),
-            // Updates go to recent items: the search stops RECENT items back, so a tool update costs the same in a chat of any length.
             "tool_call_update" if self.agent.items.iter().rev().take(RECENT).any(|i| matches!(i, Item::Web(w) if Some(w.id.as_str()) == u.get("toolCallId").and_then(Value::as_str))) => {
                 let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
                 if let Some(Item::Web(w)) = self.agent.items.iter_mut().rev().take(RECENT).find(|i| matches!(i, Item::Web(w) if w.id == id)) {
@@ -1673,7 +1503,6 @@ impl Workbench {
         }
     }
 
-    /// Pictures in a tool call, its update, or an answer: added under that tool's step (one strip per tool), or as their own strip for an answer.
     fn agent_take_images(&mut self, u: &Value) {
         let kind = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         let found = match kind {
@@ -1730,7 +1559,6 @@ impl Workbench {
                             .collect()
                     })
                     .unwrap_or_default();
-                // The access level answers what it can; the rest asks.
                 let kind = params.pointer("/toolCall/kind").and_then(Value::as_str).unwrap_or("other");
                 let reads = matches!(kind, "read" | "search" | "fetch" | "think");
                 let writes = matches!(kind, "edit" | "delete" | "move");
@@ -1753,7 +1581,6 @@ impl Workbench {
                         return;
                     }
                 }
-                // What exactly runs: the command or the path, when the agent says it.
                 let detail = ["/toolCall/rawInput/command", "/toolCall/rawInput/cmd", "/toolCall/rawInput/filePath", "/toolCall/rawInput/file_path", "/toolCall/rawInput/path", "/toolCall/locations/0/path"]
                     .iter()
                     .find_map(|p| params.pointer(p).and_then(Value::as_str))
@@ -1768,7 +1595,6 @@ impl Workbench {
                 if self.agent.bg {
                     self.status = crate::trf!("{name} waits for your answer in “{chat}”."; name => agent_name(), chat => self.agent_chat_title()).into();
                 }
-                // The agent waits for this: make sure it is seen.
                 if self.settings.agent_right {
                     self.agent_open = true;
                     self.right_view = SideView::Agent;
@@ -1785,7 +1611,6 @@ impl Workbench {
             }
             ("elicitation/create", _) => self.agent_on_elicitation(id.clone(), &params, cx),
             ("fs/read_text_file", Some(p)) => {
-                // Unsaved editor text wins over the file on disk.
                 let text = match self.docs.iter().find(|d| d.path == p) {
                     Some(d) => Ok(d.text(cx)),
                     None => core::read_text(&p).map(|f| f.text),
@@ -1835,7 +1660,6 @@ impl Workbench {
         }
     }
 
-    /// The ON/OFF switch: start OpenCode, or stop it (the chat stays on screen).
     fn agent_set_on(&mut self, on: bool, cx: &mut Context<Self>) {
         if on {
             self.agent_start(cx);
@@ -1845,13 +1669,11 @@ impl Workbench {
         }
     }
 
-    /// Start a new chat with the agent picked last.
     fn agent_new_chat(&mut self, cx: &mut Context<Self>) {
         let next = Run::new(self.settings.agent_cli.clone(), None);
         self.agent_switch_to(next, true, cx);
     }
 
-    /// Reopen a saved chat.
     fn agent_open_chat(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.agent.chat_id == Some(id) {
             self.agent.show_history = false;
@@ -1881,7 +1703,6 @@ impl Workbench {
             let t: String = t.chars().take(2000).collect();
             earlier.push_str(&format!("{who}: {t}\n\n"));
         }
-        // Its own session continues when the harness can load it (the agent falls back to these messages as context when it can't).
         match chat.session.clone() {
             Some(sid) => next.resume_id = Some(sid),
             None => next.carry = Some(earlier),
@@ -1890,7 +1711,6 @@ impl Workbench {
         self.agent_switch_to(next, true, cx);
     }
 
-    /// Move a chat into the archive or back out (taken out, it stays out).
     pub(crate) fn agent_archive_chat(&mut self, id: u64, archive: bool, cx: &mut Context<Self>) {
         if let Some(chat) = self.agent.history.iter_mut().find(|c| c.id == id) {
             chat.archived = archive;
@@ -1900,7 +1720,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Pin a chat to the top of the list, or unpin it.
     pub(crate) fn agent_pin_chat(&mut self, id: u64, pin: bool, cx: &mut Context<Self>) {
         if let Some(chat) = self.agent.history.iter_mut().find(|c| c.id == id) {
             chat.pinned = pin;
@@ -1913,7 +1732,6 @@ impl Workbench {
     }
 
     fn agent_delete_chat(&mut self, id: u64, cx: &mut Context<Self>) {
-        // Its agent, if still up in the background, goes with it.
         if let Some(ix) = self.agent.runs.iter().position(|r| r.chat_id == Some(id)) {
             let run = self.agent.runs.remove(ix);
             if let Some(p) = run.proc_id {
@@ -1928,7 +1746,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Move OpenCode between the left side bar and the right dock.
     fn agent_move_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.agent_right = !self.settings.agent_right;
         self.settings.save();
@@ -1948,7 +1765,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Full screen from either side: the workspace belongs to the right dock, so the agent moves there first when it sits in the left side bar.
     fn agent_fill_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.settings.agent_right {
             self.agent_move_dock(window, cx);
@@ -1963,7 +1779,6 @@ impl Workbench {
         self.agent.input.focus_handle(cx)
     }
 
-    /// OpenCode docked on the right: its own title row above the panel.
     pub(crate) fn render_agent_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .size_full()
@@ -1991,31 +1806,25 @@ impl Workbench {
                     })),
             )
             .children(self.render_worktree_strip(cx))
-            // Filling the window, the chat keeps a readable width in the middle.
             .child(h_flex().flex_1().min_h_0().justify_center().child(div().h_full().w_full().when(self.agent_full && self.settings.agent_right, |d| d.max_w(theme::u(860.))).child(self.render_agent(window, cx))))
             .into_any_element()
     }
 
-    /// Switch the harness from the title menu.
     fn agent_use(&mut self, cli: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.agent.agent == cli {
             return;
         }
         let old = agent_name();
-        // The chat under the pointer changes: nothing in it stays selected.
         gpui_kit::base::TextSelection::clear(window, cx);
         self.agent_save();
         self.agent_stop(cx);
         self.agent.install_err = None;
-        // This chat's agent, and the one new chats start with.
         self.agent.agent = cli.into();
-        // Accounts belong to one family of agents.
         self.agent.account = None;
         self.settings.agent_cli = cli.into();
         self.settings.save();
         set_choice(cli);
         let name = agent_name();
-        // Same chat, new harness: it gets the conversation so far with its first message.
         if self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))) {
             self.agent.carry = Some(transcript(&self.agent.items));
             self.agent.items.push(Item::Branch(crate::trf!("Continued with {name}. It gets the conversation with {old} above as context."; name => name, old => old)));
@@ -2023,7 +1832,6 @@ impl Workbench {
         self.agent.resume_id = None;
         self.agent.relaunch = false;
         self.agent.config.clear();
-        // The context and limits were the old agent's.
         self.agent.usage = Default::default();
         self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
         if !self.agent.queue.is_empty() {
@@ -2040,7 +1848,6 @@ impl Workbench {
         self.agent_use("mura", w, cx);
     }
 
-    /// The panel title: the agent's icon and name, opening the agent menu (`menu.rs`): agents on this PC with whether each is on, then the ones to download.
     pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = agent_id();
         let open = self.agent.menu.open == Some(Menu::Agent);
@@ -2054,17 +1861,14 @@ impl Workbench {
         }))
     }
 
-    /// Install an agent from the ACP registry, off the UI thread, then switch to it.
     pub(crate) fn agent_install(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.agent.installing.is_some() {
             return;
         }
         if id == "mura" {
-            // Mura is built from its repository; it is not in the registry.
             cx.open_url("https://github.com/MuaraAI/Mura-Harness");
             return;
         }
-        // Installed outside FluxCode since the list was drawn (npm, an installer, WinGet): use that copy instead of downloading it again.
         crate::acp::rescan();
         if crate::acp::locate(&id).is_some() {
             self.agent_use(&id, window, cx);
@@ -2072,7 +1876,6 @@ impl Workbench {
             return;
         }
         if id == "commandcode" {
-            // Installed by the user with npm; FluxCode detects the copy on PATH.
             cx.open_url("https://commandcode.ai/docs/quickstart");
             return;
         }
@@ -2088,7 +1891,6 @@ impl Workbench {
             let entry = match find(&crate::acp::registry()) {
                 Some(e) if !crate::acp::registry_stale() => Ok(e),
                 _ => {
-                    // Fresh versions when the saved list is old; the saved one when offline.
                     let fetched = crate::acp::refresh_registry();
                     crate::acp::fetch_icons_soon();
                     match (find(&crate::acp::registry()), fetched) {
@@ -2105,7 +1907,6 @@ impl Workbench {
         cx.spawn_in(window, async move |this, cx| {
             let res = task.await;
             if res.is_ok() {
-                // Long enough for the check to draw in before the chat appears.
                 cx.background_executor().timer(std::time::Duration::from_millis(800)).await;
             }
             _ = this.update_in(cx, |this, window, cx| {
@@ -2120,14 +1921,12 @@ impl Workbench {
         .detach();
     }
 
-    /// Which agent, model, effort and mode the panel runs now (for live share's AI labels).
     pub(crate) fn agent_attribution(&self) -> crate::collab::proto::AiInfo {
         let view = self.agent_config_view();
         let pick = |cat: &str| view.iter().find(|o| o.category == cat).map(|o| o.current_name().rsplit('/').next().unwrap_or("").to_string()).unwrap_or_default();
         crate::collab::proto::AiInfo { agent: agent_name().to_string(), model: pick("model"), effort: pick("thought_level"), mode: pick("mode") }
     }
 
-    /// Ask before removing an agent: its name, typed twice.
     pub(crate) fn agent_ask_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.uninstall = Some(id.to_string());
         for i in &self.agent.uninstall_inputs {
@@ -2172,7 +1971,6 @@ impl Workbench {
                             .danger()
                             .when(!ok, |b| b.ghost())
                             .on_click(cx.listener(move |this, _, w, cx| {
-                                // Checked again at the click: the name, exactly, in both boxes.
                                 let name = crate::acp::display_name(&id2);
                                 if !this.agent.uninstall_inputs.iter().all(|i| i.read(cx).value().trim() == name) {
                                     return;
@@ -2185,12 +1983,10 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Delete an agent FluxCode installed, and fall back to another one.
     fn agent_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if agent_id() == id {
             self.agent_stop(cx);
         }
-        // Chats running it in the background stop too (its files are about to go).
         for r in self.agent.runs.iter_mut().filter(|r| r.agent == id) {
             if let Some(p) = r.proc_id.take() {
                 self.procs.kill(p);
@@ -2210,7 +2006,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The ON/OFF switch, shown right of the panel title.
     pub(crate) fn render_agent_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
         let weak = cx.entity().downgrade();
@@ -2224,7 +2019,6 @@ impl Workbench {
             })
     }
 
-    /// History and move-to-other-side, as icons in the panel title row.
     pub(crate) fn render_agent_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let right = self.settings.agent_right;
         h_flex()
@@ -2254,7 +2048,6 @@ impl Workbench {
                         cx.notify();
                     })),
             )
-            // In the left side bar the agent says where else it can go: the right side bar beside the code, or the whole window.
             .when(!right, |h| {
                 h.child(
                     Button::new("ag-move-right")
@@ -2299,7 +2092,6 @@ impl Workbench {
             list = list.child(div().px_1().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No saved chats yet. Chats are saved after each answer.")));
         }
         for (i, chat) in a.history.iter().enumerate() {
-            // The archive lives in the full-screen chat list (link below).
             if chat.archived {
                 continue;
             }
@@ -2411,22 +2203,18 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Reload open editors the agent changed on disk (render has the Window).
     pub(crate) fn apply_agent_reloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for p in std::mem::take(&mut self.agent.reloads) {
-            // Live share: this rewrite is the agent's, and is labelled so.
             self.collab_mark_ai(&p);
             if let (Some(d), Ok(f)) = (self.docs.iter_mut().find(|d| d.path == p), core::read_text(&p)) {
                 d.crlf = f.crlf;
                 d.editor.update(cx, |s, cx| s.set_value(f.text, window, cx));
                 d.dirty = false;
             }
-            // set_value fires no change event: send the agent's rewrite to the session now.
             self.collab_on_path(&p, cx);
         }
     }
 
-    /// Follow an edit tool: keep the file as it was before (from the `diff` content the agent sends, else read before the edit runs) and, once it finishes, count the lines it added and removed.
     fn agent_track_edit(&mut self, u: &Value, kind: &str, done: bool) {
         let has_diff = u.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|x| x.get("type").and_then(Value::as_str) == Some("diff")));
         if !matches!(kind, "edit" | "delete" | "move") && !has_diff {
@@ -2483,7 +2271,6 @@ impl Workbench {
                 let ch = &mut self.agent.changes[ix];
                 (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
                 ch.counted = true;
-                // Looked at but not changed: not a change.
                 if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
                     self.agent.changes.remove(ix);
                 }
@@ -2497,7 +2284,6 @@ impl Workbench {
         }
     }
 
-    /// Count every changed file's lines again from the disk (end of a turn).
     fn agent_recount(&mut self) {
         self.agent.tool_paths.clear();
         self.agent.changes.retain_mut(|ch| {
@@ -2505,16 +2291,13 @@ impl Workbench {
             (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
             ch.counted = true;
             match (&ch.before, &after) {
-                // Made and removed again (a scratch file): nothing changed.
                 (None, None) => false,
-                // Read but not changed after all.
                 (Some(_), Some(_)) => ch.added > 0 || ch.removed > 0,
                 _ => true,
             }
         });
     }
 
-    /// Open what the agent changed in a file as a unified diff, in a tab.
     fn agent_show_diff(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ch) = self.agent.changes.get(ix) else { return };
         let target = ch.path.clone();
@@ -2556,13 +2339,11 @@ impl Workbench {
     }
 
 
-    /// Re-read the input after each change: is an `@file` being typed?
     pub(crate) fn agent_update_mention(&mut self, cx: &mut Context<Self>) {
         let (text, cursor) = {
             let s = self.agent.input.read(cx);
             (s.value().to_string(), s.cursor())
         };
-        // `/` at the start: the command list (FluxCode's and the agent's).
         let head = &text[..cursor.min(text.len())];
         if head.starts_with('/') && !head.contains(char::is_whitespace) {
             let q = head[1..].to_lowercase();
@@ -2600,7 +2381,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Put the highlighted file into the message as `@relative/path `.
     pub(crate) fn agent_mention_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((at, hits, sel)) = self.agent.mention.take() else { return };
         let Some(&ix) = hits.get(sel) else {
@@ -2631,7 +2411,6 @@ impl Workbench {
             *sel = sel.saturating_sub(1);
             return cx.notify();
         }
-        // No list open: Up moves the caret between lines as usual.
         window.dispatch_action(Box::new(gpui_kit::component::input::MoveUp), cx);
     }
 
@@ -2653,7 +2432,6 @@ impl Workbench {
 
     pub(crate) fn on_agent_mention_accept(&mut self, _: &crate::workbench::AgentMentionAccept, w: &mut Window, cx: &mut Context<Self>) {
         if self.agent.slash.is_some() {
-            // Tab only completes the name; Enter also runs a command that needs nothing more.
             return self.agent_slash_fill(w, cx).map_or((), |_| ());
         }
         if self.agent.mention.is_some() {
@@ -2669,7 +2447,6 @@ impl Workbench {
         }
     }
 
-    /// Put the highlighted command into the input as `/name `; returns it.
     fn agent_slash_fill(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<SlashCmd> {
         let (list, sel) = self.agent.slash.take()?;
         let cmd = list.get(sel)?.clone();
@@ -2684,7 +2461,6 @@ impl Workbench {
         Some(cmd)
     }
 
-    /// Enter on the command list: fill it in, and run it right away when it needs no text.
     fn agent_slash_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(cmd) = self.agent_slash_fill(window, cx) {
             if !cmd.takes_input {
@@ -2693,7 +2469,6 @@ impl Workbench {
         }
     }
 
-    /// Stop the agent after `agent_idle_min` quiet minutes; the next message resumes the session.
     fn agent_schedule_idle(&mut self, cx: &mut Context<Self>) {
         let mins = self.settings.agent_idle_min;
         if mins == 0 {
@@ -2701,7 +2476,6 @@ impl Workbench {
         }
         let stamp = std::time::Instant::now();
         self.agent.last_active = Some(stamp);
-        // The timer belongs to this chat, on screen or not.
         let key = self.agent.key;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_secs(mins as u64 * 60)).await;
@@ -2739,7 +2513,6 @@ impl Workbench {
     }
 
 
-    /// What goes with the next message, exactly as the chips above the input show it: (key, label, icon, on).
     fn agent_chips(&self, cx: &App) -> Vec<(String, String, Icon, bool)> {
         let text = self.agent.input.read(cx).value().to_string();
         let off = |k: &str| self.agent.off_ctx.contains(k);
@@ -2783,7 +2556,6 @@ impl Workbench {
         chips
     }
 
-    /// Folders and open tabs for the workspace overview (the active tab first, with its line).
     fn agent_ws_parts(&self, cx: &App) -> (Vec<PathBuf>, Vec<String>) {
         let mut tabs = Vec::new();
         if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
@@ -2809,7 +2581,6 @@ impl Workbench {
         })
     }
 
-    /// The last command that failed in the terminal (or the last failed run), with its output.
     fn agent_last_failure(&self) -> Option<String> {
         for lines in [&self.term_lines, &self.out_lines] {
             let end = lines.iter().rposition(|l| l.kind == crate::term::LineKind::Status && l.err)?;
@@ -2821,7 +2592,6 @@ impl Workbench {
         None
     }
 
-    /// Context blocks for a prompt: the chips that are on, read-only mode, and a one-time note on the language to answer in.
     fn agent_context_blocks(&mut self, cx: &mut Context<Self>) -> Vec<Value> {
         let chips = self.agent_chips(cx);
         let mut blocks = Vec::new();
@@ -2937,7 +2707,6 @@ impl Workbench {
         self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
     }
 
-    /// Resume a session OpenCode or Mura Harness saved: its history replays into the panel and the next message continues it.
     fn agent_open_remote(&mut self, id: String, cx: &mut Context<Self>) {
         let mut next = Run::new(self.agent.agent.clone(), self.agent.folder.clone());
         next.account = self.agent.account.clone();
@@ -2959,7 +2728,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Read the harness's saved sessions for this folder (`<cli> session list --format json`), off the UI thread.
     fn agent_load_remote_list(&mut self, cx: &mut Context<Self>) {
         if self.agent.remote_state == 1 {
             return;
@@ -2971,7 +2739,6 @@ impl Workbench {
         let Some(mut cmd) = sessions_cmd() else {
             self.agent.remote_state = 2;
             self.agent.remote.clear();
-            // Agents other than Mura and OpenCode keep no session list FluxCode can read.
             if crate::acp::locate(&agent_id()).is_none() {
                 self.agent.remote_err = Some(format!("{} isn't installed, so its sessions can't be read.", agent_name()));
             }
@@ -2980,7 +2747,6 @@ impl Workbench {
         let harness = agent_name();
         cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
         if crate::acp::is_opencode(&agent_id()) {
-            // A private server that exits with the command, instead of starting OpenCode's background service (which would stay resident after FluxCode closes).
             cmd.arg("--standalone");
         }
         self.agent.remote_state = 1;
@@ -3077,7 +2843,6 @@ impl Workbench {
         v.into_any_element()
     }
 
-    /// "Working…" / "Starting…" for the input box's bottom row (nothing while idle).
     fn agent_status_line(&self) -> Option<(theme::Tok, String)> {
         if self.agent.permission.is_some() {
             return Some((theme::WARN, crate::i18n::tr("Waiting for you").into()));
@@ -3090,7 +2855,6 @@ impl Workbench {
         }
     }
 
-    /// Click on a chip's name: show what it stands for.
     fn agent_chip_go(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         match key {
             "file" | "sel" => {
@@ -3133,9 +2897,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// What goes with the message, one chip each.
     fn render_context_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        // The workspace overview goes with nearly every message: it is the small folder toggle in the bottom row, not a chip taking room up here.
         let chips: Vec<_> = self.agent_chips(cx).into_iter().filter(|c| c.0 != "ws").collect();
         let hidden: Vec<(String, String)> = chips.iter().filter(|c| !c.3).map(|c| (c.0.clone(), c.1.clone())).collect();
         let mut out: Vec<AnyElement> = chips
@@ -3144,7 +2906,6 @@ impl Workbench {
             .enumerate()
             .map(|(i, (key, label, icon, _))| {
                 let close_key = key.clone();
-                // A mentioned picture shows itself, small, instead of the @ mark.
                 let thumb = key
                     .strip_prefix('@')
                     .and_then(|m| self.root.as_ref().map(|r| r.join(m)))
@@ -3312,7 +3073,6 @@ impl Workbench {
         let body = self.render_agent_body(window, cx);
         let geom = self.agent.geom.clone();
         let id = cx.entity_id();
-        // The panel's top, for the room the menus get (see `geom`).
         let probe = canvas(
             move |b, _, cx| {
                 let y = f32::from(b.origin.y);
@@ -3333,7 +3093,6 @@ impl Workbench {
             .size_full()
             .child(body)
             .child(probe)
-            // The agent menu opens under the panel title, inside the panel.
             .children(self.render_agent_menu(true, window, cx).map(|m| div().absolute().top_1().left_2().right_2().child(deferred(m))))
             .children(self.render_usage_modal(cx))
             .children(self.render_saver_panel(cx).map(|p| div().absolute().right_3().bottom(theme::u(118.)).child(deferred(p))))
@@ -3351,7 +3110,6 @@ impl Workbench {
             Status::Error(_) => (theme::DANGER, "Error".into()),
         };
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
-        // The working / starting state is shown in the input box's bottom row.
         let _ = (dot, label);
         let header = div();
         if a.show_history {
@@ -3398,7 +3156,6 @@ impl Workbench {
         };
         let permission = a.permission.as_ref().map(|p| self.render_permission(p, cx));
         
-        // What the agent changed this turn, like a worktree: each file with its lines added / removed, a diff, and undo.
         let folded = a.changes_folded;
         let changes = (!a.changes.is_empty()).then(|| {
             let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
@@ -3531,10 +3288,8 @@ impl Workbench {
         v_flex()
             .id("agent-panel")
             .size_full()
-            // Files dropped anywhere on the panel are attached to the next message.
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(c(theme::BG_HOVER)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                // Attached here, not opened by the window.
                 cx.stop_propagation();
                 this.agent_attach(paths.paths().to_vec(), cx);
             }))
@@ -3559,19 +3314,16 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// An agent installing while a chat is on screen (the welcome, which shows the big animation, is gone): its name, the step and a bar, right above the message box.
     fn render_install_strip(&self, window: &mut Window) -> Option<AnyElement> {
         if self.agent.items.is_empty() {
             return None;
         }
         let (id, tracker, _) = self.agent.installing.as_ref()?;
         let snap = tracker.get();
-        // The tracker is written off the UI thread: draw again until the install ends.
         window.request_animation_frame();
         let frac = snap.fraction().filter(|_| matches!(snap.phase, crate::acp::Phase::Download | crate::acp::Phase::Unpack));
         let bar = div().relative().w_full().h(px(4.)).rounded_full().bg(c(theme::BG_HOVER)).overflow_hidden().child(match frac {
             Some(f) => div().absolute().left_0().top_0().bottom_0().rounded_full().bg(c(theme::ACCENT)).w(relative(f)).into_any_element(),
-            // Unknown amount: a short piece sliding along the track.
             None => div()
                 .absolute()
                 .top_0()
@@ -3604,7 +3356,6 @@ impl Workbench {
     }
 
 
-    /// One chat item, for the virtual list: the speaker line when an answer starts, the group line above a run of steps, then the item (or nothing, folded in a group).
     fn render_agent_item(&mut self, i: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let Some(item) = a.items.get(i) else { return div().into_any_element() };
@@ -3621,12 +3372,9 @@ impl Workbench {
         };
         let busy = a.status == Status::Busy;
         let run_of = |k: usize| self.agent_run_of(k);
-        // The group header sits above the first step of a group, so the rail joins them.
         let joined_up = |k: usize| is_step(k.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(k).is_some_and(|r| r.0 == k);
         let last_item = i + 1 == a.items.len();
-        // Rows get the list's width: relative widths inside (the user bubble) are of the panel.
         let mut col = v_flex().w_full().min_w_0().px_3().pt_2().when(last_item, |v| v.pb_3());
-        // An answer starts after the user's message (or a branch), notes aside.
         let answer = !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
         let prev = a.items[..i].iter().rev().find(|x| !matches!(x, Item::Note(..)));
         if answer && matches!(prev, None | Some(Item::User(_) | Item::Branch(_))) {
@@ -3636,7 +3384,6 @@ impl Workbench {
         if let Some((first, last)) = run_of(i) {
             let head = first.max(top);
             let open = a.open_groups.contains(&first);
-            // While the agent works on the last group, its newest step stays in view.
             let live_tail = busy && last + 1 == a.items.len();
             if i == head {
                 let members = &a.items[first..=last];
@@ -3682,7 +3429,6 @@ impl Workbench {
                             .justify_end()
                             .items_center()
                             .gap_1()
-                            // Edit sits left of the bubble, dim until pointed at.
                             .child(
                                 div()
                                     .id(("ag-edit", i))
@@ -3721,7 +3467,6 @@ impl Workbench {
                 .style(chat_text_style())
                 .code_block_actions(|block, _, _| {
                     let (copy, insert) = (block.code().to_string(), block.code().to_string());
-                    // A solid strip so the buttons never sit on top of the code.
                     h_flex()
                         .gap_px()
                         .p_px()
@@ -3823,7 +3568,6 @@ impl Workbench {
                         .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
                 }))
                 .into_any_element(),
-            // Notes: the icon sits in a box one text line tall, so it centers on the first line.
             Item::Note(t, err) => h_flex()
                 .items_start()
                 .gap_1p5()
@@ -3837,7 +3581,6 @@ impl Workbench {
     .into_any_element()
     }
 
-    /// Add files to the next message (button, drop or paste).
     pub(crate) fn agent_attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for p in paths {
             if p.exists() && !self.agent.attachments.contains(&p) {
@@ -3856,7 +3599,6 @@ impl Workbench {
         .detach();
     }
 
-    /// How attached files go to the agent (see docs.rs): images as images, text and Office documents as text, anything else as a link the agent opens itself.
     fn agent_attachment_blocks(&self, files: &[PathBuf]) -> Vec<Value> {
         use base64::Engine;
         let mut out = Vec::new();
@@ -3953,7 +3695,6 @@ impl Workbench {
         .map(|v| v.into_any_element())
     }
 
-    /// The message box: chips (what goes along), the text (grows with it), and a bottom row with attach, @, the keys hint and Send / Stop.
     fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a = &self.agent;
         let view = self.agent_config_view();
@@ -4020,7 +3761,6 @@ impl Workbench {
         let geom = self.agent.geom.clone();
         let width = self.agent.compose_w.clone();
         let eid = cx.entity_id();
-        // The box's top (the menus above it get the room up to the panel's top) and its width (a narrow box compacts its bottom row), as drawn.
         let box_probe = canvas(
             move |b, _, cx| {
                 let y = f32::from(b.origin.y);
@@ -4043,7 +3783,6 @@ impl Workbench {
         .absolute()
         .inset_0();
         let w = a.compose_w.get();
-        // Below NARROW the labels on the right turn into icons, below TIGHT the share beside the context ring goes too.
         let narrow = w > 0. && w < NARROW;
         let tight = w > 0. && w < TIGHT;
         let boxed = v_flex()
@@ -4054,7 +3793,6 @@ impl Workbench {
             .border_color(c(theme::BORDER_STRONG))
             .bg(c(theme::BG_ELEVATED))
             .cursor_text()
-            // A click anywhere in the box puts the caret in the text.
             .on_click(cx.listener(|this, _, w, cx| {
                 let h = this.agent.input.focus_handle(cx);
                 if !h.is_focused(w) {
@@ -4072,7 +3810,6 @@ impl Workbench {
                         .min_w_0()
                         .overflow_x_scroll()
                         .track_scroll(&a.chips_scroll)
-                        // A wheel turned over the row moves it left and right.
                         .on_scroll(move |ev: &ScrollEvent, _, cx| {
                             let d = ev.delta.pixel_delta(px(24.));
                             if d.x != px(0.) || d.y == px(0.) {
@@ -4091,7 +3828,6 @@ impl Workbench {
             .child(
                 div().px_1().pt_1().key_context("AgentInput").child(
                     Textarea::new(&a.input).appearance(false).on_paste(move |item, _, cx| {
-                        // Pasted screenshots and copied files become attachments.
                         let mut files: Vec<PathBuf> = Vec::new();
                         for entry in item.entries() {
                             match entry {
@@ -4152,7 +3888,6 @@ impl Workbench {
                                 this.agent_update_mention(cx);
                             })),
                     )
-                    // The workspace overview (folders and open files) goes with the message: lit while it is on, a click leaves it out.
                     .when(self.root.is_some(), |h| {
                         let ws_on = !self.agent.off_ctx.contains("ws");
                         h.child(
@@ -4171,13 +3906,11 @@ impl Workbench {
                             })),
                         )
                     })
-                    // The model and mode take what is left of the row.
                     .child(
                         h_flex()
                             .flex_1()
                             .min_w_0()
                             .gap_0p5()
-                            // The mode (ask / accept edits / bypass / plan) is in the header's "more" menu.
                             .when_some(view.iter().find(|o| o.category == "model"), |h, m| h.child(self.render_model_menu(m, narrow, cx))),
                     )
                     .when_some(self.agent_status_line(), |h, (dot, label)| {
@@ -4199,7 +3932,6 @@ impl Workbench {
                     .child(self.render_saver_button(cx))
                     .children(self.render_context_meter(tight, cx))
                     .child(if busy && !has_text {
-                        // A solid square in the accent: the one action while the agent works.
                         send_btn("ag-stop", true, tr("Stop the answer"))
                             .child(div().size(theme::u(8.)).rounded(px(1.5)).bg(c(theme::ON_ACCENT)))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -4217,7 +3949,6 @@ impl Workbench {
                             .into_any_element()
                     }),
             );
-        // The menus open right above the box, as wide as it, over the chat.
         div()
             .relative()
             .mx_3()
@@ -4226,7 +3957,6 @@ impl Workbench {
             .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(deferred(m))))
     }
 
-    /// Which browser the agents drive, and where its tools stand.
     fn render_browser_setting(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::browser::State;
         let setting = self.settings.agent_browser.clone();
@@ -4287,7 +4017,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// While an earlier message is being edited: what Enter will do, and a way out.
     fn render_edit_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.agent.editing?;
         Some(
@@ -4308,7 +4037,6 @@ impl Workbench {
         )
     }
 
-    /// The agent is waiting for a yes or no: what it wants to do, in its own words and (for a command or a file) exactly, then the choices.
     fn render_permission(&self, p: &Permission, cx: &mut Context<Self>) -> AnyElement {
         let name = agent_name();
         let lu = gpui_kit::assets::IconName::ShieldAlert;
@@ -4330,7 +4058,6 @@ impl Workbench {
         };
         let exact = p.detail.clone();
         let mut options: Vec<(usize, String, String, String)> = p.options.iter().enumerate().map(|(i, (o, n, k))| (i, o.clone(), n.clone(), k.clone())).collect();
-        // Allow once first (the default answer), then the lasting allow, then the rejects.
         options.sort_by_key(|o| match o.3.as_str() {
             "allow_once" => 0,
             "allow_always" => 1,
@@ -4434,20 +4161,16 @@ impl Workbench {
     }
 }
 
-/// A 12 px icon in a box one text line (18 px) tall, for rows whose text may wrap.
 impl Workbench {
-    /// The composer's model chip: the model's short name, then the effort when one is set.
     fn render_model_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let current = m.current_name();
         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
-        // "Free" is said by the group in the menu; here it only takes room.
         if let Some(s) = short.strip_suffix(" Free") {
             short = s.to_string();
         }
         if m.current == crate::acp::FLAG_DEFAULT && m.id.starts_with(FLAG_PREFIX) {
             short = tr("Model").to_string();
         }
-        // "Default (recommended)": the menu says why; the chip only needs the name.
         if let Some(s) = short.strip_suffix(" (recommended)") {
             short = s.to_string();
         }
@@ -4457,7 +4180,6 @@ impl Workbench {
             None => crate::trf!("Model: {m}"; m => current).into(),
         };
         chip_button("ag-model-btn", self.agent.menu.open == Some(Menu::Model), tip)
-            // The one chip that shrinks: everything else keeps its size.
             .flex_shrink(1.)
             .min_w(theme::u(48.))
             .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(short))
@@ -4469,7 +4191,6 @@ impl Workbench {
             }))
     }
 
-    /// The agent's modes (build, plan, ...): the current one, opening the mode menu.
     fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.settings.access().to_string();
         let (icon, label) = menu::ACCESS.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
@@ -4490,7 +4211,6 @@ impl Workbench {
             }))
     }
 
-    /// The chat before the first message: the agent and what to type, or, when the agent isn't on this PC, a way to get it (or any other agent).
     fn render_agent_welcome(&self, on: bool, cx: &mut Context<Self>) -> AnyElement {
         let name = agent_name();
         let id = agent_id();
@@ -4611,7 +4331,6 @@ impl Workbench {
                 .children(err_box)
                 .into_any_element();
         }
-        // Not on this PC: the chosen agent first, then the most used ones.
         let mut ids: Vec<&'static str> = Vec::new();
         if let Some(k) = crate::acp::known(&id) {
             ids.push(k.id);
@@ -4658,7 +4377,6 @@ impl Workbench {
     }
 }
 
-/// An agent's icon from the ACP registry, drawn in the theme's text color.
 pub(crate) fn agent_glyph(id: &str, size: f32) -> AnyElement {
     let s = theme::u(size);
     match crate::acp::icon_asset(id) {
@@ -4683,16 +4401,13 @@ pub(crate) fn agent_glyph(id: &str, size: f32) -> AnyElement {
     }
 }
 
-/// A title over one dim line, for menu rows and agent cards.
 fn is_step(item: Option<&Item>) -> bool {
     matches!(item, Some(Item::Thought(_) | Item::Tool { .. }))
 }
 
-/// Below this width the composer's bottom row shows icons instead of labels.
 const NARROW: f32 = 500.;
 const TIGHT: f32 = 360.;
 
-/// A chip in the composer's bottom row that opens a menu: 24 px tall like the icon buttons beside it, its text cut to fit, highlighted while its menu is open.
 fn chip_button(id: &'static str, open: bool, tip: SharedString) -> Stateful<Div> {
     h_flex()
         .id(id)
@@ -4727,7 +4442,6 @@ fn line_icon(icon: Icon) -> Div {
     div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
 }
 
-/// The composer's icon buttons: one 24 px square each, icon centered.
 fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -4744,7 +4458,6 @@ fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
         .child(icon.size(theme::u(14.)))
 }
 
-/// Send / stop: the same 24 px square, filled with the accent when it does something.
 fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -4760,12 +4473,10 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
         .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
 }
 
-/// A chip above the input: 22 px tall, the remove button first, then the name.
 fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
     h_flex()
         .id(id)
         .group("ag-chip")
-        // In one row with the others, which scrolls sideways when they don't fit.
         .flex_none()
         .max_w(theme::u(180.))
         .h(theme::u(22.))
@@ -4798,7 +4509,6 @@ fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window,
         .child(Icon::new(icon).size(theme::u(11.)))
 }
 
-/// A 22 px icon button of the Changes card.
 fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -4815,10 +4525,8 @@ fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Sta
         .child(icon.into().size(theme::u(13.)))
 }
 
-/// Smooth-scroll key of the chat log (editors use their entity id).
 pub(crate) const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
 
-/// Answers read like a chat, not a document: headings a step or two above the 14 px body (the default makes a `#` twice the body size), and paragraphs a little closer.
 fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
     gpui_kit::component::text::TextViewStyle::default().paragraph_gap(rems(0.6)).heading_font_size(|level, _| match level {
         1 => px(17.),
@@ -4829,16 +4537,13 @@ fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
 }
 
 impl Workbench {
-    /// The list follows the newest text by itself (tail mode) while the reader is at the bottom; nothing to do per update.
     fn agent_follow(&self) {}
 
-    /// Jump to the newest message and follow it again (a message was sent).
     pub(crate) fn agent_to_end(&self) {
         self.agent.list.set_follow_mode(FollowMode::Tail);
         self.agent.list.scroll_to_end();
     }
 
-    /// Tell the list what changed since the last frame.
     fn agent_sync_list(&self) {
         let a = &self.agent;
         let items = &a.items;
@@ -4849,7 +4554,6 @@ impl Workbench {
         const TAIL: usize = 16;
         let tail: Vec<u64> = items[n.saturating_sub(TAIL)..].iter().map(item_size_sig).collect();
         let replaced = n < seen.len || (ptr != seen.ptr && seen.len > 0 && n > 0 && items.first().map(item_size_sig) != Some(seen.first));
-        // The window: a chat opened (or cut short) shows its newest items.
         let mut start = a.view_start.get().min(n);
         if replaced || seen.len == 0 {
             start = n.saturating_sub(WINDOW);
@@ -4871,7 +4575,6 @@ impl Workbench {
                 from = seen.len.saturating_sub(2);
             }
             if start < seen.start && !replaced {
-                // Paged back: the item that was on top stays where the reader had it.
                 a.list.scroll_to(ListOffset { item_ix: row(seen.start), offset_in_item: px(0.) });
             } else if a.list.is_following_tail() || replaced {
                 a.list.scroll_to_end();
@@ -4880,10 +4583,8 @@ impl Workbench {
             if n > seen.len {
                 let old_rows = row(seen.len);
                 a.list.splice(old_rows..old_rows, n - seen.len);
-                // The old last item(s) lose the bottom padding or fold into a group.
                 from = seen.len.saturating_sub(2);
             }
-            // The first of the last items whose size changed.
             let base = n.saturating_sub(TAIL);
             for (k, sig) in tail.iter().enumerate() {
                 let ix = base + k;
@@ -4893,7 +4594,6 @@ impl Workbench {
                     break;
                 }
             }
-            // Working / done changes what the last group shows.
             if busy != seen.busy {
                 from = from.min(n.saturating_sub(TAIL));
             }
@@ -4909,7 +4609,6 @@ impl Workbench {
             }
         }
         a.remeasure.borrow_mut().clear();
-        // Step runs, kept up to date from the first changed item only.
         let from = from.min(seen.run_start.len()).min(n);
         seen.run_start.truncate(from);
         seen.run_end.retain(|&f, _| f < from);
@@ -4937,7 +4636,6 @@ impl Workbench {
         seen.busy = busy;
     }
 
-    /// The row above the window: how many earlier items are not shown, and a button that brings back PAGE more (the reader stays where they were).
     fn render_agent_pager(&mut self, start: usize, cx: &mut Context<Self>) -> AnyElement {
         let more = start.min(PAGE);
         h_flex()
@@ -4963,7 +4661,6 @@ impl Workbench {
                     .child(crate::trf!("Show {n} earlier"; n => more))
                     .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("· {n} hidden"; n => start)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        // Reading back: stop following the newest text until the reader returns to the bottom.
                         this.agent.list.pause_following_tail();
                         this.agent.view_start.set(this.agent.view_start.get().saturating_sub(PAGE));
                         cx.notify();
@@ -4972,7 +4669,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The run of two or more steps `i` belongs to: (first, last).
     fn agent_run_of(&self, i: usize) -> Option<(usize, usize)> {
         let seen = self.agent.list_seen.borrow();
         let f = *seen.run_start.get(i)?;
@@ -4981,38 +4677,30 @@ impl Workbench {
     }
 }
 
-/// Items in the list while the reader follows the newest text, and how many more come in before the oldest leave (and each "Show earlier" step).
 const WINDOW: usize = 40;
 const PAGE: usize = 20;
 
-/// The file as it was before an edit tool ran, from what is on disk now and the tool's diff.
 fn before_edit(disk: Option<String>, old: Option<&str>, new: &str) -> Option<String> {
     let d = disk?;
     match old {
-        // A new file this tool wrote.
         None if d == new => None,
         Some(o) if !new.is_empty() && !o.is_empty() && d.contains(new) && !d.contains(o) => Some(d.replacen(new, o, 1)),
         _ => Some(d),
     }
 }
 
-/// What the virtual list was told last frame.
 #[derive(Default)]
 pub(crate) struct ListSeen {
     len: usize,
-    /// The window's first item.
     start: usize,
     ptr: usize,
     first: u64,
     busy: bool,
-    /// Size signatures of the last items.
     tail: Vec<u64>,
-    /// For each item, the first item of its step run (usize::MAX: not a step); and each run's last item, by its first.
     run_start: Vec<usize>,
     run_end: HashMap<usize, usize>,
 }
 
-/// Changes when an item's height can: its kind and the lengths of what it shows.
 fn item_size_sig(item: &Item) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -5028,14 +4716,12 @@ fn item_size_sig(item: &Item) -> u64 {
     h.finish()
 }
 
-/// OpenCode's user config (opencode.jsonc or opencode.json), if it exists.
 fn opencode_config_file() -> Option<PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
     let dir = PathBuf::from(home).join(".config").join("opencode");
     ["opencode.jsonc", "opencode.json"].iter().map(|n| dir.join(n)).find(|p| p.is_file())
 }
 
-/// Code from an answer's Insert button, handed to `on_agent_insert_code` (the button's closure can't hold the workbench, so it goes through an action).
 static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[cfg(test)]
@@ -5045,11 +4731,8 @@ mod tests {
     #[test]
     fn before_an_edit() {
         use super::before_edit;
-        // Not written yet: the disk is the "before".
         assert_eq!(before_edit(Some("a\nold\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
-        // Already written: the snippet is undone.
         assert_eq!(before_edit(Some("a\nnew\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
-        // A new file.
         assert_eq!(before_edit(Some("x".into()), None, "x"), None);
         assert_eq!(before_edit(None, None, "x"), None);
     }

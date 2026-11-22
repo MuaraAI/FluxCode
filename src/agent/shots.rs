@@ -1,4 +1,3 @@
-//! Pictures the agent shows: screenshots its tools take (a browser or desktop screenshot, an image a tool read) and images in its answers.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -10,21 +9,16 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// A picture larger than this (decoded) is left out: no tool screenshot is near it.
 const MAX_BYTES: usize = 40 * 1024 * 1024;
-/// Cached pictures kept; the oldest go first.
 const KEEP: usize = 300;
-/// Preview height in the chat (before UI scaling).
 const THUMB_H: f32 = 132.;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shot {
     pub path: PathBuf,
-    /// Pixel size, when the header could be read.
     pub size: Option<(u32, u32)>,
 }
 
-/// The full-screen viewer: the pictures of one strip and the one shown.
 pub struct Lightbox {
     pub shots: Vec<Shot>,
     pub ix: usize,
@@ -35,7 +29,6 @@ fn cache_dir() -> PathBuf {
     crate::settings::config_dir().join("agent-images")
 }
 
-/// Every image block in `v` (any depth: tool content wraps them differently per agent), saved to the cache.
 pub fn collect(v: &Value) -> Vec<Shot> {
     let mut out = Vec::new();
     walk(v, &mut out, 0);
@@ -58,7 +51,6 @@ fn walk(v: &Value, out: &mut Vec<Shot>, depth: usize) {
                 }
                 return;
             }
-            // Anthropic-style blocks: {"type":"image","source":{"type":"base64","data":..,"media_type":..}}
             if is_image {
                 if let Some(src) = m.get("source") {
                     let data = src.get("data").and_then(Value::as_str);
@@ -84,7 +76,6 @@ fn walk(v: &Value, out: &mut Vec<Shot>, depth: usize) {
     }
 }
 
-/// Decode and write one picture to the cache; the same picture twice is one file.
 fn save(data: &str, mime: &str) -> Option<Shot> {
     use base64::Engine as _;
     if data.len() > MAX_BYTES / 3 * 4 + 8 {
@@ -110,7 +101,6 @@ fn save(data: &str, mime: &str) -> Option<Shot> {
     Some(Shot { path, size })
 }
 
-/// Keep the cache small: the newest `KEEP` pictures stay (run off the UI thread).
 pub fn prune_cache() {
     let Ok(rd) = std::fs::read_dir(cache_dir()) else { return };
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
@@ -124,7 +114,6 @@ pub fn prune_cache() {
 }
 
 impl Workbench {
-    /// Open the full-screen viewer on picture `ix` of `shots`.
     pub(crate) fn agent_open_lightbox(&mut self, shots: Vec<Shot>, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -149,7 +138,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Under a step: the pictures it produced, as previews in a row (one tall preview when it is a single picture), with a header to fold them away.
     pub(crate) fn render_shots(&self, i: usize, shots: &[Shot], hidden: bool, cx: &mut Context<Self>) -> AnyElement {
         let n = shots.len();
         let label: SharedString = if n == 1 { tr("Screenshot").into() } else { crate::trf!("{n} screenshots"; n => n).into() };
@@ -166,7 +154,6 @@ impl Workbench {
             .child(Icon::new(Ico::Image).size(theme::u(12.)))
             .child(label)
             .when(hidden, |h| {
-                // Folded: the first picture as a tiny thumbnail, so it's clear what is there.
                 h.child(img(shots[0].path.clone()).h(theme::u(16.)).max_w(theme::u(28.)).rounded(px(3.)).object_fit(ObjectFit::Cover))
             })
             .child(Icon::new(if hidden { Ico::ChevronRight } else { Ico::ChevronDown }).size(theme::u(11.)))
@@ -202,7 +189,6 @@ impl Workbench {
                         .cursor_pointer()
                         .hover(|s| s.border_color(c(theme::ACCENT)))
                         .child(img(s.path.clone()).size_full().object_fit(ObjectFit::Contain))
-                        // A full-screen mark in the corner while the pointer is on it.
                         .child(
                             div()
                                 .absolute()
@@ -228,14 +214,12 @@ impl Workbench {
         col.into_any_element()
     }
 
-    /// The full-screen viewer over the whole window: the picture fitted, a dim backdrop that fades in, arrows between pictures, and its actions on top.
     pub(crate) fn render_lightbox(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lb = self.agent.lightbox.as_ref()?;
         let shot = lb.shots.get(lb.ix)?.clone();
         let n = lb.shots.len();
         let vp = window.viewport_size();
         let (vw, vh) = (f32::from(vp.width), f32::from(vp.height));
-        // Fit inside the window with room for the bar and the arrows; never past 2x.
         let (aw, ah) = ((vw - 160.).max(120.), (vh - 150.).max(120.));
         let scale = window.scale_factor().max(0.5);
         let (pw, ph) = match shot.size {
@@ -293,7 +277,6 @@ impl Workbench {
             .rounded(px(10.))
             .overflow_hidden()
             .shadow_lg()
-            // A click on the picture itself doesn't close the viewer.
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(img(shot.path.clone()).size_full().object_fit(ObjectFit::Contain))
             .with_animation(SharedString::from(format!("ag-lb-in-{}", shot.path.display())), Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()), |d, t| d.opacity(t));
@@ -366,7 +349,6 @@ impl Workbench {
 mod tests {
     use super::collect;
 
-    // A 1x1 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
     #[test]
@@ -376,7 +358,6 @@ mod tests {
             "rawOutput": {"content": [{"type": "text", "text": "ok"}, {"type": "image", "source": {"type": "base64", "data": PNG, "media_type": "image/png"}}]}
         });
         let shots = collect(&tool);
-        // The same picture twice is one file.
         assert_eq!(shots.len(), 1);
         assert_eq!(shots[0].size, Some((1, 1)));
         assert!(shots[0].path.is_file());

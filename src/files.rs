@@ -1,32 +1,25 @@
-//! File system helpers: workspace tree, language detection, file badges.
 
 use crate::fluxicon::{self, FluxIcon};
 use gpui_kit::component::tree::TreeItem;
 use std::path::Path;
 
-/// Folders that are never worth walking for the explorer.
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv",
-    // Caches and tool state: a home folder is mostly these, and walking them spends the whole budget before the folders a reader came for.
     ".cache", ".local", ".cargo", ".rustup", ".npm", ".nvm", ".bun", ".pnpm-store", ".yarn",
     ".deno", ".volta", ".asdf", ".android", ".gradle", ".m2", ".vscode-server", ".ollama",
     ".oh-my-zsh", ".dotnet", ".nuget", ".conda", ".pyenv", ".sdkman", ".gem", ".pub-cache",
     ".stack", ".ghcup", ".cabal", ".terraform.d",
 ];
-/// Upper bound so a huge folder can't stall startup.
 pub(crate) const MAX_ENTRIES: usize = 20_000;
 
-/// Plain (Send) folder listing, built on a background thread.
 #[derive(Clone)]
 pub struct Node {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) children: Option<Vec<Node>>,
-    /// A folder whose contents have been read.
     pub(crate) loaded: bool,
 }
 
-/// Files the image tab shows (GPUI decodes these; SVG is rasterized sharp at any size).
 pub fn is_image(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
@@ -34,7 +27,6 @@ pub fn is_image(path: &Path) -> bool {
     )
 }
 
-/// Every leaf of a scan (files, and skipped folders listed without children).
 pub fn flatten(nodes: &[Node], out: &mut Vec<String>) {
     for n in nodes {
         match &n.children {
@@ -49,14 +41,12 @@ pub fn scan(root: &Path) -> Vec<Node> {
     walk(root, &mut budget)
 }
 
-/// One level of a folder: folders are listed but not read, so a home folder with a 70,000-entry cache still shows every folder it has.
 pub fn nodes_from_remote(dir: &Path, entries: Vec<(String, bool)>) -> Vec<Node> {
     let mut entries = entries;
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
     entries
         .into_iter()
         .map(|(name, is_dir)| {
-            // A UNC path on a non-Windows build joins with `/`; the tree ids must match what the rest of the workbench (Windows-style) uses.
             let id = dir.join(&name).to_string_lossy().into_owned();
             let id = if dir.as_os_str().to_string_lossy().starts_with(r"\\") { id.replace('/', r"\") } else { id };
             if is_dir {
@@ -72,7 +62,6 @@ pub fn scan_shallow(root: &Path) -> Vec<Node> {
     list(root)
 }
 
-/// Several folders, each as a top-level folder node, one level deep.
 pub fn scan_roots_shallow(roots: &[std::path::PathBuf]) -> Vec<Node> {
     roots
         .iter()
@@ -85,7 +74,6 @@ pub fn scan_roots_shallow(roots: &[std::path::PathBuf]) -> Vec<Node> {
         .collect()
 }
 
-/// The entries of one folder, folders first, each folder unread.
 pub fn scan_dir(dir: &Path) -> Vec<Node> {
     list(dir)
 }
@@ -114,7 +102,6 @@ fn list(dir: &Path) -> Vec<Node> {
         .collect()
 }
 
-/// Several folders, each as a top-level folder node (a multi-folder workspace).
 pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
     let mut budget = MAX_ENTRIES;
     roots
@@ -128,7 +115,6 @@ pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
         .collect()
 }
 
-/// Turn a scan into tree items (UI thread: `TreeItem` is not Send), and collect every folder's path: the tree only calls an item a folder when it has children, so empty and skipped folders would otherwise draw as files.
 pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
     nodes
         .into_iter()
@@ -139,7 +125,6 @@ pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, 
                 item = if n.loaded {
                     item.children(to_items(ch, dirs, expanded))
                 } else {
-                    // The tree calls a node a folder only when it has a child, so an unread folder gets a placeholder the expand replaces.
                     item.child(TreeItem::new(format!("{}\u{1}", n.id), "…"))
                 };
                 if expanded.contains(&n.id) {
@@ -162,10 +147,8 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
             (is_dir, e.file_name().to_string_lossy().into_owned(), p)
         })
         .collect();
-    // Folders first, then case-insensitive by name (like VS Code).
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
 
-    // Every entry of this folder first, then the folders' own contents.
     let mut out = Vec::with_capacity(entries.len());
     let mut dirs: Vec<(usize, String, std::path::PathBuf)> = Vec::new();
     for (is_dir, name, path) in entries {
@@ -193,7 +176,6 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
     out
 }
 
-/// Languages the editor colors: (highlighter token, status-bar name, extensions, file names).
 const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
     ("javascript", "JavaScript", &["js", "mjs", "cjs", "jsx", "es6", "htc"], &[]),
     ("typescript", "TypeScript", &["ts", "mts", "cts"], &[]),
@@ -207,7 +189,6 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
         &[".babelrc", ".eslintrc", ".prettierrc", ".swcrc", "composer.lock", "package-lock.json", ".jshintrc"],
     ),
     ("markdown", "Markdown", &["md", "markdown", "mdx", "mdown", "mkd"], &[]),
-    // Flux documents are Markdown with blocks of their own: Markdown's colors fit.
     ("markdown", "Flux", &["flux"], &[]),
     (
         "python",
@@ -231,7 +212,6 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
     ("java", "Java", &["java", "bsh"], &[]),
     ("lua", "Lua", &["lua", "luau", "rockspec"], &[]),
     ("sql", "SQL", &["sql", "ddl", "dml", "psql", "pgsql", "mysql"], &[]),
-    // The tokens below are syntect extensions.
     ("vue", "Vue", &["vue"], &[]),
     ("svelte", "Svelte", &["svelte"], &[]),
     ("erb", "Embedded template", &["ejs", "erb", "rhtml", "eex", "heex", "leex"], &[]),
@@ -285,7 +265,6 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
     ("asm", "Assembly", &["asm", "s", "nasm", "yasm", "a51", "inc"], &[]),
     ("ll", "LLVM IR", &["ll"], &[]),
     ("glsl", "GLSL", &["glsl", "vert", "frag", "geom", "tesc", "tese", "comp", "vsh", "fsh", "shader"], &[]),
-    // There is no HLSL grammar in the set; GLSL's is the closest (C-like, same types).
     ("glsl", "HLSL", &["hlsl", "fx", "fxh", "cginc", "compute", "usf", "ush"], &[]),
     ("wgsl", "WGSL", &["wgsl"], &[]),
     ("sv", "SystemVerilog", &["sv", "svh"], &[]),
@@ -351,7 +330,6 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
     ("http", "HTTP", &["http", "rest"], &[]),
     ("requirements.txt", "pip requirements", &[], &["requirements.txt", "requirements.in", "constraints.txt"]),
     ("bat", "Batch", &["bat", "cmd", "btm"], &[]),
-    // There is no PowerShell grammar in the set; the shell one colors its strings, $variables and # comments.
     ("bash", "PowerShell", &["ps1", "psm1", "psd1"], &[]),
     ("fish", "Fish", &["fish"], &[]),
     ("awk", "AWK", &["awk", "gawk", "mawk", "nawk"], &[]),
@@ -375,13 +353,11 @@ const LANGS: &[(&str, &str, &[&str], &[&str])] = &[
     ("eml", "Email", &["eml", "mbox"], &[]),
 ];
 
-/// Highlighter token and status-bar name for a file: by file name, then extension, then (for files with no known extension) the `#!` line.
 pub fn language_for(path: &Path, first_line: &str) -> (&'static str, &'static str) {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
     if let Some(l) = LANGS.iter().find(|l| l.3.contains(&name.as_str())) {
         return (l.0, l.1);
     }
-    // Endings like `.blade.php` from an installed VS Code extension are more specific than FluxCode's own `.php`.
     if let Some(l) = crate::ext::native::language(&name, true) {
         return l;
     }
@@ -400,14 +376,12 @@ pub fn language_for(path: &Path, first_line: &str) -> (&'static str, &'static st
             return (l.0, l.1);
         }
     }
-    // File types FluxCode doesn't know, added by an installed VS Code extension.
     if let Some(l) = crate::ext::native::language(&name, false) {
         return l;
     }
     shebang(first_line).unwrap_or(("text", "Plain Text"))
 }
 
-/// `#!/usr/bin/env python3` and friends.
 fn shebang(line: &str) -> Option<(&'static str, &'static str)> {
     let rest = line.strip_prefix("#!")?;
     let mut words = rest.split_whitespace();
@@ -438,7 +412,6 @@ fn shebang(line: &str) -> Option<(&'static str, &'static str)> {
 }
 
 
-/// The explorer's, tabs' and search's file icon: a FluxIcon (FluxCode's own set, see `fluxicon.rs`) and its tint.
 pub fn icon_for(name: &str) -> (FluxIcon, Option<u32>) {
     if let Some(hit) = fluxicon::for_name(name) {
         return hit;
@@ -449,7 +422,6 @@ pub fn icon_for(name: &str) -> (FluxIcon, Option<u32>) {
     }
 }
 
-/// Folder icon: open or closed.
 pub fn folder_icon(_name: &str, open: bool) -> FluxIcon {
     if open {
         fluxicon::FOLDER_OPEN
@@ -458,36 +430,22 @@ pub fn folder_icon(_name: &str, open: bool) -> FluxIcon {
     }
 }
 
-// Extra Lucide icons for the interface, embedded next to gpui-kit's default set (about 0.5 KiB of SVG each).
 gpui_kit::assets::icon_assets!(pub FileIcons, [
     File, FileCode, FileBraces, FileText, FileImage, FileLock, FileCog, FileTerminal, FileArchive,
     FileMusic, FileVideoCamera, FileType, FileSpreadsheet, FileKey, FolderGit, Clock,
-    // Source Control
     GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2,
-    // Agent panel
     TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert, PencilLine, MessageSquareCode, MessagesSquare,
-    // Agent picker: download an agent, and the spinner while it installs
     Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus,
-    // Live share: the panel, and the ways in from the internet
     Users, LogIn, House, Router, RadioTower, Link,
-    // Flux documents: tip callouts and pictures from the web
     Lightbulb, Image,
-    // Extensions: the view, their icons and their tasks
     Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
     Sparkles, FolderPlus,
-    // Agent panel: usage (and a free model's mark), the settings dialog, permission requests
     Gauge, BadgeCheck, ShieldCheck, Timer, FilePen, Wrench,
-    // Agent panel: a folded group of steps, its own worktree, more than one account
     ListCollapse, GitFork, GitMerge, UserPlus,
-    // Agent: token saver
     Leaf,
-    // Agent full screen: only the chat, and the limits card's way to the usage panel
     Focus, Maximize2,
-    // Token saver: its options; the composer's workspace toggle
     TextAlignStart, Code, Shrink, FolderCheck,
-    // Agent chats: the view menu and the archive
     ListFilter, Archive, ArchiveRestore, Pin, PinOff,
-    // Editor header: word wrap and image zoom
     TextWrap, ZoomIn, ZoomOut
 ]);
 
@@ -515,7 +473,6 @@ mod tests {
         assert_eq!(super::icon_for("query.sql").0, fluxicon::SQL);
         assert_eq!(super::icon_for("requirements-dev.txt").0, fluxicon::PYPACKAGE);
         assert_eq!(super::icon_for("icon-48.png").0, fluxicon::IMAGE);
-        // Known to the editor as a language, but not to the icon set.
         assert_eq!(super::icon_for("x.sml").0, fluxicon::CODE);
         assert_eq!(super::icon_for("NOTES").0, fluxicon::FILE);
     }
@@ -539,7 +496,6 @@ mod tests {
             std::fs::write(root.join("a-big").join(format!("f{i}.txt")), b"x").unwrap();
         }
         std::fs::write(root.join("z-code").join("main.rs"), b"x").unwrap();
-        // A budget the first folder alone would spend if it were walked first.
         let mut budget = 10;
         let nodes = walk(&root, &mut budget);
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();

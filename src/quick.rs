@@ -1,4 +1,3 @@
-//! Go to File (Ctrl+P, or a click on the search box in the title bar), like VS Code's Quick Open: type part of a name, Enter opens the file.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -13,14 +12,12 @@ use std::path::PathBuf;
 
 const MAX_HITS: usize = 60;
 
-/// Score `path` for `query` (both compared lower-case): every query character must appear in order.
 #[cfg(test)]
 pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
     let q: Vec<u8> = query.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
     fuzzy_lower(&q, path.to_lowercase().as_bytes())
 }
 
-/// `fuzzy` on an already lower-cased query and path (bytes, so a keystroke over thousands of files allocates nothing).
 pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     if q.is_empty() {
         return Some(0);
@@ -44,7 +41,6 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
         prev = Some(pos);
         at = pos + 1;
     }
-    // Typed text found whole beats letters scattered along the path: name starts with it, name contains it, path contains it.
     let name = &p[name_start..];
     let contains = |hay: &[u8]| hay.windows(q.len()).any(|w| w == q);
     if name.starts_with(q) {
@@ -57,15 +53,11 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     Some(score * 10 - p.len() as i32)
 }
 
-/// What the box is doing, from the first character typed (as in VS Code).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Files,
-    /// ">": the Command Palette.
     Commands,
-    /// ":": Go to Line.
     Line,
-    /// "wsl:": pick a WSL2 distro to open.
     Wsl,
 }
 
@@ -80,17 +72,14 @@ pub fn mode_of(q: &str) -> Mode {
     }
 }
 
-/// One row of the `wsl:` folder browser.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WslRow {
     Up,
     Open,
-    /// A path typed into the box, opened as it is.
     OpenPath(String),
     Dir(String),
 }
 
-/// The quick box's placeholder, in one place so the WSL browser can put it back.
 pub fn placeholder() -> &'static str {
     tr("Type part of a file name ( > commands, : a line, wsl: a distro )")
 }
@@ -98,21 +87,14 @@ pub fn placeholder() -> &'static str {
 pub struct QuickOpen {
     pub open: bool,
     pub input: Entity<InputState>,
-    /// Indices into `Workbench::all_files` (files) or `commands::commands()`, best first.
     pub hits: Vec<usize>,
     pub sel: usize,
     pub mode: Mode,
-    /// The distros the `wsl:` mode lists, read once.
     pub wsl: Vec<String>,
-    /// A distro list is being read off the UI thread.
     pub wsl_loading: bool,
-    /// The distro and folder the `wsl:` mode is browsing, once a distro is picked.
     pub wsl_browse: Option<(String, String)>,
-    /// The folders of the folder being browsed.
     pub wsl_dirs: Vec<String>,
-    /// The distro's home folder, so `~` can be typed.
     pub wsl_home: String,
-    /// The rows the browse mode shows: up, open this folder, then the folders.
     pub wsl_rows: Vec<WslRow>,
 }
 
@@ -140,7 +122,6 @@ impl Workbench {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, c)| {
-                        // Both the English name and the translated one match.
                         let hay = format!("{} {}", c.label, tr(c.label)).to_lowercase();
                         fuzzy_lower(&query, hay.as_bytes()).map(|s| (s, i))
                     })
@@ -162,7 +143,6 @@ impl Workbench {
             Mode::Wsl => {
                 if self.quick.wsl_browse.is_some() {
                     let typed = q.trim_start_matches("wsl:").trim();
-                    // A typed path opens as it is, without walking to it.
                     if typed.starts_with('/') || typed.starts_with('~') {
                         let path = if typed == "~" {
                             self.quick.wsl_home.clone()
@@ -193,7 +173,6 @@ impl Workbench {
                     cx.notify();
                     return;
                 }
-                // `wsl.exe -l` starts the WSL service, so ask off the UI thread.
                 if self.quick.wsl.is_empty() && !self.quick.wsl_loading {
                     self.quick.wsl_loading = true;
                     cx.spawn(async move |this, cx| {
@@ -230,7 +209,6 @@ impl Workbench {
         let qb: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
         let mut scored: Vec<(i32, usize)> = lower.iter().enumerate().filter_map(|(i, p)| fuzzy_lower(&qb, p.as_bytes()).map(|s| (s, i))).collect();
         if q.trim().is_empty() {
-            // No query: open tabs first, then the folder in its own order.
             let open: Vec<String> = self.docs.iter().map(|d| d.path.to_string_lossy().into_owned()).collect();
             scored.sort_by_key(|(_, i)| if open.contains(&files[*i]) { 0 } else { 1 });
         } else {
@@ -256,7 +234,6 @@ impl Workbench {
         self.quick_filter(cx);
     }
 
-    /// Open the box with `prefix` typed (">" commands, ":" a line), caret at the end.
     pub(crate) fn quick_open_with(&mut self, prefix: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = true;
         let p = prefix.to_string();
@@ -270,7 +247,6 @@ impl Workbench {
         self.quick_filter(cx);
     }
 
-    /// Show the folders of `path` in the `wsl:` box, so a folder can be picked.
     fn wsl_browse_to(&mut self, distro: String, path: String, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = true;
         self.quick.wsl_browse = Some((distro.clone(), path.clone()));
@@ -352,7 +328,6 @@ impl Workbench {
                     let Some(row) = self.quick.wsl_rows.get(self.quick.sel).cloned() else { return };
                     match row {
                         WslRow::Up if path == "/" => {
-                            // At the root, ".." goes back to the distro list.
                             self.quick.wsl_browse = None;
                             self.quick.wsl_dirs.clear();
                             self.quick.wsl_rows.clear();
@@ -428,7 +403,6 @@ impl Workbench {
         let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
         let path = PathBuf::from(&self.all_files[ix]);
         self.quick.open = false;
-        // Ctrl+P over the agent's full screen: show the file in the editor.
         self.agent_full = false;
         self.open_file(path, window, cx);
         cx.notify();
@@ -584,7 +558,6 @@ impl Workbench {
 
     fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {
         let q = &self.quick;
-        // The rest of the window dims so the eye goes to the box; a click there closes it.
         let fade = || Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint());
         div()
             .absolute()
@@ -623,7 +596,6 @@ impl Workbench {
     }
 }
 
-/// "Ctrl+K Ctrl+O" as key caps: one small box per key, chords spaced apart.
 pub fn keys_chips(keys: &'static str) -> Div {
     h_flex().flex_none().gap_1().children(keys.split(' ').enumerate().map(|(i, chord)| {
         h_flex().gap(px(2.)).when(i > 0, |h| h.ml_1()).children(chord.split('+').map(|k| {
@@ -642,7 +614,6 @@ pub fn keys_chips(keys: &'static str) -> Div {
     }))
 }
 
-/// The folder above `path` inside the distro.
 fn parent_of(path: &str) -> String {
     let p = path.trim_end_matches('/');
     match p.rfind('/') {
@@ -682,7 +653,6 @@ mod tests {
         assert!(fuzzy("apy", "app.py").is_some());
         assert!(fuzzy("zz", "app.py").is_none());
         assert!(fuzzy("req", "requirements.txt").unwrap() > fuzzy("req", "src\\query\\r.txt").unwrap_or(i32::MIN));
-        // whole word in the name beats letters spread over a long path
         assert!(fuzzy("rea", "readme.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
         assert!(fuzzy("rea", "docs\\area.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
     }

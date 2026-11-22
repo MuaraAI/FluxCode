@@ -1,4 +1,3 @@
-//! A workspace that lives inside a WSL2 distro.
 
 mod client;
 #[cfg(test)]

@@ -1,4 +1,3 @@
-//! Files opened from Explorer go to the FluxCode window that is already open.
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
@@ -8,7 +7,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const FILE: &str = "instance.json";
-/// Plenty for a few hundred paths; a client that sends more is not FluxCode.
 const MAX_MESSAGE: u64 = 256 * 1024;
 
 #[derive(Serialize, Deserialize, Default)]
@@ -19,7 +17,6 @@ struct Info {
     pid: u32,
 }
 
-/// Hand `files` to the open FluxCode window.
 pub(crate) fn forward(files: &[PathBuf]) -> bool {
     let info: Info = crate::settings::load_json(FILE);
     if info.port == 0 || info.token.is_empty() || info.pid == std::process::id() || !alive(info.pid) {
@@ -31,7 +28,6 @@ pub(crate) fn forward(files: &[PathBuf]) -> bool {
     };
     let _ = conn.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = conn.set_write_timeout(Some(Duration::from_secs(3)));
-    // Explorer gave this process the right to take the foreground.
     allow_foreground(info.pid);
     if conn.write_all(message(&info.token, files).as_bytes()).is_err() {
         return false;
@@ -40,7 +36,6 @@ pub(crate) fn forward(files: &[PathBuf]) -> bool {
     BufReader::new(conn).read_line(&mut reply).is_ok() && reply.trim_end() == "ok"
 }
 
-/// The token, one path per line, and an empty line.
 fn message(token: &str, files: &[PathBuf]) -> String {
     let mut msg = format!("{token}\n");
     for f in files {
@@ -51,7 +46,6 @@ fn message(token: &str, files: &[PathBuf]) -> String {
     msg
 }
 
-/// Read one message; the paths when its token matches.
 fn parse(input: impl Read, token: &str) -> Option<Vec<PathBuf>> {
     let mut lines = BufReader::new(input.take(MAX_MESSAGE)).lines();
     if lines.next()?.ok()? != token {
@@ -68,7 +62,6 @@ fn parse(input: impl Read, token: &str) -> Option<Vec<PathBuf>> {
     None
 }
 
-/// Start taking files from other `fluxcode` launches.
 pub(crate) fn listen() -> Option<UnboundedReceiver<Vec<PathBuf>>> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
     let port = listener.local_addr().ok()?.port();
@@ -114,7 +107,6 @@ fn allow_foreground(pid: u32) {
 #[cfg(not(windows))]
 fn allow_foreground(_pid: u32) {}
 
-/// Whether the process that wrote `instance.json` still runs.
 #[cfg(windows)]
 fn alive(pid: u32) -> bool {
     #[link(name = "kernel32")]
@@ -162,7 +154,6 @@ mod tests {
 
     #[test]
     fn forwards_to_a_listener() {
-        // serve() only, so the test never touches the user's instance.json.
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, mut rx) = unbounded();

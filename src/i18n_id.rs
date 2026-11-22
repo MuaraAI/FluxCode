@@ -1,4 +1,3 @@
-//! Indonesian interface text, keyed by the English source text.
 
 pub const ID: &[(&str, &str)] = &[
     ("File", "File"),
@@ -555,7 +554,6 @@ pub const ID: &[(&str, &str)] = &[
     ("View: Show Extensions", "Tampilan: Ekstensi"),
     ("built in", "bawaan"),
     ("{ext}: {task}", "{ext}: {task}"),
-    // VS Code Marketplace
     ("Marketplace", "Marketplace"),
     ("Couldn't reach the Marketplace: {e}", "Tidak bisa menghubungi Marketplace: {e}"),
     ("No Marketplace extension matches.", "Tidak ada ekstensi Marketplace yang cocok."),
@@ -1472,7 +1470,6 @@ pub const ID: &[(&str, &str)] = &[
 mod tests {
     use super::ID;
 
-    /// Every `{slot}` of the English text appears in the Indonesian one too.
     #[test]
     fn slots_match() {
         let slots = |s: &str| {

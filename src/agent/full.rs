@@ -1,4 +1,3 @@
-//! The agent's full-screen workspace: chats on the left, the conversation in the middle, the files it changed on the right, each a floating glass column.
 
 use super::{ago, when_label, Item, HISTORY_FILE};
 use crate::i18n::tr;
@@ -14,21 +13,16 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
-/// Below these window widths the changes column, then the chats column, step aside.
 const WIDE: f32 = 1180.;
 const MEDIUM: f32 = 860.;
 
 pub struct FullState {
-    /// The user hid (false) or showed the side columns from the top bar.
     pub left: bool,
     pub right: bool,
-    /// A chat's title being edited in the left column.
     pub rename: Option<Rename>,
-    /// A column edge being dragged: (mouse x, the column's width) when it started.
     pub drag: Option<(f32, f32)>,
 }
 
-/// The chats and changes columns: their default widths and what a drag may make of them.
 pub const LEFT_W: f32 = 260.;
 pub const RIGHT_W: f32 = 300.;
 pub const MIN_W: f32 = 200.;
@@ -47,13 +41,11 @@ impl Default for FullState {
 }
 
 impl Workbench {
-    /// The chats column's width (dragged, else the default).
     pub(crate) fn full_left_w(&self) -> f32 {
         let w = self.settings.full_left_w;
         if w > 0. { w.clamp(MIN_W, MAX_W) } else { f32::from(theme::u(LEFT_W)) }
     }
 
-    /// The changes column's width (dragged, else the default).
     pub(crate) fn full_right_w(&self) -> f32 {
         let w = self.settings.full_right_w;
         if w > 0. { w.clamp(MIN_W, MAX_W) } else { f32::from(theme::u(RIGHT_W)) }
@@ -64,7 +56,6 @@ impl Workbench {
         let left = self.agent.full.left && w >= MEDIUM;
         let right = self.agent.full.right && w >= WIDE;
         let gap = theme::u(10.);
-        // The gap beside a side column is its edge: drag it to make the column wider or narrower (the width is kept in Settings).
         let edge = |id: &'static str, which: u8, this: &Self, cx: &mut Context<Self>| {
             let on = this.resizing == which;
             div()
@@ -116,7 +107,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The bar over the conversation: agent, its switch, side column toggles, tools.
     fn render_full_top(&self, w: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let toggle = |id: &'static str, icon: IconName, on: bool, can: bool, tip: &'static str| {
             Button::new(id).icon(Icon::new(icon)).xsmall().ghost().selected(on && can).tooltip(tip)
@@ -138,7 +128,6 @@ impl Workbench {
             .child(self.render_agent_tools(cx))
             .child(self.render_agent_more(cx))
             .child({
-                // Only the conversation: both side columns step aside (and come back).
                 let focused = !self.agent.full.left && !self.agent.full.right;
                 Button::new("agf-focus")
                     .icon(Icon::new(Ico::Focus))
@@ -158,7 +147,6 @@ impl Workbench {
             })))
     }
 
-    /// Edit a saved chat's title in place (Enter or clicking away keeps it, Esc doesn't).
     fn agent_rename_start(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(title) = self.agent.history.iter().find(|c| c.id == id).map(|c| c.title.clone()) else { return };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Chat name")));
@@ -182,7 +170,6 @@ impl Workbench {
         if keep {
             if let Some(chat) = self.agent.history.iter_mut().find(|c| c.id == r.id) {
                 if text.is_empty() {
-                    // Cleared: back to the first message's line.
                     chat.renamed = false;
                     chat.title = chat.messages.iter().find(|m| m.0 == "user").map(|m| m.1.lines().next().unwrap_or("").chars().take(70).collect()).unwrap_or_default();
                 } else {
@@ -195,7 +182,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Left column: new chat, the view menu (date, recent, folder, agent, working, archive), then the chats in their groups.
     fn render_full_chats(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use super::chats::{self, ChatView};
         let a = &self.agent;
@@ -207,7 +193,6 @@ impl Workbench {
             let title = a.items.iter().find_map(|i| if let Item::User(t) = i { Some(t.lines().next().unwrap_or("").to_string()) } else { None }).unwrap_or_default();
             list = list.child(chat_row("agf-now", title, tr("Now").into(), Flags { current: true, working: busy, archived: false, pinned: false, mark: Some(c(theme::GREEN)) }));
         }
-        // Every chat answering now, the ones in the background too.
         let busy_ids = a.working_ids();
         let now = super::now_ms();
         let today_start = {
@@ -216,7 +201,6 @@ impl Workbench {
             Local.from_local_datetime(&midnight).single().map(|t| t.timestamp_millis() as u64).unwrap_or(now)
         };
         let all = chats::groups(&a.history, view, &busy_ids, now, today_start);
-        // Compact (the default): only what is working, open or pinned; the rest one click away.
         let foldable = !matches!(view, ChatView::Archived | ChatView::Working);
         let show_all = self.settings.chat_show_all || !foldable;
         let (groups, hidden) = if show_all { (all, 0) } else { chats::compact(all, &a.history, &busy_ids, a.chat_id) };
@@ -247,7 +231,6 @@ impl Workbench {
                         .text_color(c(theme::FG_DIM))
                         .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_MUTED)))
                         .child(Icon::new(if folded { Ico::ChevronRight } else { Ico::ChevronDown }).size(theme::u(11.)))
-                        // A small dot in the group's color beside a calm label: told apart at a glance without a loud pill.
                         .children(pill.map(|col| div().flex_none().size(px(6.)).rounded_full().bg(col.opacity(0.85))))
                         .child(div().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
                         .child(div().text_color(c(theme::FG_DIM)).font_weight(FontWeight::NORMAL).child(idx.len().to_string()))
@@ -287,7 +270,6 @@ impl Workbench {
                     );
                     continue;
                 }
-                // A clock time and how long ago, then the agent when the view isn't by agent.
                 let clock = when_label(chat.updated);
                 let mut when = if clock.contains(' ') { clock } else { format!("{clock} · {}", ago(chat.updated)) };
                 if view != ChatView::Agent {
@@ -327,7 +309,6 @@ impl Workbench {
                 );
             }
         }
-        // Folded away in the compact list: one row brings them back (and one folds them).
         if foldable && (hidden > 0 || self.settings.chat_show_all) {
             let more = hidden > 0;
             let label: SharedString = if more { crate::trf!("Show {n} more chats"; n => hidden).into() } else { tr("Show only active and pinned").into() };
@@ -392,7 +373,6 @@ impl Workbench {
             .h_full()
             .glass()
             .overflow_hidden()
-            // One row on top: New chat, then the view menu and the hide button beside it.
             .child(
                 h_flex()
                     .p_2()
@@ -423,7 +403,6 @@ impl Workbench {
             .child(list)
     }
 
-    /// Right column: every file the agent changed, with its counts, a diff on click.
     fn render_full_changes(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let a = &self.agent;
         let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
@@ -515,23 +494,19 @@ impl Workbench {
                         cx.notify();
                     })),
             )
-            // The list scrolls; the limits stay at the foot however many files changed.
             .child(list.pt_1())
             .child(self.render_limits_card(cx))
     }
 }
 
-/// How a chat row is drawn.
 struct Flags {
     current: bool,
     working: bool,
     archived: bool,
     pinned: bool,
-    /// The colour of its recency mark (Today, Yesterday, This week); None for older.
     mark: Option<Hsla>,
 }
 
-/// Today green, yesterday blue, this week amber; older chats get no mark.
 fn recency_color(r: super::chats::Recency) -> Option<Hsla> {
     use super::chats::Recency;
     match r {
@@ -542,7 +517,6 @@ fn recency_color(r: super::chats::Recency) -> Option<Hsla> {
     }
 }
 
-/// One chat in the left column: title (a pin when pinned), when it last changed with a coloured recency mark, and which agent.
 fn chat_row(id: impl Into<ElementId>, title: String, when: SharedString, f: Flags) -> Stateful<Div> {
     let Flags { current, working, archived, pinned, mark } = f;
     h_flex()
@@ -598,7 +572,6 @@ fn chat_row(id: impl Into<ElementId>, title: String, when: SharedString, f: Flag
         )
 }
 
-/// A small action on a chat row, shown while the pointer is on the row.
 fn row_action(id: impl Into<ElementId>, icon: Ico, tip: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -613,7 +586,6 @@ fn row_action(id: impl Into<ElementId>, icon: Ico, tip: &'static str) -> Statefu
         .child(Icon::new(icon).size(theme::u(13.)))
 }
 
-/// A group heading's text, translated when it is one of the fixed ones (a folder or agent name is shown as it is).
 fn tr_dyn(s: &str) -> String {
     match s {
         "Working now" => tr("Working now").into(),

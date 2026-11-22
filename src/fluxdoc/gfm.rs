@@ -1,10 +1,8 @@
-//! GitHub-flavored Markdown, bent into Flux so one renderer can draw it.
 
 pub fn to_flux(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut lines = src.lines().peekable();
 
-    // A leading YAML front-matter block (--- ... ---) is metadata, not content.
     if lines.peek().is_some_and(|l| l.trim_end() == "---") {
         lines.next();
         for l in lines.by_ref() {
@@ -33,7 +31,6 @@ pub fn to_flux(src: &str) -> String {
             out.push('\n');
             continue;
         }
-        // GitHub alert: a quote whose first line names a callout kind.
         if let Some(kind) = alert_kind(t) {
             out.push_str(kind);
             out.push('\n');
@@ -49,7 +46,6 @@ pub fn to_flux(src: &str) -> String {
             out.push('\n');
             continue;
         }
-        // A line that is nothing but HTML tags carries no text: drop it.
         let stripped = strip_html(line, &mut in_comment);
         if stripped.is_empty() {
             continue;
@@ -60,7 +56,6 @@ pub fn to_flux(src: &str) -> String {
     out
 }
 
-/// `> [!NOTE]` and friends, as the Flux directive that draws the same callout.
 fn alert_kind(line: &str) -> Option<&'static str> {
     let t = line.trim().trim_start_matches('>').trim_start();
     for (marker, directive) in [
@@ -76,7 +71,6 @@ fn alert_kind(line: &str) -> Option<&'static str> {
     None
 }
 
-/// The quoted lines after an alert header, with their `>` markers taken off.
 fn alert_body<'a, I: Iterator<Item = &'a str>>(header: &str, lines: &mut std::iter::Peekable<I>) -> Vec<String> {
     let mut body = Vec::new();
     let mut rest = header.trim().trim_start_matches('>').trim_start();
@@ -100,16 +94,13 @@ fn alert_body<'a, I: Iterator<Item = &'a str>>(header: &str, lines: &mut std::it
     body
 }
 
-/// `![alt](path)` and `[![alt](path)](link)` lines become `@image` directives.
 fn image_directive(line: &str) -> Option<String> {
     let t = line.trim();
-    // Only image lines get here, so the markup bytes exist: past `![` for a plain image, past `[![` for a link around one.
     let nested = t.starts_with("[![");
     if !nested && !t.starts_with("![") {
         return None;
     }
     let (alt, path, rest) = bracket_target(t, if nested { 3 } else { 2 })?;
-    // The nested form wraps the picture in a link: `](link)` must follow it.
     let link = if nested {
         let (l, leftover) = parens(rest.strip_prefix(']')?)?;
         if !leftover.is_empty() {
@@ -124,7 +115,6 @@ fn image_directive(line: &str) -> Option<String> {
     Some(directive(&alt, path, link))
 }
 
-/// `alt` up to the next `]`, then `(target)`, in `t` after `skip` bytes.
 fn bracket_target(t: &str, skip: usize) -> Option<(String, &str, &str)> {
     let t = &t[skip..];
     let alt_close = t.find(']')?;
@@ -133,7 +123,6 @@ fn bracket_target(t: &str, skip: usize) -> Option<(String, &str, &str)> {
     Some((alt.to_string(), target, rest))
 }
 
-/// `(target)` at the start of `s`: the target and what follows.
 fn parens(s: &str) -> Option<(&str, &str)> {
     let inner = s.strip_prefix('(')?;
     let close = inner.find(')')?;
@@ -161,7 +150,6 @@ fn directive(alt: &str, path: &str, link: Option<&str>) -> String {
     out
 }
 
-/// HTML tags come off the text, their content stays.
 fn strip_html(line: &str, in_comment: &mut bool) -> String {
     let mut out = String::with_capacity(line.len());
     let mut in_code = false;
@@ -181,7 +169,6 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
         }
         if *in_comment {
             match line[i..].find("-->") {
-                // The comment ends mid-line; the text after it stays.
                 Some(rel) => {
                     for _ in 0..rel + 2 {
                         chars.next();
@@ -194,14 +181,12 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
         }
         if ch == '<' && line[i..].starts_with("<!--") {
             match line[i..].find("-->") {
-                // Same arithmetic as above: the `<` is consumed, so rel + 2 more.
                 Some(rel) => {
                     for _ in 0..rel + 2 {
                         chars.next();
                     }
                     continue;
                 }
-                // It stays open past this line: the rest of the line is comment, the text before it still counts.
                 None => {
                     *in_comment = true;
                     break;
@@ -209,7 +194,6 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
             }
         }
         if ch == '<' {
-            // A tag opens with a letter or `/` right after `<`; anything else is text (like `a < b` or `<3`).
             let opens_tag = chars.peek().is_some_and(|(_, n)| n.is_ascii_alphabetic() || *n == '/');
             if opens_tag {
                 if let Some(end) = line[i..].find('>') {
@@ -280,7 +264,6 @@ mod tests {
         assert_eq!(to_flux("use `<div>` here\n"), "use `<div>` here\n");
     }
 
-    /// The generated files carry an HTML-comment banner; a preview must not show it.
     #[test]
     fn html_comments_vanish() {
         let banner = "<!-- Made from README.flux by FluxCode. Edit README.flux, not this file. -->\n# Title\n";
@@ -293,7 +276,6 @@ mod tests {
         assert_eq!(to_flux("use `<!--` marker\n"), "use `<!--` marker\n");
     }
 
-    /// The shipped generated files must draw without a single HTML comment or details block left over (the report that started this: `</details>` on screen).
     #[test]
     fn generated_files_draw_without_html() {
         for f in ["README.md", "README.id.md", "docs/flux.md"] {
@@ -303,7 +285,6 @@ mod tests {
                 assert!(!l.contains("<!--"), "{f}: {l}");
             }
             if f != "docs/flux.md" {
-                // The Flux guide quotes `<details><summary>` inside code spans on purpose; the README pair has no reason to carry one.
                 for l in out.lines() {
                     assert!(!l.contains("</details>") && !l.contains("<details>"), "{f}: {l}");
                 }
@@ -327,7 +308,6 @@ mod tests {
         assert_eq!(to_flux(src), src);
     }
 
-    /// A line whose first characters are multibyte (an arrow, "Über…") once panicked the byte slice in the image scanner; it must pass through.
     #[test]
     fn lines_starting_with_multibyte_characters_pass_through() {
         let src = "→ forward\nÜber all of it\n![Übersicht](plan.png)\n";

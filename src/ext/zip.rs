@@ -1,4 +1,3 @@
-//! A small ZIP writer for `.mcpack` and `.mcaddon` files: deflate from miniz_oxide (already compiled for the editor), stored when that isn't smaller, UTF-8 names.
 
 const TABLE: [u32; 256] = {
     let mut t = [0u32; 256];
@@ -46,11 +45,9 @@ fn u32le(v: &mut Vec<u8>, n: u32) {
     v.extend_from_slice(&n.to_le_bytes());
 }
 
-/// 1980-01-01 00:00, the earliest DOS date: the same bytes for the same files.
 const DOS_DATE: u16 = (1 << 5) | 1;
 
 impl Zip {
-    /// Add a file.
     pub fn add(&mut self, name: &str, data: &[u8]) {
         let crc = crc32(data);
         let deflated = miniz_oxide::deflate::compress_to_vec(data, 6);
@@ -115,7 +112,6 @@ impl Zip {
     }
 }
 
-/// A file the central directory of a ZIP lists.
 pub struct Listed {
     pub name: String,
     pub size: usize,
@@ -132,9 +128,7 @@ fn u32at(zip: &[u8], i: usize) -> Option<u32> {
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// Every entry of a ZIP (a jar, a VSIX), in the central directory's order.
 pub fn list(zip: &[u8]) -> Option<Vec<Listed>> {
-    // The end record is in the last 64 KB (after an optional comment).
     let from = zip.len().saturating_sub(22 + 65_535);
     let end = (from..zip.len().saturating_sub(21))
         .rev()
@@ -168,7 +162,6 @@ pub fn list(zip: &[u8]) -> Option<Vec<Listed>> {
     Some(out)
 }
 
-/// A listed entry's bytes, stored or deflated.
 pub fn read(zip: &[u8], e: &Listed, max: usize) -> Option<Vec<u8>> {
     if e.size > max {
         return None;
@@ -190,7 +183,6 @@ pub fn read(zip: &[u8], e: &Listed, max: usize) -> Option<Vec<u8>> {
     }
 }
 
-/// One file out of a ZIP (a jar): found in the central directory, stored or deflated.
 pub fn read_entry(zip: &[u8], name: &str) -> Option<Vec<u8>> {
     let e = list(zip)?.into_iter().find(|e| e.name == name)?;
     read(zip, &e, usize::MAX)
@@ -223,11 +215,9 @@ mod tests {
         z.add("BP/manifest.json", text.as_bytes());
         z.add("BP/pack_icon.png", &[1, 2, 3]);
         let bytes = z.finish();
-        // End record: two entries.
         let end = bytes.len() - 22;
         assert_eq!(&bytes[end..end + 4], &[0x50, 0x4b, 0x05, 0x06]);
         assert_eq!(u16::from_le_bytes([bytes[end + 10], bytes[end + 11]]), 2);
-        // First entry: deflated, and it inflates back to the text.
         assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 8);
         let packed = u32::from_le_bytes(bytes[18..22].try_into().unwrap()) as usize;
         let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;

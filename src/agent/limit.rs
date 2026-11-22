@@ -1,4 +1,3 @@
-//! Usage limit reached: a banner above the message box instead of a line lost in the chat, with when the limit resets, "Continue now" (send again) and "Resume at reset" (FluxCode sends again by itself once the window has reset).
 
 use super::{Item, Status};
 use crate::i18n::tr;
@@ -14,15 +13,11 @@ use std::path::PathBuf;
 
 #[derive(Default)]
 pub struct LimitState {
-    /// The limit notice on screen: its text and the reset time (Unix seconds) if known.
     pub hit: Option<(String, Option<i64>)>,
-    /// What the last prompt said, to send again.
     pub last: Option<(String, Vec<PathBuf>)>,
-    /// Bumped whenever the banner changes, so a resume timer from an older one does nothing.
     pub gen: u64,
 }
 
-/// The text names a usage or rate limit (not, say, "limit" in a code answer).
 pub fn is_limit_text(text: &str) -> bool {
     let low = text.to_lowercase();
     let short = low.len() < 600;
@@ -35,7 +30,6 @@ pub fn is_limit_text(text: &str) -> bool {
             || low.contains("429"))
 }
 
-/// "resets 12pm (Asia/Jakarta)", "Resets 10:40 PM", "resets at 3am" → (hour, minute), 24 h.
 pub fn reset_clock(text: &str) -> Option<(u32, u32)> {
     let low = text.to_lowercase();
     let rest = &low[low.find("reset")?..];
@@ -56,7 +50,6 @@ pub fn reset_clock(text: &str) -> Option<(u32, u32)> {
     (h < 24 && m < 60).then_some((h, m))
 }
 
-/// The next time the local clock shows `h:m`, as Unix seconds.
 fn next_local(h: u32, m: u32) -> Option<i64> {
     use chrono::{Local, TimeZone};
     let now = Local::now();
@@ -67,7 +60,6 @@ fn next_local(h: u32, m: u32) -> Option<i64> {
 }
 
 impl Workbench {
-    /// Look at what just came back: a limit notice raises the banner.
     pub(crate) fn agent_check_limit(&mut self, text: &str, cx: &mut Context<Self>) {
         if !is_limit_text(text) {
             return;
@@ -82,7 +74,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// With "Resume at reset" on, wait for the reset (plus a little slack) and continue.
     fn agent_schedule_resume(&mut self, cx: &mut Context<Self>) {
         let Some((_, Some(resets))) = self.agent.limit.hit else { return };
         if !self.settings.resume_at_reset {
@@ -104,7 +95,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Send the cut-off message again, saying why, in the same session.
     pub(crate) fn agent_continue_after_limit(&mut self, cx: &mut Context<Self>) {
         self.agent.limit.hit = None;
         self.agent.limit.gen += 1;
@@ -128,7 +118,6 @@ impl Workbench {
             }
         });
         let resume = self.settings.resume_at_reset;
-        // Two groups that wrap: the notice (its text wraps too, never cut) and the controls, which drop to a line of their own when the column is narrow.
         let notice = h_flex()
             .flex_1()
             .min_w(theme::u(180.))

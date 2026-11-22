@@ -1,4 +1,3 @@
-//! Start-up timing and memory.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -8,13 +7,11 @@ static START: OnceLock<Instant> = OnceLock::new();
 static ON: AtomicBool = AtomicBool::new(false);
 static MARKS: Mutex<Vec<(&'static str, f64, (f64, f64))>> = Mutex::new(Vec::new());
 
-/// Call first thing in `main`.
 pub fn start() {
     START.get_or_init(Instant::now);
     ON.store(std::env::var_os("FLUXCODE_STARTUP_LOG").is_some(), Ordering::Relaxed);
 }
 
-/// (working set, private bytes) of this process, in MB.
 #[cfg(windows)]
 pub fn memory_mb() -> (f64, f64) {
     #[repr(C)]
@@ -38,7 +35,6 @@ pub fn memory_mb() -> (f64, f64) {
         fn K32GetProcessMemoryInfo(process: isize, counters: *mut Counters, cb: u32) -> i32;
     }
     let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, ..Default::default() };
-    // SAFETY: a plain out-struct of the documented PROCESS_MEMORY_COUNTERS_EX layout.
     let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0;
     if !ok {
         return (0., 0.);
@@ -48,7 +44,6 @@ pub fn memory_mb() -> (f64, f64) {
 
 #[cfg(not(windows))]
 pub fn memory_mb() -> (f64, f64) {
-    // VmRSS and RssAnon from /proc (Linux).
     let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     let kb = |key: &str| s.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_whitespace().nth(1)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.) / 1024.;
     (kb("VmRSS:"), kb("RssAnon:"))
@@ -64,7 +59,6 @@ pub fn mark(label: &'static str) {
     }
 }
 
-/// Logging is on and the first frame has not been written yet.
 pub fn pending() -> bool {
     ON.load(Ordering::Relaxed)
 }
@@ -78,7 +72,6 @@ fn write() {
     let _ = std::fs::write(path, text);
 }
 
-/// Write the marks after the first frame, then once more 5 s later (idle memory).
 pub fn flush() {
     if !ON.swap(false, Ordering::Relaxed) {
         return;

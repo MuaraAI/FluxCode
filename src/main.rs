@@ -1,4 +1,3 @@
-//! FluxCode: a native code editor on GPUI.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -62,7 +61,6 @@ use gpui_kit::*;
 use std::path::PathBuf;
 
 fn main() {
-    // `fluxcode --remote-server`: the helper the editor runs inside a distro.
     if std::env::args().any(|a| a == "--remote-server") {
         match remote::serve() {
             Ok(()) => std::process::exit(0),
@@ -72,24 +70,20 @@ fn main() {
             }
         }
     }
-    // `fluxcode --flux-to-md README.flux README.md [--check]`: no window.
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("--flux-to-md") {
         std::process::exit(fluxdoc::md::cli(&argv[2..]));
     }
-    // `fluxcode --register-shell` / `--unregister-shell`: "Open with FluxCode" in Explorer, run by the installer and the uninstaller.
     match argv.get(1).map(String::as_str) {
         Some("--register-shell") => std::process::exit(shell::cli(true)),
         Some("--unregister-shell") => std::process::exit(shell::cli(false)),
         _ => {}
     }
     boot::start();
-    // `fluxcode [folder] [files...]`.
     let paths: Vec<PathBuf> = std::env::args_os()
         .skip(1)
         .filter(|a| !a.to_string_lossy().starts_with('-'))
         .filter_map(|a| PathBuf::from(a).canonicalize().ok())
-        // canonicalize() gives `\\?\C:\...` and `\\?\UNC\server\share\...`; keep the plain form, and keep a WSL root whole.
         .map(|p| {
             let s = p.to_string_lossy();
             let plain = match s.strip_prefix(r"\\?\UNC\") {
@@ -101,12 +95,10 @@ fn main() {
         .collect();
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();
-    // Files alone (a double-click in Explorer, "Open with FluxCode") open in the FluxCode window that is already open.
     if root.is_none() && !files.is_empty() && !argv.iter().any(|a| a == "--new-window") && instance::forward(&files) {
         return;
     }
 
-    // Which agents are installed (PATH and ~/.fluxcode/agents), worked out while GPUI sets up the window system, so the agent panel never waits for it.
     std::thread::spawn(|| {
         let _ = acp::installed();
     });
@@ -116,12 +108,9 @@ fn main() {
     app.with_assets(AppAssets).run(move |cx| {
         boot::mark("app running");
         gpui_kit::init(cx);
-        // The pointer stays visible while typing: hiding it on every key (Tab, shortcuts) made it blink away and back in the editor.
         cx.set_cursor_hide_mode(CursorHideMode::Never);
         boot::mark("gpui-kit init");
-        // The saved theme is active before the first frame, so the window never flashes another one.
         let saved = settings::Settings::load();
-        // Installed VS Code themes and languages, so a saved extension theme is there for the first frame too (a few small files when any are installed).
         ext::native::load();
         boot::mark("vscode extensions");
         theme::set_ui_size(saved.ui_size);
@@ -135,11 +124,9 @@ fn main() {
         let mut options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(600.), px(400.))),
-            // Linux: matches fluxcode.desktop, so the dock groups the window under its icon.
             app_id: Some("fluxcode".into()),
             ..TitleBar::window_options()
         };
-        // The name the taskbar preview, Alt+Tab and the window list show.
         if let Some(t) = options.titlebar.as_mut() {
             t.title = Some(format!("FluxCode Development ({})", update::BUILD).into());
         }
@@ -153,7 +140,6 @@ fn main() {
     });
 }
 
-/// gpui-kit's default icons, the file-type icons the explorer uses, and the agent icons.
 struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -164,7 +150,6 @@ impl AssetSource for AppAssets {
         if let Some(bytes) = files::FileIcons.load(path)? {
             return Ok(Some(bytes));
         }
-        // Agent icons from the ACP registry, kept on disk (see acp::fetch_icons).
         if path.starts_with(acp::ICON_ASSETS) {
             return Ok(acp::load_icon(path).map(std::borrow::Cow::Owned));
         }

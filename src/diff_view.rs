@@ -1,4 +1,3 @@
-//! A `.diff` / `.patch` tab drawn like a code review, compact enough for a narrow panel: added lines on green with `+`, removed ones on red with `-`, one line-number column (the new file's number, the old one's for a removed line), each hunk as a slim "line N" divider, and the file's name in the bar instead of `---` / `+++`.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -10,7 +9,6 @@ use std::rc::Rc;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
-    /// `--- a/x`, `+++ b/x`, `diff --git`, `index ...`.
     File,
     Hunk,
     Add,
@@ -29,16 +27,12 @@ pub struct DiffDoc {
     pub lines: Rc<Vec<Line>>,
     pub added: usize,
     pub removed: usize,
-    /// Showing the editor instead (to change the patch by hand).
     pub source: bool,
     pub list: ListState,
-    /// The file the diff is of, as the `+++` line names it.
     pub name: SharedString,
-    /// The file on disk, when known (the agent's Changes card sets it).
     pub target: Option<std::path::PathBuf>,
 }
 
-/// `@@ -12,7 +12,9 @@` → (12, 12).
 fn hunk_starts(h: &str) -> Option<(u32, u32)> {
     let mut it = h.split_whitespace().skip(1);
     let num = |s: Option<&str>, sign: char| -> Option<u32> { s?.strip_prefix(sign)?.split(',').next()?.parse().ok() };
@@ -74,13 +68,11 @@ pub fn parse(text: &str) -> DiffDoc {
                 new += 1;
                 (Kind::Same, in_hunk.then_some(old - 1), in_hunk.then_some(new - 1))
             };
-            // `--- a/x` after a hunk starts the next file.
             if l.starts_with("diff ") {
                 in_hunk = false;
             }
             Line { kind, old: o, new: n, text: l.to_string().into() }
         })
-        // The file lines are said once, in the bar.
         .filter(|l: &Line| l.kind != Kind::File)
         .collect::<Vec<_>>();
     let name = text
@@ -104,12 +96,10 @@ impl Workbench {
         let digits = lines.iter().filter_map(|l| l.new.max(l.old)).max().unwrap_or(1).to_string().len().max(2) as f32;
         let num_w = px(fs * 0.62 * digits + 10.);
         let (green, red) = (c(theme::GREEN), c(theme::DANGER));
-        // List rows don't take the list's text style: each row sets the editor's font.
         let font = self.settings.font_family.clone();
         let rows = list(d.list.clone(), move |i, _, _| {
             let Some(l) = lines.get(i) else { return div().into_any_element() };
             if l.kind == Kind::Hunk {
-                // "@@ -12,7 +12,9 @@ fn main" -> a slim divider: "line 12  fn main".
                 let at = l.text.split("@@").nth(1).and_then(|h| h.split_whitespace().nth(1)).and_then(|n| n.trim_start_matches('+').split(',').next()).unwrap_or("");
                 let ctx = l.text.splitn(3, "@@").nth(2).unwrap_or("").trim().to_string();
                 return h_flex()
@@ -130,7 +120,6 @@ impl Workbench {
                 Kind::Del => (Some(red.opacity(0.13)), "-", red, l.old),
                 _ => (None, " ", c(theme::FG_DIM), l.new),
             };
-            // The text without its +/-/space mark (the sign column says it).
             let body: SharedString = l.text.get(1..).unwrap_or("").to_string().into();
             h_flex()
                 .w_full()
@@ -141,7 +130,6 @@ impl Workbench {
                 .when_some(bg, |d, bg| d.bg(bg))
                 .child(div().flex_none().w(num_w).pr_1().text_right().text_color(c(theme::FG_DIM)).child(num.map(|n| n.to_string()).unwrap_or_default()))
                 .child(div().flex_none().w(px(fs * 0.9)).text_center().text_color(sign_col).child(sign))
-                // Wraps at the panel's width; leading spaces keep the indentation.
                 .child(div().flex_1().min_w_0().pr_2().text_color(c(theme::FG)).child(body))
                 .into_any_element()
         })

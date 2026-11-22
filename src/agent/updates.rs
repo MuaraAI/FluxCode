@@ -1,4 +1,3 @@
-//! Updates for the agents FluxCode installed itself from the ACP registry.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -10,9 +9,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::time::Duration;
 
-/// First look, after start-up work has settled.
 const FIRST: Duration = Duration::from_secs(15);
-/// How often a running FluxCode looks again.
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 pub(crate) enum Step {
@@ -22,7 +19,6 @@ pub(crate) enum Step {
     Failed(String),
 }
 
-/// One agent with a newer version in the registry.
 pub(crate) struct Pending {
     pub id: String,
     pub from: String,
@@ -30,7 +26,6 @@ pub(crate) struct Pending {
     pub step: Step,
 }
 
-/// True when version `a` is newer than `b`: compared number by number ("2.10.0" after "2.9.3").
 pub(crate) fn newer(a: &str, b: &str) -> bool {
     let nums = |v: &str| -> Vec<u64> { v.trim_start_matches('v').split(|ch: char| !ch.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect() };
     let (x, y) = (nums(a), nums(b));
@@ -40,7 +35,6 @@ pub(crate) fn newer(a: &str, b: &str) -> bool {
     x > y
 }
 
-/// The agents FluxCode installed whose registry version is newer: (id, installed, latest).
 pub(crate) fn available(reg: &[crate::acp::Entry]) -> Vec<(String, String, String)> {
     crate::acp::installed()
         .into_iter()
@@ -58,7 +52,6 @@ fn v(s: &str) -> String {
 }
 
 impl Workbench {
-    /// Look for agent updates a while after start, then every six hours.
     pub(crate) fn start_agent_update_checks(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let mut wait = FIRST;
@@ -67,14 +60,12 @@ impl Workbench {
                 wait = EVERY;
                 let found = cx
                     .background_spawn(async move {
-                        // Nothing FluxCode installed: no registry to read.
                         if !crate::acp::installed().iter().any(|id| crate::acp::managed(id)) {
                             return Vec::new();
                         }
                         if crate::acp::registry_stale() {
                             let _ = crate::acp::refresh_registry();
                         }
-                        // Icons are kept per registry version: a fresh registry names new ones, and the cards show each agent's icon.
                         crate::acp::fetch_icons();
                         available(&crate::acp::registry())
                     })
@@ -92,7 +83,6 @@ impl Workbench {
         let mut new = false;
         for (id, from, to) in found {
             match list.iter_mut().find(|p| p.id == id) {
-                // Running or just finished: leave it.
                 Some(p) if matches!(p.step, Step::Running(_) | Step::Done) => {}
                 Some(p) => {
                     new |= p.to != to;
@@ -110,7 +100,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Install the newer version of one agent, with its progress on the card.
     pub(crate) fn agent_update(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(p) = self.agent.updates.iter_mut().find(|p| p.id == id) else { return };
         if matches!(p.step, Step::Running(_)) {
@@ -139,7 +128,6 @@ impl Workbench {
                 cx.notify();
             });
             if ok {
-                // The card says so for a moment, then goes.
                 cx.background_executor().timer(Duration::from_secs(5)).await;
                 _ = this.update(cx, |this, cx| {
                     this.agent.updates.retain(|p| !(p.id == id && matches!(p.step, Step::Done)));
@@ -157,14 +145,12 @@ impl Workbench {
         }
     }
 
-    /// The cards: one per agent with an update, in the top right corner.
     pub(crate) fn render_agent_updates(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let list = &self.agent.updates;
         if list.is_empty() || self.agent.updates_hidden {
             return None;
         }
         if list.iter().any(|p| matches!(p.step, Step::Running(_))) {
-            // The installer writes its progress off the UI thread.
             window.request_animation_frame();
         }
         let ready = list.iter().filter(|p| matches!(p.step, Step::Ready | Step::Failed(_))).count();
@@ -185,7 +171,6 @@ impl Workbench {
                     .tooltip(if busy { tr("Hide (the update goes on)") } else { tr("Later") })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.updates_hidden = true;
-                        // Cards that were only offering an update come back with the next check.
                         this.agent.updates.retain(|p| !matches!(p.step, Step::Ready | Step::Failed(_)));
                         cx.notify();
                     })),
@@ -264,7 +249,6 @@ impl Workbench {
                 .top(theme::u(44.))
                 .right(theme::u(12.))
                 .w(theme::u(340.))
-                // One glass panel, painted after everything under it (deferred), so the page's text can't show through.
                 .child(deferred(v_flex().id("ag-updates").occlude().p_2().gap_2().glass_pop().child(head).children(cards)))
                 .into_any_element(),
         )

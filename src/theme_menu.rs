@@ -1,4 +1,3 @@
-//! The color theme from the status bar: its name there opens a small list above it, each theme drawn as a little editor in its own colors (surface, side bar, a line of text, the accent), so you pick by looking.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -10,7 +9,6 @@ fn rgb_of(v: u32) -> Hsla {
     rgb(v).into()
 }
 
-/// A theme in miniature: the side bar, the editor with two lines of text, the accent.
 fn thumb(p: &theme::Palette) -> Div {
     let [editor, side, accent, fg] = p.swatches();
     h_flex()
@@ -37,7 +35,6 @@ fn thumb(p: &theme::Palette) -> Div {
 }
 
 impl Workbench {
-    /// The theme's name at the right of the status bar: a dot of its accent, the name.
     pub(crate) fn render_theme_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette();
         let open = self.theme_menu;
@@ -52,7 +49,6 @@ impl Workbench {
             .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
             .child(div().size(theme::u(8.)).rounded_full().bg(rgb_of(p.swatches()[2])).border_1().border_color(c(theme::BORDER_STRONG)))
             .child(p.name)
-            // No tooltip while the list is open: it would cover the list's last row.
             .when(!open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Color theme (Ctrl+K Ctrl+T for the next one)")).build(w, cx)))
             .on_click(cx.listener(|this, _, _, cx| {
                 let may = this.pop_may_open("theme");
@@ -62,13 +58,11 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The list above the status bar's right end.
     pub(crate) fn render_theme_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.theme_menu {
             return None;
         }
         let current = theme::palette().id;
-        // Installed VS Code themes can make the list long: it scrolls past about ten rows.
         let mut list = v_flex().id("theme-list").p_1().gap_0p5().max_h(theme::u(460.)).overflow_y_scroll();
         for (i, p) in theme::all().into_iter().enumerate() {
             let on = p.id == current;

@@ -1,15 +1,12 @@
-//! Talking to a WSL2 distro: the distro list, its home folder, and the commands that run a line or a program inside it.
 
 use std::process::Command;
 
 use super::WslTarget;
 
-/// `wsl.exe` is on PATH on Windows; elsewhere there is no WSL.
 pub fn available() -> bool {
     cfg!(windows)
 }
 
-/// The installed distros, in the order `wsl.exe` lists them.
 pub fn distros() -> Vec<String> {
     if !available() {
         return Vec::new();
@@ -26,13 +23,11 @@ pub fn distros() -> Vec<String> {
         .collect()
 }
 
-/// `wsl.exe -l` writes UTF-16LE, with a NUL after every ASCII byte.
 fn decode_utf16(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect();
     String::from_utf16_lossy(&units).trim_start_matches('\u{feff}').to_string()
 }
 
-/// The distro's home folder, as the distro sees it.
 pub fn home_dir(distro: &str) -> Option<String> {
     let out = crate::proc::command("wsl.exe")
         .args(["-d", distro, "--exec", "sh", "-c", "echo $HOME"])
@@ -45,7 +40,6 @@ pub fn home_dir(distro: &str) -> Option<String> {
     (!home.is_empty()).then_some(home)
 }
 
-/// The subfolders of a folder inside the distro, hidden ones included.
 pub fn list_dirs(distro: &str, path: &str) -> Vec<String> {
     let out = crate::proc::command("wsl.exe")
         .args(["-d", distro, "--exec", "sh", "-c", r#"cd "$1" || exit 1; shift; ls -1pa"#, "--", path])
@@ -62,7 +56,6 @@ pub fn list_dirs(distro: &str, path: &str) -> Vec<String> {
         .collect()
 }
 
-/// A shell line that runs inside the distro, in `cwd`, with the user's login PATH.
 pub fn shell_command(target: &WslTarget, cwd: &str, line: &str) -> Command {
     let mut cmd = crate::proc::command("wsl.exe");
     cmd.args([
@@ -79,7 +72,6 @@ pub fn shell_command(target: &WslTarget, cwd: &str, line: &str) -> Command {
     cmd
 }
 
-/// A program that runs inside the distro, in `cwd`.
 pub fn program_command(target: &WslTarget, cwd: &str, program: &str, args: &[&str]) -> Command {
     let mut cmd = crate::proc::command("wsl.exe");
     cmd.args(["-d", &target.distro, "--exec", "sh", "-c", r#"cd "$1" || exit 1; shift; exec "$@""#, "--", cwd, program]);
@@ -87,7 +79,6 @@ pub fn program_command(target: &WslTarget, cwd: &str, program: &str, args: &[&st
     cmd
 }
 
-/// A program that runs inside the distro with environment variables set there.
 pub fn program_command_env(target: &WslTarget, cwd: &str, env: &[(&str, &str)], program: &str, args: &[&str]) -> Command {
     let mut exports = String::new();
     for (k, v) in env {
@@ -106,7 +97,6 @@ mod tests {
 
     #[test]
     fn the_distro_list_is_utf16() {
-        // `wsl.exe -l -q` for one distro, as it arrives on stdout.
         let bytes = [0x55, 0x00, 0x62, 0x00, 0x75, 0x00, 0x6e, 0x00, 0x74, 0x00, 0x75, 0x00, 0x0d, 0x00, 0x0a, 0x00];
         assert_eq!(decode_utf16(&bytes), "Ubuntu\r\n");
     }

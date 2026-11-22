@@ -2,7 +2,6 @@ use super::{flow, inline, md, parse, text, Align, Block, Kind};
 
 const SAMPLE: &str = "@title Flux
 @style accent=#d0a070 width=880
-// a comment
 Intro **bold** and *it*.
 Second line.
 
@@ -78,7 +77,6 @@ fn blocks_in_order() {
     assert_eq!(d.tables[0].row(9), (2, false));
     assert_eq!(std::mem::size_of::<Block>(), 16, "blocks stay small");
     assert!(matches!(d.blocks[12], Block::Boxed { kind: Kind::Note, .. }));
-    // Languages: the last three paragraphs are en, id, all.
     assert_eq!(&d.lang[16..], [1, 2, 0]);
     assert_eq!(d.visible("en").len(), d.blocks.len() - 1);
 }
@@ -106,7 +104,6 @@ fn flowchart_layers_and_loops() {
     assert_eq!(f.nodes[1].shape, flow::Shape::Diamond);
     assert_eq!(f.nodes.iter().map(|n| n.layer).collect::<Vec<_>>(), [0, 1, 2]);
     assert!(f.edges.iter().any(|e| e.back && e.label == "no"), "b -> a closes a loop");
-    // Layers go down and nothing overlaps.
     assert!(f.nodes[0].rect.1 < f.nodes[1].rect.1 && f.nodes[1].rect.1 < f.nodes[2].rect.1);
     let m = flow::to_mermaid(f);
     assert!(m.starts_with("flowchart TD"));
@@ -135,7 +132,6 @@ fn changelog_flux_still_reads() {
     assert_eq!(d.lang, [0, 1, 2, 1, 2]);
 }
 
-/// README.md, README.id.md and docs/flux*.md are made from their .flux files: they must agree (run `fluxcode --flux-to-md README.flux README.md --lang en`, and the same with `--lang id`).
 #[test]
 fn markdown_made_from_flux_is_up_to_date() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -152,7 +148,6 @@ fn markdown_made_from_flux_is_up_to_date() {
     }
 }
 
-/// The English file is the default one, and both languages must be complete enough to differ: a section that exists only in English is a reader hitting a wall.
 #[test]
 fn both_languages_cover_the_same_sections() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -177,7 +172,6 @@ fn both_languages_cover_the_same_sections() {
     }
 }
 
-/// What a file draws: Markdown draws through the shim (Source first), Flux draws itself (Preview first), everything else stays in the plain editor.
 #[test]
 fn drawable_kinds() {
     use std::path::Path;
@@ -186,7 +180,6 @@ fn drawable_kinds() {
     }
 }
 
-/// The tab bar's export button writes `.md` next to a Flux document; a Markdown file already is one, so the button only belongs to Flux.
 #[test]
 fn the_export_button_belongs_to_flux_only() {
     use std::path::Path;
@@ -195,7 +188,6 @@ fn the_export_button_belongs_to_flux_only() {
     assert!(!super::view::shows_md_export(Path::new("notes.txt")));
 }
 
-/// A million lines (text, lists and a 200,000-row table), parsed in one pass.
 #[test]
 #[ignore]
 fn million_lines() {
@@ -226,16 +218,13 @@ fn million_lines() {
         block_bytes as f64 / 1e6
     );
     assert!(lines >= 1_000_000);
-    // What FluxCode draws first: the document's first 32 KB, read at once.
     let first = &src[..src[..32 << 10].rfind("\n\n").unwrap() + 1];
     let t = std::time::Instant::now();
     let fd = parse(first);
     println!("first part ({} KB, {} blocks) read in {:.3} ms", first.len() / 1024, fd.blocks.len(), t.elapsed().as_secs_f64() * 1e3);
-    // The rest, read and packed on another thread.
     let t = std::time::Instant::now();
     let kept = super::view::prepare_size(src.clone());
     println!("read and packed in {:.0} ms: text kept in {:.1} MB", t.elapsed().as_secs_f64() * 1e3, kept as f64 / 1e6);
-    // Drawing one screen works out inline marks for about 40 blocks.
     let t = std::time::Instant::now();
     let mut n = 0;
     for b in d.blocks.iter().skip(1_000) {

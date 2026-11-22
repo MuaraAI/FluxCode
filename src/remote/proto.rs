@@ -1,39 +1,27 @@
-//! The framed protocol between the editor and its helper inside a distro.
 
 use serde::{Deserialize, Serialize};
 
-/// Bumped when a request or a response changes shape.
 pub const PROTOCOL_VERSION: u32 = 3;
 
 pub const FRAME_JSON: u8 = 0;
 pub const FRAME_BYTES: u8 = 1;
 
-/// What the editor asks the helper to do.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "m", rename_all = "snake_case")]
 pub enum Request {
-    /// Version and platform, sent once before anything else.
     Hello,
-    /// One level of a folder.
     List { path: String },
-    /// Every file under `root`, skipping the folders search skips.
     Scan { root: String, max: usize },
-    /// A file's bytes, up to `limit`.
     Read { path: String, limit: u64 },
-    /// A file's bytes, sent as a byte frame after this request.
     Write { path: String, crlf: bool },
-    /// Whether a path exists and what it is.
     Stat { path: String },
-    /// The folder's entries, matching `core::search`'s rules.
     Search { root: String, query: String, match_case: bool, whole_word: bool },
-    /// `git` in the distro, so it sees Linux paths and line endings.
     Git {
         cwd: String,
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<String>,
     },
-    /// Keeps a long-lived connection from being reaped.
     Ping,
 }
 
@@ -58,7 +46,6 @@ impl Response {
         }
     }
 
-    /// A byte answer (a file's contents).
     pub fn bytes() -> Self {
         Self { ok: true, error: None, json: None }
     }
@@ -113,7 +100,6 @@ pub struct GitWire {
     pub stderr: String,
 }
 
-/// Write one frame.
 pub fn write_frame(out: &mut impl std::io::Write, kind: u8, payload: &[u8]) -> std::io::Result<()> {
     out.write_all(&[kind])?;
     out.write_all(&(payload.len() as u32).to_le_bytes())?;
@@ -121,7 +107,6 @@ pub fn write_frame(out: &mut impl std::io::Write, kind: u8, payload: &[u8]) -> s
     out.flush()
 }
 
-/// Read one frame.
 pub fn read_frame(input: &mut impl std::io::Read) -> std::io::Result<Option<(u8, Vec<u8>)>> {
     let mut head = [0u8; 5];
     match input.read_exact(&mut head) {
@@ -131,7 +116,6 @@ pub fn read_frame(input: &mut impl std::io::Read) -> std::io::Result<Option<(u8,
     }
     let kind = head[0];
     let len = u32::from_le_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    // A frame longer than this is not something this protocol sends; refuse it rather than allocate whatever a broken length field asks for.
     if len > 512 * 1024 * 1024 {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "frame too long"));
     }

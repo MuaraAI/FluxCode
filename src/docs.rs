@@ -1,4 +1,3 @@
-//! Files attached to an agent message: what kind each is and how it is sent.
 
 use std::path::Path;
 
@@ -21,7 +20,6 @@ pub fn kind(path: &Path) -> Kind {
         | "html" | "htm" | "css" | "scss" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "py" | "pyw" | "rs" | "go" | "java"
         | "kt" | "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "php" | "rb" | "lua" | "sh" | "bat" | "cmd" | "ps1" | "sql" | "vue"
         | "svelte" | "svg" | "env" | "gitignore" | "dockerfile" | "r" | "dart" | "swift" => Kind::Text,
-        // No extension: text if it decodes as UTF-8.
         "" => Kind::Text,
         _ => Kind::Other,
     }
@@ -46,7 +44,6 @@ pub fn mime(path: &Path) -> &'static str {
     }
 }
 
-/// `file://` URI for a path, with spaces and non-ASCII percent-encoded.
 pub fn file_uri(path: &Path) -> String {
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -56,7 +53,6 @@ pub fn file_uri(path: &Path) -> String {
     file_uri_from_abs_text(&abs.to_string_lossy())
 }
 
-/// Build a `file://` URI from the text of an already-absolute path.
 fn file_uri_from_abs_text(raw: &str) -> String {
     let mut text = raw.replace('\\', "/");
     if let Some(rest) = strip_prefix_ignore_ascii_case(&text, "//?/unc/") {
@@ -83,7 +79,6 @@ fn file_uri_from_abs_text(raw: &str) -> String {
     s
 }
 
-/// `s` without `prefix`, matching the prefix case-insensitively (ASCII only).
 pub(crate) fn strip_prefix_ignore_ascii_case<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     let n = prefix.len();
     if s.len() >= n && s.as_bytes()[..n].eq_ignore_ascii_case(prefix.as_bytes()) {
@@ -101,9 +96,7 @@ fn u32le(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// The files in a ZIP archive: (name, compressed data offset, compressed size, method, size).
 pub(crate) fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, usize)>> {
-    // End of central directory: signature PK\5\6, searched from the end (comment ≤ 64 KiB).
     let start = b.len().saturating_sub(22 + 65_535);
     let eocd = (start..b.len().saturating_sub(21)).rev().find(|&i| b[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])?;
     let count = u16le(b, eocd + 10)? as usize;
@@ -121,7 +114,6 @@ pub(crate) fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, us
         let clen = u16le(b, at + 32)? as usize;
         let local = u32le(b, at + 42)? as usize;
         let name = String::from_utf8_lossy(b.get(at + 46..at + 46 + nlen)?).into_owned();
-        // Local header: fixed 30 bytes + its own name and extra field.
         let lnlen = u16le(b, local + 26)? as usize;
         let lelen = u16le(b, local + 28)? as usize;
         out.push((name, local + 30 + lnlen + lelen, csize, method, usize_));
@@ -130,7 +122,6 @@ pub(crate) fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, us
     Some(out)
 }
 
-/// One file from a ZIP archive, decompressed (stored or deflate).
 fn zip_read(b: &[u8], entries: &[(String, usize, usize, u16, usize)], name: &str) -> Option<Vec<u8>> {
     let (_, off, csize, method, size) = entries.iter().find(|e| e.0 == name)?;
     if *size > 20 * 1024 * 1024 {
@@ -149,7 +140,6 @@ fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
-/// Text of every `<tag ...>text</tag>` in order (tag given without `<`, e.g. "w:t").
 fn tag_texts<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -157,7 +147,6 @@ fn tag_texts<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     let mut rest = xml;
     while let Some(i) = rest.find(&open) {
         let after = &rest[i + open.len()..];
-        // `<w:t>` or `<w:t xml:space=..>`, but not `<w:tab/>` or `<w:tbl>`.
         if !after.starts_with('>') && !after.starts_with(' ') {
             rest = after;
             continue;
@@ -187,7 +176,6 @@ fn docx_text(xml: &str) -> String {
     out
 }
 
-/// Column letters of a cell reference ("BC12" -> 54), 1-based.
 fn col_index(r: &str) -> usize {
     r.chars().take_while(|c| c.is_ascii_alphabetic()).fold(0, |n, c| n * 26 + (c.to_ascii_uppercase() as usize - 'A' as usize + 1))
 }
@@ -229,7 +217,6 @@ fn xlsx_sheet(xml: &str, shared: &[String], max_rows: usize) -> String {
     out
 }
 
-/// The readable text of a .docx / .xlsx / .pptx file (tab-separated rows for sheets).
 pub fn office_text(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let entries = zip_entries(&bytes).ok_or("not a readable Office file")?;
@@ -300,7 +287,6 @@ pub fn office_text(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A minimal ZIP with stored (uncompressed) files.
     fn zip(files: &[(&str, &str)]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut central = Vec::new();
@@ -397,7 +383,6 @@ mod tests {
         for (path, uri) in cases {
             assert_eq!(file_uri_from_abs_text(path), uri, "{path}");
         }
-        // The public helper agrees on a real absolute path for this platform.
         #[cfg(windows)]
         assert_eq!(
             file_uri(Path::new(r"C:\home\u\my file.rs")),

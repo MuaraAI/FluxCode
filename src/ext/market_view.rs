@@ -1,4 +1,3 @@
-//! The Extensions side bar: the VS Code Marketplace, all of it.
 
 use super::market::{self, Busy, Item, Query, Sort};
 use super::view::tile;
@@ -21,18 +20,12 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Page ids of Marketplace extensions start with this; built-in ids have no colon.
 pub const PAGE: &str = "vsx:";
-/// Quiet time after a keystroke before the Marketplace is asked.
 const DEBOUNCE_MS: u64 = 150;
-/// Icons downloaded at the same time.
 const ICON_WORKERS: usize = 6;
-/// A row's height: three lines (name; publisher and numbers; description and button).
 const ROW_H: f32 = 66.;
-/// The next page is asked for when the viewport is this many rows from the end.
 const PREFETCH_ROWS: usize = 20;
 
-/// A Marketplace extension's icon, or the Blocks tile until it is on disk.
 fn vsx_icon(path: Option<&PathBuf>, size: f32) -> AnyElement {
     match path {
         Some(p) => img(p.clone())
@@ -45,7 +38,6 @@ fn vsx_icon(path: Option<&PathBuf>, size: f32) -> AnyElement {
     }
 }
 
-/// A small pill (tabs, sort orders).
 fn chip(id: impl Into<ElementId>, label: SharedString, on: bool) -> Stateful<Div> {
     div()
         .id(id)
@@ -68,13 +60,11 @@ fn chip(id: impl Into<ElementId>, label: SharedString, on: bool) -> Stateful<Div
 }
 
 impl Workbench {
-    /// The query the box, the sort and the category ask for.
     fn market_query(&self, cx: &App) -> Query {
         let m = &self.ext.market;
         Query::new(&self.ext.query.read(cx).value(), m.sort, m.category)
     }
 
-    /// The query box changed: on the Marketplace tab, search once typing pauses (at once when the answer is cached).
     pub(crate) fn market_query_changed(&mut self, cx: &mut Context<Self>) {
         if self.ext.filter == Filter::Market {
             self.market_search(DEBOUNCE_MS, cx);
@@ -82,14 +72,12 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Show the current query: from the cache when its first page is there, else from the gallery after `delay` ms.
     pub(crate) fn market_search(&mut self, delay: u64, cx: &mut Context<Self>) {
         let q = self.market_query(cx);
         let m = &mut self.ext.market;
         m.kicked.set(true);
         m.generation += 1;
         let generation = m.generation;
-        // Back to what the list shows (typed and erased): keep it, pages and all; the bump above already dropped the request in flight.
         if m.shown.as_ref() == Some(&q) {
             if m.loading {
                 m.loading = false;
@@ -144,7 +132,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Load the next page of the shown query (from the cache when it's there).
     fn market_load_more(&mut self, cx: &mut Context<Self>) {
         let m = &mut self.ext.market;
         let Some(q) = m.shown.clone() else { return };
@@ -189,7 +176,6 @@ impl Workbench {
         .detach();
     }
 
-    /// The list drew `range`: ask for the next page near the end, and queue the icons of the rows in and around the viewport (nearest first, replacing what was queued for rows scrolled away).
     fn market_in_view(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let n = self.ext.market.items.len();
         if n > 0 && range.end + PREFETCH_ROWS >= n {
@@ -214,7 +200,6 @@ impl Workbench {
         self.market_pump_icons(cx);
     }
 
-    /// Start queued icon downloads while fewer than `ICON_WORKERS` run.
     fn market_pump_icons(&mut self, cx: &mut Context<Self>) {
         let m = &mut self.ext.market;
         while m.icons_running < ICON_WORKERS && !m.icon_queue.is_empty() {
@@ -276,7 +261,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Install a .vsix file the user picks.
     fn market_install_file(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -350,7 +334,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// After `native::load`: the theme list may have changed (and the active theme with it, if its extension was removed or updated), so the palette is applied again.
     fn vsx_applied_changed(&mut self, installed: &str, cx: &mut Context<Self>) {
         self.settings.apply_backdrop();
         theme::apply(cx);
@@ -362,7 +345,6 @@ impl Workbench {
         }
     }
 
-    /// Show an extension's page in the editor area and fetch its README once.
     pub(crate) fn market_open(&mut self, item: Item, cx: &mut Context<Self>) {
         let id = item.id();
         let loading = self.ext.market.open.as_ref().is_some_and(|o| o.id() == id);
@@ -383,7 +365,6 @@ impl Workbench {
                     this.ext.market.readme.insert(id.clone(), text);
                     cx.notify();
                 });
-                // Then its pictures: the text shows at once, the pictures as they arrive.
                 if let Some(md) = md {
                     let images = cx
                         .background_spawn(async move { market::fetch_readme_images(&md, folder.as_deref()) })
@@ -400,7 +381,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Install (with a spinner while it runs), Removing, or Installed (opens the page).
     fn market_button(
         &self,
         id: (&'static str, usize),
@@ -446,7 +426,6 @@ impl Workbench {
         }
     }
 
-    /// One row, readable at a 260 px side bar: the name alone on the first line, the description on the second, then the publisher (with its check when verified), installs, rating and the button, as in VS Code.
     fn market_row(
         &self,
         keys: (&'static str, &'static str),
@@ -458,7 +437,6 @@ impl Workbench {
         let id = it.id();
         let selected =
             self.ext.page.as_deref().and_then(|p| p.strip_prefix(PAGE)) == Some(id.as_str());
-        // Clipped before the button is: at the narrowest the button always stays.
         let stats = h_flex()
             .flex_shrink(1.)
             .min_w_0()
@@ -507,7 +485,6 @@ impl Workbench {
                             .text_color(c(theme::FG_MUTED))
                             .child(it.short.clone()),
                     )
-                    // Publisher, numbers and the button share the last line; the publisher gives way first but always keeps a readable stub.
                     .child(
                         h_flex()
                             .w_full()
@@ -546,7 +523,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The row under the last one while there is more: loading, or why it stopped.
     fn market_more_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let m = &self.ext.market;
         let row = h_flex()
@@ -585,7 +561,6 @@ impl Workbench {
         }
     }
 
-    /// Sort and category in one small menu at the end of the tabs row: the label says what is applied, the menu changes it.
     fn market_filters(&self, cx: &mut Context<Self>) -> AnyElement {
         let q = self.market_query(cx);
         let current = q.category;
@@ -630,11 +605,9 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The Extensions side bar: search, the Marketplace / Installed tabs, the sort and category on the Marketplace tab, then the list.
     pub(crate) fn render_market_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let m = &self.ext.market;
         let on_market = self.ext.filter == Filter::Market;
-        // The first time the Marketplace shows: most installed, or the query.
         if on_market && !m.kicked.replace(true) {
             cx.spawn(async move |this, cx| {
                 _ = this.update(cx, |this, cx| this.market_search(0, cx));
@@ -739,7 +712,6 @@ impl Workbench {
                 .flex_1()
                 .min_h_0()
                 .w_full()
-                // The old list stays while a new query loads, dimmed.
                 .when(m.loading, |l| l.opacity(0.5))
                 .into_any_element()
             }
@@ -759,7 +731,6 @@ impl Workbench {
                 if !q.split_whitespace().all(|w| hay.contains(w)) {
                     continue;
                 }
-                // The search's entry when it has the same extension: its numbers, and the newer version for the page's Update.
                 let item = m
                     .items
                     .iter()
@@ -816,7 +787,6 @@ impl Workbench {
                             .on_click(cx.listener(|this, _, _, cx| this.market_install_file(cx))),
                     ),
             )
-            // The tabs and, on the Marketplace, the sort / category menu: one row.
             .child(
                 h_flex()
                     .w_full()
@@ -842,7 +812,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// A Marketplace extension's page.
     pub(crate) fn render_market_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(it) = self.ext.market.open.clone() else {
             return div().into_any_element();
@@ -1020,7 +989,6 @@ impl Workbench {
                     }),
             );
 
-        // What FluxCode does with it: the declared parts, what is applied, and the honest limit.
         let declared: SharedString = match &inst {
             Some(i) if !i.contributes.is_empty() => {
                 crate::trf!("It declares {list}."; list => i.contributes.join(", ")).into()
@@ -1080,7 +1048,6 @@ impl Workbench {
                 .child(tr("Loading the README…"))
                 .into_any_element(),
             Some(Ok(t)) => {
-                // Pictures come from the cache once fetched; until then (or when one can't be fetched) they stay out rather than showing a broken frame.
                 let images = m.readme_images.get(&id).cloned().unwrap_or_default();
                 let gen = images.len();
                 div()
@@ -1108,7 +1075,6 @@ impl Workbench {
                 .text_color(c(theme::FG_STRONG))
                 .child(tr(t))
         };
-        // Facts as small chips under the title, instead of a table of their own.
         let chip = |t: String| div().px_2().py(px(2.)).rounded(px(4.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::FG_MUTED)).child(t);
         let mut chips = h_flex().w_full().flex_wrap().gap_1p5();
         chips = chips.child(chip(format!("v{}", it.version)));

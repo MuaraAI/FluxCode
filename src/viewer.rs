@@ -1,18 +1,12 @@
-//! Read-only views of files a text editor can't show: Office documents and PDFs as their text, archives as a file list, SQLite databases as their tables, and any other binary file as a hex dump.
 
 use std::path::Path;
 
-/// How much of an unknown binary file the hex view shows.
 const HEX_BYTES: usize = 64 * 1024;
 
 pub struct View {
-    /// What the editor shows (read only).
     pub text: String,
-    /// Highlighter token for that text ("text", "csv", "sql", ...).
     pub lang: &'static str,
-    /// Status-bar name of the view ("Hex", "Word document", ...).
     pub label: &'static str,
-    /// One line above the view: what this is and what is shown.
     pub banner: String,
 }
 
@@ -28,17 +22,14 @@ fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-/// True when the bytes look like text (no NUL near the start, mostly valid UTF-8).
 pub fn looks_text(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(8192)];
     if head.contains(&0) {
-        // UTF-16 with a BOM is text too; it is decoded by `decode_utf16`.
         return head.starts_with(&[0xff, 0xfe]) || head.starts_with(&[0xfe, 0xff]);
     }
     true
 }
 
-/// UTF-16 (with BOM) to a String, for files Windows tools write that way.
 pub fn decode_utf16(bytes: &[u8]) -> Option<String> {
     let le = bytes.starts_with(&[0xff, 0xfe]);
     let be = bytes.starts_with(&[0xfe, 0xff]);
@@ -52,7 +43,6 @@ pub fn decode_utf16(bytes: &[u8]) -> Option<String> {
     Some(String::from_utf16_lossy(&units))
 }
 
-/// A view for a file that isn't plain text, or None when the editor can show it.
 pub fn view(path: &Path, bytes: &[u8]) -> Option<View> {
     let ext = ext_of(path);
     let size = human_size(bytes.len() as u64);
@@ -91,7 +81,6 @@ pub fn view(path: &Path, bytes: &[u8]) -> Option<View> {
     Some(hex_view(bytes, &crate::trf!("{what} · {size}{more} · hex view, read only"; what => what, size => size, more => more)))
 }
 
-/// A short name for a binary file, from its magic bytes or extension.
 fn kind_name(ext: &str, b: &[u8]) -> String {
     let magic: &[(&[u8], &str)] = &[
         (b"MZ", "Windows program"),
@@ -125,7 +114,6 @@ fn kind_name(ext: &str, b: &[u8]) -> String {
     }
 }
 
-/// Classic hex dump: offset, 16 bytes in two groups, the printable characters.
 pub fn hex_dump(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().min(HEX_BYTES) / 16 * 78);
     for (i, row) in bytes[..bytes.len().min(HEX_BYTES)].chunks(16).enumerate() {
@@ -172,7 +160,6 @@ fn zip_view(bytes: &[u8], size: &str) -> Option<View> {
 }
 
 
-/// Text of a PDF: inflate its content streams and collect the strings drawn with Tj / TJ / ' / ".
 pub fn pdf_text(b: &[u8]) -> String {
     let mut out = String::new();
     let mut at = 0;
@@ -185,7 +172,6 @@ pub fn pdf_text(b: &[u8]) -> String {
             s += 1;
         }
         let Some(e) = find(b, b"endstream", s) else { break };
-        // The stream's dictionary sits just before "stream".
         let dict_start = i.saturating_sub(400);
         let dict = &b[dict_start..i];
         let raw = &b[s..e];
@@ -213,7 +199,6 @@ fn find(h: &[u8], n: &[u8], from: usize) -> Option<usize> {
     h[from..].windows(n.len()).position(|w| w == n).map(|p| p + from)
 }
 
-/// Strings shown by one content stream, a new line per text line.
 fn content_text(d: &[u8], out: &mut String) {
     let mut i = 0;
     let mut line = String::new();
@@ -232,7 +217,6 @@ fn content_text(d: &[u8], out: &mut String) {
                 line.push_str(&s);
                 i = next;
             }
-            // A big kerning gap inside TJ is a space.
             b'-' if d.get(i + 1).is_some_and(|c| c.is_ascii_digit()) => {
                 let mut j = i + 1;
                 while j < d.len() && (d[j].is_ascii_digit() || d[j] == b'.') {
@@ -261,7 +245,6 @@ fn content_text(d: &[u8], out: &mut String) {
     flush(&mut line, out);
 }
 
-/// A literal string `( ... )` starting after the parenthesis; returns it and the index after `)`.
 fn pdf_string(d: &[u8], mut i: usize) -> (String, usize) {
     let mut s = Vec::new();
     let mut depth = 0;
@@ -330,7 +313,6 @@ fn count(h: &[u8], n: &[u8]) -> usize {
 }
 
 
-/// Tables, indexes and views of an SQLite database with their SQL and row counts, read straight from the file's b-tree pages (no SQLite library).
 fn sqlite_view(b: &[u8], size: &str) -> View {
     let page = match u16::from_be_bytes([b[16], b[17]]) {
         1 => 65536,
@@ -342,7 +324,6 @@ fn sqlite_view(b: &[u8], size: &str) -> View {
     let mut text = String::new();
     let mut tables = 0;
     for r in &rows {
-        // sqlite_schema columns: type, name, tbl_name, rootpage, sql
         let get = |i: usize| match r.get(i) {
             Some(Val::Text(s)) => s.clone(),
             Some(Val::Int(n)) => n.to_string(),
@@ -403,11 +384,9 @@ fn varint(b: &[u8], at: usize) -> (u64, usize) {
 fn page_at(b: &[u8], page: usize, n: usize) -> Option<(&[u8], usize)> {
     let start = (n - 1) * page;
     let p = b.get(start..start + page)?;
-    // Page 1 starts with the 100-byte file header.
     Some((p, if n == 1 { 100 } else { 0 }))
 }
 
-/// Every row (local payload only) of the table b-tree rooted at page `n`.
 fn table_rows(b: &[u8], page: usize, n: usize, out: &mut Vec<Vec<Val>>, budget: &mut usize) {
     if *budget == 0 {
         return;
@@ -467,7 +446,6 @@ fn count_rows(b: &[u8], page: usize, n: usize, budget: &mut usize) -> usize {
     }
 }
 
-/// Decode an SQLite record (header of serial types, then the values).
 fn record(r: &[u8]) -> Vec<Val> {
     let (hlen, mut at) = varint(r, 0);
     let mut types = Vec::new();
@@ -487,7 +465,6 @@ fn record(r: &[u8]) -> Vec<Val> {
                 for i in 0..len {
                     v = (v << 8) | *r.get(pos + i).unwrap_or(&0) as i64;
                 }
-                // Sign-extend.
                 let shift = 64 - 8 * len as u32;
                 ((Val::Int((v << shift) >> shift)), len)
             }

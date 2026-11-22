@@ -1,4 +1,3 @@
-//! Follow the agent's edits.
 
 use crate::core;
 use crate::workbench::Workbench;
@@ -7,16 +6,12 @@ use gpui_kit::*;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Frames in one replay at most, and time between them.
 const FRAMES: usize = 40;
 const FRAME_MS: u64 = 16;
-/// Each frame sets the whole text (and the editor colors it again), so a replay gets a budget of bytes: a small file is typed in 40 steps, a 50 KB one in 8, and from ~100 KB on (under 4 steps) the file just reloads.
 const BYTE_BUDGET: usize = 400 * 1024;
 const MIN_FRAMES: usize = 4;
-/// After the user picks a tab or a file, the editor stays with them this long.
 const HANDS_OFF: Duration = Duration::from_secs(4);
 
-/// Steps a replay of a `len`-byte file gets (0: reload at once).
 pub fn frames_for(len: usize) -> usize {
     let n = (BYTE_BUDGET / len.max(1)).min(FRAMES);
     if n < MIN_FRAMES {
@@ -27,9 +22,7 @@ pub fn frames_for(len: usize) -> usize {
 }
 
 impl Workbench {
-    /// The agent finished writing `p`: replay it on the next frame.
     pub(crate) fn agent_follow_edit(&mut self, p: PathBuf) {
-        // A chat working in the background doesn't move the editor.
         if !self.settings.agent_follow_edits || self.agent.bg {
             return;
         }
@@ -37,18 +30,15 @@ impl Workbench {
         self.agent.follow_q.push(p);
     }
 
-    /// Runs before the reloads (render has the Window).
     pub(crate) fn apply_agent_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(p) = self.agent.follow_q.pop() else { return };
         self.agent.follow_q.clear();
-        // The user is changing the file on screen, or just picked one: leave their view alone.
         if self.active.is_some_and(|a| self.docs[a].dirty && self.docs[a].path != p) || self.agent.user_nav.is_some_and(|t| t.elapsed() < HANDS_OFF) {
             return;
         }
         self.agent_finish_replay(window, cx);
         let Ok(f) = core::read_text(&p) else { return };
         self.collab_mark_ai(&p);
-        // What the file looked like before: the open editor's text, else as the agent found it (the Changes card keeps it).
         let open = self.docs.iter().position(|d| d.path == p);
         let before = match open {
             Some(ix) if self.docs[ix].dirty || self.docs[ix].image.is_some() => return,
@@ -58,7 +48,6 @@ impl Workbench {
                 None => return,
             },
         };
-        // Open or bring up the file without taking the keyboard from the user.
         let had = window.focused(cx);
         match open {
             Some(ix) => self.activate(ix, window, cx),
@@ -68,7 +57,6 @@ impl Workbench {
             h.focus(window, cx);
         }
         let Some(ix) = self.docs.iter().position(|d| d.path == p) else { return };
-        // Its reload is this replay's last frame.
         self.agent.reloads.retain(|x| *x != p);
         let steps = frames_for(f.text.len().max(before.len()));
         let frames = if steps == 0 { Vec::new() } else { crate::diff::typing_frames(&before, &f.text, steps) };
@@ -114,7 +102,6 @@ impl Workbench {
         .detach();
     }
 
-    /// End the running replay: its file gets its final text now.
     fn agent_finish_replay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((p, text)) = self.agent.replay.take() else { return };
         self.agent.replay_gen += 1;

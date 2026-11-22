@@ -1,4 +1,3 @@
-//! Animated backgrounds behind the panels: twelve scenes drawn live (`scene_art`) in the active theme's colors, or none.
 
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -37,7 +36,6 @@ impl Scene {
         Scene::Space,
     ];
 
-    /// The id saved in settings.json.
     pub fn id(self) -> &'static str {
         match self {
             Scene::Sky => "sky",
@@ -77,11 +75,9 @@ impl Scene {
     }
 }
 
-/// 0: no scene, n: `Scene::ALL[n - 1]`.
 static SCENE: AtomicU8 = AtomicU8::new(0);
 static ANIMATE: AtomicBool = AtomicBool::new(true);
 
-/// Which scene shows (None: none) and whether it moves (off: it stands still).
 pub fn set(scene: Option<Scene>, animate: bool) {
     let n = scene.and_then(|s| Scene::ALL.iter().position(|x| *x == s)).map_or(0, |i| i as u8 + 1);
     SCENE.store(n, Ordering::Relaxed);
@@ -99,18 +95,15 @@ pub fn active() -> bool {
     current().is_some()
 }
 
-/// Seconds since the first scene showed: every scene's clock.
 fn clock() -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
-/// A scene drawn into its element's bounds, standing still at `t` seconds (Settings' previews), in the theme's colors at the time it is drawn.
 pub fn preview(scene: Scene, t: f32) -> impl IntoElement {
     canvas(|_, _, _| (), move |b, _, window, _| crate::scene_art::paint(scene.id(), b, t, false, window)).size_full()
 }
 
-/// The window root: the scene, and the workbench over it as a cached view.
 pub struct Shell {
     backdrop: Entity<Backdrop>,
     workbench: Entity<crate::workbench::Workbench>,
@@ -124,12 +117,10 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-component's Root sets the rem to its 13 px text size on every render.
         window.set_rem_size(crate::theme::rem());
         let mut style = StyleRefinement::default();
         style.size.width = Some(relative(1.).into());
         style.size.height = Some(relative(1.).into());
-        // FLUXCODE_SCENE_ONLY=1 shows the scene alone (the README's pictures of them).
         static SCENE_ONLY: OnceLock<bool> = OnceLock::new();
         let only = *SCENE_ONLY.get_or_init(|| std::env::var_os("FLUXCODE_SCENE_ONLY").is_some_and(|v| v == "1"));
         div()
@@ -142,13 +133,10 @@ impl Render for Shell {
 
 #[derive(Default)]
 pub struct Backdrop {
-    /// The frame timer is running.
     ticking: bool,
-    /// The window is in the background: frames come slower.
     idle: bool,
 }
 
-/// 24 frames a second in front: the motions are slow (clouds, fog and stars move less than a pixel a frame), so this reads as smooth for about a fifth less work than 30.
 const FRAME: Duration = Duration::from_millis(42);
 const IDLE_FRAME: Duration = Duration::from_millis(400);
 
@@ -188,7 +176,6 @@ impl Render for Backdrop {
         if scene.is_some() && animate {
             self.tick(cx);
         }
-        // Standing still, every scene is shown at the same calm moment.
         let t = if animate { clock() } else { 12. };
         canvas(|_, _, _| (), move |b, _, window, _| {
             if let Some(s) = scene {
@@ -209,7 +196,6 @@ mod tests {
             assert_eq!(Scene::from_id(s.id()), Some(s));
         }
         assert_eq!(Scene::from_id("none"), None);
-        // The pixel videos' ids still name a scene.
         for old in ["ocean", "river", "beach", "mountains", "anime"] {
             assert!(Scene::from_id(old).is_some(), "{old}");
         }

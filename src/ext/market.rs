@@ -1,4 +1,3 @@
-//! VS Code Marketplace: search it, show an extension, install its VSIX.
 
 use crate::i18n::tr;
 use serde_json::{json, Value};
@@ -13,15 +12,11 @@ pub const ICON_SMALL: &str = "Microsoft.VisualStudio.Services.Icons.Small";
 pub const ICON_DEFAULT: &str = "Microsoft.VisualStudio.Services.Icons.Default";
 pub const DETAILS: &str = "Microsoft.VisualStudio.Services.Content.Details";
 pub const VSIX: &str = "Microsoft.VisualStudio.Services.VSIXPackage";
-/// Unpacked size an install may reach; past it the VSIX is refused.
 const MAX_UNPACKED: u64 = 1 << 30;
-/// README text kept for the page: the rest is cut.
 const MAX_README: usize = 200 * 1024;
 
-/// One extension from a gallery query (its latest version for this platform).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Item {
-    /// The publisher's id (`ms-python`), half of the identifier.
     pub publisher: String,
     pub publisher_display: String,
     pub verified: bool,
@@ -30,23 +25,19 @@ pub struct Item {
     pub short: String,
     pub version: String,
     pub asset_uri: String,
-    /// Asset type → URL, from the version's file list.
     pub files: Vec<(String, String)>,
     pub installs: u64,
     pub rating: Option<f32>,
     pub rating_count: u64,
-    /// `YYYY-MM-DD`.
     pub updated: String,
     pub categories: Vec<String>,
 }
 
 impl Item {
-    /// `publisher.name`, lowercase: VS Code ids ignore case.
     pub fn id(&self) -> String {
         format!("{}.{}", self.publisher, self.name).to_lowercase()
     }
 
-    /// An asset's URL: the listed file, else built from the asset URI.
     pub fn asset(&self, kind: &str) -> Option<String> {
         self.files
             .iter()
@@ -55,7 +46,6 @@ impl Item {
             .or_else(|| (!self.asset_uri.is_empty()).then(|| format!("{}/{kind}", self.asset_uri)))
     }
 
-    /// Where its icon is kept on disk once fetched.
     pub fn icon_cache(&self) -> Option<PathBuf> {
         let file = folder_name(&self.publisher, &self.name, &self.version)?;
         Some(
@@ -66,10 +56,8 @@ impl Item {
     }
 }
 
-/// Extensions per gallery page.
 pub const PAGE_SIZE: usize = 50;
 
-/// VS Code's Marketplace categories, as the gallery names them.
 pub const CATEGORIES: &[&str] = &[
     "Programming Languages",
     "Themes",
@@ -93,7 +81,6 @@ pub const CATEGORIES: &[&str] = &[
     "Other",
 ];
 
-/// List orders the gallery can sort by.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Sort {
     Relevance,
@@ -112,7 +99,6 @@ impl Sort {
         Sort::Name,
     ];
 
-    /// The gallery's `sortBy` and `sortOrder` (0: its default, 1: ascending).
     fn code(self) -> (u32, u32) {
         match self {
             Sort::Relevance => (0, 0),
@@ -134,7 +120,6 @@ impl Sort {
     }
 }
 
-/// What the list asks the gallery for.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Query {
     pub text: String,
@@ -143,7 +128,6 @@ pub struct Query {
 }
 
 impl Query {
-    /// The text trimmed with single spaces.
     pub fn new(text: &str, sort: Option<Sort>, category: Option<&'static str>) -> Self {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let sort = match sort {
@@ -159,14 +143,12 @@ impl Query {
     }
 }
 
-/// One page of answers is cached under this: the gallery's search ignores case.
 pub type CacheKey = (String, Sort, Option<&'static str>, usize);
 
 pub fn cache_key(q: &Query, page: usize) -> CacheKey {
     (q.text.to_lowercase(), q.sort, q.category, page)
 }
 
-/// The JSON a gallery query sends for one page (from 1): VS Code extensions without unpublished ones, maybe a search text and a category.
 pub fn query_body(q: &Query, page: usize) -> String {
     let mut criteria = vec![json!({"filterType": 8, "value": "Microsoft.VisualStudio.Code"})];
     if !q.text.is_empty() {
@@ -177,11 +159,9 @@ pub fn query_body(q: &Query, page: usize) -> String {
     }
     criteria.push(json!({"filterType": 12, "value": "4096"}));
     let (sort, order) = q.sort.code();
-    // 918 = files (2) + categories and tags (4) + version properties (16) + asset URI (128) + statistics (256) + latest version only (512): every row's icon, numbers, categories and VSIX in one answer.
     json!({"filters": [{"criteria": criteria, "pageNumber": page, "pageSize": PAGE_SIZE, "sortBy": sort, "sortOrder": order}], "flags": 918}).to_string()
 }
 
-/// The VSIX target this build runs on (`win32-x64`); platform-specific extensions publish one version per target.
 fn target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "win32-x64",
@@ -227,7 +207,6 @@ fn item(e: &Value) -> Option<Item> {
     if publisher.is_empty() || name.is_empty() {
         return None;
     }
-    // Some names start with spaces to sort first by name: trimmed.
     let or = |s: String, d: &str| {
         let t = s.trim();
         if t.is_empty() {
@@ -275,15 +254,12 @@ fn item(e: &Value) -> Option<Item> {
     })
 }
 
-/// One page of a gallery answer.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub items: Vec<Item>,
-    /// How many extensions match in all (the answer's ResultCount).
     pub total: Option<u64>,
 }
 
-/// `resultMetadata`'s TotalCount.
 fn result_count(result: &Value) -> Option<u64> {
     result
         .get("resultMetadata")?
@@ -298,7 +274,6 @@ fn result_count(result: &Value) -> Option<u64> {
         .as_u64()
 }
 
-/// The extensions in a gallery answer, and how many match in all.
 pub fn parse(body: &str) -> Result<Page, String> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| format!("The Marketplace sent something unexpected ({e})."))?;
@@ -315,7 +290,6 @@ pub fn parse(body: &str) -> Result<Page, String> {
     })
 }
 
-/// A count with thousands separators: 1,234,567.
 pub fn format_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -328,7 +302,6 @@ pub fn format_thousands(n: u64) -> String {
     out
 }
 
-/// An install count the way VS Code shows it: 950, 5.6K, 48.4M.
 pub fn format_count(n: u64) -> String {
     let short = |v: f64, unit: &str| {
         let r = (v * 10.0).round() / 10.0;
@@ -346,7 +319,6 @@ pub fn format_count(n: u64) -> String {
     }
 }
 
-/// A file or folder name built from gallery data: letters, digits, `.`, `-`, `_`, not starting with a dot, so it can't climb out of its folder or hide.
 pub fn safe_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 160
@@ -356,7 +328,6 @@ pub fn safe_name(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
-/// `publisher.name-version`, lowercase like VS Code's own folders; None when a part isn't a safe name.
 pub fn folder_name(publisher: &str, name: &str, version: &str) -> Option<String> {
     let f = format!(
         "{}.{}-{}",
@@ -367,7 +338,6 @@ pub fn folder_name(publisher: &str, name: &str, version: &str) -> Option<String>
     (safe_name(publisher) && safe_name(name) && safe_name(version) && safe_name(&f)).then_some(f)
 }
 
-/// Where a VSIX entry goes inside the extension's folder: files under `extension/` only, and none whose path has an empty, `.`, `..` or drive part.
 pub fn entry_path(name: &str) -> Option<PathBuf> {
     let rest = name.strip_prefix("extension/")?;
     if rest.is_empty() || rest.ends_with('/') {
@@ -403,7 +373,6 @@ fn finish(out: std::process::Output) -> Result<Vec<u8>, String> {
     }
 }
 
-/// One page (from 1) of a gallery query (blocking: run it off the UI thread).
 pub fn search(query: &Query, page: usize) -> Result<Page, String> {
     use std::io::Write;
     let mut child = curl()
@@ -430,7 +399,6 @@ pub fn search(query: &Query, page: usize) -> Result<Page, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("curl could not start ({e})"))?;
-    // The body goes through stdin: no quoting of JSON on a Windows command line.
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(query_body(query, page).as_bytes())
@@ -440,7 +408,6 @@ pub fn search(query: &Query, page: usize) -> Result<Page, String> {
     parse(&String::from_utf8_lossy(&out))
 }
 
-/// Download `url` into `to` (blocking).
 fn download(url: &str, to: &Path, max_secs: u32, max_bytes: u64) -> Result<(), String> {
     let out = curl()
         .args([
@@ -465,7 +432,6 @@ fn download(url: &str, to: &Path, max_secs: u32, max_bytes: u64) -> Result<(), S
     finish(out).map(|_| ())
 }
 
-/// Fetch an extension's icon into the cache (the small one, else the default); the cached file when it is there already.
 pub fn fetch_icon(urls: &[String], to: &Path) -> bool {
     if std::fs::metadata(to).is_ok_and(|m| m.len() > 0) {
         return true;
@@ -485,7 +451,6 @@ pub fn fetch_icon(urls: &[String], to: &Path) -> bool {
     false
 }
 
-/// An extension's README: from its folder when installed, else from the gallery.
 pub fn readme(item: &Item, installed: Option<&Path>) -> Result<String, String> {
     let local = installed
         .and_then(|d| std::fs::read_dir(d).ok())
@@ -536,7 +501,6 @@ pub fn readme(item: &Item, installed: Option<&Path>) -> Result<String, String> {
     Ok(text)
 }
 
-/// The pictures a README shows: `![alt](url)` and `<img src="url">`, in order, without repeats.
 pub fn readme_image_urls(md: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |u: &str| {
@@ -550,7 +514,6 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
         let before = &rest[..i];
         let after = &rest[i + 2..];
         let end = after.find(')').unwrap_or(after.len());
-        // Only an image: the `[` that opens this link text follows a `!`.
         if before.rfind('[').is_some_and(|o| o > 0 && before.as_bytes()[o - 1] == b'!') {
             add(&after[..end]);
         }
@@ -574,7 +537,6 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
     out
 }
 
-/// What kind of picture `bytes` are, as a file extension gpui can read.
 fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).to_ascii_lowercase();
     Some(match bytes {
@@ -588,7 +550,6 @@ fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
-/// Fetch a README's pictures into the cache, so the page can show them (gpui has no HTTP client here.
 pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String, PathBuf> {
     let cache = dir().join(".readme-images");
     let _ = std::fs::create_dir_all(&cache);
@@ -624,12 +585,10 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
 }
 
 
-/// `~/.fluxcode/vscode-extensions`.
 pub fn dir() -> PathBuf {
     super::home().join(".fluxcode").join("vscode-extensions")
 }
 
-/// An extension unpacked into `dir()`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Installed {
     pub id: String,
@@ -641,14 +600,11 @@ pub struct Installed {
     pub version: String,
     pub categories: Vec<String>,
     pub icon: Option<PathBuf>,
-    /// What it declares in `contributes`, in words ("3 color themes").
     pub contributes: Vec<String>,
-    /// It has a `main` or `browser` script: code for VS Code's extension host.
     pub has_code: bool,
 }
 
 impl Installed {
-    /// As a gallery item, for the page when the search doesn't list it.
     pub fn item(&self) -> Item {
         Item {
             publisher: self.publisher.clone(),
@@ -663,7 +619,6 @@ impl Installed {
     }
 }
 
-/// `contributes` in words, the parts FluxCode can read as data first.
 pub fn contributes(pkg: &Value) -> Vec<String> {
     let Some(c) = pkg.get("contributes") else {
         return Vec::new();
@@ -692,7 +647,6 @@ pub fn contributes(pkg: &Value) -> Vec<String> {
         .collect()
 }
 
-/// `%key%` names come from package.nls.json.
 pub(crate) fn localized(folder: &Path, s: &str, nls: &mut Option<Value>) -> String {
     let Some(key) = s.strip_prefix('%').and_then(|k| k.strip_suffix('%')) else {
         return s.to_string();
@@ -756,7 +710,6 @@ fn read_installed(folder: &Path) -> Option<Installed> {
     })
 }
 
-/// The installed extensions, by name (blocking: a few small files).
 pub fn installed_list() -> Vec<Installed> {
     let mut out: Vec<Installed> = std::fs::read_dir(dir())
         .map(|rd| {
@@ -770,7 +723,6 @@ pub fn installed_list() -> Vec<Installed> {
     out
 }
 
-/// Download the VSIX and unpack it; replaces other versions of the same extension.
 pub fn install(item: &Item) -> Result<(), String> {
     let folder = folder_name(&item.publisher, &item.name, &item.version).ok_or_else(bad_name)?;
     let url = item
@@ -783,7 +735,6 @@ pub fn install(item: &Item) -> Result<(), String> {
     unpack(&bytes?, &folder, &item.id())
 }
 
-/// Install a `.vsix` file from disk; returns the extension's name.
 pub fn install_file(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let entries = super::zip::list(&bytes).ok_or_else(not_vsix)?;
@@ -821,7 +772,6 @@ fn not_vsix() -> String {
     tr("The file is not a VSIX package.").to_string()
 }
 
-/// Unpack a VSIX's `extension/` folder into `dir()/<folder>`, through a hidden partial folder renamed at the end: a failed install never leaves a half folder that looks installed.
 fn unpack(bytes: &[u8], folder: &str, id: &str) -> Result<(), String> {
     let entries = super::zip::list(bytes).ok_or_else(not_vsix)?;
     let root = dir();
@@ -863,7 +813,6 @@ fn unpack(bytes: &[u8], folder: &str, id: &str) -> Result<(), String> {
     std::fs::rename(&partial, &dest).map_err(|e| e.to_string())
 }
 
-/// Remove an installed extension's folder (only ever one inside `dir()`).
 pub fn uninstall(folder: &Path) -> Result<(), String> {
     let ok = folder.parent() == Some(dir().as_path())
         && folder
@@ -886,46 +835,33 @@ pub enum Busy {
     Removing,
 }
 
-/// Pages kept in memory before the cache starts over.
 const CACHE_PAGES: usize = 400;
 
-/// The Marketplace list: the pages loaded so far for one query, and a cache of every page fetched, so going back to an earlier query (Backspace) is instant.
 #[derive(Default)]
 pub struct Market {
-    /// The sort the user picked (None: relevance for a search, else installs).
     pub sort: Option<Sort>,
     pub category: Option<&'static str>,
-    /// The query `items` answer (None: nothing shown yet).
     pub shown: Option<Query>,
     pub items: Vec<Item>,
     pub total: Option<u64>,
-    /// Pages of `shown` loaded; the last one came back short.
     pub pages: usize,
     pub done: bool,
-    /// A new query's first page is on its way: the old list stays, dimmed.
     pub loading: bool,
     pub loading_more: bool,
     pub error: Option<String>,
     pub more_error: Option<String>,
-    /// Bumped per query: a wait or an answer that belongs to an older one is dropped.
     pub generation: u64,
-    /// The first search was started (set while drawing, hence a Cell).
     pub kicked: Cell<bool>,
     pub cache: HashMap<CacheKey, Page>,
     pub scroll: gpui_kit::UniformListScrollHandle,
-    /// Icons on disk, by id; the ones asked for or failed; downloads running.
     pub icons: HashMap<String, PathBuf>,
     pub icons_tried: HashSet<String>,
     pub icons_running: usize,
-    /// Icons the rows near the viewport still need, nearest first.
     pub icon_queue: Vec<(String, Vec<String>, PathBuf)>,
     pub installed: Vec<Installed>,
     pub busy: HashMap<String, Busy>,
-    /// The extension the page shows.
     pub open: Option<Item>,
-    /// README per id; missing while it loads.
     pub readme: HashMap<String, Result<String, String>>,
-    /// Each README's pictures, fetched into the cache (URL as written → file).
     pub readme_images: HashMap<String, std::sync::Arc<HashMap<String, PathBuf>>>,
 }
 
@@ -941,7 +877,6 @@ impl Market {
         self.cache.insert(key, page);
     }
 
-    /// Show a query's first page in place of the list.
     pub fn show_first(&mut self, q: Query, page: Page) {
         self.done = page.items.len() < PAGE_SIZE;
         self.items = page.items;
@@ -955,7 +890,6 @@ impl Market {
         self.icon_queue.clear();
     }
 
-    /// Add the next page under the list (an extension already listed is skipped: the order can shift between two requests).
     pub fn append(&mut self, page: Page) {
         self.done = page.items.len() < PAGE_SIZE;
         let seen: HashSet<String> = self.items.iter().map(Item::id).collect();
@@ -1050,7 +984,6 @@ mod tests {
             ),
             (Some(2), Some(1))
         );
-        // Relevance means nothing without text: most installed instead.
         assert_eq!(
             Query::new(" ", Some(Sort::Relevance), None).sort,
             Sort::Installs

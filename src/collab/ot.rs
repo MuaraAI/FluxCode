@@ -1,4 +1,3 @@
-//! Operational transformation for plain text: the same algorithm as ot.js (Google Wave / Etherpad's model).
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +11,6 @@ pub enum Comp {
     Delete(usize),
 }
 
-/// A text operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Op {
     pub comps: Vec<Comp>,
@@ -39,7 +37,6 @@ impl Op {
         self
     }
 
-    /// Inserts go before a delete at the same place, so equal edits have one form.
     pub fn insert(&mut self, s: &str) -> &mut Self {
         if s.is_empty() {
             return self;
@@ -84,7 +81,6 @@ impl Op {
         }).sum()
     }
 
-    /// Bytes this operation inserts or deletes.
     pub fn changed_bytes(&self) -> usize {
         self.comps
             .iter()
@@ -96,7 +92,6 @@ impl Op {
             .sum()
     }
 
-    /// Keeps everything: changes nothing.
     #[cfg(test)]
     pub fn is_noop(&self) -> bool {
         self.comps.iter().all(|c| matches!(c, Comp::Retain(_)))
@@ -123,7 +118,6 @@ impl Op {
         Ok(out)
     }
 
-    /// The single operation that turns `old` into `new`: the common start and end are kept, the middle replaced.
     pub fn diff(old: &str, new: &str) -> Op {
         let a: Vec<char> = old.chars().collect();
         let b: Vec<char> = new.chars().collect();
@@ -139,7 +133,6 @@ impl Op {
         op
     }
 
-    /// `self` then `other`, as one operation.
     pub fn compose(&self, other: &Op) -> Result<Op, String> {
         if self.target_len() != other.base_len() {
             return Err("compose: lengths differ".into());
@@ -192,7 +185,6 @@ impl Op {
         Ok(out)
     }
 
-    /// For two operations made on the same text, `(a', b')` such that `b'` after `a` equals `a'` after `b`.
     pub fn transform(a: &Op, b: &Op) -> Result<(Op, Op), String> {
         if a.base_len() != b.base_len() {
             return Err("transform: the edits were made on different texts".into());
@@ -246,7 +238,6 @@ impl Op {
         Ok((a1, b1))
     }
 
-    /// Where a caret at char index `i` ends up after this operation.
     pub fn transform_index(&self, i: usize) -> usize {
         let (mut pos, mut out) = (0usize, i);
         for c in &self.comps {
@@ -265,7 +256,6 @@ impl Op {
         out
     }
 
-    /// The edits as (char start, chars removed, text inserted) on the original text, for applying to an editor one span at a time.
     pub fn spans(&self) -> Vec<(usize, usize, String)> {
         let mut out: Vec<(usize, usize, String)> = Vec::new();
         let mut pos = 0;
@@ -289,7 +279,6 @@ impl Op {
     }
 }
 
-/// A guest's side of one shared file: at most one edit in flight to the host, later local edits gathered into one buffer behind it.
 #[derive(Clone, Debug, Default)]
 pub enum Client {
     #[default]
@@ -299,7 +288,6 @@ pub enum Client {
 }
 
 impl Client {
-    /// A local edit.
     pub fn local(&mut self, op: Op) -> Result<Option<Op>, String> {
         match std::mem::take(self) {
             Client::Synced => {
@@ -317,7 +305,6 @@ impl Client {
         }
     }
 
-    /// An edit from the host (someone else's).
     pub fn remote(&mut self, op: Op) -> Result<Op, String> {
         match std::mem::take(self) {
             Client::Synced => Ok(op),
@@ -335,7 +322,6 @@ impl Client {
         }
     }
 
-    /// The host took our in-flight edit.
     pub fn ack(&mut self) -> Option<Op> {
         match std::mem::take(self) {
             Client::Synced => None,
@@ -348,12 +334,10 @@ impl Client {
     }
 }
 
-/// The host's copy of one shared file: its text, its revision, and the recent edits a late guest edit is transformed past.
 #[derive(Clone, Debug, Default)]
 pub struct Server {
     pub text: String,
     pub rev: u64,
-    /// Edits `rev - history.len() .. rev`.
     pub history: std::collections::VecDeque<Op>,
 }
 
@@ -364,7 +348,6 @@ impl Server {
         Self { text, rev: 0, history: Default::default() }
     }
 
-    /// A guest's edit made at revision `base`: transformed past what came since, applied, recorded.
     pub fn receive(&mut self, base: u64, op: Op) -> Result<Op, String> {
         let oldest = self.rev - self.history.len() as u64;
         if base < oldest || base > self.rev {
@@ -372,7 +355,6 @@ impl Server {
         }
         let mut op = op;
         for past in self.history.iter().skip((base - oldest) as usize) {
-            // The host's earlier edit goes first at a shared spot.
             op = Op::transform(past, &op)?.1;
         }
         self.text = op.apply(&self.text)?;
@@ -380,7 +362,6 @@ impl Server {
         Ok(op)
     }
 
-    /// The host's own edit, made on the current text.
     pub fn local(&mut self, op: Op) -> Result<(), String> {
         self.text = op.apply(&self.text)?;
         self.push(op);
@@ -442,31 +423,25 @@ mod tests {
         assert_eq!(op("abcdef", "af").transform_index(4), 1);
     }
 
-    /// Two guests type at the same moment; the host orders; everyone ends equal.
     #[test]
     fn host_and_two_guests_end_with_the_same_text() {
         let start = "fn main() {\n}\n".to_string();
         let mut host = Server::new(start.clone());
         let (mut g1, mut g2) = (Client::default(), Client::default());
         let (mut t1, mut t2) = (start.clone(), start.clone());
-        // Guest 1 inserts a line; guest 2 renames, both at rev 0.
         let e1 = op(&t1, "fn main() {\n    run();\n}\n");
         t1 = e1.apply(&t1).unwrap();
         let s1 = g1.local(e1).unwrap().unwrap();
         let e2 = op(&t2, "fn start() {\n}\n");
         t2 = e2.apply(&t2).unwrap();
         let s2 = g2.local(e2).unwrap().unwrap();
-        // Guest 2 types again before its first edit is acked: buffered.
         let e3 = op(&t2, "fn start() {\n}\n// done\n");
         t2 = e3.apply(&t2).unwrap();
         assert!(g2.local(e3).unwrap().is_none());
-        // The host gets guest 1 first, then guest 2 (both made at rev 0).
         let a1 = host.receive(0, s1).unwrap();
         let a2 = host.receive(0, s2).unwrap();
-        // Guest 1: ack for its own, then guest 2's edit.
         assert!(g1.ack().is_none());
         t1 = g1.remote(a2).unwrap().apply(&t1).unwrap();
-        // Guest 2: guest 1's edit (remote), then ack, then sends its buffer.
         t2 = g2.remote(a1).unwrap().apply(&t2).unwrap();
         let buf = g2.ack().unwrap();
         let a3 = host.receive(2, buf).unwrap();

@@ -1,6 +1,4 @@
-//! Line diff for the agent's changes: how many lines it added and removed in a file, and a unified diff to read them.
 
-/// Above this many cells in the middle part, counts are estimated and no diff text is made.
 const MAX_CELLS: usize = 4_000_000;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -10,7 +8,6 @@ enum Op {
     Add,
 }
 
-/// (op, index in old, index in new) for every line, in order; None if too large.
 fn ops(a: &[&str], b: &[&str]) -> Option<Vec<(Op, usize, usize)>> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
@@ -19,7 +16,6 @@ fn ops(a: &[&str], b: &[&str]) -> Option<Vec<(Op, usize, usize)>> {
         return None;
     }
     let (n, m) = (am.len(), bm.len());
-    // lcs[i][j] = longest common subsequence of am[i..] and bm[j..]
     let mut lcs = vec![0u32; (n + 1) * (m + 1)];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
@@ -37,7 +33,6 @@ fn ops(a: &[&str], b: &[&str]) -> Option<Vec<(Op, usize, usize)>> {
             out.push((Op::Same, pre + i, pre + j));
             i += 1;
             j += 1;
-        // On a tie the removal comes first, so a changed line reads "-old" then "+new".
         } else if j < m && (i == n || lcs[i * (m + 1) + j + 1] > lcs[(i + 1) * (m + 1) + j]) {
             out.push((Op::Add, pre + i, pre + j));
             j += 1;
@@ -52,12 +47,10 @@ fn ops(a: &[&str], b: &[&str]) -> Option<Vec<(Op, usize, usize)>> {
     Some(out)
 }
 
-/// Lines added and removed going from `old` to `new`.
 pub fn counts(old: &str, new: &str) -> (usize, usize) {
     let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     match ops(&a, &b) {
         Some(o) => (o.iter().filter(|x| x.0 == Op::Add).count(), o.iter().filter(|x| x.0 == Op::Del).count()),
-        // Too big to diff exactly: compare line multisets.
         None => {
             let mut seen: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
             for l in &a {
@@ -77,7 +70,6 @@ pub fn counts(old: &str, new: &str) -> (usize, usize) {
     }
 }
 
-/// A unified diff (3 lines of context) with `---`/`+++` headers named `name`.
 pub fn unified(name: &str, old: &str, new: &str) -> String {
     let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     let Some(o) = ops(&a, &b) else {
@@ -87,7 +79,6 @@ pub fn unified(name: &str, old: &str, new: &str) -> String {
     let changed: Vec<usize> = o.iter().enumerate().filter(|(_, x)| x.0 != Op::Same).map(|(k, _)| k).collect();
     let mut k = 0;
     while k < changed.len() {
-        // A hunk: changes closer than 6 lines apart stay together, with 3 lines around.
         let start = changed[k].saturating_sub(3);
         let mut end = changed[k];
         while k + 1 < changed.len() && changed[k + 1] <= end + 6 {
@@ -111,11 +102,9 @@ pub fn unified(name: &str, old: &str, new: &str) -> String {
     out
 }
 
-/// The steps from `old` to `new` as a person would type them: removed lines go in one step per block, added lines appear one per step, top to bottom.
 pub fn typing_frames(old: &str, new: &str, max: usize) -> Vec<(String, u32)> {
     let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     let Some(o) = ops(&a, &b) else { return Vec::new() };
-    // A step ends after each added line and after each block of removed lines.
     let mut cuts: Vec<usize> = Vec::new();
     for (k, x) in o.iter().enumerate() {
         let next_del = o.get(k + 1).is_some_and(|y| y.0 == Op::Del);
@@ -137,7 +126,6 @@ pub fn typing_frames(old: &str, new: &str, max: usize) -> Vec<(String, u32)> {
         .into_iter()
         .enumerate()
         .map(|(s, k)| {
-            // Lines before the cut are the new file's, from the cut on still the old one's.
             let done: Vec<&str> = o[..k].iter().filter(|x| x.0 != Op::Del).map(|x| b[x.2]).collect();
             let line = done.len().saturating_sub(1) as u32;
             if s == last {

@@ -1,6 +1,4 @@
-//! "Can this PC take the moving background?" Asked when Background animation is turned on in Settings: FluxCode measures its own CPU time for a few seconds while the scene moves, reads the PC's cores, memory and whether it runs on battery, and says plainly whether that is light, fine or heavy here.
 
-/// How the moving background suits this PC.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
     Light,
@@ -8,18 +6,15 @@ pub enum Level {
     Heavy,
 }
 
-/// The running check in Settings, or its result.
 #[derive(Clone, Debug)]
 pub enum Check {
     Running,
     Done(Level, String),
 }
 
-/// How long the scene runs while it is measured, after a moment to settle.
 pub const SETTLE: std::time::Duration = std::time::Duration::from_millis(800);
 pub const MEASURE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// What matters about the PC here.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Specs {
     pub cores: usize,
@@ -31,7 +26,6 @@ pub fn specs() -> Specs {
     Specs { cores: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1), ram_gb: ram_gb(), on_battery: on_battery() }
 }
 
-/// Seconds of CPU this process has used so far (user and kernel), where it can be read.
 pub fn cpu_seconds() -> Option<f64> {
     #[cfg(windows)]
     {
@@ -47,7 +41,6 @@ pub fn cpu_seconds() -> Option<f64> {
             fn GetProcessTimes(p: isize, created: *mut FileTime, exited: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
         }
         let (mut a, mut b, mut k, mut u) = (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
-        // SAFETY: four valid out-pointers and the process's own pseudo handle.
         if unsafe { GetProcessTimes(GetCurrentProcess(), &mut a, &mut b, &mut k, &mut u) } == 0 {
             return None;
         }
@@ -56,7 +49,6 @@ pub fn cpu_seconds() -> Option<f64> {
     }
     #[cfg(target_os = "linux")]
     {
-        // Fields 14 and 15 (utime, stime) in clock ticks, after the ")" that ends the name.
         let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
         let rest = &stat[stat.rfind(')')? + 2..];
         let f: Vec<&str> = rest.split_whitespace().collect();
@@ -89,7 +81,6 @@ fn ram_gb() -> Option<f32> {
             fn GlobalMemoryStatusEx(m: *mut MemoryStatusEx) -> i32;
         }
         let mut m = MemoryStatusEx { length: std::mem::size_of::<MemoryStatusEx>() as u32, load: 0, total_phys: 0, avail_phys: 0, total_page: 0, avail_page: 0, total_virtual: 0, avail_virtual: 0, avail_extended: 0 };
-        // SAFETY: `length` is set, as the call requires.
         if unsafe { GlobalMemoryStatusEx(&mut m) } == 0 {
             return None;
         }
@@ -121,11 +112,9 @@ fn on_battery() -> bool {
             fn GetSystemPowerStatus(s: *mut PowerStatus) -> i32;
         }
         let mut s = PowerStatus::default();
-        // SAFETY: a valid out-pointer.
         if unsafe { GetSystemPowerStatus(&mut s) } == 0 {
             return false;
         }
-        // 0: unplugged; 128 in the flags: no battery at all.
         s.ac_line == 0 && s.battery_flag & 128 == 0
     }
     #[cfg(not(windows))]
@@ -136,12 +125,10 @@ fn on_battery() -> bool {
     }
 }
 
-/// The verdict for `core_pct` (percent of one core the measurement found, None when it can't be read here) on a PC with `s`, and the sentence that says it.
 pub fn verdict(core_pct: Option<f32>, s: Specs) -> (Level, String) {
     let ram = s.ram_gb.map(|g| format!("{:.0} GB", g.round())).unwrap_or_else(|| "?".into());
     let spec = crate::trf!("{cores} cores, {ram} RAM"; cores => s.cores, ram => ram);
     let Some(pct) = core_pct else {
-        // No measurement: go by the cores alone.
         let level = if s.cores >= 8 { Level::Fine } else { Level::Heavy };
         let text = match level {
             Level::Heavy => crate::trf!("Couldn't measure it here. With {spec}, it may be heavy: leave it off if FluxCode feels slow."; spec => spec),
@@ -149,7 +136,6 @@ pub fn verdict(core_pct: Option<f32>, s: Specs) -> (Level, String) {
         };
         return (level, text);
     };
-    // Its share of the whole processor, as Task Manager shows it.
     let whole = pct / s.cores.max(1) as f32;
     let level = if whole < 2.5 && pct < 20. {
         Level::Light

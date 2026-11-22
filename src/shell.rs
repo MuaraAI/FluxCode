@@ -1,8 +1,6 @@
-//! "Open with FluxCode" in Windows Explorer (issue #87).
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
-/// The file types FluxCode offers to open.
 pub(crate) const EXTENSIONS: &[&str] = &[
     "txt", "md", "markdown", "flux", "log", "csv", "tsv", "json", "jsonc", "json5", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "html", "htm",
     "css", "scss", "sass", "less", "vue", "svelte", "astro", "py", "pyw", "pyi", "rs", "go", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "java", "kt",
@@ -11,14 +9,12 @@ pub(crate) const EXTENSIONS: &[&str] = &[
     "gradle", "cmake", "mk", "dockerfile", "gitignore", "gitattributes", "editorconfig", "lock",
 ];
 
-/// Types in `EXTENSIONS` FluxCode never makes their default, only offers in "Open with".
 const SCRIPTS: &[&str] = &["bat", "cmd", "ps1", "psm1"];
 
 pub(crate) const PROG_ID: &str = "FluxCode.File";
 const MENU_KEY: &str = "FluxCode";
 const MENU_LABEL: &str = "Open with FluxCode";
 
-/// The registry keys and values this module writes, as (key, value name, data) under `HKCU\Software\Classes`.
 fn entries(exe: &str) -> Vec<(String, Option<&'static str>, String)> {
     let open_file = format!("\"{exe}\" \"%1\"");
     let open_dir = format!("\"{exe}\" \"%V\"");
@@ -27,7 +23,6 @@ fn entries(exe: &str) -> Vec<(String, Option<&'static str>, String)> {
         (PROG_ID.into(), None, "FluxCode file".into()),
         (format!("{PROG_ID}\\DefaultIcon"), None, icon.clone()),
         (format!("{PROG_ID}\\shell\\open\\command"), None, open_file.clone()),
-        // The name "Open with" shows for FluxCode.exe.
         ("Applications\\FluxCode.exe".into(), Some("FriendlyAppName"), "FluxCode".into()),
         ("Applications\\FluxCode.exe\\shell\\open\\command".into(), None, open_file.clone()),
     ];
@@ -39,7 +34,6 @@ fn entries(exe: &str) -> Vec<(String, Option<&'static str>, String)> {
     v
 }
 
-/// The `"exe" "%1"` command FluxCode would register for itself.
 #[cfg(windows)]
 fn exe_path() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -53,7 +47,6 @@ pub(crate) mod reg {
     use std::ptr::{null, null_mut};
 
     pub type Hkey = isize;
-    // (HKEY)(ULONG_PTR)(LONG)0x8000000x: sign-extended on 64-bit Windows.
     pub const HKCR: Hkey = 0x8000_0000u32 as i32 as isize;
     pub const HKCU: Hkey = 0x8000_0001u32 as i32 as isize;
     pub const HKLM: Hkey = 0x8000_0002u32 as i32 as isize;
@@ -101,7 +94,6 @@ pub(crate) mod reg {
         }
     }
 
-    /// Set a string value (or, with `data` None, an empty REG_NONE marker) on `root\sub`, creating the key.
     pub fn set(root: Hkey, sub: &str, name: Option<&str>, data: Option<&str>) -> Result<(), String> {
         let sub_w = wide(sub);
         let mut key: Hkey = 0;
@@ -121,13 +113,11 @@ pub(crate) mod reg {
         check(rc, sub)
     }
 
-    /// A string value, or None when the key or value is missing.
     pub fn get(root: Hkey, sub: &str, name: Option<&str>) -> Option<String> {
         let sub_w = wide(sub);
         let name_w = opt_wide(name);
         let mut buf = vec![0u16; 1024];
         let mut len = (buf.len() * 2) as u32;
-        // REG_EXPAND_SZ values (PATH) come back expanded; a long one asks for a bigger buffer.
         let mut rc = unsafe { RegGetValueW(root, sub_w.as_ptr(), ptr(&name_w), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut len) };
         if rc == ERROR_MORE_DATA {
             buf = vec![0u16; len as usize / 2 + 64];
@@ -141,7 +131,6 @@ pub(crate) mod reg {
         Some(String::from_utf16_lossy(&buf[..n]))
     }
 
-    /// Delete `root\sub` with everything under it; a missing key is fine.
     pub fn delete_tree(root: Hkey, sub: &str) -> Result<(), String> {
         let rc = unsafe { RegDeleteTreeW(root, wide(sub).as_ptr()) };
         if rc == ERROR_FILE_NOT_FOUND {
@@ -150,7 +139,6 @@ pub(crate) mod reg {
         check(rc, sub)
     }
 
-    /// Delete `root\sub` when it holds no values and no keys (one `register` made for a type Windows didn't know).
     pub fn delete_if_empty(root: Hkey, sub: &str) {
         let sub_w = wide(sub);
         let mut key: Hkey = 0;
@@ -166,7 +154,6 @@ pub(crate) mod reg {
         }
     }
 
-    /// Delete one value; a missing key or value is fine.
     pub fn delete_value(root: Hkey, sub: &str, name: Option<&str>) -> Result<(), String> {
         let name_w = opt_wide(name);
         let rc = unsafe { RegDeleteKeyValueW(root, wide(sub).as_ptr(), ptr(&name_w)) };
@@ -180,7 +167,6 @@ pub(crate) mod reg {
 #[cfg(windows)]
 const CLASSES: &str = "Software\\Classes";
 
-/// Tell Explorer the file types changed, so menus and icons update without a sign-out.
 #[cfg(windows)]
 fn notify_shell() {
     #[link(name = "shell32")]
@@ -191,7 +177,6 @@ fn notify_shell() {
     unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, 0, std::ptr::null(), std::ptr::null()) };
 }
 
-/// True when the right-click entry points at this FluxCode.exe.
 #[cfg(windows)]
 pub(crate) fn is_registered() -> bool {
     let Ok(exe) = exe_path() else { return false };
@@ -199,7 +184,6 @@ pub(crate) fn is_registered() -> bool {
         .is_some_and(|cmd| cmd.to_lowercase().contains(&exe.to_lowercase()))
 }
 
-/// Add the file types and the right-click entries for this FluxCode.exe.
 #[cfg(windows)]
 pub(crate) fn register() -> Result<(), String> {
     use reg::{get, set, HKCR, HKCU};
@@ -211,7 +195,6 @@ pub(crate) fn register() -> Result<(), String> {
         let key = format!("{CLASSES}\\.{ext}");
         set(HKCU, &format!("{key}\\OpenWithProgids"), Some(PROG_ID), None)?;
         set(HKCU, &format!("{CLASSES}\\Applications\\FluxCode.exe\\SupportedTypes"), Some(&format!(".{ext}")), Some(""))?;
-        // The default only where nothing opens this type yet: an app the user or Windows chose stays, and a script type never opens in the editor on a double-click unless the user asks for it.
         if !SCRIPTS.contains(ext) && get(HKCR, &format!(".{ext}"), None).filter(|v| !v.is_empty()).is_none() {
             set(HKCU, &key, None, Some(PROG_ID))?;
         }
@@ -220,7 +203,6 @@ pub(crate) fn register() -> Result<(), String> {
     Ok(())
 }
 
-/// Remove what `register` added.
 #[cfg(windows)]
 pub(crate) fn unregister() -> Result<(), String> {
     use reg::{delete_tree, delete_value, get, HKCU};
@@ -264,7 +246,6 @@ pub(crate) fn unregister() -> Result<(), String> {
     Ok(())
 }
 
-/// `fluxcode --register-shell` / `--unregister-shell`, run by the installer.
 pub(crate) fn cli(register_it: bool) -> i32 {
     let r = if register_it { register() } else { unregister() };
     match r {

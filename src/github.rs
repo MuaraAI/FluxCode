@@ -1,4 +1,3 @@
-//! GitHub account, ported from `src-tauri/src/github.rs`: a personal access token (verified against api.github.com with the system `curl.exe`, so no HTTP client is compiled in) or the token of an existing GitHub CLI login.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -10,7 +9,6 @@ use std::process::Stdio;
 pub struct Account {
     pub login: String,
     pub name: String,
-    /// "token" (pasted) or "gh" (GitHub CLI)
     pub source: String,
     #[serde(default)]
     token: String,
@@ -33,12 +31,10 @@ fn save(account: &Account) -> Result<(), String> {
     fs::write(path, serde_json::to_string(account).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
-/// The stored token, if any (for child-process environments).
 pub fn token() -> Option<String> {
     load().map(|a| a.token)
 }
 
-/// Add the token to a child's environment.
 pub fn apply_env(cmd: &mut std::process::Command) {
     if let Some(t) = token() {
         cmd.env("GH_TOKEN", &t).env("GITHUB_TOKEN", &t);
@@ -50,7 +46,6 @@ pub fn gh_on_path() -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(exe).is_file()))
 }
 
-/// Ask api.github.com who the token belongs to.
 fn verify(token: &str) -> Result<(String, String), String> {
     let token = token.trim();
     if token.is_empty() || token.contains(|c: char| c.is_whitespace() || c == '"') {
@@ -86,7 +81,6 @@ pub fn login_token(token: &str) -> Result<Account, String> {
     Ok(account)
 }
 
-/// Reuse the GitHub CLI's login (`gh auth token`).
 pub fn login_cli() -> Result<Account, String> {
     if !gh_on_path() {
         return Err("The GitHub CLI (gh) was not found on PATH. Install it from cli.github.com, run `gh auth login`, then try again.".into());

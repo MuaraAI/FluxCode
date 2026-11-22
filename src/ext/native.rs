@@ -1,4 +1,3 @@
-//! What installed VS Code extensions do in FluxCode without VS Code's extension host: the declarative parts of `contributes`, applied natively.
 
 use super::market;
 use super::vsx_theme;
@@ -8,18 +7,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock};
 
-/// What FluxCode applies from one extension, for its page.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Applied {
-    /// Themes now in the theme menu: (palette id, name).
     pub themes: Vec<(String, String)>,
-    /// Language names that now open with this extension's file types.
     pub languages: Vec<String>,
-    /// Theme files that could not be read, with why.
     pub failed: Vec<String>,
 }
 
-/// A language an extension adds: the highlighter token, the status-bar name, and the file name endings (`.svelte`, `.blade.php`) and exact names that select it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lang {
     pub token: &'static str,
@@ -30,14 +24,12 @@ pub struct Lang {
 
 static APPLIED: RwLock<Option<HashMap<String, Applied>>> = RwLock::new(None);
 static LANGS: RwLock<Vec<Lang>> = RwLock::new(Vec::new());
-/// Palettes already built, by theme file and label: loading again (after another install) reuses them instead of leaking a second copy.
 static BUILT: Mutex<Option<HashMap<(PathBuf, String), &'static Palette>>> = Mutex::new(None);
 
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Read every installed extension and apply what it declares.
 pub fn load() {
     let mut applied = HashMap::new();
     let mut palettes = Vec::new();
@@ -75,7 +67,6 @@ pub fn load() {
     *APPLIED.write().unwrap_or_else(|e| e.into_inner()) = Some(applied);
 }
 
-/// What `load` applied from the extension `id` (`publisher.name`, lower case).
 pub fn applied(id: &str) -> Applied {
     APPLIED
         .read()
@@ -96,7 +87,6 @@ fn list<'a>(pkg: &'a Value, key: &str) -> &'a [Value] {
         .map_or(&[], Vec::as_slice)
 }
 
-/// `vsx:<publisher.name>/<theme id or label>`: what settings.json keeps.
 pub fn theme_id(ext_id: &str, theme: &Value, label: &str) -> String {
     let own = theme.get("id").and_then(Value::as_str).unwrap_or(label);
     format!("vsx:{ext_id}/{own}")
@@ -146,7 +136,6 @@ fn theme(
     Ok(p)
 }
 
-/// A palette for FluxCode from a read theme file (leaked: palettes live as long as the app, like the built-in ones).
 pub fn palette(
     file: &vsx_theme::ThemeFile,
     dark: bool,
@@ -187,7 +176,6 @@ pub fn palette(
     }))
 }
 
-/// `contributes.languages[]` → a `Lang`, or nothing if it adds no file types.
 pub fn language_of(l: &Value, localize: &mut dyn FnMut(&str) -> String) -> Option<Lang> {
     let id = l.get("id").and_then(Value::as_str)?.trim();
     let strings = |k: &str| -> Vec<String> {
@@ -241,7 +229,6 @@ pub fn language_of(l: &Value, localize: &mut dyn FnMut(&str) -> String) -> Optio
     })
 }
 
-/// The language an installed extension gives a file name (lower case), if any.
 pub fn language(name: &str, multi_dot: bool) -> Option<(&'static str, &'static str)> {
     let langs = LANGS.read().unwrap_or_else(|e| e.into_inner());
     lookup(&langs, name, multi_dot)
@@ -253,7 +240,6 @@ fn lookup(langs: &[Lang], name: &str, multi_dot: bool) -> Option<(&'static str, 
             return Some((l.token, l.name));
         }
     }
-    // The longest matching ending wins (`.d.ts` over `.ts`).
     langs
         .iter()
         .flat_map(|l| l.extensions.iter().map(move |e| (l, e)))
@@ -285,9 +271,7 @@ mod tests {
         assert_eq!((l.token, l.name), ("svelte", "Svelte"));
         assert_eq!(l.extensions, [".svelte", ".svx"]);
         assert_eq!(l.filenames, ["svelte.config"]);
-        // A language that only names a grammar adds no file types.
         assert!(language_of(&json!({ "id": "svelte-injection" }), &mut same).is_none());
-        // Without aliases the id is the name; an alias from package.nls.json is localized.
         let l = language_of(
             &json!({ "id": "prisma", "extensions": [".prisma"] }),
             &mut same,
@@ -320,7 +304,6 @@ mod tests {
             lookup(&langs, "home.blade.php", true),
             Some(("php", "Blade"))
         );
-        // Multi-dot endings are only asked in the first pass; single ones only in the second.
         assert_eq!(lookup(&langs, "home.blade.php", false), None);
         assert_eq!(lookup(&langs, "app.svelte", true), None);
         assert_eq!(lookup(&langs, ".svelte", false), None);
@@ -343,7 +326,6 @@ mod tests {
         );
     }
 
-    /// Network: searches the Marketplace, installs real theme extensions into `%USERPROFILE%` (point it at a scratch folder) and checks what FluxCode makes of them.
     #[test]
     #[ignore]
     fn marketplace_themes_end_to_end() {
@@ -379,7 +361,6 @@ mod tests {
                     p.dark, p.editor, p.side, p.fg, p.accent, p.selection
                 );
                 assert!(named >= 5, "{name}: only {named} of the main code colors");
-                // The built-in palettes' contract (theme.rs): text at 4.5:1 on every surface.
                 for t in [
                     p.fg,
                     p.strong,
@@ -440,7 +421,6 @@ mod tests {
             ("vsx:acme.night/Night", "Night", true, 0x101820)
         );
         assert!(p.syntax.and_then(|s| s.syntax.style("keyword")).is_some());
-        // Built once: asking again gives the same palette.
         assert!(std::ptr::eq(
             p,
             theme(&installed, &list(&pkg, "themes")[0], &mut nls).unwrap()

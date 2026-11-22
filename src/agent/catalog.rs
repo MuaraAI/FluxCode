@@ -1,4 +1,3 @@
-//! Facts about a model for the model menu: how many tokens it reads at once (its context window), how many it can write in one answer, and whether it is free.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -7,18 +6,13 @@ use std::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Meta {
-    /// Tokens the model reads at once.
     pub context: u64,
-    /// Tokens it can write in one answer.
     pub output: u64,
-    /// Input and output both cost nothing.
     pub free: bool,
 }
 
-/// What has been read so far, by `provider/model` id; None until a read finished.
 static KEPT: Mutex<Option<HashMap<String, Meta>>> = Mutex::new(None);
 
-/// OpenCode's copy of the catalog.
 pub fn file() -> Option<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_CACHE_HOME").filter(|x| !x.is_empty()) {
         return Some(PathBuf::from(x).join("opencode").join("models.json"));
@@ -27,7 +21,6 @@ pub fn file() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".cache").join("opencode").join("models.json"))
 }
 
-/// The facts for these ids, from the catalog's JSON (`{provider: {models: {id: …}}}`).
 pub fn parse(json: &str, ids: &[String]) -> HashMap<String, Meta> {
     let Ok(v) = serde_json::from_str::<Value>(json) else { return HashMap::new() };
     let mut out = HashMap::new();
@@ -46,12 +39,10 @@ pub fn parse(json: &str, ids: &[String]) -> HashMap<String, Meta> {
     out
 }
 
-/// The facts for one id, once they have been read.
 pub fn get(id: &str) -> Option<Meta> {
     KEPT.lock().ok()?.as_ref()?.get(id).copied()
 }
 
-/// The ids not looked up yet (all of them before the first read).
 pub fn missing(ids: &[String]) -> Vec<String> {
     let Ok(g) = KEPT.lock() else { return Vec::new() };
     match g.as_ref() {
@@ -60,7 +51,6 @@ pub fn missing(ids: &[String]) -> Vec<String> {
     }
 }
 
-/// Read the catalog for these ids (off the UI thread) and keep what it says.
 pub fn load(ids: &[String]) {
     let found = file().and_then(|f| std::fs::read_to_string(f).ok()).map(|j| parse(&j, ids)).unwrap_or_default();
     if let Ok(mut g) = KEPT.lock() {
@@ -68,13 +58,11 @@ pub fn load(ids: &[String]) {
     }
 }
 
-/// The catalog id of a Claude model named like "Opus 5.5" or "Claude Sonnet 4.6".
 pub fn claude_id(family: &str, version: f32) -> String {
     let v = format!("{version}").replace('.', "-");
     format!("anthropic/claude-{}-{v}", family.to_lowercase())
 }
 
-/// "1M", "1.5M", "262K", "8K".
 pub fn tokens(n: u64) -> String {
     if n >= 950_000 {
         let m = (n as f64 / 1_000_000.0 * 10.0).round() / 10.0;

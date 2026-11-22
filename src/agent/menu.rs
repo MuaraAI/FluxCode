@@ -1,4 +1,3 @@
-//! The agent panel's menus: which agent runs, and the model, mode and permissions under the message box.
 
 use super::{agent_glyph, agent_id, model_groups, ConfigOpt, Status};
 use crate::i18n::tr;
@@ -27,9 +26,7 @@ pub struct MenuState {
     focus: FocusHandle,
     sel: usize,
     scroll: ScrollHandle,
-    /// Scroll the highlighted row into view on the next frame.
     reveal: Cell<bool>,
-    /// A click outside just closed this menu: its own button then must not reopen it.
     closed: Option<(Menu, Instant)>,
     _sub: Subscription,
 }
@@ -65,9 +62,7 @@ enum Lead {
 enum Trail {
     Download,
     Note(SharedString),
-    /// A dot and a word: whether the agent is on.
     State(theme::Tok, SharedString),
-    /// A model's limits in two right-aligned columns, so every row lines up: what it reads at once and what it writes in one answer (blank when unknown).
     Cols(SharedString, SharedString, bool),
     None,
 }
@@ -77,7 +72,6 @@ struct Row {
     lead: Lead,
     title: SharedString,
     sub: SharedString,
-    /// The line under the name may take two lines (descriptions); else it is cut to one.
     wrap: bool,
     checked: bool,
     trail: Trail,
@@ -91,7 +85,6 @@ impl Row {
     }
 }
 
-/// Widths of the model columns (context, output), shared by the rows and their header; they follow the interface size like the text in them.
 fn col_ctx() -> Pixels {
     theme::u(54.)
 }
@@ -100,7 +93,6 @@ fn col_out() -> Pixels {
     theme::u(50.)
 }
 
-/// Lists this long get a search box.
 const SEARCH_FROM: usize = 9;
 
 fn searchable(m: Menu, rows: usize) -> bool {
@@ -116,7 +108,6 @@ fn placeholder(m: Menu) -> &'static str {
 }
 
 impl Workbench {
-    /// A menu's button was clicked: open it, or close it when it is open.
     pub(crate) fn agent_menu_toggle(&mut self, m: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let st = &mut self.agent.menu;
         if let Some((was, at)) = st.closed.take() {
@@ -132,7 +123,6 @@ impl Workbench {
             self.agent_menu_load_catalog(cx);
         }
         if m == Menu::Agent {
-            // Agents installed or removed outside FluxCode since the last look show up without a restart: the PC is looked at again in the background.
             let scan = cx.background_spawn(async { crate::acp::rescan() });
             cx.spawn(async move |this, cx| {
                 scan.await;
@@ -149,14 +139,12 @@ impl Workbench {
         let rows = self.agent_menu_rows(m, cx);
         let st = &mut self.agent.menu;
         st.sel = rows.iter().position(|r| r.checked).unwrap_or(0);
-        // The handle still holds the last menu's rows: start at the top.
         st.scroll.set_offset(point(px(0.), px(0.)));
         if searchable(m, rows.len()) {
             q.focus_handle(cx).focus(window, cx);
         } else {
             st.focus.focus(window, cx);
         }
-        // The rows' positions are known after the first frame: then scroll the current choice into view.
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_millis(30)).await;
             _ = this.update(cx, |this, cx| {
@@ -168,7 +156,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Read the model catalog for the agent's models (once, in the background), then redraw the menu with what it says.
     fn agent_menu_load_catalog(&mut self, cx: &mut Context<Self>) {
         let view = self.agent_config_view();
         let Some(o) = view.iter().find(|o| o.category == "model") else { return };
@@ -189,7 +176,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Close the open menu.
     fn agent_menu_close(&mut self, quiet: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(m) = self.agent.menu.open.take() else { return };
         if quiet {
@@ -246,7 +232,6 @@ impl Workbench {
     fn agent_menu_pick(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.menu.open = None;
         match act {
-            // Still being built: not offered yet.
             Act::Use(id) | Act::Install(id) if crate::acp::experimental(&id) => {
                 self.status = crate::trf!("{name} is not available yet: it is still being built."; name => crate::acp::display_name(&id)).into();
             }
@@ -260,7 +245,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Every row of a menu, in order (the search filters them).
     fn agent_menu_rows(&self, m: Menu, _cx: &App) -> Vec<Row> {
         match m {
             Menu::Agent => self.agent_rows(),
@@ -285,7 +269,6 @@ impl Workbench {
                                 group: title.clone(),
                                 lead: Lead::None,
                                 title: n.into(),
-                                // Searchable by its id too ("glm", "zen").
                                 sub: v.clone().into(),
                                 wrap: false,
                                 checked: v == cur,
@@ -315,7 +298,6 @@ impl Workbench {
         }
     }
 
-    /// Agents on this PC (with whether each is on), then the well-known ones to get, then the rest of the ACP registry.
     fn agent_rows(&self) -> Vec<Row> {
         let installed = crate::acp::installed();
         let reg = crate::acp::registry();
@@ -326,7 +308,6 @@ impl Workbench {
         };
         let mut rows = Vec::new();
         let here: SharedString = tr("On this PC").into();
-        // The recommended agents first, in each group.
         let mut installed = installed;
         installed.sort_by_key(|id| !crate::acp::recommended(id));
         for id in &installed {
@@ -352,7 +333,6 @@ impl Workbench {
         let mut known: Vec<_> = crate::acp::KNOWN.iter().filter(|k| !installed.iter().any(|i| i == k.id)).collect();
         known.sort_by_key(|k| !crate::acp::recommended(k.id));
         for k in known {
-            // Its own program is here already (Claude Code, Codex): only the small ACP bridge is downloaded, and it uses that program's sign-in.
             let sub: SharedString = match crate::acp::cli_without_bridge(k.id) {
                 Some(cli) => crate::trf!("{cli} found · adds its ACP bridge"; cli => cli).into(),
                 None => k.by.into(),
@@ -366,7 +346,6 @@ impl Workbench {
         rows
     }
 
-    /// The open menu, when it belongs at `top` (the agent list) or above the message box.
     pub(crate) fn render_agent_menu(&self, top: bool, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let m = self.agent.menu.open?;
         if (m == Menu::Agent) != top {
@@ -379,7 +358,6 @@ impl Workbench {
         let sel = st.sel.min(rows.len().saturating_sub(1));
         let vh = window.viewport_size().height / px(1.);
         let u = |v: f32| f32::from(theme::u(v));
-        // Room left for the list: between the panel's top and the message box (both measured as the panel was drawn), minus the menu's own title, search box and effort slider.
         let chrome = u(34.) + if search { u(38.) } else { 0. } + if m == Menu::Agent { u(38.) } else { 0. } + if m == Menu::Model && self.agent_effort().is_some() { u(74.) } else { 0. } + 12.;
         let (panel_top, composer_top) = self.agent.geom.get();
         let room = if composer_top > panel_top + 40. {
@@ -396,7 +374,6 @@ impl Workbench {
         let (mut child, mut sel_child) = (0usize, 0usize);
         for (i, r) in rows.iter().enumerate() {
             if !r.group.is_empty() && last.as_ref() != Some(&r.group) {
-                // Model groups name their columns once, over the numbers.
                 let cols = matches!(r.trail, Trail::Cols(..));
                 list = list.child(
                     h_flex()
@@ -506,7 +483,6 @@ impl Workbench {
         let act = r.act.clone();
         h_flex()
             .id(("ag-menu-row", i))
-            // A scrolling column would squeeze its rows to fit; they keep their height.
             .flex_none()
             .mx_1()
             .px_2()
@@ -518,29 +494,24 @@ impl Workbench {
             .cursor_pointer()
             .when(sel, |h| h.bg(c(theme::SELECT)))
             .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
-            // An agent that is still being built is shown, dimmed, but can't be picked.
             .when(matches!(&r.lead, Lead::Agent(id) if crate::acp::experimental(id)), |h| h.opacity(0.6).cursor_default())
             .children(lead)
             .child({
                 let name = div().text_sm().text_color(c(if r.checked { theme::FG_STRONG } else { theme::FG })).when(r.checked, |d| d.font_weight(FontWeight::MEDIUM)).child(r.title.clone());
                 if r.wrap {
-                    // Name over a description of up to two lines.
                     v_flex()
                         .flex_1()
                         .min_w_0()
                         .child(name.truncate())
                         .when(!r.sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).line_clamp(2).child(r.sub.clone())))
                 } else if matches!(r.trail, Trail::Cols(..)) {
-                    // A model: its name takes the row; the numbers sit in their columns.
                     h_flex().flex_1().min_w_0().child(name.flex_1().min_w_0().truncate())
                 } else {
-                    // One line: the name, its badge, then who makes it, cut to fit.
                     let exp = matches!(&r.lead, Lead::Agent(id) if crate::acp::experimental(id));
                     let rec = matches!(&r.lead, Lead::Agent(id) if crate::acp::recommended(id));
                     let w = self.agent.compose_w.get();
                     let fit = |at: f32| w <= 0. || w >= f32::from(theme::u(at));
                     let (show_sub, wide_badge) = (fit(400.), fit(290.));
-                    // "Claude Code found · …" says why this download is small: when the row is too narrow for it beside the name, it goes under the name.
                     let found = matches!((&r.lead, &r.act), (Lead::Agent(id), Act::Install(_)) if crate::acp::cli_without_bridge(id).is_some());
                     let line = h_flex()
                         .w_full()
@@ -567,7 +538,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Effort, as a slider above the models (it changes without closing the menu).
     fn render_effort_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let e = self.agent_effort()?;
         let levels: Vec<(String, String)> = e.choices.iter().filter(|c| c.0 != "default").map(|c| (c.0.clone(), c.1.clone())).collect();
@@ -580,7 +550,6 @@ impl Workbench {
         let pos = move |i: usize| i as f32 / (n - 1) as f32;
         let nearest = move |f: f32| ((f * (n - 1) as f32).round() as usize).min(n - 1);
         let drag = self.agent.effort_drag.get();
-        // While held, the level under the pointer is the one named.
         let shown = drag.map(nearest).or(at);
         let name: SharedString = match shown {
             Some(i) => levels[i].1.clone().into(),
@@ -593,7 +562,6 @@ impl Workbench {
 
         let gap = px(5.);
         let rail_h = px(6.);
-        // The rail at a handle position `p` (0..1): filled up to it, empty after, with a gap around the handle.
         let rail = move |p: Option<f32>, held: bool| {
             let mut d = div().absolute().inset_0().flex().items_center();
             match p {
@@ -601,7 +569,6 @@ impl Workbench {
                     d = d
                         .child(div().absolute().left_0().w(relative(p)).h(rail_h).flex().child(div().flex_1().mr(gap).rounded_l_full().rounded_r(px(2.)).bg(c(theme::ACCENT))))
                         .child(div().absolute().right_0().w(relative(1. - p)).h(rail_h).flex().child(div().flex_1().ml(gap).rounded_r_full().rounded_l(px(2.)).bg(c(theme::BG_HOVER))))
-                        // No stop at the very start (the rail's rounded end is there) or under the handle.
                         .children((1..n).filter(|&i| (pos(i) - p).abs() > 0.035).map(move |i| {
                             let on = pos(i) < p;
                             div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(if on { theme::ON_ACCENT } else { theme::FG_DIM }))
@@ -626,7 +593,6 @@ impl Workbench {
             d
         };
         let drawn = match (drag, to) {
-            // Held: exactly under the pointer, no easing to lag behind it.
             (Some(f), _) => rail(Some(f), true).into_any_element(),
             (None, Some(to)) => div()
                 .absolute()
@@ -638,7 +604,6 @@ impl Workbench {
             (None, None) => rail(None, false).into_any_element(),
         };
 
-        // Press, drag and release, read from the window while the rail is on screen.
         let weak = cx.entity().downgrade();
         let values: Vec<String> = levels.iter().map(|l| l.0.clone()).collect();
         let opt = e.id.clone();
@@ -684,7 +649,6 @@ impl Workbench {
                         if this.agent.effort_drag.take().is_none() {
                             return;
                         }
-                        // Settle from where it was let go.
                         this.agent.effort_from.set(Some(f));
                         this.agent.effort_gen.set(this.agent.effort_gen.get().wrapping_add(1));
                         let v = values[nearest(f)].clone();
@@ -698,7 +662,6 @@ impl Workbench {
         .inset_0();
         let track = div().relative().h(theme::u(26.)).mx(theme::u(8.)).child(drawn).child(input);
 
-        // A label under each stop: the first starts at it, the last ends at it, the rest are centered on it.
         let labels = div().relative().h(theme::u(16.)).mx(theme::u(8.)).children(levels.iter().enumerate().map(|(i, (v, l))| {
             let on = shown == Some(i);
             let (id, v) = (e.id.clone(), v.clone());
@@ -797,14 +760,12 @@ impl Workbench {
     }
 }
 
-/// The permission levels: id, icon, name, what it allows.
 pub(super) const ACCESS: [(&str, IconName, &str, &str); 3] = [
     ("read", IconName::Eye, "Read only", "Reads files and answers. Changes nothing."),
     ("write", IconName::PencilLine, "Edit files", "Edits files. Asks before running commands."),
     ("full", IconName::ShieldAlert, "Full access", "Edits files and runs commands without asking."),
 ];
 
-/// One line on what an effort level is for.
 pub(super) fn effort_note(level: &str) -> &'static str {
     match level {
         "minimal" | "low" => "fast and cheap, for small edits",
@@ -816,7 +777,6 @@ pub(super) fn effort_note(level: &str) -> &'static str {
     }
 }
 
-/// Claude's prices per million tokens (input, output), from Anthropic's model table (checked 2026-11-10).
 pub(super) fn claude_price(name: &str) -> Option<(f32, f32)> {
     let n = name.to_lowercase();
     let table: [(&str, f32, f32); 15] = [
@@ -836,11 +796,9 @@ pub(super) fn claude_price(name: &str) -> Option<(f32, f32)> {
         ("haiku 5.5", 0.10, 0.50),
         ("haiku 4.5", 1., 5.),
     ];
-    // Longest name first, so "opus 5" doesn't take "opus 5.5".
     table.iter().filter(|(k, _, _)| n == *k || n.starts_with(&format!("{k} ")) || n.ends_with(k)).max_by_key(|(k, _, _)| k.len()).map(|(_, i, o)| (*i, *o))
 }
 
-/// "1M context · 131K out": what a model reads at once and writes in one answer.
 fn limits_line(m: super::catalog::Meta) -> String {
     let ctx = super::catalog::tokens(m.context);
     if m.output > 0 {
@@ -854,7 +812,6 @@ fn money(v: f32) -> String {
     if v < 1. { format!("${v:.2}") } else if v.fract() == 0. { format!("${v:.0}") } else { format!("${v:.1}") }
 }
 
-/// "Opus 5.5" → (5.5, rank of the family: Fable 0, Opus 1, Sonnet 2, Haiku 3).
 fn claude_version(name: &str) -> Option<(f32, u8)> {
     let mut it = name.split_whitespace();
     let fam = it.next()?.to_lowercase();
@@ -869,7 +826,6 @@ fn claude_version(name: &str) -> Option<(f32, u8)> {
     Some((v, rank))
 }
 
-/// Claude Agent's models by generation, newest first, each with its price: the newest do the same work with fewer tokens, so the older a group, the less it is worth it.
 fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
     let named: Vec<(&String, &String, &String, Option<(f32, u8)>)> = o.choices.iter().map(|(v, n, d)| (v, n, d, claude_version(n))).collect();
     if named.iter().filter(|x| x.3.is_some()).count() < 3 {
@@ -892,7 +848,6 @@ fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
         act: Act::Opt(o.id.clone(), v.clone()),
     };
     let mut rows = Vec::new();
-    // Models without a version (Default): first, saying what they stand for.
     for (v, n, d, ver) in &named {
         if ver.is_none() {
             let sub = if d.is_empty() { String::new() } else { format!("{} · {}", d, price_line(d)) };
@@ -926,7 +881,6 @@ fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
     Some(rows)
 }
 
-/// The first sentence of a description, for a row's one line (the row cuts it to fit).
 pub(crate) fn recommended_badge() -> Div {
     h_flex()
         .flex_none()
@@ -943,17 +897,14 @@ pub(crate) fn recommended_badge() -> Div {
         .child(tr("Recommended"))
 }
 
-/// The recommended mark where a narrow panel has no room for the pill: the star alone.
 fn recommended_star() -> Div {
     div().flex_none().child(Icon::new(gpui_kit::assets::IconName::Star).size(theme::u(11.)).text_color(c(theme::ACCENT_TEXT)))
 }
 
-/// "Not available" where a narrow panel has no room for the pill: a hollow dot (the dimmed row already says it can't be picked).
 fn experimental_dot() -> Div {
     div().flex_none().size(theme::u(7.)).rounded_full().border_1().border_color(c(theme::FG_DIM))
 }
 
-/// A small muted pill beside an agent that is still being built (it can't be picked).
 pub(crate) fn experimental_badge() -> Div {
     div()
         .flex_none()

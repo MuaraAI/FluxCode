@@ -1,4 +1,3 @@
-//! The agent's settings, as a dialog over the window instead of a page that replaces the chat: open it from the gear in the panel's title row, change things, and the chat is still where it was when it closes (Esc, the close button, or a click outside).
 
 use super::{agent_glyph, agent_id, agent_name, menu::effort_note, model_groups, opencode_config_file, ConfigOpt, Status};
 use crate::i18n::tr;
@@ -46,7 +45,6 @@ impl Tab {
         }
     }
 
-    /// One line under the section's title.
     fn blurb(self) -> &'static str {
         match self {
             Tab::Model => "Which model answers, how hard it thinks, and how it works.",
@@ -58,11 +56,9 @@ impl Tab {
     }
 }
 
-/// Below this card width the section rail becomes a row of tabs and rows stack.
 const COMPACT: f32 = 600.;
 
 impl Workbench {
-    /// The dialog, when it is open (drawn over the whole window).
     pub(crate) fn render_agent_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.agent.show_options {
             return None;
@@ -173,7 +169,6 @@ impl Workbench {
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
             .bg(c(theme::BG_SIDE))
-            // Elevation: the one thing above the window while it is open.
             .shadow_lg()
             .overflow_hidden()
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
@@ -233,7 +228,6 @@ impl Workbench {
         col.into_any_element()
     }
 
-    /// The models in one scrolling list, laid out like the composer's menu: the name, then the context and output limits in columns that line up.
     fn settings_model_list(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> AnyElement {
         let mut list = v_flex().id("ag-set-models").max_h(theme::u(248.)).overflow_y_scroll().py_1().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).bg(c(theme::BG_EDITOR));
         for (gi, (group, models)) in model_groups(&m.choices).into_iter().enumerate() {
@@ -452,7 +446,6 @@ impl Workbench {
     }
 }
 
-/// One setting: its name and what it does on the left, the control on the right, or under them (`stacked`) for wide controls and narrow windows.
 fn row(title: SharedString, desc: Option<SharedString>, control: AnyElement, stacked: bool) -> Div {
     let text = v_flex()
         .flex_1()
@@ -471,7 +464,6 @@ fn divider() -> Div {
     div().h(px(1.)).bg(c(theme::BORDER))
 }
 
-/// A few choices as a row of buttons, the current one filled.
 fn segmented(o: &ConfigOpt, cx: &mut Context<Workbench>) -> AnyElement {
     let mut choices = o.choices.clone();
     if o.category == "thought_level" {

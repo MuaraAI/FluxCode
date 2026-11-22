@@ -1,4 +1,3 @@
-//! Live Preview for HTML/CSS/JS, ported from `src-tauri/src/preview.rs`: a tiny static file server bound to 127.0.0.1 on a random port, serving only the workspace folder.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -38,14 +37,12 @@ impl PreviewServer {
         *self.root.lock().unwrap() = root.to_path_buf();
     }
 
-    /// A file was saved: reload open preview pages.
     pub fn reload(&self) {
         let (lock, cv) = &*self.version;
         *lock.lock().unwrap() += 1;
         cv.notify_all();
     }
 
-    /// URL of `file` (inside the served root), or the root's index.
     pub fn url_for(&self, file: Option<&Path>) -> String {
         let root = self.root.lock().unwrap().clone();
         let rel = file
@@ -111,7 +108,6 @@ fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> st
 
 fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, Condvar)) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    // Read the whole request head: it can arrive in several pieces, and closing the socket with unread bytes makes Linux reset the connection instead of closing it.
     let mut buf = [0u8; 8192];
     let mut n = 0;
     while n < buf.len() {
@@ -135,7 +131,6 @@ fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, C
     let target = head.split_whitespace().nth(1).unwrap_or("/");
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if path == "/__flux/wait" {
-        // Long-poll: answer as soon as the version moves past what the page has.
         let seen: u64 = query.strip_prefix("v=").and_then(|v| v.parse().ok()).unwrap_or(0);
         let (lock, cv) = version;
         let guard = lock.lock().unwrap();
@@ -147,7 +142,6 @@ fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, C
 
     let rel = percent_decode(path.trim_start_matches('/'));
     let rel_path = Path::new(&rel);
-    // Only plain names inside the workspace: no "..", no drive or root jumps.
     if rel_path.components().any(|c| !matches!(c, Component::Normal(_))) {
         return respond(&mut stream, "403 Forbidden", "text/plain", b"Forbidden");
     }

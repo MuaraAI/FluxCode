@@ -1,13 +1,10 @@
-//! Small, testable pieces of the agent panel: `@file` mentions, the words that mean "look at my error", and reading another harness's saved sessions.
 
 use std::path::Path;
 
-/// The `@query` being typed at `cursor` (byte offset), if any: (offset of `@`, query).
 pub fn mention_query(text: &str, cursor: usize) -> Option<(usize, String)> {
     let cursor = cursor.min(text.len());
     let before = &text[..cursor];
     let at = before.rfind('@')?;
-    // `@` starts a word (start of line or after a space), and no space since.
     if at > 0 && !before[..at].ends_with(char::is_whitespace) {
         return None;
     }
@@ -18,7 +15,6 @@ pub fn mention_query(text: &str, cursor: usize) -> Option<(usize, String)> {
     Some((at, q.to_string()))
 }
 
-/// Every `@path` in a message (trailing punctuation trimmed).
 pub fn mentions(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
@@ -32,7 +28,6 @@ pub fn mentions(text: &str) -> Vec<String> {
     out
 }
 
-/// Does the message ask about an error? (English and Indonesian, as people type them.)
 pub fn wants_error(text: &str) -> bool {
     let t = text.to_lowercase();
     const WORDS: &[&str] = &[
@@ -43,13 +38,11 @@ pub fn wants_error(text: &str) -> bool {
     WORDS.iter().any(|w| t.contains(w))
 }
 
-/// Does the message ask about the terminal or program output?
 pub fn wants_output(text: &str) -> bool {
     let t = text.to_lowercase();
     ["terminal", "output", "log", "hasil", "console", "printed", "keluaran"].iter().any(|w| t.contains(w))
 }
 
-/// A session saved by OpenCode (or Mura) for the open folder.
 #[derive(Clone, Debug)]
 pub struct RemoteSession {
     pub id: String,
@@ -58,7 +51,6 @@ pub struct RemoteSession {
     pub harness: &'static str,
 }
 
-/// Parse `<cli> session list --format json` output.
 pub fn parse_session_list(json: &str, harness: &'static str) -> Result<Vec<RemoteSession>, String> {
     let v: serde_json::Value = serde_json::from_str(json.trim()).map_err(|e| format!("couldn't read the session list: {e}"))?;
     let arr = v.as_array().or_else(|| v.get("sessions").and_then(|s| s.as_array())).ok_or("unexpected session list")?;
@@ -73,14 +65,12 @@ pub fn parse_session_list(json: &str, harness: &'static str) -> Result<Vec<Remot
         .collect())
 }
 
-/// Lines of a file for a selection given as byte offsets: (first line, last line), 1-based.
 pub fn line_span(text: &str, start: usize, end: usize) -> (usize, usize) {
     let s = text[..start.min(text.len())].matches('\n').count() + 1;
     let e = text[..end.min(text.len())].matches('\n').count() + 1;
     (s, e.max(s))
 }
 
-/// Fence language for a file name (for selections sent as code blocks).
 pub fn fence_lang(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "py" | "pyw" => "python",

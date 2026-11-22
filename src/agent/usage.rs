@@ -1,4 +1,3 @@
-//! Usage: how much of the plan's limits and of the context window the agent has used, in a panel of its own instead of typing `/usage`.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -12,14 +11,10 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use serde_json::Value;
 use std::time::Duration;
 
-/// One limit window, as the live updates give it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Window {
-    /// `five_hour`, `seven_day`, ...
     pub key: String,
-    /// 0.0 - 1.0
     pub used: f32,
-    /// Unix seconds.
     pub resets: i64,
 }
 
@@ -33,7 +28,6 @@ pub struct Live {
 }
 
 impl Live {
-    /// Merge one `usage_update` (fields it leaves out keep their value).
     pub fn take(&mut self, u: &Value) {
         if let Some(n) = u.get("used").and_then(Value::as_u64) {
             self.used = n;
@@ -63,7 +57,6 @@ impl Live {
     }
 }
 
-/// One limit from `/usage`: "5-hour limit", 16 (%), "Resets Nov 10, 10:40 PM GMT+7".
 #[derive(Clone, Debug, PartialEq)]
 pub struct Limit {
     pub name: String,
@@ -73,14 +66,10 @@ pub struct Limit {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Report {
-    /// "Claude enterprise subscription usage".
     pub plan: String,
     pub limits: Vec<Limit>,
-    /// "$0.00".
     pub cost: String,
-    /// (Input, 0), (Output, 0), ...
     pub tokens: Vec<(String, String)>,
-    /// What uses the limits most, last 24 hours: (share %, advice).
     pub tips: Vec<(u32, String)>,
 }
 
@@ -88,7 +77,6 @@ fn strip_md(s: &str) -> String {
     s.replace("**", "").replace('`', "").replace("\\_", "_").trim().to_string()
 }
 
-/// Read the agent's `/usage` reply (Markdown).
 pub fn parse_usage(md: &str) -> Report {
     let mut r = Report::default();
     let mut section = "";
@@ -108,11 +96,9 @@ pub fn parse_usage(md: &str) -> Report {
         }
         match section {
             "limits" if t.starts_with("**") => {
-                // **5-hour limit**, a dash, **16%** · Resets Nov 10, 10:40 PM GMT+7
                 let parts: Vec<&str> = t.split("**").collect();
                 let name = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
                 let pct = parts.get(3).and_then(|p| p.trim().trim_end_matches('%').parse().ok()).unwrap_or(0);
-                // After the share: " · Resets Nov 10, 10:40 PM GMT+7" (the name may hold a "·" too).
                 let resets = parts.get(4..).map(|p| p.join("**")).unwrap_or_default().trim().trim_start_matches('·').trim().to_string();
                 if !name.is_empty() {
                     r.limits.push(Limit { name, pct, resets });
@@ -151,7 +137,6 @@ pub fn parse_usage(md: &str) -> Report {
     r
 }
 
-/// `/context`: "**Tokens:** 34.6k / 1m (3%)" → ("34.6k", "1m", 3).
 pub fn parse_context(md: &str) -> Option<(String, String, u32)> {
     let line = md.lines().find(|l| l.contains("**Tokens:**"))?;
     let rest = strip_md(line.split("**Tokens:**").nth(1)?);
@@ -160,7 +145,6 @@ pub fn parse_context(md: &str) -> Option<(String, String, u32)> {
     Some((used.trim().to_string(), total.trim().to_string(), pct.trim_end_matches([')', '%', ' ']).parse().unwrap_or(0)))
 }
 
-/// 59_125 → "59k", 1_000_000 → "1M".
 pub fn tokens(n: u64) -> String {
     match n {
         0..=999 => n.to_string(),
@@ -172,7 +156,6 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
-/// Seconds until a Unix time, as "4 h 12 min" / "18 min" / "2 days 3 h".
 pub fn until(resets: i64, now: i64) -> Option<String> {
     let s = resets - now;
     if s <= 0 {
@@ -192,7 +175,6 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// What a quiet command is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Probe {
     Usage,
@@ -213,24 +195,18 @@ impl Probe {
 #[derive(Default)]
 pub struct UsageState {
     pub open: bool,
-    /// Opened this many times (restarts the bars' fill animation).
     pub shown: u32,
     pub live: Option<Live>,
     pub report: Option<Report>,
     pub context: Option<(String, String, u32)>,
-    /// The quiet command running now, and what it has said so far.
     pub probe: Option<(Probe, String)>,
-    /// Quiet commands still to run.
     pub queue: Vec<Probe>,
-    /// "Request usage credits" was clicked: asking before it runs.
     pub confirm_credits: bool,
-    /// The agent's answer to `/usage-credits`.
     pub credits: Option<String>,
     pub error: Option<String>,
 }
 
 impl UsageState {
-    /// Every limit known: (name, % used, when it resets).
     pub fn limit_rows(&self, now: i64) -> Vec<(String, f32, Option<String>)> {
         let window_of = |name: &str| -> Option<&Window> {
             let l = self.live.as_ref()?;
@@ -242,7 +218,6 @@ impl UsageState {
                 .limits
                 .iter()
                 .map(|l| {
-                    // The live window gives the exact reset time; the report says it in words.
                     let when = window_of(&l.name).and_then(|w| until(w.resets, now)).map(|t| crate::trf!("Resets in {t}"; t => t));
                     let text = match (when, l.resets.is_empty()) {
                         (Some(w), false) => Some(format!("{w} · {}", l.resets.trim_start_matches("Resets ").trim())),
@@ -268,14 +243,12 @@ impl UsageState {
             .collect()
     }
 
-    /// Context used, 0.0 - 1.0, when known.
     pub fn context_share(&self) -> Option<f32> {
         let l = self.live.as_ref()?;
         (l.size > 0).then(|| (l.used as f32 / l.size as f32).clamp(0., 1.))
     }
 }
 
-/// The bar color for a share used: calm, then a warning, then the limit.
 fn level(pct: f32) -> theme::Tok {
     if pct >= 90. {
         theme::DANGER
@@ -286,7 +259,6 @@ fn level(pct: f32) -> theme::Tok {
     }
 }
 
-/// A 14 px ring filled clockwise from the top to `share` (0..1) of its turn.
 fn ring(share: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -300,7 +272,6 @@ fn ring(share: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
                 point(px(x0 + r * a.cos()), px(y0 + r * a.sin()))
             };
             let radii = point(px(r), px(r));
-            // An arc from the top to `t` of a turn, split in halves (one arc can't close).
             let arc = |t: f32| {
                 let mut p = PathBuilder::stroke(px(stroke));
                 p.move_to(at(0.));
@@ -322,7 +293,6 @@ fn ring(share: f32, track: Hsla, fill: Hsla) -> impl IntoElement {
     .size(theme::u(14.))
 }
 
-/// A thin bar that fills to `pct` when the panel opens.
 fn bar(key: SharedString, pct: f32) -> AnyElement {
     let frac = (pct / 100.).clamp(0., 1.);
     let col = level(pct);
@@ -345,7 +315,6 @@ fn bar(key: SharedString, pct: f32) -> AnyElement {
 }
 
 impl Workbench {
-    /// The model in use, when it is a free one (OpenCode Zen's `-free` models): its name.
     pub(crate) fn agent_model_free(&self) -> Option<String> {
         let view = self.agent_config_view();
         let m = view.iter().find(|o| o.category == "model")?;
@@ -354,12 +323,10 @@ impl Workbench {
         free.then(|| name.strip_suffix(" Free").or_else(|| name.strip_suffix(" free")).unwrap_or(&name).to_string())
     }
 
-    /// The agent can tell its usage (Claude Agent: a `/usage` command or live updates).
     pub(crate) fn agent_has_usage(&self) -> bool {
         self.agent.usage.live.is_some() || self.agent.commands.iter().any(|c| c.name == "usage")
     }
 
-    /// A usage button was clicked: close the panel when it is open, else open it (unless this same press just closed it from outside).
     pub(crate) fn agent_usage_toggle(&mut self, cx: &mut Context<Self>) {
         let may = self.pop_may_open("usage");
         if self.agent.usage.open {
@@ -384,7 +351,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Queue quiet commands; they run when the agent is free.
     pub(crate) fn agent_probe_queue(&mut self, list: &[Probe], cx: &mut Context<Self>) {
         for p in list {
             if !self.agent.usage.queue.contains(p) && self.agent.usage.probe.as_ref().map(|x| x.0) != Some(*p) {
@@ -394,7 +360,6 @@ impl Workbench {
         self.agent_probe_next(cx);
     }
 
-    /// Run the next quiet command if the agent has a session and isn't answering.
     pub(crate) fn agent_probe_next(&mut self, cx: &mut Context<Self>) {
         if self.agent.usage.probe.is_some() || self.agent.usage.queue.is_empty() {
             return;
@@ -408,7 +373,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A quiet command finished: read what it said.
     pub(crate) fn agent_probe_done(&mut self, failed: Option<String>, cx: &mut Context<Self>) {
         let Some((p, text)) = self.agent.usage.probe.take() else { return };
         let u = &mut self.agent.usage;
@@ -432,7 +396,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The meter under the message box: how full the context is, as a ring (and the share beside it when there's room).
     pub(crate) fn render_context_meter(&self, narrow: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.agent.usage;
         let l = u.live.as_ref()?;
@@ -451,7 +414,6 @@ impl Workbench {
                 .text_xs()
                 .text_color(c(theme::FG_DIM))
                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
-                // In a tight box only the number stays: a ring alone reads like a spinner.
                 .when(!narrow, |h| h.child(ring(share, c(theme::BORDER_STRONG), c(level(pct)))))
                 .child(div().whitespace_nowrap().child(format!("{pct}%")))
                 .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
@@ -463,7 +425,6 @@ impl Workbench {
         )
     }
 
-    /// The limits at the foot of the full-screen changes column: always in view (the list of changes above it scrolls), with the context window under them.
     pub(crate) fn render_limits_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let u = &self.agent.usage;
         let now = unix_now();
@@ -550,7 +511,6 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The usage panel over the chat.
     pub(crate) fn render_usage_modal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.agent.usage;
         if !u.open {
@@ -582,7 +542,6 @@ impl Workbench {
                 cx.notify();
             })));
 
-        // One limit: name and share on a line, the bar, then when it resets.
         let row = |i: usize, name: String, pct: f32, resets: Option<String>| {
             v_flex()
                 .gap_1()
@@ -604,7 +563,6 @@ impl Workbench {
         }
         let free = self.agent_model_free();
         if !any && free.is_some() {
-            // A free model has no plan behind it: nothing to count down.
             let name = free.unwrap_or_default();
             limits = limits.child(
                 h_flex()
@@ -630,7 +588,6 @@ impl Workbench {
             }));
         }
 
-        // The context window.
         let context = match (&u.context, &u.live) {
             (Some((used, total, pct)), _) => Some((format!("{used} / {total}"), *pct as f32)),
             (None, Some(l)) if l.size > 0 => Some((format!("{} / {}", tokens(l.used), tokens(l.size)), l.used as f32 * 100. / l.size as f32)),
@@ -684,7 +641,6 @@ impl Workbench {
             body = body.child(div().text_xs().text_color(c(theme::DANGER)).child(e.clone()));
         }
 
-        // Usage credits: the one way to get more before a limit resets.
         let can_credits = self.agent.commands.iter().any(|c| c.name == "usage-credits");
         let footer = if !can_credits {
             None

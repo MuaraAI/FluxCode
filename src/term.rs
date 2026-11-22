@@ -1,34 +1,21 @@
-//! The terminal's smarts, kept free of UI so they can be unit tested:
 
 use std::path::{Path, PathBuf};
 
-/// How a line of terminal output is drawn.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LineKind {
     Normal,
-    /// A real error: pip's `ERROR:`, `Traceback`, the final `XxxError: ...` line.
     Err,
-    /// The echoed command (prompt + what was typed).
     Cmd,
-    /// Quiet output: pip's `[notice]`, `Requirement already satisfied`, `Using cached`.
     Dim,
     Warn,
     Success,
-    /// `  File "app.py", line 3, in main`: clickable.
     Frame,
-    /// The source line Python prints under a frame.
     Code,
-    /// `    ^^^^` under a code line.
     Caret,
-    /// "auto-corrected: pip i → pip install".
     Fixed,
-    /// The end of a command: exit status and time.
     Status,
-    /// The outcome under a status line: what a build produced (FluxCompile's jar line), or, with `err`, the line that says why the command failed.
     Result,
-    /// `@@ -5,3 +5,4 @@` in a diff.
     Hunk,
-    /// Error card rows (see `PyError`).
     CardHead,
     CardMsg,
     CardCode,
@@ -38,7 +25,6 @@ pub enum LineKind {
 }
 
 
-/// Optimal string alignment distance (Levenshtein + adjacent swaps), on chars.
 pub fn distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -63,7 +49,6 @@ pub fn distance(a: &str, b: &str) -> usize {
     d[n][m]
 }
 
-/// How many edits a word of this length may need and still count as a typo.
 fn budget(len: usize) -> usize {
     match len {
         0..=2 => 0,
@@ -73,7 +58,6 @@ fn budget(len: usize) -> usize {
     }
 }
 
-/// The single closest candidate within the typo budget (ties mean "not sure": None).
 fn closest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let w = word.to_lowercase();
     let max = budget(w.chars().count());
@@ -97,7 +81,6 @@ fn closest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) -> Opt
 }
 
 
-/// Byte spans of the words in a command line; quoted words keep their quotes.
 fn tokens(line: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
@@ -135,7 +118,6 @@ pub fn is_python(token: &str) -> bool {
     matches!(program_name(token).as_str(), "py" | "python" | "python3" | "pythonw" | "pyw")
 }
 
-/// Commands the auto-correct knows.
 const KNOWN: &[&str] = &[
     "python", "python3", "py", "pip", "pip3", "pipx", "uv", "node", "npm", "npx", "pnpm", "yarn", "bun",
     "deno", "git", "cargo", "rustc", "code", "cd", "dir", "cls", "clear", "echo", "type", "where", "mkdir",
@@ -143,7 +125,6 @@ const KNOWN: &[&str] = &[
     "black", "ruff", "mypy", "django-admin", "uvicorn", "gunicorn", "pyinstaller",
 ];
 
-/// cmd.exe built-ins: never "corrected", they are not on PATH.
 const BUILTINS: &[&str] = &[
     "set", "if", "for", "call", "vol", "ver", "title", "color", "date", "time", "pushd", "popd", "del",
     "erase", "rd", "md", "assoc", "ftype", "path", "prompt", "pause", "rem", "mklink", "goto", "shift",
@@ -155,7 +136,6 @@ const PIP_COMMANDS: &[&str] = &[
     "cache", "index", "wheel", "hash", "completion", "debug", "help",
 ];
 
-/// Short forms people type for pip (npm habits included).
 fn pip_alias(word: &str) -> Option<&'static str> {
     Some(match word.to_ascii_lowercase().as_str() {
         "i" | "in" | "ins" | "add" => "install",
@@ -168,7 +148,6 @@ fn pip_alias(word: &str) -> Option<&'static str> {
     })
 }
 
-/// Is `name` a program on PATH (any PATHEXT on Windows)?
 pub fn on_path(name: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else { return false };
     let exts: Vec<String> = if cfg!(windows) {
@@ -186,7 +165,6 @@ pub fn on_path(name: &str) -> bool {
     })
 }
 
-/// Names in a folder (files and folders), for file-name corrections and Tab.
 fn entries(dir: &Path) -> Vec<(String, bool)> {
     std::fs::read_dir(dir)
         .map(|rd| {
@@ -197,7 +175,6 @@ fn entries(dir: &Path) -> Vec<(String, bool)> {
         .unwrap_or_default()
 }
 
-/// A file argument that doesn't exist: the one existing file it most likely means.
 fn fix_file(arg: &str, cwd: &Path, want_ext: &[&str]) -> Option<String> {
     let raw = unquote(arg);
     if raw.is_empty() || raw.starts_with('-') || raw.contains(['*', '?', '<', '>', '|']) || cwd.join(raw).exists() {
@@ -217,7 +194,6 @@ fn fix_file(arg: &str, cwd: &Path, want_ext: &[&str]) -> Option<String> {
             }
         }
     }
-    // A script name cut short or slightly off (`py ap`, `py aap`): match the stems of files with the expected extension.
     let stem_hit = (!want_ext.is_empty() && !name.contains('.') && name.chars().count() >= 2)
         .then(|| {
             let lower = name.to_lowercase();
@@ -250,21 +226,17 @@ fn fix_file(arg: &str, cwd: &Path, want_ext: &[&str]) -> Option<String> {
 
 pub struct Correction {
     pub line: String,
-    /// (what was typed, what runs instead), for the "auto-corrected" note.
     pub fixes: Vec<(String, String)>,
 }
 
-/// Fix the obvious slips in a command line before it runs.
 pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     let spans = tokens(line);
     if spans.is_empty() {
         return None;
     }
     let words: Vec<&str> = spans.iter().map(|&(s, e)| &line[s..e]).collect();
-    // (span index, replacement)
     let mut edits: Vec<(usize, String)> = Vec::new();
 
-    // 1.
     let first = words[0];
     let first_lower = first.to_ascii_lowercase();
     let mut program = program_name(first);
@@ -290,10 +262,8 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
         }
     }
 
-    // `ls -la` → `dir`: Windows' dir doesn't take Unix flags.
     let drop_flags = program == "dir" && first_lower != "dir";
 
-    // 2. pip: the sub-command and `-r file`.
     let pip_at = if matches!(program.as_str(), "pip" | "pip3") {
         Some(1)
     } else if is_python(first) || program == "python" || program == "py" {
@@ -322,7 +292,6 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
         python_script_from = Some(1);
     }
 
-    // 3.
     let script = |from: usize, exts: &[&str], edits: &mut Vec<(usize, String)>| {
         for i in from..words.len() {
             let w = words[i];
@@ -358,7 +327,6 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
         last = *e;
         if drop_flags && ix > 0 && words[ix].starts_with('-') {
             fixes.push((words[ix].to_string(), String::new()));
-            // swallow the flag and the space before it
             while out.ends_with(' ') {
                 out.pop();
             }
@@ -377,7 +345,6 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     Some(Correction { line: out, fixes })
 }
 
-/// Tab in the terminal: complete the last word as a path (or a command name when it is the only word).
 pub fn complete(line: &str, cwd: &Path) -> (Option<String>, Vec<String>) {
     let start = line.rfind(' ').map_or(0, |i| i + 1);
     let word = line[start..].trim_start_matches('"');
@@ -411,7 +378,6 @@ pub fn complete(line: &str, cwd: &Path) -> (Option<String>, Vec<String>) {
             (Some(format!("{}{}{}", &line[..start], render(n, *d, true), tail)), Vec::new())
         }
         _ => {
-            // Extend to the longest common prefix, then list the choices.
             let first = names[0].0.to_lowercase();
             let mut common = first.len();
             for (n, _) in &names[1..] {
@@ -431,7 +397,6 @@ fn is_ident_path(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
 }
 
-/// `NameError: x` / `requests.exceptions.HTTPError: ...` / `KeyboardInterrupt`.
 pub fn python_error_line(text: &str) -> Option<(&str, &str)> {
     if text.starts_with(char::is_whitespace) {
         return None;
@@ -446,7 +411,6 @@ pub fn python_error_line(text: &str) -> Option<(&str, &str)> {
     (looks && is_ident_path(name)).then_some((name, msg))
 }
 
-/// `  File "C:\x\app.py", line 12, in main` → (path, line, function).
 pub fn parse_frame(text: &str) -> Option<(String, u32, Option<String>)> {
     let t = text.trim_start();
     let rest = t.strip_prefix("File \"")?;
@@ -459,14 +423,11 @@ pub fn parse_frame(text: &str) -> Option<(String, u32, Option<String>)> {
     Some((path, line, func))
 }
 
-/// `C:\x\app.py:12: UserWarning: ...` → (path, line).
 pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
     let mut t = text.trim_start();
-    // rustc's `--> src/main.rs:3:5`, kotlinc's `e: file:///C:/x/Y.kt:12:5 ...`, Maven's `[ERROR] /C:/x/Y.java:[12,5]`.
     for prefix in ["--> ", "e: ", "w: ", "[ERROR] ", "[WARNING] "] {
         t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
     }
-    // `file:///` is a drive or POSIX path; `file://server/share/...` is UNC.
     let owned;
     if let Some(rest) = t.strip_prefix("file:///") {
         t = rest;
@@ -477,7 +438,6 @@ pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
         }
     }
     let lower = t.to_ascii_lowercase();
-    // The earliest `<file>.<ext>:<line>` (or MSBuild's `<file>.cs(<line>,<col>)`).
     let exts = [
         ".py:", ".pyw:", ".java:", ".kt:", ".kts:", ".rs:", ".go:", ".c:", ".h:", ".cc:", ".cpp:", ".cxx:", ".hpp:", ".cs:", ".fs:", ".ts:", ".tsx:", ".js:", ".jsx:", ".mjs:", ".cjs:",
         ".vue:", ".svelte:", ".gradle:", ".json:", ".yml:", ".yaml:", ".cs(", ".fs(", ".vb(",
@@ -503,12 +463,10 @@ pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
     let after = &t[i + n..];
     let digits: String = after.strip_prefix('[').unwrap_or(after).chars().take_while(char::is_ascii_digit).collect();
     let line = digits.parse().ok()?;
-    // A Maven path starts with `/C:/`.
     let path = if path.len() > 3 && path.starts_with('/') && path.as_bytes()[2] == b':' { &path[1..] } else { path };
     Some((path.to_string(), line))
 }
 
-/// The kind of one finished (or growing) output line.
 pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     let t = text.trim_start();
     let indented = text.len() != t.len();
@@ -536,11 +494,9 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
         return LineKind::Err;
     }
     let lower = t.to_ascii_lowercase();
-    // Build tools: Gradle, Maven, javac, kotlinc, rustc, gcc/clang, MSBuild.
     if t.starts_with("> Task ") || (t.starts_with("[INFO] ") && !t.contains("BUILD")) {
         return LineKind::Dim;
     }
-    // Gradle's housekeeping around a build: true, but not what happened.
     const GRADLE_NOISE: &[&str] = &[
         "Consider enabling configuration cache",
         "Deprecated Gradle features were used",
@@ -558,7 +514,6 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     if GRADLE_NOISE.iter().any(|p| t.starts_with(p)) || (t.contains(" actionable task") && t.contains(": ")) {
         return LineKind::Dim;
     }
-    // rustc points at the place: `--> src/main.rs:3:5` (a link).
     if t.starts_with("--> ") && parse_path_line(t).is_some() {
         return LineKind::Warn;
     }
@@ -582,7 +537,6 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
         || lower.starts_with("fatal:")
         || lower.starts_with("npm err!")
         || lower.contains("is not recognized as an internal or external command")
-        // cmd.exe's second line of the same message.
         || (prev == Some(LineKind::Err) && lower.starts_with("operable program or batch file"))
         || lower.starts_with("the system cannot find")
         || lower.contains(": can't open file '")
@@ -616,22 +570,18 @@ pub struct PyError {
     pub message: String,
     pub file: Option<PathBuf>,
     pub line: Option<u32>,
-    /// 0-based column of the first `^`, relative to the stripped code line.
     pub caret: Option<(usize, usize)>,
     pub code: Option<String>,
     pub hint: Option<String>,
-    /// A command that fixes it (`py -m pip install customtkinter`).
     pub fix: Option<String>,
 }
 
-/// Code the user wrote, as opposed to the standard library or installed packages.
 fn is_user_frame(path: &str) -> bool {
     let p = path.to_ascii_lowercase().replace('/', "\\");
     let stdlib = p.contains("\\lib\\") && p.split('\\').any(|c| c.starts_with("python"));
     !(p.starts_with('<') || p.contains("site-packages") || p.contains("dist-packages") || stdlib)
 }
 
-/// Package name on PyPI for an import name that differs from it.
 pub fn pip_package(module: &str) -> Option<&'static str> {
     let root = module.split('.').next().unwrap_or(module);
     Some(match root {
@@ -671,7 +621,6 @@ fn quoted(s: &str) -> String {
     if s.contains(' ') { format!("\"{s}\"") } else { s.to_string() }
 }
 
-/// Plain-language advice for common Python errors, and a fix command if one is obvious.
 fn advise(kind: &str, msg: &str, python: &str, cwd: &Path) -> (Option<String>, Option<String>) {
     let short = kind.rsplit('.').next().unwrap_or(kind);
     let between = |s: &str| s.split('\'').nth(1).map(str::to_string);
@@ -771,14 +720,12 @@ fn advise(kind: &str, msg: &str, python: &str, cwd: &Path) -> (Option<String>, O
     }
 }
 
-/// The last Python error in a block of output lines (`(text, kind)` as classified).
 pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) -> Option<PyError> {
     let err_ix = lines.iter().rposition(|(t, k)| *k == LineKind::Err && python_error_line(t).is_some())?;
     let (kind, message) = python_error_line(lines[err_ix].0)?;
     if kind == "KeyboardInterrupt" || kind == "SystemExit" {
         return None;
     }
-    // Frames above the error line, up to the traceback header.
     let mut frames: Vec<(String, u32, Option<String>, Option<(usize, usize)>)> = Vec::new();
     let mut i = err_ix;
     while i > 0 {
@@ -823,7 +770,6 @@ pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) 
     })
 }
 
-/// What went wrong in a finished command, for the card: a Python error, a script Python can't find, or a command Windows doesn't know.
 pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cwd: &Path) -> Option<PyError> {
     if let Some(e) = parse_python_error(lines, python, cwd) {
         return Some(e);
@@ -838,7 +784,6 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
         hint,
         fix,
     };
-    // python.exe: can't open file 'C:\\proj\\ap': [Errno 2] No such file or directory
     if let Some((t, _)) = lines.iter().find(|(t, _)| t.contains(": can't open file '")) {
         let quoted_path = t.split('\'').nth(1).unwrap_or("").replace("\\\\", "\\");
         let name = Path::new(&quoted_path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(quoted_path.clone());
@@ -850,7 +795,6 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
         };
         return Some(card("File not found", format!("Python can't find '{name}' in {}", cwd.display()), Some(hint), fix));
     }
-    // 'pyhton' is not recognized as an internal or external command,
     if let Some((t, _)) = lines.iter().find(|(t, _)| t.contains("is not recognized as an internal or external command")) {
         let name = t.split('\'').nth(1).unwrap_or("").to_string();
         let near = closest(&name, KNOWN.iter().copied()).filter(|k| on_path(k) || matches!(*k, "cd" | "dir" | "cls" | "type" | "echo"));
@@ -867,7 +811,6 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
     None
 }
 
-/// Break a long message into rows for the card (the panel list has fixed-height rows).
 pub fn failure_reason(lines: &[(&str, LineKind)]) -> Option<String> {
     let generic = |t: &str| {
         let t = t.trim_start();
@@ -882,11 +825,9 @@ pub fn failure_reason(lines: &[(&str, LineKind)]) -> Option<String> {
         })
         .or_else(|| lines.iter().rposition(|(t, k)| *k == LineKind::Err && !t.trim().is_empty() && !generic(t)))?;
     let shown = lines.iter().rposition(|(t, k)| !t.trim().is_empty() && *k != LineKind::Blank).unwrap_or(0);
-    // Already in plain sight right above: saying it again is noise.
     (found + 3 <= shown).then(|| lines[found].0.trim().to_string())
 }
 
-/// The user's home folder, lower-cased, for shortening paths to `~`.
 fn home_lower() -> &'static str {
     static HOME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HOME.get_or_init(|| {
@@ -894,7 +835,6 @@ fn home_lower() -> &'static str {
     })
 }
 
-/// How a line reads on screen: pip's long "already satisfied … site-packages" lines become "customtkinter 6.0.0 is already installed", and the home folder becomes `~`.
 pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
     if let Some(rest) = text.strip_prefix("Requirement already satisfied: ") {
         let pkg = rest.split(" in ").next().unwrap_or(rest).trim();
@@ -914,7 +854,6 @@ pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
         return text.into();
     }
     let lower = text.to_lowercase();
-    // to_lowercase keeps byte offsets for ASCII paths; bail out otherwise.
     if lower.len() != text.len() || !lower.contains(home) {
         return text.into();
     }
@@ -929,7 +868,6 @@ pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
-/// Split a line into rows of at most `cols` characters, breaking after a space, `\` or `/` when one is near the end, so paths wrap at a folder boundary.
 pub fn wrap_ranges(s: &str, first: usize, hang: usize) -> Vec<(usize, usize)> {
     let first = first.max(8);
     let rest = first.saturating_sub(hang).max(8);
@@ -954,7 +892,6 @@ pub fn wrap_ranges(s: &str, first: usize, hang: usize) -> Vec<(usize, usize)> {
     out
 }
 
-/// "3.2s", "120ms", "1m 05s".
 pub fn elapsed(d: std::time::Duration) -> String {
     let ms = d.as_millis();
     if ms < 1000 {
@@ -966,7 +903,6 @@ pub fn elapsed(d: std::time::Duration) -> String {
     }
 }
 
-/// `C:\Users\me\Documents\proj\src` → `~\Documents\proj\src`; inside the open folder, from the folder's own name.
 pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     if let Some(root) = root {
         if let Ok(rel) = cwd.strip_prefix(root) {
@@ -982,24 +918,20 @@ pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     cwd.display().to_string()
 }
 
-/// A path cut from the left to at most `max` characters, keeping whole folder names where it can: `~\Documents\Project Pribadi\app` → `…\Project Pribadi\app`.
 pub fn fit_path_left(path: &str, max: usize) -> String {
     let n = path.chars().count();
     if n <= max {
         return path.to_string();
     }
     let max = max.max(2);
-    // Keep the longest tail that starts at a separator and still fits after "…".
     let tail_start = path.char_indices().map(|(i, _)| i).find(|&i| path[i..].chars().count() < max).unwrap_or(path.len());
     let tail = &path[tail_start..];
     match tail.find(['\\', '/']) {
         Some(k) if tail[k..].chars().count() > 1 => format!("…{}", &tail[k..]),
-        // Not even the last folder fits: its own end.
         _ => format!("…{tail}"),
     }
 }
 
-/// The last folder of a path as shown (`~\Documents\proj` → `proj`).
 pub fn last_folder(path: &str) -> &str {
     path.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().filter(|s| !s.is_empty()).unwrap_or(path)
 }
@@ -1162,7 +1094,6 @@ mod tests {
         assert_eq!(rows.iter().map(|(a, b)| &s[*a..*b]).collect::<String>(), s);
         assert!(s[rows[0].0..rows[0].1].ends_with('\\'));
         assert_eq!(wrap_ranges("short", 30, 2), vec![(0, 5)]);
-        // A jar name breaks at its dash, not one letter before the end.
         let jar = "build\\main\\libs\\KiwEssentials-0.1.0-SNAPSHOT.jar";
         let rows = wrap_ranges(jar, 46, 2);
         assert!(rows.iter().all(|(a, b)| b - a > 3));
@@ -1194,9 +1125,7 @@ mod tests {
         assert_eq!(failure_reason(&javac).as_deref(), Some("C:\\p\\src\\Main.java:12: error: ';' expected"));
         let gradle = [k("FAILURE: Build failed with an exception."), k(""), k("* What went wrong:"), k("Could not resolve all files."), k(""), k("* Try:"), k("> Run with --info"), k("BUILD FAILED in 1s")];
         assert_eq!(failure_reason(&gradle).as_deref(), Some("Could not resolve all files."));
-        // The only line is right above the status already.
         assert_eq!(failure_reason(&[k("'foo' is not recognized as an internal or external command,")]), None);
-        // Both lines of cmd's message read as the error.
         assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Err)), LineKind::Err);
         assert_eq!(classify("operable program or batch file.", true, Some(LineKind::Normal)), LineKind::Normal);
     }

@@ -1,15 +1,11 @@
-//! What the agent is told about the workspace before the first message (and again when it changes): its folders, what kind of project each is (from the manifests in it), the languages and layout, the git state and the open tabs.
 
 use crate::scm::RepoStatus;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-/// Cap on the overview, so it never crowds out the question.
 const MAX_CHARS: usize = 14000;
-/// Of that, the file map (about 2,000 tokens): every file of a small project, the first ones of each folder in a large one.
 const MAP_CHARS: usize = 7000;
-/// Folders whose files are never worth listing.
 const SKIP_DIRS: &[&str] = &["node_modules", "target", ".git", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".cache", "vendor", ".idea", ".vscode", "out", "coverage"];
 
 fn read_small(p: &Path) -> Option<String> {
@@ -30,7 +26,6 @@ fn first_n(items: impl IntoIterator<Item = String>, n: usize) -> String {
     s
 }
 
-/// Keys of a `[section]` in a TOML file (rough: one `key = ...` per line).
 fn toml_keys(text: &str, section: &str) -> Vec<String> {
     let mut on = false;
     let mut out = Vec::new();
@@ -71,7 +66,6 @@ fn toml_value(text: &str, section: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Package name from a requirements / dependency spec line.
 fn req_name(line: &str) -> Option<String> {
     let t = line.trim();
     if t.is_empty() || t.starts_with('#') || t.starts_with('-') {
@@ -81,7 +75,6 @@ fn req_name(line: &str) -> Option<String> {
     Some(t[..end].to_string()).filter(|s| !s.is_empty())
 }
 
-/// One line per thing the folder is, read from its manifests.
 pub fn project_kinds(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let has = |n: &str| root.join(n).exists();
@@ -209,7 +202,6 @@ pub fn project_kinds(root: &Path) -> Vec<String> {
     out
 }
 
-/// Title and first paragraph of the README, if there is one.
 fn readme(root: &Path) -> Option<String> {
     let t = ["README.md", "readme.md", "README.MD", "README.txt", "README"].iter().find_map(|n| read_small(&root.join(n)))?;
     let mut out = String::new();
@@ -233,7 +225,6 @@ fn readme(root: &Path) -> Option<String> {
     (!out.is_empty()).then(|| out.chars().take(400).collect())
 }
 
-/// Folders and files at the top of `root`, with how many files each folder holds.
 fn layout(root: &Path, files: &[String]) -> String {
     let rs = root.to_string_lossy().to_string();
     let mut dirs: BTreeMap<String, usize> = BTreeMap::new();
@@ -262,7 +253,6 @@ fn layout(root: &Path, files: &[String]) -> String {
     out
 }
 
-/// Every file under `root`, one line per folder: `src/agent/: activity.rs, menu.rs`.
 fn file_map(root: &Path, files: &[String], budget: usize) -> String {
     let rs = root.to_string_lossy().to_string();
     let mut by_dir: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -285,7 +275,6 @@ fn file_map(root: &Path, files: &[String], budget: usize) -> String {
         return String::new();
     }
     let total: usize = by_dir.values().map(Vec::len).sum();
-    // Files per folder: all of them if they fit, else as many as the budget allows.
     let mut per = usize::MAX;
     loop {
         let size: usize = by_dir.iter().map(|(d, v)| d.len() + 4 + v.iter().take(per).map(|n| n.len() + 2).sum::<usize>() + 10).sum();
@@ -308,7 +297,6 @@ fn file_map(root: &Path, files: &[String], budget: usize) -> String {
     out
 }
 
-/// Counts of files per language (Plain Text left out), largest first.
 fn languages(files: &[String]) -> String {
     let mut by: BTreeMap<&'static str, usize> = BTreeMap::new();
     for f in files {
@@ -326,7 +314,6 @@ pub struct Inputs<'a> {
     pub roots: &'a [PathBuf],
     pub files: &'a [String],
     pub git: Option<&'a RepoStatus>,
-    /// Open tabs, relative, the active one first with its cursor line.
     pub tabs: Vec<String>,
     pub python: Option<&'a str>,
 }
@@ -378,7 +365,6 @@ pub fn overview(i: &Inputs) -> String {
     s
 }
 
-/// Changes when the workspace does: folders, file count, branch, number of changes (not the tabs: the open file goes with each message anyway).
 pub fn signature(i: &Inputs) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();

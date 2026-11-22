@@ -1,4 +1,3 @@
-//! "What's new": the page that opens the first time a new build starts, from `changelog.flux` (compiled in, so it works offline).
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -8,17 +7,14 @@ use gpui_kit::{prelude::FluentBuilder, *};
 
 pub const SOURCE: &str = include_str!("../changelog.flux");
 
-// RELEASE_BUILDS: the build each release came in, worked out from git by build.rs.
 include!(concat!(env!("OUT_DIR"), "/release_builds.rs"));
 
-/// The build a release came in, when git could tell (by its English title).
 pub fn build_of(title_en: &str) -> Option<&'static str> {
     RELEASE_BUILDS.iter().find(|(t, _)| *t == title_en).map(|(_, b)| *b)
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Release {
-    /// YYYY-MM-DD, as in the build names.
     pub date: String,
     pub title_en: String,
     pub title_id: String,
@@ -35,7 +31,6 @@ impl Release {
     }
 }
 
-/// Parse `changelog.flux` (see its header for the format).
 pub fn parse(src: &str) -> Vec<Release> {
     let mut out: Vec<Release> = Vec::new();
     let mut lang = "en";
@@ -68,13 +63,11 @@ pub fn parse(src: &str) -> Vec<Release> {
     out
 }
 
-/// "BuildDev-2026-11-10-08-00-00" -> "2026-11-10".
 pub fn build_date(build: &str) -> Option<&str> {
     let d = build.strip_prefix("BuildDev-")?.get(..10)?;
     (d.len() == 10 && d.as_bytes()[4] == b'-' && d.as_bytes()[7] == b'-').then_some(d)
 }
 
-/// Indices of the releases to show after updating from `last` (a build name).
 pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
     let Some(last) = last else { return (0..releases.len()).collect() };
     let Some(after) = build_date(last) else { return (0..releases.len()).collect() };
@@ -82,7 +75,6 @@ pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, r)| match build_of(&r.title_en) {
-            // Build names are fixed-width dates and times, so a plain string comparison is a time comparison.
             Some(b) => b > last,
             None => r.date.as_str() > after,
         })
@@ -90,18 +82,14 @@ pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
         .collect()
 }
 
-/// The page's state: the releases it shows and the build it came from.
 pub struct Page {
     pub releases: Vec<Release>,
     pub from: Option<String>,
-    /// A newer build on offer (the update card's "What's new"): its tag, release page, and every build between this one and it.
     pub update: Option<crate::update::Release>,
-    /// Fetching the new build's changelog.flux.
     pub loading: bool,
     pub error: Option<String>,
 }
 
-/// The new build's notes, from its changelog.flux at its tag on GitHub (one small text file, fetched when asked).
 pub fn fetch(tag: &str) -> Result<String, String> {
     let url = format!("https://raw.githubusercontent.com/MuaraAI/FluxCode/{tag}/changelog.flux");
     let out = crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
@@ -114,7 +102,6 @@ pub fn fetch(tag: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Releases in `newer` that this build doesn't carry (by date and title), newest first.
 pub fn not_in(newer: Vec<Release>, mine: &[Release]) -> Vec<Release> {
     newer.into_iter().filter(|r| !mine.iter().any(|m| m.date == r.date && m.title_en == r.title_en)).collect()
 }
@@ -123,7 +110,6 @@ impl Page {
     pub fn after_update(from: &str) -> Self {
         let all = parse(SOURCE);
         let pick = since(&all, Some(from));
-        // An empty name means the build before didn't record itself: say nothing about it.
         let from = (!from.is_empty()).then(|| from.to_string());
         Self { releases: pick.into_iter().map(|i| all[i].clone()).collect(), from, update: None, loading: false, error: None }
     }
@@ -133,11 +119,9 @@ impl Page {
 }
 
 impl Workbench {
-    /// The update card's "What's new": the new build's notes, compared with this one's.
     pub(crate) fn show_update_notes(&mut self, rel: crate::update::Release, cx: &mut Context<Self>) {
         let tag = rel.tag.clone();
         self.settings_open = false;
-        // The page says the same and more: the card steps aside for this build.
         self.update.hidden = Some(tag.clone());
         self.whats_new = Some(Page { releases: Vec::new(), from: Some(crate::update::BUILD.to_string()), update: Some(rel), loading: true, error: None });
         cx.notify();
@@ -169,7 +153,6 @@ impl Workbench {
             Some(_) => tr("What the new build changes"),
             None => tr("What's new in FluxCode"),
         };
-        // Label and build name, one pair per line; the names in a fixed-width font so the dates and times line up and read at a glance.
         let pair = |label: SharedString, build: String, strong: bool| {
             h_flex()
                 .flex_wrap()
@@ -190,7 +173,6 @@ impl Workbench {
             (None, Some(f)) => builds = builds.child(pair(tr("Before").into(), f.clone(), false)),
             (None, None) => {}
         }
-        // The logo, title and Close on one line; the build names get the full width below.
         let header = v_flex()
             .flex_none()
             .w_full()
@@ -209,7 +191,6 @@ impl Workbench {
         let cards = page.releases.iter().enumerate().map(|(i, r)| {
             let build = build_of(&r.title_en);
             let here = build == Some(now);
-            // The build name when git knew it, else the date.
             let chip: SharedString = build.map(str::to_string).unwrap_or_else(|| r.date.clone()).into();
             let note: Option<SharedString> = if here {
                 Some(tr("installed now").into())
@@ -243,7 +224,6 @@ impl Workbench {
                                 .items_center()
                                 .text_xs()
                                 .child({
-                                    // No tooltip: the chip already shows the full build name, and the tooltip rendered below it, over the title line.
                                     div()
                                         .id(("wn-build", i))
                                         .flex_shrink(1.)
@@ -266,7 +246,6 @@ impl Workbench {
             .id("whats-new")
             .key_context("WhatsNew")
             .size_full()
-            // The column sits in the middle of wide windows and fills narrow ones.
             .items_center()
             .px(theme::u(20.))
             .py_6()
@@ -298,7 +277,6 @@ impl Workbench {
 }
 
 impl Workbench {
-    /// The builds between this one and the new one, and the update button.
     fn render_update_builds(&self, u: &crate::update::Release, page: &Page, cx: &mut Context<Self>) -> AnyElement {
         let builds: Vec<(String, String)> = if u.between.is_empty() { vec![(u.tag.clone(), String::new())] } else { u.between.clone() };
         let page_url = u.page.clone();
@@ -368,7 +346,6 @@ mod tests {
 
     #[test]
     fn release_builds_are_build_names() {
-        // Empty without git tags (a shallow checkout); when known, each is a build name.
         for r in parse(SOURCE) {
             if let Some(b) = build_of(&r.title_en) {
                 assert!(build_date(b).is_some(), "{b}");
@@ -386,7 +363,6 @@ mod tests {
             assert!(!r.body_en.is_empty() && !r.body_id.is_empty(), "{}", r.date);
             assert!(!r.body_en.contains("@id") && !r.body_en.contains('\u{2014}'), "{}", r.date);
         }
-        // Newest first (several releases can share a day).
         assert!(all.windows(2).all(|w| w[0].date >= w[1].date));
     }
 
@@ -404,7 +380,6 @@ mod tests {
         let src = "@release 2026-11-12\n@title en: C\n@en\nc\n@release 2026-11-10\n@title en: B\n@en\nb\n@release 2026-11-01\n@title en: A\n@en\na\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-09-10-00-00")), vec![0, 1]);
-        // Same day as the newest release: nothing is newer, so nothing shows.
         assert_eq!(since(&all, Some("BuildDev-2026-11-12-23-00-00")), Vec::<usize>::new());
         assert_eq!(since(&all, None), vec![0, 1, 2]);
         assert_eq!(build_date("BuildDev-2026-11-10-08-00-00"), Some("2026-11-10"));
@@ -413,7 +388,6 @@ mod tests {
 
     #[test]
     fn an_entry_the_previous_build_already_has_is_not_shown() {
-        // The WSL2 helper entry came in BuildDev-2026-11-14-03-51-07: updating from that build, or a later one, shows nothing for it.
         let src = "@release 2026-11-13\n@title en: WSL2 workspaces read through a helper in the distro\n@en\nx\n@release 2026-11-13\n@title en: WSL2 workspaces\n@en\ny\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-14-03-51-07")), Vec::<usize>::new());
@@ -422,7 +396,6 @@ mod tests {
 
     #[test]
     fn an_entry_from_a_newer_build_is_shown() {
-        // The same WSL2 helper entry, seen from a build made before it: its build is newer than the last one, so it shows.
         let src = "@release 2026-11-13\n@title en: WSL2 workspaces read through a helper in the distro\n@en\nx\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-12-10-00-00")), vec![0]);
@@ -430,7 +403,6 @@ mod tests {
 
     #[test]
     fn an_entry_with_no_known_build_uses_the_date_rule() {
-        // A title git cannot place in a build (it is made up here) falls back to the date rule: shown when dated after the last build, hidden when dated on its day or before.
         let src = "@release 2026-11-12\n@title en: A made-up entry\n@en\nx\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-09-10-00-00")), vec![0]);

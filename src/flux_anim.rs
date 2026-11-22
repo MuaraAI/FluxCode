@@ -1,4 +1,3 @@
-//! The install animation in the agent panel, drawn natively each frame (no video, no images): a few filled paths, tessellated by GPUI and drawn on the GPU.
 
 use crate::acp::{Phase, Snapshot, Tracker};
 use crate::theme::{self, c};
@@ -12,15 +11,11 @@ pub struct InstallAnim {
     tracker: Tracker,
     born: Instant,
     last: Instant,
-    /// Eased fill level, 0..1.
     fill: f32,
-    /// 1 when the size is known (a fill level), 0 for the swirl; eased between.
     known: f32,
     phase: Phase,
     phase_at: Instant,
-    /// "Installing Cursor", under the animation.
     title: SharedString,
-    /// The clock, stopped at the moment of a failure.
     frozen: Option<f32>,
     _tick: Task<()>,
 }
@@ -41,7 +36,6 @@ impl InstallAnim {
         Self { tracker, born: now, last: now, fill: 0., known: 0., phase: Phase::Registry, phase_at: now, title, frozen: None, _tick: tick }
     }
 
-    /// Advance the eased values to now and return what to draw.
     fn step(&mut self, reduce_motion: bool) -> (Snapshot, Frame) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().min(0.1);
@@ -82,7 +76,6 @@ impl InstallAnim {
     }
 }
 
-/// Where the fill should go for a snapshot, and whether that level is a measurement.
 fn target(s: &Snapshot) -> (Option<f32>, bool) {
     match s.phase {
         Phase::Download => (s.fraction(), s.fraction().is_some()),
@@ -91,7 +84,6 @@ fn target(s: &Snapshot) -> (Option<f32>, bool) {
     }
 }
 
-/// The line under the animation: the step, and the measured amount when there is one.
 pub fn detail(s: &Snapshot) -> String {
     let label = crate::i18n::tr(s.phase.label());
     let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.);
@@ -131,7 +123,6 @@ impl Render for InstallAnim {
     }
 }
 
-/// Everything one frame needs, copied into the canvas.
 #[derive(Clone, Copy)]
 struct Frame {
     t: f32,
@@ -146,12 +137,10 @@ struct Frame {
     ground: Hsla,
 }
 
-/// Smooth, looping edge noise in -1..1: three waves per edge, each drifting on its own.
 pub fn wob(th: f32, t: f32, seed: f32) -> f32 {
     0.55 * (3. * th + 1.3 * t + seed).sin() + 0.30 * (5. * th - 0.9 * t + 2.1 * seed).sin() + 0.15 * (8. * th + 2.3 * t + 0.7 * seed).sin()
 }
 
-/// A closed wobbly circle: `n` points at radius `r` +- `amp`.
 pub fn blob(cx: f32, cy: f32, r: f32, amp: f32, t: f32, seed: f32, n: usize) -> Vec<(f32, f32)> {
     (0..n)
         .map(|i| {
@@ -162,7 +151,6 @@ pub fn blob(cx: f32, cy: f32, r: f32, amp: f32, t: f32, seed: f32, n: usize) -> 
         .collect()
 }
 
-/// The inner radius of the liquid ring: thin while unknown, closing to 0 as it fills.
 pub fn inner_radius(r: f32, fill: f32, known: f32, t: f32) -> f32 {
     let open = r * 0.80;
     let filled = open * (1. - fill.clamp(0., 1.)).powf(0.85);
@@ -174,10 +162,8 @@ fn pts(v: &[(f32, f32)]) -> Vec<Point<Pixels>> {
     v.iter().map(|&(x, y)| point(px(x), px(y))).collect()
 }
 
-/// Fill one or more closed outlines as one path (even-odd, so an inner outline is a hole).
 fn fill(window: &mut Window, outlines: &[Vec<(f32, f32)>], color: Hsla) {
     let mut b = PathBuilder::fill();
-    // A shape with a non-finite point is skipped: the tessellator would abort the app.
     for o in outlines.iter().filter(|o| o.len() > 2 && o.iter().all(|(x, y)| x.is_finite() && y.is_finite())) {
         b.add_polygon(&pts(o), true);
     }
@@ -200,7 +186,6 @@ impl Frame {
             Phase::Unpack => {
                 let m = ease(self.since / 0.35);
                 if m < 1. {
-                    // The full disc shrinks and sinks into the box.
                     let rr = r * (1. - 0.6 * m);
                     let y = cy + m * r * 0.35;
                     fill(window, &[blob(cx, y, rr, r * 0.03, self.t, 0., 72)], self.fg.opacity(1. - m));
@@ -221,7 +206,6 @@ impl Frame {
         let t = self.t;
         let inner = inner_radius(r, self.fill, self.known, t);
         let n = 112;
-        // Smoke: three faint, loose layers round the outside, each drifting on its own, so the edge feathers instead of ending in a line.
         for k in 0..3 {
             let k = k as f32;
             let outer = blob(cx, cy, r * (1.03 + 0.035 * k), r * (0.05 + 0.025 * k), t * (0.55 + 0.17 * k), 4.0 + 1.9 * k, n);
@@ -242,7 +226,6 @@ impl Frame {
                 fill(window, &[a, b], self.fg.opacity((0.09 - 0.03 * k) * alpha));
             }
         }
-        // The flow: ochre streaks running round inside the liquid, tapered at both ends, faster while the size is unknown.
         let calm = if self.phase == Phase::Done { 1. - ease(self.since / 0.3) } else { 1. };
         if calm <= 0. {
             return;
@@ -252,13 +235,11 @@ impl Frame {
         let (lo, hi) = if hole { (inner + (r - inner) * 0.2, r - (r - inner) * 0.2) } else { (r * 0.46, r * 0.84) };
         let mid = (lo + hi) / 2.;
         let half = (hi - lo) / 2.;
-        // A wide soft glow, the main streak, and a thinner one on the far side.
         for (offset, len, width, a) in [(0., 1.5, 1.35, 0.14), (0., 1.15, 1., 0.72), (PI + 0.6, 0.8, 0.6, 0.38)] {
             fill(window, &[comet(cx, cy, mid, half * width, head + offset, len, r * 0.03, t)], self.accent.opacity(a * alpha * calm));
         }
     }
 
-    /// The check drawn into the full disc, stroke by stroke.
     fn check(self, window: &mut Window, cx: f32, cy: f32, r: f32) {
         let k = ease(self.since / 0.35);
         let a = (cx - r * 0.38, cy + r * 0.02);
@@ -278,19 +259,16 @@ impl Frame {
         }
     }
 
-    /// The ring after a failure: thin, still, broken open at the top.
     fn broken(self, window: &mut Window, cx: f32, cy: f32, r: f32) {
         let t = self.t;
         fill(window, &[arc_band(cx, cy, r * 0.84, r, -PI / 2. + 0.42, -PI / 2. + TAU - 0.42, r * 0.03, t)], self.danger.opacity(0.85));
     }
 
-    /// Unpacking: a box whose lids open and whose contents rise out as tar writes them.
     fn fluxbox(self, window: &mut Window, cx: f32, cy: f32, r: f32, show: f32) {
         let t = self.t;
         let (hw, top, bottom, w) = (r * 0.62, cy - r * 0.02, cy + r * 0.74, r * 0.08);
         let fg = self.fg.opacity(0.92 * show);
         let rect = |x0: f32, y0: f32, x1: f32, y1: f32| vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
-        // The liquid inside, draining as the files come out.
         let drained = self.unpacked.unwrap_or(0.35 + 0.1 * (t * 1.3).sin());
         let depth = (bottom - top - w) * (0.78 - 0.5 * drained.clamp(0., 1.));
         let level = bottom - w - depth;
@@ -303,9 +281,7 @@ impl Frame {
         surface.push((cx + hw - w, bottom - w));
         surface.push((cx - hw + w, bottom - w));
         fill(window, &[surface], self.accent.opacity(0.75 * show));
-        // Walls and floor.
         fill(window, &[rect(cx - hw, top, cx - hw + w, bottom), rect(cx + hw - w, top, cx + hw, bottom), rect(cx - hw, bottom - w, cx + hw, bottom)], fg);
-        // Lids: hinged at the top corners, swinging up and out.
         let open = ease((self.since - 0.15) / 0.45) * 2.25;
         let len = hw * 0.96;
         for side in [-1f32, 1.] {
@@ -315,7 +291,6 @@ impl Frame {
             let tip = (hinge.0 + dir.0 * len, hinge.1 + dir.1 * len);
             fill(window, &[vec![(hinge.0 - nrm.0, hinge.1 - nrm.1), (tip.0 - nrm.0, tip.1 - nrm.1), (tip.0 + nrm.0, tip.1 + nrm.1), (hinge.0 + nrm.0, hinge.1 + nrm.1)]], fg);
         }
-        // Contents rising once the lids are open: small squares that turn and fade.
         if open > 1.4 {
             let lift = ease((open - 1.4) / 0.85) * show;
             for i in 0..6 {
@@ -335,12 +310,10 @@ impl Frame {
     }
 }
 
-/// A streak along the circle of radius `mid`, `half` wide at its middle and pointed at both ends, ending at angle `head` and `len` radians long.
 fn comet(cx: f32, cy: f32, mid: f32, half: f32, head: f32, len: f32, amp: f32, t: f32) -> Vec<(f32, f32)> {
     let steps = 40;
     let at = |i: usize| {
         let s = i as f32 / steps as f32;
-        // Fuller toward the head, like a drop being pulled along.
         let taper = (s * PI).sin().max(0.).powf(0.8) * (0.55 + 0.45 * s);
         (head - len * (1. - s), half * taper)
     };
@@ -359,7 +332,6 @@ fn comet(cx: f32, cy: f32, mid: f32, half: f32, head: f32, len: f32, amp: f32, t
     v
 }
 
-/// A band between radii `lo` and `hi` from angle `a0` to `a1`, its edges moving like the ring's.
 fn arc_band(cx: f32, cy: f32, lo: f32, hi: f32, a0: f32, a1: f32, amp: f32, t: f32) -> Vec<(f32, f32)> {
     let steps = (((a1 - a0).abs() / TAU) * 160.).ceil().max(8.) as usize;
     let at = |i: usize| a0 + (a1 - a0) * i as f32 / steps as f32;
@@ -380,7 +352,6 @@ fn arc_band(cx: f32, cy: f32, lo: f32, hi: f32, a0: f32, a1: f32, amp: f32, t: f
 
 #[cfg(test)]
 mod tests {
-    // Not `super::*`: that brings in gpui_kit's `test` attribute, which shadows std's.
     use super::{blob, detail, inner_radius, target, wob};
     use crate::acp::{Phase, Snapshot};
 
@@ -397,7 +368,6 @@ mod tests {
         }
         assert!(inner_radius(r, 1., 1., 0.) < 1e-3, "a full ring is a disc");
         assert!(inner_radius(r, 0., 1., 0.) > r * 0.7, "an empty ring is thin");
-        // Unknown size: thin whatever the fill says.
         assert!(inner_radius(r, 1., 0., 3.) > r * 0.7);
     }
 
@@ -416,7 +386,6 @@ mod tests {
 
     #[test]
     fn every_shape_point_is_finite() {
-        // A NaN point aborts the tessellator (and the app); sweep the shapes.
         for i in 0..400 {
             let t = i as f32 * 0.173;
             let head = i as f32 * 0.91 - 50.;

@@ -1,4 +1,3 @@
-//! A web search (or a page read) in the chat, drawn as what it is: the query, the sources it found, each a click away, instead of a generic "Tool" row.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -9,27 +8,21 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use serde_json::Value;
 use std::time::Duration;
 
-/// Rows shown before "Show all".
 const FIRST: usize = 4;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Web {
     pub id: String,
-    /// The search, or the page's address for a fetch.
     pub query: String,
-    /// (title, url)
     pub results: Vec<(String, String)>,
     pub status: String,
-    /// A page read (WebFetch) rather than a search.
     pub fetch: bool,
 }
 
-/// The agent's own tool name, when it says it (Claude Agent's `_meta.claudeCode.toolName`).
 pub fn tool_name(u: &Value) -> Option<&str> {
     u.pointer("/_meta/claudeCode/toolName").and_then(Value::as_str)
 }
 
-/// Tools that only manage the agent's own tool list: not worth a row in the chat.
 pub fn hidden_tool(u: &Value) -> bool {
     matches!(tool_name(u), Some("ToolSearch"))
 }
@@ -38,7 +31,6 @@ pub fn is_web(u: &Value) -> bool {
     matches!(tool_name(u), Some("WebSearch" | "WebFetch"))
 }
 
-/// `Search "GPUI Rust"` → `GPUI Rust`.
 fn query_of_title(t: &str) -> Option<String> {
     let q = t.strip_prefix("Search ")?.trim().trim_matches(['"', '\u{201c}', '\u{201d}']);
     (!q.is_empty()).then(|| q.to_string())
@@ -51,7 +43,6 @@ impl Web {
         w
     }
 
-    /// Merge a tool_call / tool_call_update.
     pub fn take(&mut self, u: &Value) {
         if let Some(s) = u.get("status").and_then(Value::as_str) {
             self.status = s.to_string();
@@ -84,14 +75,12 @@ impl Web {
     }
 }
 
-/// `https://www.github.com/x` → `github.com`.
 pub fn domain(url: &str) -> String {
     let rest = url.split("://").nth(1).unwrap_or(url);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     host.trim_start_matches("www.").to_string()
 }
 
-/// A title that says nothing ("Expand description", "github.com") gives way to the path.
 fn shown_title(title: &str, url: &str, repeated: bool) -> String {
     let t = title.trim();
     let weak = repeated || t.is_empty() || t.eq_ignore_ascii_case(&domain(url)) || t == "Expand description";
@@ -126,7 +115,6 @@ impl Workbench {
                 h.child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(if w.fetch { q } else { format!("\u{201c}{q}\u{201d}") }))
             })
             .when(w.query.is_empty(), |h| h.child(div().flex_1()));
-        // While it runs: a short line sweeping under the title, nothing else moves.
         let sweep = running.then(|| {
             div()
                 .relative()
@@ -147,7 +135,6 @@ impl Workbench {
                 )
         });
         let shown: Vec<(usize, &(String, String))> = w.results.iter().enumerate().take(if open { n } else { FIRST }).collect();
-        // Several pages titled alike ("overview summary"): their paths tell them apart.
         let repeated = |t: &str| w.results.iter().filter(|(x, _)| x.trim() == t.trim()).count() > 1;
         let total = shown.len();
         let rows = (!running && n > 0).then(|| {
@@ -186,7 +173,6 @@ impl Workbench {
                         move |w, cx| gpui_kit::component::tooltip::Tooltip::new(u.clone()).build(w, cx)
                     })
                     .on_click(move |_, _, cx| cx.open_url(&u));
-                // One after another, once: each row starts 40 ms after the one above.
                 let delay = k as f32 * 40.;
                 let span = 160. + delay;
                 row.with_animation(SharedString::from(format!("ag-web-in-{}-{k}-{total}", w.id)), Animation::new(Duration::from_millis(span as u64)).with_easing(gpui_kit::ease_out_quint()), move |el, t| {

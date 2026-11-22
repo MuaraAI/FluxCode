@@ -1,6 +1,4 @@
-//! Build ID and Windows resources.
 
-/// French and Malay interface text: `i18n/<lang>.tsv` deflated into OUT_DIR, so each adds a few dozen KB to the binary and is only unpacked when chosen.
 fn pack_languages() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -34,7 +32,6 @@ fn main() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     std::fs::copy(manifest.join("assets/icon.ico"), out.join("fluxcode.ico")).expect("copy icon");
 
-    // Numeric file version from the build time: year, MMDD, HHMM, seconds.
     let n: Vec<u16> = build.split('-').skip(1).map(|p| p.parse().unwrap_or(0)).collect();
     let (y, md, hm, s) = (n[0], n[1] * 100 + n[2], n[3] * 100 + n[4], n[5]);
     let rc = format!(
@@ -68,7 +65,6 @@ END
     embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional().expect("embed resources");
 }
 
-/// Write `RELEASE_BUILDS: &[(title, build)]` for the releases in changelog.flux.
 fn release_builds(this_build: &str) {
     println!("cargo:rerun-if-changed=changelog.flux");
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -78,7 +74,6 @@ fn release_builds(this_build: &str) {
         o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
     let mut rows = String::new();
-    // Only when this is a checkout with build tags (CI fetches them; so does a clone).
     let tagged = git(&["tag", "-l", "BuildDev-*"]).is_some_and(|t| !t.trim().is_empty());
     let text = std::fs::read_to_string(manifest.join("changelog.flux")).unwrap_or_default();
     for line in text.lines() {
@@ -88,7 +83,6 @@ fn release_builds(this_build: &str) {
         }
         let pick = format!("-S@title en: {title}");
         let Some(first) = git(&["log", "--format=%H", "--reverse", &pick, "--", "changelog.flux"]).and_then(|s| s.lines().next().map(str::to_string)) else {
-            // Not committed yet: it comes with the build being made.
             rows.push_str(&format!("    ({title:?}, {this_build:?}),\n"));
             continue;
         };
@@ -101,7 +95,6 @@ fn release_builds(this_build: &str) {
     std::fs::write(out.join("release_builds.rs"), src).expect("write release_builds.rs");
 }
 
-/// `BuildDev-` followed by six dash-separated numbers of the right widths.
 fn valid(b: &str) -> bool {
     let Some(rest) = b.strip_prefix("BuildDev-") else { return false };
     let parts: Vec<&str> = rest.split('-').collect();
@@ -109,11 +102,9 @@ fn valid(b: &str) -> bool {
     parts.len() == 6 && parts.iter().zip(widths).all(|(p, w)| p.len() == w && p.bytes().all(|c| c.is_ascii_digit()))
 }
 
-/// The current UTC time as a build ID (no date crate in the build script).
 fn utc_now() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's days_from_civil, inverted.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;

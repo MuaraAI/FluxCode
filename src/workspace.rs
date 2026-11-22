@@ -1,4 +1,3 @@
-//! Several folders in one window, and files or folders dropped on it.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -9,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub(crate) struct Workspace {
-    /// Folders added next to the main one (`Workbench::root`).
     pub extra: Vec<PathBuf>,
-    /// Folders dropped while one is open, waiting for "add" or "switch".
     pub ask: Option<Vec<PathBuf>>,
 }
 
@@ -20,12 +17,10 @@ fn name_of(p: &Path) -> String {
 }
 
 impl Workbench {
-    /// Every folder of the workspace, the main one first.
     pub(crate) fn roots(&self) -> Vec<PathBuf> {
         self.root.iter().cloned().chain(self.workspace.extra.iter().cloned()).collect()
     }
 
-    /// A path as the lists show it: relative to its folder, and with the folder's name in front when the workspace has more than one.
     pub(crate) fn rel_display(&self, full: &str) -> String {
         let multi = !self.workspace.extra.is_empty();
         for r in self.roots() {
@@ -77,7 +72,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Switch the window to the first folder (the others join it).
     fn switch_to(&mut self, dirs: Vec<PathBuf>, cx: &mut Context<Self>) {
         let mut it = dirs.into_iter();
         let Some(first) = it.next() else { return };
@@ -108,7 +102,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Faint frame over the editor while files are dragged over the window.
     pub(crate) fn render_drop_hint(&self) -> impl IntoElement {
         div()
             .id("drop-hint")
@@ -134,7 +127,6 @@ impl Workbench {
             )
     }
 
-    /// "Add to workspace" or "switch to it", for folders dropped while one is open.
     pub(crate) fn render_drop_ask(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dirs = self.workspace.ask.as_ref()?;
         let what = match dirs.as_slice() {
@@ -169,7 +161,6 @@ impl Workbench {
                     div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().child(
                         v_flex()
                             .id("drop-ask")
-                            // Clicks inside stay here instead of reaching the backdrop (which cancels).
                             .occlude()
                             .track_focus(&self.drop_focus)
                             .w(theme::u(440.))

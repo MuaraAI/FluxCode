@@ -1,4 +1,3 @@
-//! Token buckets that keep one guest from flooding the host.
 
 use std::time::Instant;
 
@@ -14,7 +13,6 @@ impl Bucket {
         Self { capacity: capacity as f64, per_sec: per_sec as f64, tokens: capacity as f64, last: Instant::now() }
     }
 
-    /// Refill what time has added, then spend `weight` tokens if they are there.
     pub fn take_weight(&mut self, weight: f64) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last).as_secs_f64();
@@ -29,7 +27,6 @@ impl Bucket {
         }
     }
 
-    /// Spend one token, or none if the bucket is empty.
     #[cfg(test)]
     pub fn take(&mut self) -> bool {
         self.take_weight(1.0)
@@ -86,14 +83,12 @@ mod tests {
 
     #[test]
     fn a_bulk_edit_costs_more_than_a_keystroke() {
-        // 60 tokens: 60 keystrokes.
         let mut b = Bucket::new(60, 60);
         for _ in 0..60 {
             assert!(b.take());
         }
         assert!(!b.take(), "keystrokes alone should exhaust the bucket");
 
-        // The same bucket fits only 20 edits of 2 KiB each (1 + 2 tokens).
         let mut b = Bucket::new(60, 60);
         let mut accepted = 0;
         while b.take_weight(1.0 + 2048.0 / 1024.0) {

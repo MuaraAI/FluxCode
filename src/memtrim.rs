@@ -1,16 +1,13 @@
-//! Give memory FluxCode is not using back to the system.
 
 use gpui_kit::{AsyncWindowContext, Context, Window};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Bumped on every activation change, so a pending background trim knows the window came back in the meantime.
 static GEN: AtomicU64 = AtomicU64::new(0);
 
 const AFTER_START: Duration = Duration::from_secs(6);
 const IN_BACKGROUND: Duration = Duration::from_secs(15);
 
-/// Release what the process is not using right now.
 pub fn trim() {
     #[cfg(windows)]
     {
@@ -19,7 +16,6 @@ pub fn trim() {
             fn GetCurrentProcess() -> isize;
             fn K32EmptyWorkingSet(process: isize) -> i32;
         }
-        // SAFETY: both take and return plain handles / flags.
         unsafe {
             K32EmptyWorkingSet(GetCurrentProcess());
         }
@@ -29,14 +25,12 @@ pub fn trim() {
         extern "C" {
             fn malloc_trim(pad: usize) -> i32;
         }
-        // SAFETY: glibc's documented call; it only returns free heap memory.
         unsafe {
             malloc_trim(0);
         }
     }
 }
 
-/// Start both trims for the workbench window.
 pub fn watch<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
     cx.spawn_in(window, async move |_, cx: &mut AsyncWindowContext| {
         cx.background_executor().timer(AFTER_START).await;

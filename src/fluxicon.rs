@@ -1,8 +1,6 @@
-//! FluxIcon: FluxCode's own file icons.
 
 use gpui_kit::SharedString;
 
-/// One FluxIcon: the asset path of its SVG.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FluxIcon(pub &'static str);
 
@@ -179,7 +177,6 @@ pub const CODE: FluxIcon = FluxIcon("fluxicon/code.svg");
 pub const FOLDER: FluxIcon = FluxIcon("fluxicon/folder.svg");
 pub const FOLDER_OPEN: FluxIcon = FluxIcon("fluxicon/folder-open.svg");
 
-/// The SVGs, embedded (about 0.3 KiB each).
 pub static SVGS: &[(&str, &[u8])] = &[
     ("fluxicon/python.svg", include_bytes!("../assets/fluxicon/python.svg")),
     ("fluxicon/javascript.svg", include_bytes!("../assets/fluxicon/javascript.svg")),
@@ -349,7 +346,6 @@ pub static SVGS: &[(&str, &[u8])] = &[
     ("fluxicon/folder-open.svg", include_bytes!("../assets/fluxicon/folder-open.svg")),
 ];
 
-/// The SVG at `path`, if it is a FluxIcon.
 pub fn load(path: &str) -> Option<&'static [u8]> {
     if !path.starts_with("fluxicon/") {
         return None;
@@ -357,12 +353,10 @@ pub fn load(path: &str) -> Option<&'static [u8]> {
     SVGS.iter().find(|(p, _)| *p == path).map(|(_, b)| *b)
 }
 
-/// Every FluxIcon path, for the asset source's listing.
 pub fn paths() -> impl Iterator<Item = &'static str> {
     SVGS.iter().map(|(p, _)| *p)
 }
 
-/// The icon for a whole lower-cased file name or a name pattern.
 fn by_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
     let hit = match name {
         "setup.py" => (PYTHON, Some(0x4F9FD8)),
@@ -547,7 +541,6 @@ fn by_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
     Some(hit)
 }
 
-/// The icon for a lower-cased extension (no dot).
 fn by_ext(ext: &str) -> Option<(FluxIcon, Option<u32>)> {
     Some(match ext {
         "py" | "pyw" | "pyi" | "pyx" | "pxd" | "pyz" | "rpy" => (PYTHON, Some(0x4F9FD8)),
@@ -692,7 +685,6 @@ fn by_ext(ext: &str) -> Option<(FluxIcon, Option<u32>)> {
     })
 }
 
-/// The icon and tint for a file name, or None when nothing in the set knows it (the caller falls back to the generic code or file icon).
 pub fn for_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
     let lower = name.to_ascii_lowercase();
     if let Some(hit) = by_name(&lower) {
@@ -702,6 +694,5 @@ pub fn for_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
     by_ext(ext)
 }
 
-/// How many file kinds the set tells apart.
 #[allow(dead_code)]
 pub const KINDS: usize = 166;

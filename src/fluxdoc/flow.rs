@@ -1,4 +1,3 @@
-//! `@flow`: flowcharts written as text, laid out on their own.
 
 use super::{text, Span};
 
@@ -19,7 +18,6 @@ pub struct Node {
     pub fill: Option<u32>,
     pub text: Option<u32>,
     pub border: Option<u32>,
-    /// Layout: layer, position in it, and the box (x, y, w, h) in px.
     pub layer: usize,
     pub rect: (f32, f32, f32, f32),
 }
@@ -30,7 +28,6 @@ pub struct Edge {
     pub to: usize,
     pub label: String,
     pub dashed: bool,
-    /// Goes to an earlier layer (closes a loop).
     pub back: bool,
 }
 
@@ -39,18 +36,15 @@ pub struct Flow {
     pub right: bool,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
-    /// Size of the whole drawing in px.
     pub size: (f32, f32),
 }
 
-/// Width of a label in px at the flowchart's 13 px text (an estimate: the renderer draws boxes this wide and lets the text centre inside).
 fn label_w(s: &str) -> f32 {
     s.chars().map(|c| if c.is_ascii_uppercase() || c.is_ascii_digit() { 8.2 } else if c.is_ascii() { 7.0 } else { 12.0 }).sum()
 }
 
 use super::hex;
 
-/// Read a node reference at the start of `s`: (index, rest).
 fn node_ref<'a>(s: &'a str, f: &mut Flow) -> Option<(usize, &'a str)> {
     let s = s.trim_start();
     let id_len = s.bytes().take_while(|b| b.is_ascii_alphanumeric() || *b == b'_').count();
@@ -93,7 +87,6 @@ fn node_ref<'a>(s: &'a str, f: &mut Flow) -> Option<(usize, &'a str)> {
     Some((ix, rest))
 }
 
-/// An edge arrow at the start of `s`: (label, dashed, rest).
 fn arrow(s: &str) -> Option<(String, bool, &str)> {
     let s = s.trim_start();
     if let Some(r) = s.strip_prefix("-->").or_else(|| s.strip_prefix("->")) {
@@ -102,7 +95,6 @@ fn arrow(s: &str) -> Option<(String, bool, &str)> {
     if let Some(r) = s.strip_prefix("..>") {
         return Some((String::new(), true, r));
     }
-    // -label-> and .label.>
     for (open, close, dashed) in [("-", "->", false), (".", ".>", true)] {
         if let Some(r) = s.strip_prefix(open) {
             if let Some(e) = r.find(close) {
@@ -162,7 +154,6 @@ fn layout(f: &mut Flow) {
         return;
     }
     let out: Vec<Vec<usize>> = (0..n).map(|i| f.edges.iter().enumerate().filter(|(_, e)| e.from == i).map(|(k, _)| k).collect()).collect();
-    // Back edges: those reaching a node still on the DFS stack.
     let mut state = vec![0u8; n];
     fn dfs(v: usize, f: &mut Flow, out: &[Vec<usize>], state: &mut [u8]) {
         state[v] = 1;
@@ -182,7 +173,6 @@ fn layout(f: &mut Flow) {
             dfs(v, f, &out, &mut state);
         }
     }
-    // Layers: longest path over forward edges (n passes at most).
     let mut layer = vec![0usize; n];
     for _ in 0..n {
         let mut moved = false;
@@ -201,7 +191,6 @@ fn layout(f: &mut Flow) {
     for v in 0..n {
         rows[layer[v]].push(v);
     }
-    // Order by the parents' average position, twice.
     for _ in 0..2 {
         let pos: Vec<f32> = {
             let mut p = vec![0f32; n];
@@ -220,9 +209,7 @@ fn layout(f: &mut Flow) {
             r.sort_by(|a, b| key(*a).partial_cmp(&key(*b)).unwrap_or(std::cmp::Ordering::Equal));
         }
     }
-    // Sizes, then place layer by layer, centring each layer on the widest.
     for node in &mut f.nodes {
-        // A diamond's text sits in its middle half: it needs more room around it.
         let (w, h) = if node.shape == Shape::Diamond {
             ((label_w(&node.label) * 1.4 + 60.).max(104.), NODE_H + 24.)
         } else {
@@ -248,12 +235,10 @@ fn layout(f: &mut Flow) {
         depth_at += thick + LAYER_GAP;
     }
     let depth = depth_at - LAYER_GAP;
-    // Room on the side for edges that loop back.
     let back = if f.edges.iter().any(|e| e.back) { 40. } else { 0. };
     f.size = if f.right { (depth, widest + back) } else { (widest + back, depth) };
 }
 
-/// The flowchart as Mermaid, which GitHub draws in Markdown.
 pub fn to_mermaid(f: &Flow) -> String {
     let mut s = format!("flowchart {}\n", if f.right { "LR" } else { "TD" });
     let q = |l: &str| l.replace('"', "#quot;");

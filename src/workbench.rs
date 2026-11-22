@@ -1,4 +1,3 @@
-//! The workbench: title bar + menus, activity bar, side bar (explorer, search, run, OpenCode), editor tabs, bottom panel (terminal, output) and status bar, in VS Code's layout.
 
 use crate::i18n::tr;
 use crate::core;
@@ -21,13 +20,10 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-/// Files above this size open without syntax highlighting.
 const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
 
-/// Files above this size are read and written off the UI thread.
 const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
 
-/// Saves go off the UI thread sooner than reads: auto-save fires ~1 s after every typing pause, and a sync write stalled the window.
 const SAVE_OFF_THREAD_BYTES: u64 = 64 * 1024;
 
 actions!(
@@ -70,12 +66,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
         KeyBinding::new("down", QuickDown, Some("QuickOpen > Input")),
         KeyBinding::new("escape", QuickClose, Some("QuickOpen > Input")),
-        // Agent input: the @file list.
         KeyBinding::new("up", AgentMentionUp, Some("AgentInput > Input")),
         KeyBinding::new("down", AgentMentionDown, Some("AgentInput > Input")),
         KeyBinding::new("tab", AgentMentionAccept, Some("AgentInput > Input")),
         KeyBinding::new("escape", AgentMentionClose, Some("AgentInput > Input")),
-        // The agent panel's menus (agent, model, mode, permissions), with or without their search box.
         KeyBinding::new("up", AgentMenuUp, Some("AgentMenu")),
         KeyBinding::new("down", AgentMenuDown, Some("AgentMenu")),
         KeyBinding::new("enter", AgentMenuPick, Some("AgentMenu")),
@@ -95,18 +89,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
-        // Esc drops the name being typed in the Explorer, or the delete confirm.
         KeyBinding::new("escape", CancelPending, Some("Explorer > Input")),
         KeyBinding::new("escape", CancelPending, Some("Explorer")),
-        // In the code editor Tab accepts the highlighted suggestion.
         KeyBinding::new("tab", TabAccept, Some("Input && mode == editor")),
-        // Terminal prompt: shell-like keys (bound after gpui-kit's, so they win over the input's own).
         KeyBinding::new("up", TermHistoryPrev, Some("Terminal > Input")),
         KeyBinding::new("down", TermHistoryNext, Some("Terminal > Input")),
         KeyBinding::new("tab", TermComplete, Some("Terminal > Input")),
         KeyBinding::new("ctrl-c", TermInterrupt, Some("Terminal > Input")),
         KeyBinding::new("escape", TermEscape, Some("Terminal > Input")),
-        // VS Code's (Windows/Linux) keys for the commands in commands.rs.
         KeyBinding::new("ctrl-shift-p", CommandPalette, None),
         KeyBinding::new("f1", CommandPalette, None),
         KeyBinding::new("ctrl-g", GoToLine, None),
@@ -121,7 +111,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-=", ZoomIn, None),
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-0", ZoomReset, None),
-        // Line editing, in the code editor only (bound after gpui-kit's, so these win: Shift+Alt+Up/Down copy a line here as in VS Code.
         KeyBinding::new("ctrl-/", ToggleLineComment, Some("Input && mode == editor")),
         KeyBinding::new("alt-up", MoveLineUp, Some("Input && mode == editor")),
         KeyBinding::new("alt-down", MoveLineDown, Some("Input && mode == editor")),
@@ -154,15 +143,10 @@ pub(crate) use crate::term::LineKind;
 pub(crate) struct Line {
     pub text: SharedString,
     pub kind: LineKind,
-    /// The process may still append to this line (no newline yet).
     pub open: bool,
-    /// Came from stderr (or, on a status line: the command failed).
     pub err: bool,
-    /// Second piece of text: the prompt's folder, a status line's time, a card's file:line.
     pub meta: SharedString,
-    /// Click target: (path as printed, 1-based line).
     pub link: Option<(SharedString, u32)>,
-    /// Command a card's fix button runs.
     pub run: Option<SharedString>,
 }
 
@@ -175,43 +159,29 @@ impl Line {
 pub(crate) struct Doc {
     pub path: PathBuf,
     pub name: SharedString,
-    /// The tab icon for `name`, worked out once when the tab opens: calling `files::icon_for` per tab per frame redid it on every render.
     pub icon: (crate::fluxicon::FluxIcon, Option<u32>),
-    /// Highlighter token ("python", "kt", "Dockerfile"); "image" for an image tab.
     pub lang: &'static str,
-    /// Status-bar name of the language or view ("Python", "Hex", "PDF").
     pub label: &'static str,
-    /// A view of a file the editor can't hold as text (hex, PDF text, ...): never saved.
     pub read_only: bool,
-    /// One line above the editor: what a view shows, or that the file is empty.
     pub banner: Option<SharedString>,
     pub crlf: bool,
     pub editor: Entity<EditorState>,
     pub dirty: bool,
-    /// Bumped on every edit; auto save only fires for the latest one.
     pub gen: u64,
     pub _sub: Subscription,
-    /// Set for an image tab (the editor stays empty and is never shown).
     pub image: Option<ImageDoc>,
-    /// A Flux document (`.flux`): drawn, unless its source is showing.
     pub flux: Option<crate::fluxdoc::view::FluxView>,
     pub flux_source: bool,
-    /// A large Flux document opens drawn with its editor still empty (the text lives in `flux`); the editor fills the first time Source is shown.
     pub flux_lazy: bool,
-    /// A `.diff` / `.patch` file: drawn with colored lines (diff_view.rs).
     pub diff: Option<crate::diff_view::DiffDoc>,
-    /// Most of the text sits in very long lines (minified JS/JSON/CSS, a one-line export): this file wraps even when word wrap is off in Settings.
     pub long_lines: bool,
-    /// Alt+Z on this file: on/off for this file only, as in VS Code (not saved).
     pub wrap_override: Option<bool>,
 }
 
 impl Doc {
-    /// Whether this file's lines wrap: its own Alt+Z choice, else long lines, else the setting.
     pub fn wraps(&self, setting: bool) -> bool {
         self.wrap_override.unwrap_or(setting || self.long_lines)
     }
-    /// The document's text: the editor's, or a large Flux document's not yet in it.
     pub fn text(&self, cx: &App) -> String {
         match (&self.flux, self.flux_lazy) {
             (Some(v), true) => v.source(),
@@ -221,19 +191,15 @@ impl Doc {
 }
 
 pub(crate) struct ImageDoc {
-    /// Pixel size from the file header (None for SVG and unreadable headers).
     pub size: Option<(u32, u32)>,
     pub bytes: u64,
-    /// `None`: fitted to the editor (the default; small pictures are scaled up too).
     pub zoom: Option<f32>,
 }
 
-/// An image tab's zoom steps (as in VS Code's image preview).
 const ZOOM_STEPS: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1., 1.5, 2., 3., 5., 7., 10., 15., 20., 30., 50., 75., 100.];
 const ZOOM_MIN: f32 = 0.1;
 const ZOOM_MAX: f32 = 100.;
 
-/// What the explorer's inline name box is for.
 #[derive(Clone)]
 pub(crate) enum PendingOp {
     NewFile(PathBuf),
@@ -244,45 +210,28 @@ pub(crate) enum PendingOp {
 
 pub struct Workbench {
     pub(crate) root: Option<PathBuf>,
-    /// New development builds from GitHub Releases (update.rs).
     pub(crate) update: crate::update::UpdateUi,
-    /// Where the title bar menus end (window x), measured each frame, so the search box can stay centered without covering longer menu names.
     pub(crate) title_menu_end: Rc<std::cell::Cell<f32>>,
-    /// Folders added next to `root`, and folders dropped on the window.
     pub(crate) workspace: crate::workspace::Workspace,
-    /// Focus of the "add or switch" question after a folder drop.
     pub(crate) drop_focus: FocusHandle,
-    /// A mouse-wheel glide in progress (smooth scrolling of the code editor).
     pub(crate) smooth: Option<SmoothScroll>,
-    /// The welcome page's width as last drawn: too narrow for its text, it shows the logo alone.
     welcome_w: std::rc::Rc<std::cell::Cell<f32>>,
-    /// The status text last shown; a new one clears itself after a few seconds.
     pub(crate) status_seen: SharedString,
     pub(crate) tree: Entity<TreeState>,
-    /// The explorer's tree, kept so a folder can be read when it is opened.
     pub(crate) tree_nodes: Vec<crate::files::Node>,
-    /// Folders the user has opened, so a refresh keeps them open.
     pub(crate) expanded: std::collections::HashSet<String>,
-    /// Every folder in the tree (by path), including empty and skipped ones.
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
     pub(crate) active: Option<usize>,
-    /// When the active tab last changed, and whether that change came hot on the heels of the previous one (a rapid switch skips the fade).
     last_switch: Option<std::time::Instant>,
     switch_fast: bool,
-    /// A session save is already queued on a timer: `save_session` coalesces bursts (one write per 500 ms at most) instead of a sync write per close.
     session_save_pending: bool,
     pub(crate) view: SideView,
     pub(crate) sidebar_open: bool,
-    /// The OpenCode chat docked on the right is showing (settings.agent_right).
     pub(crate) agent_open: bool,
-    /// Widths of the side bar and that dock (logical px), and which edge is being dragged: 0 none, 1 side bar, 2 dock.
     pub(crate) agent_width: f32,
-    /// The agent chat fills the window (the editor steps aside until it is turned off).
     pub(crate) agent_full: bool,
-    /// A click outside just closed this popover (its key, when): the same click landing on the popover's own button must not open it again.
     pub(crate) pop_shut: Option<(&'static str, std::time::Instant)>,
-    /// The view the right side bar shows (the agent, or any view moved there).
     pub(crate) right_view: SideView,
     pub(crate) sidebar_width: f32,
     pub(crate) resizing: u8,
@@ -291,45 +240,32 @@ pub struct Workbench {
     pub(crate) settings: crate::settings::Settings,
     pub(crate) settings_open: bool,
     pub(crate) settings_section: crate::settings::SettingsSection,
-    /// The settings page's scroll: every section on one page, the left list jumps in it.
     pub(crate) settings_scroll: ScrollHandle,
-    /// The "What's new" page, when it is showing (whatsnew.rs).
     pub(crate) whats_new: Option<crate::whatsnew::Page>,
-    /// Paths of closed tabs, newest last, for Ctrl+Shift+T.
     pub(crate) closed_tabs: Vec<PathBuf>,
-    /// Live share (collab/).
     pub(crate) collab: crate::collab::Collab,
-    // explorer
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
-    /// The tab the explorer last showed, scrolled into view.
     pub(crate) revealed: RefCell<Option<String>>,
-    /// The tab the explorer gave up showing: not in the tree.
     pub(crate) reveal_tried: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
-    /// The icon the pending row last showed: the name input's Change handler redraws the workbench only when it changes.
     pub(crate) pending_icon: Option<(crate::fluxicon::FluxIcon, Option<u32>)>,
-    // search
     pub(crate) search_input: Entity<InputState>,
     pub(crate) match_case: bool,
     pub(crate) whole_word: bool,
     pub(crate) search: core::SearchResult,
     pub(crate) searching: bool,
     pub(crate) search_rows: Vec<(usize, Option<usize>)>,
-    /// Result files opened past the first lines, and files folded to their header.
     pub(crate) search_unfolded: std::collections::HashSet<usize>,
     pub(crate) search_closed: std::collections::HashSet<usize>,
-    // panel (terminal + output)
     pub(crate) procs: Procs,
     pub(crate) panel_open: bool,
     pub(crate) panel_tab: PanelTab,
     pub(crate) term_lines: Vec<Line>,
     pub(crate) term_cwd: PathBuf,
-    /// Set when the workspace lives inside a WSL2 distro: commands then run there.
     pub(crate) wsl: Option<crate::remote::WslTarget>,
     pub(crate) term_input: Entity<InputState>,
-    /// The prompt has text in it (the panel draws its own placeholder in the UI font).
     pub(crate) term_typed: bool,
     pub(crate) term_proc: Option<u32>,
     pub(crate) term_history: Vec<String>,
@@ -338,61 +274,41 @@ pub struct Workbench {
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
     pub(crate) term_run: Option<crate::panel::RunInfo>,
-    /// Wrapped rows of the terminal and output panels, and the size of the panel's log (last frame).
     pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
     pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
-    /// The panel log's left edge in window pixels (last frame): where a row's text starts.
     pub(crate) panel_left: Rc<std::cell::Cell<f32>>,
-    /// Text selected in the terminal or output log with the mouse.
     pub(crate) panel_sel: Option<crate::panel::PanelSel>,
-    /// Size of the image viewer area (measured last frame), to fit pictures exactly.
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
-    /// The tab strip's scroll position, so the active tab is scrolled into view.
     pub(crate) tabs_scroll: ScrollHandle,
-    /// Side bar shown last frame, and a count of its openings: it slides in when it opens.
     pub(crate) side_anim: std::cell::Cell<(bool, u64)>,
-    /// Agent full screen last frame, and a count of the switches: the view fades over.
     pub(crate) full_anim: std::cell::Cell<(bool, u64)>,
-    /// The editor's wash over a background scene or picture: whether a file was showing last frame, and a count of the switches, so the wash fades in when a file opens and out when the last one closes instead of snapping.
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
-    /// Position while walking the history with Up/Down.
     pub(crate) term_hist_ix: Option<usize>,
-    /// Python errors from the last runs, underlined in the editor.
     pub(crate) problems: Vec<crate::panel::Problem>,
-    /// "Python 3.15.0" for the terminal header (detected in the background).
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
     pub(crate) ext: crate::ext::Ext,
-    /// The status bar's color theme list is open.
     pub(crate) theme_menu: bool,
-    /// Background animation was just turned on: what this PC makes of it.
     pub(crate) motion_check: Option<crate::motion_check::Check>,
     pub(crate) quick: crate::quick::QuickOpen,
-    /// Every file of the open folder (from the explorer's scan), for Go to File.
     pub(crate) all_files: Rc<Vec<String>>,
-    /// The same paths relative to the folder and lower-cased, for fast matching.
     pub(crate) all_lower: Rc<Vec<String>>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
-    /// The Copilot language server client (a handle; the server runs in its own process).
     pub(crate) copilot: crate::copilot::Copilot,
-    /// True while the one-click Copilot server install is running.
     pub(crate) copilot_installing: bool,
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
     #[cfg(not(feature = "embedded-preview"))]
     pub(crate) preview: Option<((), String)>,
-    /// The WebView notice is on screen (embedded-preview only): the preview waits until the user continues or cancels.
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview_ask: bool,
-    /// "Do not show again" ticked in the open notice.
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview_ask_hide: bool,
-    /// Focus of the notice dialog, so Escape and Enter reach it.
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview_ask_focus: FocusHandle,
     _subs: Vec<Subscription>,
@@ -407,7 +323,6 @@ impl Workbench {
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
-        // No placeholder of its own: the panel draws one in the UI font (see `render_panel`).
         let term_input = cx.new(|cx| InputState::new(window, cx));
         let github_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -432,7 +347,6 @@ impl Workbench {
                 |this, _, ev: &InputEvent, window, cx| {
                     match ev {
                         InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
-                        // Redraw only when the pending row's icon changes: most keystrokes leave it alone.
                         InputEvent::Change => {
                             if let Some(icon) = this.pending_file_icon(cx) {
                                 if this.pending_icon != Some(icon) {
@@ -453,7 +367,6 @@ impl Workbench {
             cx.subscribe_in(&term_input, window, |this, _, ev: &InputEvent, window, cx| {
                 match ev {
                     InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
-                    // Redraw only when the placeholder should appear or go.
                     InputEvent::Change => {
                         let typed = !this.term_input.read(cx).value().is_empty();
                         if typed != this.term_typed {
@@ -467,7 +380,6 @@ impl Workbench {
         ];
 
         let (procs, rx) = Procs::new();
-        // Drain process output on the UI thread.
         cx.spawn(async move |this, cx| {
             let mut rx = rx;
             while let Some(ev) = rx.next().await {
@@ -486,7 +398,6 @@ impl Workbench {
         .detach();
 
         let mut settings = crate::settings::Settings::load();
-        // Accounts added before sign-in was checked, never signed in to: drop them.
         crate::agent::worktree::prune_accounts(&mut settings);
         crate::i18n::set(&settings.language);
         crate::remote::set_helper_enabled(settings.wsl_helper);
@@ -509,14 +420,11 @@ impl Workbench {
         let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
         crate::boot::mark("  quick open");
         subs.push(quick_sub);
-        // Like VS Code: re-read git state when the window comes back to the front.
         subs.push(cx.observe_window_activation(window, |this, window, cx| {
-            // Alt-Tab back and forth should not start a git process each time.
             let recent = this.scm.last_refresh.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
             if window.is_window_active() && !recent {
                 this.scm_refresh(cx);
             }
-            // Back after a while: look at the remote too (quietly, at most every two minutes).
             if window.is_window_active() {
                 this.scm_on_return(cx);
             }
@@ -624,18 +532,15 @@ impl Workbench {
             _subs: subs,
         };
         crate::boot::mark("  struct");
-        // The first start of a new build opens its release notes.
         if this.settings.last_build != crate::update::BUILD {
             let before = std::mem::replace(&mut this.settings.last_build, crate::update::BUILD.to_string());
             if crate::whatsnew::build_date(&before).is_some() {
                 this.whats_new = Some(crate::whatsnew::Page::after_update(&before));
             } else if before.is_empty() && crate::settings::existed_before_start() {
-                // Updated from a build older than this page: show the newest notes.
                 this.whats_new = Some(crate::whatsnew::Page::after_update(""));
             }
             this.settings.save();
         }
-        // Files without a folder (a double-click in Explorer) open on top of the last session, so closing the window doesn't save a one-file session over it.
         if let Some(root) = root {
             this.open_folder(root, cx);
             for path in open {
@@ -655,7 +560,6 @@ impl Workbench {
         this
     }
 
-    /// Copilot: redraw whenever its status changes, and start its server a moment after launch (in the background), so suggestions are ready at the first keystroke and Settings shows the real state (not installed, sign in, ready) instead of waiting for a first request.
     fn start_copilot(&mut self, cx: &mut Context<Self>) {
         let mut changes = self.copilot.watch();
         cx.spawn(async move |this, cx| {
@@ -670,7 +574,6 @@ impl Workbench {
         self.kick_copilot(cx);
     }
 
-    /// Start the Copilot server off the UI thread if nothing was tried yet.
     pub(crate) fn kick_copilot(&mut self, cx: &mut Context<Self>) {
         if !self.copilot.untried() {
             return;
@@ -688,7 +591,6 @@ impl Workbench {
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = Some(root.clone());
-        // A different distro (or a plain folder) gets its own helper.
         let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
         if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
             crate::remote::drop_client();
@@ -703,7 +605,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Find the workspace's Python version off the UI thread, for the terminal header.
     pub(crate) fn detect_python(&mut self, cx: &mut Context<Self>) {
         let root = self.root.clone();
         let wsl = self.wsl.clone();
@@ -722,7 +623,6 @@ impl Workbench {
         let roots = self.roots();
         let multi = roots.len() > 1;
         let wsl = self.wsl.clone();
-        // One level now: a folder is read when it is opened.
         let (root2, roots2) = (root.clone(), roots.clone());
         cx.spawn(async move |this, cx| {
             let listing = cx
@@ -741,7 +641,6 @@ impl Workbench {
             });
         })
         .detach();
-        // The file list (Ctrl+P) still wants the whole tree, off the UI thread.
         let wsl_scan = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let all = cx
@@ -767,18 +666,15 @@ impl Workbench {
         .detach();
     }
 
-    /// Build the tree items from `tree_nodes` and hand them to the tree.
     pub(crate) fn set_tree_items(&mut self, cx: &mut Context<Self>) {
         let mut dirs = std::collections::HashSet::new();
         let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
-        // A name being typed gets its own row inside the tree, first in its folder.
         crate::explorer::insert_pending_row(
             &mut items,
             self.pending.as_ref(),
             self.root.as_deref(),
         );
         self.dirs = Rc::new(dirs);
-        // While a name is being typed the tree has no selection: the input row is the selected one.
         let selected = if self.pending.is_none() {
             self.tree.read(cx).selected_item().map(|i| i.id.clone())
         } else {
@@ -793,7 +689,6 @@ impl Workbench {
                 }
             }
         });
-        // A rebuild must not move the view: it keeps the tab already shown, and only unblocks a show that gave up, when the file is there again.
         if let Some(p) = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned()) {
             let shown = self.tree.read(cx).index_of(&SharedString::from(p)).is_some();
             crate::explorer::update_reveal_state(
@@ -804,7 +699,6 @@ impl Workbench {
         }
     }
 
-    /// A folder was opened: read it now if it has not been read yet.
     pub(crate) fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
         self.expanded.insert(id.clone());
         let Some(node) = find_node(&mut self.tree_nodes, &id) else { return };
@@ -839,7 +733,6 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        // A big file is read off the UI thread; a small one is read here, so the tab is there the moment the click is handled.
         if read_off_thread(&path) {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
@@ -863,7 +756,6 @@ impl Workbench {
         self.finish_open_file(path, bytes, window, cx);
     }
 
-    /// Open a file now, reading it on this thread.
     pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_file_early(path.clone(), window, cx) {
             return;
@@ -875,9 +767,7 @@ impl Workbench {
         self.finish_open_file(path, bytes, window, cx);
     }
 
-    /// The checks both open paths share: an already-open tab, an image.
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // A file opened from anywhere takes the editor area back from a page shown there: an extension's page, Settings, What's new, live share.
         self.ext.page = None;
         self.settings_open = false;
         self.whats_new = None;
@@ -893,7 +783,6 @@ impl Workbench {
         false
     }
 
-    /// The rest of `open_file`, once the bytes are here.
     fn finish_open_file(&mut self, path: PathBuf, bytes: Result<Vec<u8>, String>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
@@ -903,7 +792,6 @@ impl Workbench {
             Ok(b) => b,
             Err(e) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                // os error 32 / 33: another program (a running server) holds the file.
                 self.status = if e.contains("os error 32") || e.contains("os error 33") {
                     crate::trf!("{name} is in use by another program (a running server, for example), so it can't be opened now"; name => name)
                 } else {
@@ -914,7 +802,6 @@ impl Workbench {
                 return;
             }
         };
-        // Files a text editor can't show (binary, Office, PDF, SQLite, ZIP) open as a read-only view instead of an error.
         let view = crate::viewer::view(&path, &bytes);
         let read_only = view.is_some();
         let (text, crlf, mut lang, mut label, banner) = match view {
@@ -923,11 +810,9 @@ impl Workbench {
                 let file = core::decode_text(&bytes);
                 let first = file.text.lines().next().unwrap_or("");
                 let (lang, label) = files::language_for(&path, first);
-                // An empty file opens clean: no banner above the editor.
                 (file.text, file.crlf, lang, label, None)
             }
         };
-        // Very large files open as plain text, like VS Code's large-file mode: highlighting keeps styles for the whole document.
         let large = text.len() > LARGE_FILE_BYTES;
         if large && !read_only {
             lang = "text";
@@ -936,7 +821,6 @@ impl Workbench {
         }
         let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(&path) };
         let is_markdown = drawable == Some(true);
-        // A large drawn document: the drawing needs only the text, not an editor full of it.
         let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
         let (mut file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
             (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
@@ -954,7 +838,6 @@ impl Workbench {
             EditorState::new(window, cx)
                 .language(lang)
                 .line_number(opts.line_numbers)
-                // Vertical guides show how far each block reaches; spaces show as faint dots.
                 .indent_guides(!read_only)
                 .show_whitespaces(dots && !read_only)
                 .tab_size(TabSize { tab_size: tab, hard_tabs: false })
@@ -970,13 +853,11 @@ impl Workbench {
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
-                // Live share: a shared file's edit goes to the others now.
                 this.collab_on_change(&editor, cx);
                 if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor && !d.read_only) {
                     d.dirty = true;
                     d.gen += 1;
                     let gen = d.gen;
-                    // The bracket underline (brackets.rs) once typing pauses.
                     let checked = editor.clone();
                     cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
@@ -1000,7 +881,6 @@ impl Workbench {
                         .detach();
                     }
                 }
-                // Only an edit needs a whole-window rebuild.
                 cx.notify();
             }
         });
@@ -1010,7 +890,6 @@ impl Workbench {
             .unwrap_or_default()
             .into();
         let banner = banner.map(SharedString::from);
-        // A large Flux document shows its first part at once; the rest is read (and its text packed) on another thread, then takes its place.
         let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
         let lang_ui = crate::fluxdoc::view::ui_lang();
         let mut rest: Option<String> = None;
@@ -1064,7 +943,6 @@ impl Workbench {
         self.save_session(cx);
     }
 
-    /// Open a picture in its own tab (no text editor, nothing to save).
     fn open_image(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let size = image::image_dimensions(&path).ok();
@@ -1101,7 +979,6 @@ impl Workbench {
         self.save_session(cx);
     }
 
-    /// The picture's scale while it is fitted: as large as the area allows, small images scaled up too, aspect kept. 1.0 means one image pixel per screen pixel.
     fn image_fit_scale(&self, im: &ImageDoc, scale: f32) -> Option<f32> {
         let (w, h) = im.size?;
         let (bw, bh) = self.image_box.get();
@@ -1110,7 +987,6 @@ impl Workbench {
         Some((aw / lw).min(ah / lh))
     }
 
-    /// Zoom an image tab one step in (`dir` 1) or out (-1), from what shows now.
     pub(crate) fn image_zoom_step(&mut self, ix: usize, dir: i32, window: &Window, cx: &mut Context<Self>) {
         let scale = window.scale_factor().max(0.5);
         let Some(im) = self.docs.get(ix).and_then(|d| d.image.as_ref()) else { return };
@@ -1126,7 +1002,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Set an image tab's zoom: `None` fits it to the area.
     pub(crate) fn image_set_zoom(&mut self, ix: usize, zoom: Option<f32>, cx: &mut Context<Self>) {
         if let Some(im) = self.docs.get_mut(ix).and_then(|d| d.image.as_mut()) {
             im.zoom = zoom.map(|z| z.clamp(ZOOM_MIN, ZOOM_MAX));
@@ -1134,7 +1009,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The image tab's actions at the right of the header: its size, then zoom out, the zoom (click: Fit or 100%), zoom in.
     fn render_image_tools(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(im) = self.docs[ix].image.as_ref() else { return div().into_any_element() };
         let info = match im.size {
@@ -1188,14 +1062,12 @@ impl Workbench {
         let d = &self.docs[ix];
         let Some(im) = &d.image else { return div().into_any_element() };
         let path = d.path.clone();
-        // 100% means one image pixel per screen pixel.
         let scale = window.scale_factor().max(0.5);
         let picture = img(path).id(("image", ix)).object_fit(ObjectFit::Contain);
         let (bw, bh) = self.image_box.get();
         let view: AnyElement = match (im.size, im.zoom.or_else(|| self.image_fit_scale(im, scale))) {
             (Some((w, h)), Some(k)) => {
                 let (pw, ph) = ((w as f32 / scale * k).round().max(1.), (h as f32 / scale * k).round().max(1.));
-                // Larger than the area: it scrolls, with a margin; smaller: centered.
                 div()
                     .id(("image-scroll", ix))
                     .size_full()
@@ -1213,7 +1085,6 @@ impl Workbench {
                     )
                     .into_any_element()
             }
-            // SVG or an unreadable header: the whole area, its shape kept.
             _ => {
                 let (aw, ah) = ((bw - 48.).max(16.), (bh - 48.).max(16.));
                 div().size_full().flex().items_center().justify_center().child(picture.w(px(aw)).h(px(ah))).into_any_element()
@@ -1246,7 +1117,6 @@ impl Workbench {
             .overflow_hidden()
             .child(probe)
             .when(can_zoom, |d| d.cursor(CursorStyle::PointingHand))
-            // As in VS Code: click zooms in, Ctrl+click (or Alt+click) zooms out, Ctrl+scroll zooms either way.
             .on_click(cx.listener(move |this, e: &ClickEvent, w, cx| {
                 let m = e.modifiers();
                 this.image_zoom_step(ix, if m.control || m.alt { -1 } else { 1 }, w, cx);
@@ -1271,14 +1141,12 @@ impl Workbench {
 
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs_scroll.scroll_to_item(ix);
-        // A switch less than 300 ms after the last one is part of a burst (rapid Ctrl+W, fast tab cycling): the fade in `render_editor_area` is skipped for it, so the burst costs one render per switch instead of ~7 animation frames per switch.
         let now = std::time::Instant::now();
         self.switch_fast = self
             .last_switch
             .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(300));
         self.last_switch = Some(now);
         self.active = Some(ix);
-        // A tab that shows no text editor (an image, a drawn Flux document, a diff) takes the workbench's focus: focusing its hidden editor would leave the keys with nowhere to go, so Ctrl+W and the other shortcuts stopped working there.
         let d = &self.docs[ix];
         let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) { self.focus.clone() } else { d.editor.focus_handle(cx) };
         handle.focus(window, cx);
@@ -1315,7 +1183,6 @@ impl Workbench {
     }
 
     pub(crate) fn save_doc(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
-        // Image tabs and read-only views have no text to write (writing it would wipe the file). ... nor does a large Flux document whose editor was never filled (it is unchanged).
         if self.docs[ix].image.is_some() || self.docs[ix].read_only || self.docs[ix].flux_lazy {
             return true;
         }
@@ -1329,7 +1196,6 @@ impl Workbench {
                 doc.name.clone(),
             )
         };
-        // A big file is written off the UI thread, for the same reason it is read there.
         if text.len() as u64 > SAVE_OFF_THREAD_BYTES {
             let wsl = self.wsl.clone();
             cx.spawn(async move |this, cx| {
@@ -1362,11 +1228,9 @@ impl Workbench {
         self.finish_save(&path, gen, name, r, cx)
     }
 
-    /// The rest of `save_doc`, once the write is done.
     fn finish_save(&mut self, path: &Path, gen: u64, name: SharedString, r: Result<(), String>, cx: &mut Context<Self>) -> bool {
         match r {
             Ok(()) => {
-                // Only the latest edit's save clears the dot: an older save that finished late must not hide newer unsaved text.
                 if let Some(d) = self.docs.iter_mut().find(|d| d.path.as_path() == path) {
                     if d.gen == gen {
                         d.dirty = false;
@@ -1387,7 +1251,6 @@ impl Workbench {
     }
 
 
-    /// Queue a session save, at most one write per 500 ms: closing tabs in a burst used to write session.json synchronously on every close.
     pub(crate) fn save_session(&mut self, cx: &mut Context<Self>) {
         if self.session_save_pending {
             return;
@@ -1405,7 +1268,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Write session.json now (the debounced save lands here; quit too).
     pub(crate) fn save_session_now(&self) {
         crate::settings::Session {
             root: self.root.clone(),
@@ -1416,7 +1278,6 @@ impl Workbench {
         .save();
     }
 
-    /// Files `fluxcode file...` hands over from another launch (`instance.rs`) open here, and the window comes to the front.
     fn take_forwarded_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use futures::StreamExt;
         let Some(mut rx) = crate::instance::listen() else { return };
@@ -1437,11 +1298,9 @@ impl Workbench {
         .detach();
     }
 
-    /// Reopen the last session, then `then` on top of it (the active tab is the last of those, else the session's own).
     fn restore_session(&mut self, then: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
         self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
-        // A saved WSL root is checked by the helper when there is one: over 9p `is_dir` is the slowest part of restoring a session.
         let saved_root = s.root.filter(|r| match crate::remote::WslTarget::from_path(r) {
             Some(t) => remote_is_dir(&t, r).unwrap_or_else(|| r.is_dir()),
             None => r.is_dir(),
@@ -1465,7 +1324,6 @@ impl Workbench {
             }
             return;
         }
-        // Read them together, off the UI thread, then open them in the order they were saved: a session with a big file in it must not open out of order.
         cx.spawn_in(window, async move |this, cx| {
             let reads = files.clone();
             let all = cx
@@ -1578,7 +1436,6 @@ impl Workbench {
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
-        // A debounced save may still be queued: flush it now, or the last closes of the session would be lost from the restore list.
         self.save_session_now();
         cx.quit();
     }
@@ -1625,7 +1482,6 @@ impl Workbench {
         }
     }
 
-    /// Ctrl+L: open the agent panel with the caret in its input, or close it.
     fn on_toggle_agent(&mut self, _: &ToggleAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_hint < AGENT_HINT_DONE {
             self.settings.agent_hint = AGENT_HINT_DONE;
@@ -1649,7 +1505,6 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Ctrl+K Ctrl+T: the next color theme, FluxDark → FluxCream → FluxMono → FluxRed.
     fn on_next_theme(&mut self, _: &NextTheme, window: &mut Window, cx: &mut Context<Self>) {
         let all = theme::all();
         let ix = all.iter().position(|p| p.id == theme::palette().id).unwrap_or(0);
@@ -1657,7 +1512,6 @@ impl Workbench {
         self.set_theme(next, window, cx);
     }
 
-    /// Tab in the code editor: accept the highlighted suggestion, else indent.
     fn on_tab_accept(&mut self, _: &TabAccept, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::input::{Enter, IndentInline};
         let editor = self.active.and_then(|ix| self.docs.get(ix)).map(|d| d.editor.clone());
@@ -1673,7 +1527,6 @@ impl Workbench {
     }
 
     fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
-        // The build ID goes to the clipboard too, ready for an issue report.
         cx.write_to_clipboard(ClipboardItem::new_string(crate::update::BUILD.to_string()));
         self.status = crate::trf!("FluxCode Development, {0} (copied)"; 0 => crate::update::BUILD).into();
         cx.notify();
@@ -1704,7 +1557,6 @@ impl Workbench {
                 } else if self.agent.owns(id) {
                     self.agent_on_output(&text, err, cx);
                 } else if let Some(key) = self.agent.run_of(id) {
-                    // A chat working in the background.
                     self.agent_with_run(key, cx, |this, cx| this.agent_on_output(&text, err, cx));
                 }
             }
@@ -1741,7 +1593,6 @@ impl Workbench {
             .as_deref()
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned());
-        // Empty parts of the bar move the window (double-click maximizes).
         let drag = |id: &'static str| {
             div().id(id).flex_1().h_full().min_w(px(8.)).on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
                 if ev.click_count >= 2 {
@@ -1753,7 +1604,6 @@ impl Workbench {
                 }
             })
         };
-        // The search box in the middle: Go to File, like VS Code's command center.
         let label = match &folder {
             Some(_) if !self.workspace.extra.is_empty() => tr("Search files in the workspace").to_string(),
             Some(f) => crate::trf!("Search files in {f}"; f => f),
@@ -1776,7 +1626,6 @@ impl Workbench {
             .border_color(c(theme::BORDER))
             .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Go to File (Ctrl+P)")).build(w, cx))
-            // Opens on the press, and keeps the press from the title bar's drag area underneath: that area starts a Windows window-move on mouse-down, which delayed or swallowed the click (Ctrl+P never went through it).
             .occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
@@ -1882,7 +1731,6 @@ impl Workbench {
                 .h_full()
             })
             .child(drag("tb-drag"))
-            // The update toast was put away: a small button brings it back.
             .children(self.update_waiting().map(|r| {
                 let tip: SharedString = crate::trf!("Update ready: {0}"; 0 => crate::update::build_time(&r.tag).unwrap_or_else(|| r.tag.clone())).into();
                 h_flex()
@@ -1899,7 +1747,6 @@ impl Workbench {
                     .text_color(c(theme::ACCENT))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
                     .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
-                    // Keep the press from the drag area underneath (see the Go to File box).
                     .occlude()
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
@@ -1909,12 +1756,10 @@ impl Workbench {
                     .child(Icon::new(IconName::ArrowDown).size(theme::u(12.)))
                     .child(tr("Update"))
             }));
-        // Too narrow for a centered box: Ctrl+P still opens Go to File.
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
             return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1()))).into_any_element();
         }
-        // Centered in the window (on the same line as the Go to File box) while that leaves the menus free.
         let win_w = f32::from(window.viewport_size().width);
         let box_w = f32::from(theme::u(420.)).min(win_w * 0.3);
         let menus = self.title_menu_end.get() + 12.;
@@ -1929,7 +1774,6 @@ impl Workbench {
             .flex()
             .items_center()
             .when(show_center && w >= 180., |d| d.child(center.w_full().max_w(relative(1.))));
-        // Windows: our own min / max / close, as plain buttons (always clickable).
         let maximized = window.is_maximized();
         let ctl = |id: &'static str, icon: IconName, close: bool| {
             div()
@@ -1950,7 +1794,6 @@ impl Workbench {
                 })
                 .child(Icon::new(icon).small())
         };
-        // Start button (Run file) - like VS Code's run button
                 let start_btn = div()
                     .id("tb-start")
                     .w(px(46.))
@@ -1987,7 +1830,6 @@ impl Workbench {
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // VS Code's pattern: the active view gets a 2px accent line on the left and full-strength icon.
         let item = |id: &'static str, icon: Icon, active: bool, _this: &Self, _cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -2002,7 +1844,6 @@ impl Workbench {
                 .when(active, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).bg(c(theme::ACCENT))))
                 .child(icon.size(theme::u(17.)))
         };
-        // Each view opens on its own side (sidedock.rs); right-click moves it to the other.
         let view_item = |id: &'static str, icon: Icon, view: SideView, this: &Self, cx: &mut Context<Self>| {
             let active = this.view_shown(view);
             let weak = cx.entity().downgrade();
@@ -2011,7 +1852,6 @@ impl Workbench {
                 .child(item(id, icon, active, this, cx))
                 .on_click(cx.listener(move |this, _, w, cx| {
                     this.toggle_view(view, cx);
-                    // Like VS Code: opening Search or Extensions puts the caret in its box.
                     if view == SideView::Search && this.view_shown(view) {
                         let h = this.search_input.focus_handle(cx);
                         h.focus(w, cx);
@@ -2041,7 +1881,6 @@ impl Workbench {
                 div()
                     .relative()
                     .child(view_item("ab-scm", Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
-                    // New commits on the remote: a blue dot (the count is for your own changes).
                     .when(incoming, |d| {
                         d.child(
                             div()
@@ -2081,7 +1920,6 @@ impl Workbench {
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child({
                 let live = self.collab.active();
-                // Live share is a page in the editor area: there is room for it there.
                 let active = self.collab.page && !self.settings_open;
                 div()
                     .id("ab-collab-page")
@@ -2110,9 +1948,7 @@ impl Workbench {
         self.render_view_panel(self.view, false, window, cx)
     }
 
-    /// One view with its header, for the left side bar or the right dock.
     pub(crate) fn render_view_panel(&self, view: SideView, right: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        // Small uppercase view titles follow VS Code, whose layout this workbench mirrors.
         let title = match view {
             SideView::Explorer => tr("EXPLORER"),
             SideView::Search => tr("SEARCH"),
@@ -2121,7 +1957,6 @@ impl Workbench {
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
         };
-        // With a folder open the Explorer header names it, like VS Code's root row.
         let title: SharedString = match (view, self.root.as_deref().and_then(Path::file_name)) {
             (SideView::Explorer, Some(_)) if !self.workspace.extra.is_empty() => tr("WORKSPACE").into(),
             (SideView::Explorer, Some(name)) => name.to_string_lossy().to_uppercase().into(),
@@ -2164,16 +1999,13 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The Run view: the folder's projects (see `render_ext_run`), then the active file when F5 can run it.
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let doc = self.active.map(|a| &self.docs[a]);
         let runnable = doc.filter(|d| crate::panel::can_run(&d.path));
-        // One accent in the view: the main task of the project you're in, else the active file when F5 runs it, else the first project's main task.
         let (lead, holds_file) = self.ext_lead();
         let file_leads = runnable.is_some() && !holds_file;
         let projects = self.render_ext_run(if file_leads { None } else { lead }, cx);
         let has_projects = projects.is_some();
-        // Something runs in the Output panel that isn't a project task: the file.
         let file_running = self.out_proc.is_some() && self.ext.running.is_none();
         let mut v = v_flex().id("run-view").size_full().overflow_y_scroll().px_3().pt_1().pb_4().gap(theme::u(20.)).when_some(projects, |v, p| v.child(p));
         if let Some(d) = runnable {
@@ -2230,7 +2062,6 @@ impl Workbench {
             );
         }
         if file_running && runnable.is_none() {
-            // The file that runs is no longer the active one: it and Stop stay in view.
             let what = self.out_run.as_ref().map(|r| r.command.clone()).unwrap_or_default();
             v = v.child(
                 crate::ext::view::run_row("run-file-bg".into(), gpui_kit::assets::IconName::Play, crate::trf!("Running {what}"; what => what).into(), true, tr("Show the output").into())
@@ -2273,7 +2104,6 @@ impl Workbench {
                     .relative()
                     .cursor_pointer()
                     .when(active, |s| {
-                        // The accent line grows out from the middle when a tab becomes the active one, so the eye follows the switch.
                         s.bg(c(theme::BG_EDITOR)).child(
                             div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT)).with_animation(
                                 SharedString::from(format!("tab-line-{}", d.path.display())),
@@ -2335,14 +2165,12 @@ impl Workbench {
             }))
     }
 
-    /// Close every tab `keep_out` picks, keeping the active one active when it stays.
     pub(crate) fn close_tabs_where(&mut self, window: &mut Window, cx: &mut Context<Self>, close: impl Fn(usize, &Doc) -> bool) {
         let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
         let doomed: Vec<usize> = self.docs.iter().enumerate().filter(|(i, d)| close(*i, d)).map(|(i, _)| i).collect();
         for &i in doomed.iter().rev() {
             let closed = self.docs.remove(i);
             if !closed.read_only {
-                // `close` does this too: without it the server keeps the closed documents in context.
                 self.copilot.did_close(&closed.path);
                 self.closed_tabs.retain(|p| *p != closed.path);
                 self.closed_tabs.push(closed.path);
@@ -2363,7 +2191,6 @@ impl Workbench {
         self.save_session(cx);
     }
 
-    /// The row below the tabs: the file's path on the left, its few actions on the right (Preview / Source, word wrap, image zoom).
     fn render_editor_header(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let d = &self.docs[ix];
         let tools: AnyElement = if d.image.is_some() {
@@ -2388,7 +2215,6 @@ impl Workbench {
             .child(tools)
     }
 
-    /// Word wrap for this file (Alt+Z), lit while its lines wrap.
     fn wrap_button(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let on = self.docs[ix].wraps(self.settings.word_wrap);
         ui::tool_button("hdr-wrap", gpui_kit::assets::IconName::TextWrap, on)
@@ -2399,10 +2225,8 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The active file's path below the tabs: folder › folder › file.
     fn render_breadcrumbs(&self, ix: usize) -> impl IntoElement {
         let d = &self.docs[ix];
-        // Outside the workspace (a diff, a file opened on its own): just the name.
         let shown = self.rel_display(&d.path.to_string_lossy());
         let rel = if shown == d.path.to_string_lossy() { PathBuf::from(d.name.as_ref()) } else { PathBuf::from(shown) };
         let parts: Vec<String> = rel.components().map(|p| p.as_os_str().to_string_lossy().into_owned()).collect();
@@ -2434,7 +2258,6 @@ impl Workbench {
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
         }
-        // Over a scene or picture the empty page shows it clear.
         let backdrop = theme::has_backdrop() || crate::scene::active();
         let (had, mut gen) = self.wash.get();
         if had != self.active.is_some() {
@@ -2485,7 +2308,6 @@ impl Workbench {
                     self.docs[ix].flux.is_some() && !self.docs[ix].flux_source,
                     |v| {
                         let weak = cx.entity().downgrade();
-                        // Guarded by the .when above; this is the backstop.
                         let Some(flux) = self.docs[ix].flux.as_ref() else {
                             return v;
                         };
@@ -2516,7 +2338,6 @@ impl Workbench {
                                 ScrollTarget::Editor(self.docs[ix].editor.clone()),
                                 cx,
                             ));
-                        // A file comes in with a short fade.
                         if self.switch_fast {
                             v.child(el)
                         } else {
@@ -2535,7 +2356,6 @@ impl Workbench {
                     },
                 )
                 .into_any_element(),
-            // The welcome page: one column, at most 320 wide, that narrows with the editor area and scrolls when the window is short (nothing is cut off at the sides).
             None if self.welcome_w.get() < 230. => div()
                 .relative()
                 .size_full()
@@ -2557,7 +2377,6 @@ impl Workbench {
                 .when(backdrop, |d| d.child(div().absolute().top_0().left_0().size_full().bg(theme::welcome_tint())).child(wash_layer(false)))
                 .child(self.welcome_probe(cx))
                 .child(
-                    // flex_none: taller than the window it grows (and scrolls) instead of shrinking and spilling over the top.
                     v_flex()
                         .flex_none()
                         .w_full()
@@ -2574,7 +2393,6 @@ impl Workbench {
                                 .items_center()
                                 .gap_1()
                                 .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
-                                // One word: cut short in a very narrow editor area, never broken letter by letter.
                                 .child(div().max_w_full().truncate().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
                                 .child(div().w_full().text_center().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
                         )
@@ -2605,7 +2423,6 @@ impl Workbench {
         }
     }
 
-    /// Measures the welcome page as it is drawn, and redraws it when its width crosses what the text needs.
     fn welcome_probe(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let cell = self.welcome_w.clone();
         let eid = cx.entity_id();
@@ -2639,7 +2456,6 @@ impl Workbench {
             }
             None => (String::new(), ""),
         };
-        // Images and read-only views have no line endings or encoding to show.
         let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
         let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
         let running = self.out_proc.is_some() || self.term_proc.is_some();
@@ -2698,7 +2514,6 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx))),
                 )
             })
-            // Only a running program gets a marker: it is the one state worth noticing here.
             .when(running, |h| {
                 h.child(
                     h_flex()
@@ -2738,7 +2553,6 @@ impl Workbench {
     }
 }
 
-/// Widths of the side bar and the right dock in a window `total` wide, so that all three columns always fit and the editor keeps room to work: the dock and side bar keep the widths the user dragged them to while there is room, then give way (side bar first, down to its minimum, then the dock), and in a very narrow window share what is left.
 pub(crate) fn fit_columns(total: f32, side: Option<f32>, agent: Option<f32>) -> (f32, f32) {
     const BAR: f32 = 40. + 8.; // activity bar and the two drag handles
     const EDITOR: f32 = 320.;
@@ -2747,14 +2561,12 @@ pub(crate) fn fit_columns(total: f32, side: Option<f32>, agent: Option<f32>) -> 
     let room = (total - BAR - EDITOR).max(0.);
     let (mut s, mut a) = (side.unwrap_or(0.), agent.unwrap_or(0.));
     if s + a > room {
-        // The side bar gives way first.
         if side.is_some() {
             s = (room - a).max(SIDE_MIN).min(s);
         }
         if s + a > room && agent.is_some() {
             a = (room - s).max(AGENT_MIN).min(a);
         }
-        // Still too wide (a small window): split what there is, editor included.
         if s + a > room {
             let all = (total - BAR).max(0.);
             let parts = 1. + side.is_some() as u8 as f32 + agent.is_some() as u8 as f32;
@@ -2785,7 +2597,6 @@ fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
         .w_full()
         .gap_2()
         .text_sm()
-        // The label gives way in a narrow editor area; the keys keep their size.
         .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
         .children(keys.split(['+', ' ']).map(|k| {
             div()
@@ -2801,7 +2612,6 @@ fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
         }))
 }
 
-/// "245 KB", "1.2 MB".
 fn human_size(b: u64) -> String {
     match b {
         0..=1023 => format!("{b} B"),
@@ -2810,12 +2620,10 @@ fn human_size(b: u64) -> String {
     }
 }
 
-/// A panel's content may not grow its slot: anything wider is clipped, so a long tab row or prompt can't push the next panel past the window edge.
 fn clip(e: AnyElement) -> AnyElement {
     div().size_full().min_w_0().min_h_0().overflow_hidden().child(e).into_any_element()
 }
 
-/// Keep at most this many lines per panel.
 const MAX_LINES: usize = 10_000;
 
 pub(crate) fn push_line(lines: &mut Vec<Line>, text: &str, kind: LineKind) {
@@ -2830,7 +2638,6 @@ pub(crate) fn close_line(lines: &mut [Line]) {
     }
 }
 
-/// Append streamed output, continuing an unfinished last line, and (re)classify each touched line so its color follows what it says, not which pipe it used.
 pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, err: bool) {
     let clean = crate::proc::strip_ansi(text);
     let mut parts = clean.split('\n').peekable();
@@ -2917,7 +2724,6 @@ impl Render for Workbench {
             self.scm.clear_message = false;
             self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));
         }
-        // Interface size: rem-based spacing and text follow this; fixed sizes use theme::u.
         window.set_rem_size(theme::rem());
         apply_glass(window);
         let editor_view: AnyElement = match &self.preview {
@@ -2941,7 +2747,6 @@ impl Render for Workbench {
         } else {
             editor_view
         };
-        // Side bar and right dock are fixed-width columns dragged by their inner edge.
         let handle = |id: &'static str, which: u8, this: &Self, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -2949,7 +2754,6 @@ impl Render for Workbench {
                 .h_full()
                 .flex_none()
                 .cursor_col_resize()
-                // Painted like the panels: a bare gap would show the backdrop raw.
                 .bg(c(theme::BG_SIDE))
                 .hover(|s| s.bg(c(theme::ACCENT)))
                 .when(this.resizing == which, |d| d.bg(c(theme::ACCENT)))
@@ -2958,7 +2762,6 @@ impl Render for Workbench {
                     cx.notify();
                 }))
         };
-        // The side bar slides in when it opens (220 ms) instead of appearing at full width.
         let (was_open, mut side_gen) = self.side_anim.get();
         if was_open != self.sidebar_open {
             if self.sidebar_open {
@@ -2969,7 +2772,6 @@ impl Render for Workbench {
         let side_column = |this: &Self, window: &mut Window, cx: &mut Context<Self>| -> AnyElement {
             let col = div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(this.render_side_bar(window, cx));
             if side_gen <= 1 {
-                // The first frame's side bar is simply there.
                 return col.into_any_element();
             }
             col.with_animation(
@@ -2979,7 +2781,6 @@ impl Render for Workbench {
             )
             .into_any_element()
         };
-        // Agent full screen fades over the editor (and back) instead of snapping.
         let full = self.agent_docked_visible() && self.agent_full && !self.settings_open;
         let (was_full, mut full_gen) = self.full_anim.get();
         if was_full != full {
@@ -3000,7 +2801,6 @@ impl Render for Workbench {
         let center: AnyElement = if self.settings_open {
             div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx)).into_any_element()
         } else if full {
-            // Full width: the agent workspace (sessions, chat, changes) fills the window; the side bar can still open beside it (explorer, search, ...).
             let agent = fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_full(window, cx)), "full-in");
             if self.sidebar_open {
                 h_flex().flex_1().min_w_0().h_full().child(side_column(self, window, cx)).child(handle("sidebar-resize", 1, self, cx)).child(agent).into_any_element()
@@ -3017,10 +2817,8 @@ impl Render for Workbench {
                 .child(fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in"))
                 .into_any_element()
         } else {
-            // Beside the activity bar it takes what is left (a full-width child would run past the window's right edge by the activity bar's width).
             fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in")
         };
-        // The right dock is a fixed-width column (dragged by its left edge), so it always fits in the window: the editor side gives up the space, never the dock.
         let center: AnyElement = if full || self.settings_open {
             center
         } else if self.right_dock_on() {
@@ -3036,7 +2834,6 @@ impl Render for Workbench {
             center
         };
         let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(center);
-        // The user's picture, under every panel.
         let backdrop = self.settings.background().map(|p| {
             img(p.to_path_buf()).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)
         });
@@ -3064,7 +2861,6 @@ impl Render for Workbench {
                 match this.resizing {
                     1 => this.sidebar_width = (x - f32::from(theme::u(40.))).clamp(160., (total * 0.45).max(200.)),
                     2 => this.agent_width = (total - x).clamp(260., (total * 0.6).max(300.)),
-                    // Agent full screen: the chats column (3) and the changes column (4).
                     3 | 4 => {
                         let Some((x0, w0)) = this.agent.full.drag else { return };
                         let w = if this.resizing == 3 { w0 + (x - x0) } else { w0 - (x - x0) };
@@ -3177,7 +2973,6 @@ impl Render for Workbench {
                 this.whats_new = Some(crate::whatsnew::Page::all());
                 cx.notify();
             }))
-            // Folders and files dropped anywhere (the agent panel keeps its own drops).
             .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)))
             .child(self.render_title_bar(window, cx))
             .child(main)
@@ -3189,13 +2984,11 @@ impl Render for Workbench {
             .children(self.render_agent_updates(window, cx))
             .children(self.render_theme_menu(cx))
             .children(self.render_agent_settings(window, cx))
-            // A picture the agent took, full screen over everything.
             .children(self.render_lightbox(window, cx))
             .child(selection_guard())
     }
 }
 
-/// Text selection starts on text.
 fn selection_guard() -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -3211,12 +3004,10 @@ fn selection_guard() -> impl IntoElement {
     .size(px(0.))
 }
 
-/// Whether to read this file off the UI thread: big enough that a slow disk (a network share, a WSL folder) would show as a frozen window.
 fn read_off_thread(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
 }
 
-/// One level of a folder, read by the helper inside the distro.
 fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
@@ -3225,37 +3016,31 @@ fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Opti
     Some(crate::files::nodes_from_remote(path, entries))
 }
 
-/// The workspace roots, the first one through the same helper call.
 fn remote_listing(target: &crate::remote::WslTarget, root: &std::path::Path, multi: bool) -> Option<Vec<crate::files::Node>> {
     if !multi {
         return remote_dir(target, root);
     }
-    // Every extra folder is a Windows path; only the root is in the distro.
     None
 }
 
-/// A file's bytes, read by the helper inside the distro.
 fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.read(&linux, limit).ok()).flatten()
 }
 
-/// A file's bytes, written by the helper inside the distro.
 fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<()> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
 }
 
-/// Whether a path is a file, answered by the helper when there is one.
 fn remote_is_file(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_file)
 }
 
-/// Every file under the workspace, read by the helper inside the distro.
 fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(root)?;
@@ -3263,14 +3048,12 @@ fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: u
     Some(paths.into_iter().map(|p| target.unc_path(&p).to_string_lossy().into_owned()).collect())
 }
 
-/// Whether a path is a folder, answered by the helper when there is one.
 fn remote_is_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_dir)
 }
 
-/// The node with this id, anywhere in the tree.
 fn find_node<'a>(nodes: &'a mut [crate::files::Node], id: &str) -> Option<&'a mut crate::files::Node> {
     for n in nodes {
         if n.id == id {
@@ -3285,7 +3068,6 @@ fn find_node<'a>(nodes: &'a mut [crate::files::Node], id: &str) -> Option<&'a mu
     None
 }
 
-/// A fresh one-level listing, keeping the folders that were already read so a refresh does not close what the user opened.
 fn merge(old: Vec<crate::files::Node>, new: Vec<crate::files::Node>) -> Vec<crate::files::Node> {
     new.into_iter()
         .map(|mut n| {
@@ -3302,7 +3084,6 @@ fn merge(old: Vec<crate::files::Node>, new: Vec<crate::files::Node>) -> Vec<crat
         .collect()
 }
 
-/// The file's bytes; past the editor's limit only the first 64 KB, for the hex view.
 fn read_head(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
@@ -3312,7 +3093,6 @@ fn read_head(path: &Path) -> Result<Vec<u8>, String> {
     let mut buf = vec![0; 64 * 1024];
     let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut buf)).map_err(|e| e.to_string())?;
     buf.truncate(n);
-    // NUL bytes make the viewer show it as binary even when it is huge text.
     if !buf.contains(&0) {
         return Err(crate::trf!("{0} is too large to open ({1} MB)."; 0 => path.display(), 1 => meta.len() / 1024 / 1024));
     }
@@ -3320,7 +3100,6 @@ fn read_head(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 impl Workbench {
-    /// After a language change: the text set once at creation (input placeholders).
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
@@ -3332,11 +3111,9 @@ impl Workbench {
     }
 }
 
-/// What a smooth wheel scroll moves: a code editor, or a plain scroll area (the chat).
 #[derive(Clone)]
 pub(crate) enum ScrollTarget {
     Editor(Entity<EditorState>),
-    // Plain scroll views (the chat used it before it became a virtual list).
     #[allow(dead_code)]
     Handle(u64, ScrollHandle),
 }
@@ -3363,7 +3140,6 @@ impl ScrollTarget {
         }
     }
 
-    /// Keep a target inside what can be scrolled (editors clamp on their own).
     fn clamp(&self, p: Point<Pixels>) -> Point<Pixels> {
         match self {
             ScrollTarget::Editor(_) => point(p.x.min(px(0.)), p.y.min(px(0.))),
@@ -3388,12 +3164,10 @@ pub(crate) struct SmoothScroll {
     prev: Option<Point<Pixels>>,
     stuck: u8,
     last: std::time::Instant,
-    /// Heading for the bottom of a scroll area: the target moves down with content that arrives during the glide (a streaming answer), so the glide lands on it.
     bottom: bool,
 }
 
 impl Workbench {
-    /// Smooth wheel scrolling, like VS Code's: a wheel notch glides to its target in about 100 ms instead of jumping, which reads as stutter.
     pub(crate) fn smooth_scroll_layer(&self, target: ScrollTarget, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         canvas(
@@ -3419,7 +3193,6 @@ impl Workbench {
         let d = delta.pixel_delta(target.line_height(cx));
         let key = target.key();
         let running = self.smooth.as_ref().is_some_and(|s| s.target.key() == key);
-        // Notches while gliding add up from where the glide is heading.
         let base = match self.smooth.as_ref().filter(|s| s.target.key() == key) {
             Some(s) => s.to,
             None => target.offset(cx),
@@ -3450,10 +3223,8 @@ impl Workbench {
         window.on_next_frame(move |window, cx| {
             _ = weak.update(cx, |this, cx| this.smooth_step(window, cx));
         });
-        // on_next_frame schedules the frame itself (request_animation_frame is only allowed while drawing and would panic from an event handler).
     }
 
-    /// A wheel glide is moving this scroll area right now.
     #[allow(dead_code)]
     pub(crate) fn smooth_running(&self, key: u64) -> bool {
         self.smooth.as_ref().is_some_and(|s| s.target.key() == key)
@@ -3477,7 +3248,6 @@ impl Workbench {
             cx.notify();
             return;
         }
-        // At an edge the area clamps and nothing moves: stop there.
         if s.prev == Some(cur) {
             s.stuck += 1;
             if s.stuck > 6 {
@@ -3488,7 +3258,6 @@ impl Workbench {
             s.stuck = 0;
         }
         s.prev = Some(cur);
-        // Exponential ease, 45 ms time constant: quick start, soft landing.
         let k = 1.0 - (-dt / 0.045).exp();
         target.set(point(cur.x + diff.x * k, cur.y + diff.y * k), cx);
         cx.notify();
@@ -3496,12 +3265,10 @@ impl Workbench {
     }
 }
 
-/// The status bar's agent button highlights once at start on the first launches, until Ctrl+L has been used.
 const AGENT_HINT_LAUNCHES: u8 = 3;
 const AGENT_HINT_DONE: u8 = 100;
 
 impl Workbench {
-    /// "Agent  Ctrl+L" in the status bar: opens or closes the panel and teaches the shortcut.
     fn render_agent_hint(&self, cx: &mut Context<Self>) -> AnyElement {
         let open = self.view_shown(SideView::Agent);
         let teach = self.settings.agent_hint <= AGENT_HINT_LAUNCHES && !open;
@@ -3529,7 +3296,6 @@ impl Workbench {
         if !teach {
             return chip.into_any_element();
         }
-        // One soft rise and fall of the accent behind it, then still.
         let accent = c(theme::ACCENT);
         chip.with_animation(
             "sb-agent-hint",
@@ -3542,7 +3308,6 @@ impl Workbench {
         .into_any_element()
     }
 
-    /// "Copilot: install server" / "Copilot: sign in" in the status bar while suggestions cannot work yet.
     fn render_copilot_hint(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::copilot::Status;
         let installing = self.copilot_installing;
@@ -3578,13 +3343,10 @@ mod fit_tests {
 
     #[test]
     fn columns_always_fit() {
-        // Wide: as dragged.
         assert_eq!(fit_columns(1900., Some(260.), Some(380.)), (260., 380.));
-        // Medium: the side bar gives way first.
         let (s, a) = fit_columns(1000., Some(300.), Some(380.));
         assert_eq!(a, 380.);
         assert!(s >= 170. && 48. + s + a + 320. <= 1000.01, "{s} {a}");
-        // Narrow: everything fits in the window.
         for w in [500., 640., 800.] {
             let (s, a) = fit_columns(w, Some(260.), Some(380.));
             assert!(48. + s + a <= w, "{w}: {s} {a}");
@@ -3593,11 +3355,9 @@ mod fit_tests {
     }
 }
 
-/// Liquid glass asks the window for the system's blur behind it (acrylic on Windows).
 fn apply_glass(window: &mut Window) {
     use std::sync::atomic::{AtomicU8, Ordering};
     static APPLIED: AtomicU8 = AtomicU8::new(0);
-    // A scene or picture covers the window, so the blur behind it would never show.
     let want = if theme::glass() && !crate::scene::active() && !theme::has_backdrop() { 2 } else { 1 };
     if APPLIED.swap(want, Ordering::Relaxed) != want {
         window.set_background_appearance(if want == 2 { WindowBackgroundAppearance::Blurred } else { WindowBackgroundAppearance::Opaque });

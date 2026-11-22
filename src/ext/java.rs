@@ -1,4 +1,3 @@
-//! Java projects: the JDK a build asks for, Paper test servers, deploying a plugin, the Gradle wrapper, and a new Paper plugin.
 
 use super::Project;
 use std::path::{Path, PathBuf};
@@ -9,7 +8,6 @@ pub struct Jdk {
     pub major: u32,
 }
 
-/// `JAVA_VERSION="21.0.5"` in a JDK's `release` file → 21 (and "1.8.0" → 8).
 pub fn release_major(text: &str) -> Option<u32> {
     let line = text.lines().find(|l| l.starts_with("JAVA_VERSION="))?;
     let v = line.split('=').nth(1)?.trim().trim_matches('"');
@@ -35,16 +33,13 @@ fn children(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default()
 }
 
-/// Every JDK found: JAVA_HOME, the usual install folders, Gradle's and IntelliJ's downloads, and `tools/jdk*` or `jdk*` folders in the project's parents.
 pub fn jdks(near: Option<&Path>) -> Vec<Jdk> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(h) = std::env::var_os("JAVA_HOME") {
         dirs.push(PathBuf::from(h));
     }
     let home = super::home();
-    // Folders whose every subfolder may be a JDK.
     let mut parents: Vec<PathBuf> = vec![home.join(".jdks"), home.join(".gradle").join("jdks"), home.join(".sdkman").join("candidates").join("java")];
-    // Folders where only `jdk*` subfolders are looked at (a project's parents).
     let mut nearby: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
         for base in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
@@ -92,7 +87,6 @@ pub fn jdks(near: Option<&Path>) -> Vec<Jdk> {
     out
 }
 
-/// The JDK for a build: the version it asks for, else the newest.
 pub fn best_jdk(project: Option<&Project>) -> Option<Jdk> {
     let all = jdks(project.map(|p| p.dir.as_path()));
     let want = project.and_then(|p| wanted(&p.dir));
@@ -102,7 +96,6 @@ pub fn best_jdk(project: Option<&Project>) -> Option<Jdk> {
     }
 }
 
-/// The Java version a build asks for: a Gradle toolchain or `release`, Maven's `maven.compiler.release` / `release` / `java.version`.
 pub fn wanted(dir: &Path) -> Option<u32> {
     let num = |s: &str| -> Option<u32> {
         let d: String = s.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
@@ -129,13 +122,11 @@ pub fn wanted(dir: &Path) -> Option<u32> {
     None
 }
 
-/// The Temurin JDK winget id for a version (21 → EclipseAdoptium.Temurin.21.JDK).
 pub fn winget_jdk(major: u32) -> String {
     format!("EclipseAdoptium.Temurin.{major}.JDK")
 }
 
 
-/// `name:`, `main:` and `api-version:` from a plugin's plugin.yml / paper-plugin.yml.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PluginYml {
     pub name: String,
@@ -151,7 +142,6 @@ fn yml_value(text: &str, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// The plugin.yml under a project (the first one, skipping build output).
 pub fn plugin_yml(dir: &Path) -> Option<PluginYml> {
     fn find(d: &Path, depth: u32) -> Option<PathBuf> {
         if depth > 7 {
@@ -181,7 +171,6 @@ pub fn plugin_yml(dir: &Path) -> Option<PluginYml> {
     Some(PluginYml { name: yml_value(&text, "name").unwrap_or_default(), main: yml_value(&text, "main").unwrap_or_default(), api: yml_value(&text, "api-version").unwrap_or_default(), path })
 }
 
-/// A Paper (or Purpur, Folia, Spigot) server: its folder and jar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Server {
     pub dir: PathBuf,
@@ -189,7 +178,6 @@ pub struct Server {
 }
 
 impl Server {
-    /// `paper-26.3-244.jar` → "26.3"; `paper-1.21.11-132.jar` → "1.21.11".
     pub fn version(&self) -> Option<String> {
         let stem = self.jar.trim_end_matches(".jar");
         let mut parts = stem.split('-').skip(1);
@@ -198,7 +186,6 @@ impl Server {
     }
 }
 
-/// A server in this folder: a `plugins` folder and a server jar.
 pub fn server_at(dir: &Path) -> Option<Server> {
     if !dir.join("plugins").is_dir() {
         return None;
@@ -216,7 +203,6 @@ pub fn server_at(dir: &Path) -> Option<Server> {
     Some(Server { dir: dir.to_path_buf(), jar: jars.pop()? })
 }
 
-/// The test server for a plugin project: a parent folder that is one (the plugin's source kept inside the server's folder), else one in the workspace.
 pub fn find_server(project: &Path, roots: &[PathBuf]) -> Option<Server> {
     let mut d = project.parent();
     for _ in 0..6 {
@@ -239,7 +225,6 @@ pub fn find_server(project: &Path, roots: &[PathBuf]) -> Option<Server> {
     None
 }
 
-/// The plugin jar a build made: the newest jar in a `libs` (Gradle) or `target` (Maven) folder, not sources or javadoc, named after the plugin when one is.
 pub fn built_jar(dir: &Path, plugin: &str) -> Option<PathBuf> {
     fn walk(d: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         if depth > 6 {
@@ -255,7 +240,6 @@ pub fn built_jar(dir: &Path, plugin: &str) -> Option<PathBuf> {
                 }
                 walk(&p, depth + 1, out);
             } else if in_out && n.ends_with(".jar") && !["-sources", "-javadoc", "-plain", "original-"].iter().any(|k| n.contains(k)) {
-                // A multi-project build's top project makes an empty jar (just a manifest) with the plugin's name: never that one.
                 if std::fs::metadata(&p).is_ok_and(|m| m.len() >= 1024) {
                     out.push(p);
                 }
@@ -269,7 +253,6 @@ pub fn built_jar(dir: &Path, plugin: &str) -> Option<PathBuf> {
         walk(&c.join("build"), 0, &mut jars);
         walk(&c.join("target"), 0, &mut jars);
     }
-    // The jars of the newest build (written within a minute of the newest one), and of those the largest: the shaded jar, not the thin one shadow leaves next to it.
     let newest = |list: Vec<PathBuf>| {
         let time = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
         let last = list.iter().filter_map(time).max()?;
@@ -283,14 +266,12 @@ pub fn built_jar(dir: &Path, plugin: &str) -> Option<PathBuf> {
     if named.is_empty() { newest(jars) } else { newest(named) }
 }
 
-/// The command line that starts a server in the Terminal, with the newest JDK.
 pub fn server_line(server: &Server) -> String {
     let java = best_jdk(None).map(|j| j.home.join("bin").join("java").display().to_string()).unwrap_or_else(|| "java".into());
     let cd = if cfg!(windows) { format!("cd /d \"{}\"", server.dir.display()) } else { format!("cd \"{}\"", server.dir.display()) };
     format!("{cd} && \"{java}\" -Xms1G -Xmx2G -XX:+UseG1GC -jar {} --nogui", server.jar)
 }
 
-/// For the agent: the JDK, the plugin and the test server.
 pub fn facts(p: &Project) -> String {
     let mut s = String::new();
     match (wanted(&p.dir), best_jdk(Some(p))) {
@@ -312,7 +293,6 @@ pub fn facts(p: &Project) -> String {
 }
 
 
-/// The current Gradle version, from services.gradle.org (blocking).
 fn current_gradle() -> Result<String, String> {
     let out = crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
         .args(["-s", "-S", "-f", "-L", "--max-time", "20", "https://services.gradle.org/versions/current"])
@@ -322,7 +302,6 @@ fn current_gradle() -> Result<String, String> {
     v.get("version").and_then(|v| v.as_str()).map(str::to_string).ok_or_else(|| "no version from services.gradle.org".into())
 }
 
-/// Add the Gradle wrapper (gradlew, gradlew.bat, the 49 KB wrapper jar) from Gradle's repository at the current release, so a project builds without Gradle installed.
 pub fn add_wrapper(dir: &Path) -> Result<String, String> {
     let v = current_gradle()?;
     let curl = if cfg!(windows) { "curl.exe" } else { "curl" };
@@ -348,7 +327,6 @@ pub fn add_wrapper(dir: &Path) -> Result<String, String> {
 }
 
 
-/// `my cool-plugin` → `MyCoolPlugin`.
 pub fn class_name(name: &str) -> String {
     let s: String = name
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -361,7 +339,6 @@ pub fn class_name(name: &str) -> String {
     if s.chars().next().is_some_and(|c| c.is_ascii_digit()) { format!("P{s}") } else { s }
 }
 
-/// The paper-api coordinate, Java version and api-version for a server version: "26.3" → 26.3.build.+ on Java 25 (Paper's docs), "1.21.11" → the -R0.1-SNAPSHOT scheme on 21.
 pub fn paper_target(version: Option<&str>) -> (String, u32, String) {
     match version {
         Some(v) if v.starts_with("1.") => (format!("io.papermc.paper:paper-api:{v}-R0.1-SNAPSHOT"), 21, v.to_string()),
@@ -370,7 +347,6 @@ pub fn paper_target(version: Option<&str>) -> (String, u32, String) {
     }
 }
 
-/// Write a new Paper plugin into `parent/<Name>`; returns its folder.
 pub fn new_plugin(parent: &Path, name: &str, server: Option<&Server>) -> Result<PathBuf, String> {
     let class = class_name(name);
     if class.is_empty() {

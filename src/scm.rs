@@ -1,4 +1,3 @@
-//! Source Control, natively: the same view as VS Code's (changes, commit box, push/pull/sync, graph) plus GitHub pull requests and Actions "deploys".
 
 use crate::i18n::tr;
 use crate::proc;
@@ -20,9 +19,7 @@ use gpui_kit::component::tooltip::Tooltip;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileChange {
-    /// Repository-relative, with `/`.
     pub path: String,
-    /// VS Code's letters: M modified, A added, D deleted, R renamed, U untracked, ! conflict.
     pub code: char,
     pub orig: Option<String>,
 }
@@ -71,7 +68,6 @@ pub struct Workflow {
     pub name: String,
 }
 
-/// What to do after a commit (VS Code's `git.postCommitCommand`).
 #[derive(Clone, Copy, PartialEq)]
 pub enum After {
     Nothing,
@@ -80,7 +76,6 @@ pub enum After {
 }
 
 pub struct Scm {
-    /// Top level of the repository, if the open folder is in one.
     pub repo: Option<PathBuf>,
     pub status: RepoStatus,
     pub log: Vec<Commit>,
@@ -88,42 +83,26 @@ pub struct Scm {
     pub workflows: Vec<Workflow>,
     pub busy: Option<SharedString>,
     pub error: Option<String>,
-    /// Last success worth showing (a PR link, "Pushed to origin/main").
     pub note: Option<(String, Option<String>)>,
     pub message: Entity<InputState>,
     refreshing: bool,
     again: bool,
     pub show_graph: bool,
     pub show_actions: bool,
-    /// The workflow list came back (possibly empty or with an error).
     pub actions_loaded: bool,
-    /// File whose Discard button was clicked once (the second click discards).
     pub confirm_discard: Option<String>,
-    /// "Remove Git from this folder" was chosen and waits for a yes.
     pub confirm_uninit: bool,
-    /// Lower-cased absolute path → letter, for the explorer (shared with its row closure).
     pub marks: Rc<HashMap<String, char>>,
-    /// Lower-cased folders that contain changes.
     pub dirty_dirs: Rc<HashSet<String>>,
-    /// A commit went through: empty the message box on the next render (needs a Window).
     pub clear_message: bool,
-    /// When the last refresh started (focus changes refresh at most every 2 s).
     pub last_refresh: Option<std::time::Instant>,
-    /// The upstream's commits this checkout doesn't have yet, newest first.
     pub incoming: Vec<Commit>,
-    /// The upstream's head when `incoming` was read.
     pub incoming_head: Option<String>,
-    /// "Not now" was chosen at this upstream head: hidden until it moves.
     pub incoming_dismissed: Option<String>,
-    /// The Incoming section is open (its header folds it like the others).
     pub incoming_shown: bool,
-    /// The incoming commit opened to its files.
     pub incoming_open: Option<String>,
-    /// Hash → (letter, path) of the files it changed, read when opened.
     pub incoming_files: HashMap<String, Vec<(char, String)>>,
-    /// A background fetch is running.
     pub fetching: bool,
-    /// The background fetch loop has been started.
     pub fetch_loop: bool,
     pub last_fetch: Option<std::time::Instant>,
 }
@@ -174,7 +153,6 @@ impl Scm {
 
 }
 
-/// Theme color for a git letter (same meaning everywhere: explorer, list, badges).
 pub fn code_color(code: char) -> theme::Tok {
     match code {
         'A' | 'U' => theme::GREEN,
@@ -185,7 +163,6 @@ pub fn code_color(code: char) -> theme::Tok {
 }
 
 
-/// `git status --porcelain=v2 --branch -z -uall` → files and branch state.
 pub fn parse_status(out: &str) -> RepoStatus {
     let mut st = RepoStatus::default();
     let mut recs = out.split('\0').filter(|r| !r.is_empty());
@@ -221,7 +198,6 @@ pub fn parse_status(out: &str) -> RepoStatus {
     st
 }
 
-/// `git log --format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P -z`.
 pub fn parse_log(out: &str) -> Vec<Commit> {
     out.split('\0')
         .filter(|r| !r.trim().is_empty())
@@ -240,7 +216,6 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
         .collect()
 }
 
-/// The first `https://github.com/...` URL in a message (gh prints the PR link).
 fn find_url(s: &str) -> Option<String> {
     let i = s.find("https://")?;
     Some(s[i..].split_whitespace().next()?.trim_end_matches(['.', ',', ')']).to_string())
@@ -263,21 +238,18 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
         Step::Git(a, i) => ("git", a, i.clone()),
         Step::Gh(a) => ("gh", a, None),
     };
-    // `git` runs inside the distro for a WSL folder, so it sees Linux paths and line endings.
     let target = matches!(step, Step::Git(..)).then_some(target).flatten();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut cmd = match &target {
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
             let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            // The helper is already running in the distro: no process to start.
             if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned, input.as_deref())) {
                 match r {
                     Ok(g) if g.success => {
                         return Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout })
                     }
                     Ok(g) => return Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), g.stderr.trim())),
-                    // The helper is gone: run it through wsl.exe instead.
                     Err(_) => {}
                 }
             }
@@ -313,7 +285,6 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if out.status.success() {
-        // git push / gh pr create report useful lines on stderr.
         Ok(if stdout.trim().is_empty() { stderr } else { stdout })
     } else {
         let msg = if stderr.is_empty() { stdout.trim().to_string() } else { stderr };
@@ -321,12 +292,10 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
     }
 }
 
-/// Everything the view shows, read off the UI thread.
 struct Snapshot {
     repo: Option<PathBuf>,
     status: RepoStatus,
     log: Option<Vec<Commit>>,
-    /// Commits on the upstream and not here, and the upstream's head (only when behind).
     incoming: (Vec<Commit>, Option<String>),
 }
 
@@ -353,10 +322,8 @@ fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget
     Snapshot { repo: Some(repo), status, log, incoming }
 }
 
-/// Rows drawn per section.
 const MAX_ROWS: usize = 200;
 
-/// "… and N more" under a capped section.
 fn more_rows(total: usize) -> Option<Div> {
     (total > MAX_ROWS).then(|| {
         div()
@@ -369,7 +336,6 @@ fn more_rows(total: usize) -> Option<Div> {
 }
 
 impl Workbench {
-    /// Re-read git state (debounced: a refresh while one runs queues one more).
     pub(crate) fn scm_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
         if self.scm.refreshing {
@@ -391,7 +357,6 @@ impl Workbench {
                     for ch in snap.status.changes.iter().chain(&snap.status.staged).chain(&snap.status.conflicts) {
                         let full = repo.join(ch.path.replace('/', "\\"));
                         let key = full.to_string_lossy().to_lowercase();
-                        // A file both staged and changed shows its working-tree letter.
                         marks.entry(key).or_insert(ch.code);
                         let mut p = full.parent();
                         while let Some(d) = p {
@@ -431,7 +396,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Run git/gh steps in order off the UI thread; stop at the first failure.
     pub(crate) fn scm_run(&mut self, label: &str, steps: Vec<Step>, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static) {
         let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else { return };
         if self.scm.busy.is_some() {
@@ -460,7 +424,6 @@ impl Workbench {
                 match res {
                     Ok(out) => done(this, &out, cx),
                     Err(e) => {
-                        // gh: "a pull request for branch X already exists: URL" is good news.
                         if e.contains("already exists") {
                             if let Some(url) = find_url(&e) {
                                 this.scm.note = Some(("A pull request for this branch already exists".into(), Some(url)));
@@ -507,7 +470,6 @@ impl Workbench {
             cx.notify();
             return;
         }
-        // Save open editors first, like VS Code's promptToSaveFilesBeforeCommit.
         for ix in 0..self.docs.len() {
             if self.docs[ix].dirty {
                 self.save_doc(ix, cx);
@@ -635,7 +597,6 @@ impl Workbench {
         let name = wf.name.clone();
         self.scm_run(&format!("Starting {name}…"), steps, cx, move |this, _, cx| {
             this.scm.note = Some((format!("Started \"{name}\" on {branch}"), None));
-            // The new run shows up in the list a moment later.
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
                 _ = this.update(cx, |this, cx| this.scm_load_actions(cx));
@@ -661,7 +622,6 @@ impl Workbench {
             return;
         }
         if ch.code == 'U' {
-            // An untracked file goes to the Recycle Bin, not into the void.
             if let Some(repo) = &self.scm.repo {
                 let full = repo.join(ch.path.replace('/', "\\"));
                 if let Err(e) = crate::core::delete_path(&full) {
@@ -680,7 +640,6 @@ impl Workbench {
         });
     }
 
-    /// The file's diff in the Output panel, colored.
     fn scm_show_diff(&mut self, ch: FileChange, staged: bool, cx: &mut Context<Self>) {
         let Some(dir) = self.scm.repo.clone() else { return };
         let mut args = vec!["-c".to_string(), "core.quotepath=off".into(), "diff".into()];
@@ -732,7 +691,6 @@ impl Workbench {
         .detach();
     }
 
-    /// A commit's summary and changed files in the Output panel.
     fn scm_show_commit(&mut self, hash: String, cx: &mut Context<Self>) {
         let Some(dir) = self.scm.repo.clone() else { return };
         let wsl = self.wsl.clone();
@@ -817,7 +775,6 @@ impl Workbench {
 
         let mut body = v_flex().id("scm-body").flex_1().min_h_0().overflow_y_scroll().pb_2();
         if s.confirm_uninit {
-            // The whole repository path (the home folder as ~), so it is clear which one goes.
             let home = std::env::var("USERPROFILE").unwrap_or_default();
             let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
             let full: SharedString = where_.clone().into();
@@ -1022,7 +979,6 @@ impl Workbench {
                 this.scm_stage(None, true, cx);
             })))
         }));
-        // Lots of untracked files (a server folder, build output): offer to ignore the folders they are in, biggest first, before listing them.
         let untracked = st.changes.iter().filter(|c| c.code == 'U').count();
         if untracked > 200 {
             let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -1066,7 +1022,6 @@ impl Workbench {
             body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No changes. The working tree matches the last commit.")));
         }
 
-        // Sync bar: VS Code puts this in the status bar; it also reads well here.
         let sync_label = match (&st.upstream, st.ahead, st.behind) {
             (None, ..) => "Publish Branch".to_string(),
             (Some(_), 0, 0) => "Up to date".to_string(),
@@ -1102,7 +1057,6 @@ impl Workbench {
                 ),
         );
 
-        // Graph
         body = body.child(
             section("scm-sec-graph", "Graph".into(), 0, s.show_graph).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
                 this.scm.show_graph = !this.scm.show_graph;
@@ -1153,7 +1107,6 @@ impl Workbench {
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
                         .child(lane)
                         .child(div().flex_1().min_w(theme::u(80.)).truncate().text_color(c(theme::FG)).child(cm.subject.clone()))
-                        // One pill (the first ref) so the subject keeps its room; the rest are in the tooltip.
                         .children(cm.refs.first().map(|r| {
                             let remote = r.starts_with("origin/");
                             div()
@@ -1178,7 +1131,6 @@ impl Workbench {
             }
         }
 
-        // GitHub Actions: run a workflow (deploy/build) and see recent runs.
         body = body.child(
             section("scm-sec-actions", "GitHub Actions (deploy)".into(), 0, s.show_actions).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
                 this.scm.show_actions = !this.scm.show_actions;
@@ -1242,7 +1194,6 @@ impl Workbench {
         v_flex().size_full().child(body).into_any_element()
     }
 
-    /// Header buttons of the Source Control view (refresh, commit, more).
     pub(crate) fn render_scm_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_px()
@@ -1311,7 +1262,6 @@ impl Workbench {
         }
     }
 
-    /// Undo "Initialize Repository": the `.git` folder goes to the Recycle Bin (history and settings with it); the project's files are not touched.
     fn scm_remove_git(&mut self, cx: &mut Context<Self>) {
         self.scm.confirm_uninit = false;
         let Some(repo) = self.scm.repo.clone() else { return };
@@ -1339,7 +1289,6 @@ impl Workbench {
         .detach();
     }
 
-    /// Add `pattern` (a folder like `libraries/`) to the repository's .gitignore.
     fn scm_ignore(&mut self, pattern: String, cx: &mut Context<Self>) {
         let Some(repo) = self.scm.repo.clone() else { return };
         let path = repo.join(".gitignore");

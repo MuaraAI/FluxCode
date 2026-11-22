@@ -1,8 +1,6 @@
-//! Tidy an agent's text before it is drawn as Markdown, so it reads as cleanly as the agent meant it to: - choices written inline ("… pilihannya (a) panel kompak, atau (b) panel penuh.") become a list, one choice per line, with the letter in bold.
 
 use std::borrow::Cow;
 
-/// Choices: `(a)` `(b)` … or `(1)` `(2)` …, in order, at least two in one line.
 fn markers(line: &str) -> Vec<(usize, String)> {
     let b = line.as_bytes();
     let mut out: Vec<(usize, String)> = Vec::new();
@@ -29,7 +27,6 @@ fn markers(line: &str) -> Vec<(usize, String)> {
     }
 }
 
-/// Words that join choices and are left dangling at the end of one once it is split.
 fn trim_joiner(s: &str) -> &str {
     let mut t = s.trim_end();
     for w in [", atau", " atau", ", or", " or", ", dan", ", and", ";", ","] {
@@ -55,7 +52,6 @@ fn split_choices(line: &str, out: &mut String) -> bool {
         let end = m.get(k + 1).map_or(line.len(), |n| n.0);
         let body = line[at + 3..end].trim();
         let body = if k + 1 < m.len() { trim_joiner(body) } else { body };
-        // The last choice may run on into a closing sentence: "… vanilla.
         let (body, tail) = match (k + 1 == m.len()).then(|| body.find(". ")).flatten() {
             Some(dot) => (&body[..=dot], body[dot + 1..].trim()),
             None => (body, ""),
@@ -70,7 +66,6 @@ fn split_choices(line: &str, out: &mut String) -> bool {
     true
 }
 
-/// Markdown for an answer.
 pub fn answer(text: &str) -> Cow<'_, str> {
     if !text.contains("(a)") && !text.contains("(1)") && !text.contains("(A)") {
         return Cow::Borrowed(text);
@@ -97,7 +92,6 @@ pub fn answer(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// Markdown for a thought: the answer's rules, plus paragraph breaks in a long run.
 pub fn thought(text: &str) -> String {
     let t = answer(text.trim());
     let mut out = String::with_capacity(t.len() + 16);
@@ -106,7 +100,6 @@ pub fn thought(text: &str) -> String {
     while let Some((i, ch)) = chars.next() {
         out.push(ch);
         run = if ch == '\n' { 0 } else { run + 1 };
-        // ".
         if matches!(ch, '.' | '?' | '!') && run > 220 && t[i + 1..].starts_with(' ') {
             let next = t[i + 1..].trim_start();
             if next.chars().next().is_some_and(char::is_uppercase) {
