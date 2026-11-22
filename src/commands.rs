@@ -129,12 +129,21 @@ impl Workbench {
         cx.notify();
     }
     pub(crate) fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.active.filter(|&i| self.docs[i].flux.is_some() && !self.docs[i].flux_source) {
+            return self.flux_zoom_step(ix, 1, cx);
+        }
         self.zoom(self.settings.font_size + 1., cx);
     }
     pub(crate) fn on_zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.active.filter(|&i| self.docs[i].flux.is_some() && !self.docs[i].flux_source) {
+            return self.flux_zoom_step(ix, -1, cx);
+        }
         self.zoom(self.settings.font_size - 1., cx);
     }
     pub(crate) fn on_zoom_reset(&mut self, _: &ZoomReset, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.active.filter(|&i| self.docs[i].flux.is_some() && !self.docs[i].flux_source) {
+            return self.flux_zoom_step(ix, 0, cx);
+        }
         self.zoom(crate::settings::Settings::default().font_size, cx);
     }
 

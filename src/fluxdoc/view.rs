@@ -1,10 +1,11 @@
 
 use super::{arg, args, cells, flow, inline, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
 use crate::theme::{self, c};
+use crate::ui;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{h_flex, v_flex, Icon};
+use gpui_kit::component::{h_flex, scroll::Scrollbar, v_flex, Icon};
 use gpui_kit::{prelude::FluentBuilder, *};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -17,6 +18,28 @@ pub const PROGRESSIVE_FROM: usize = 256 << 10;
 const FIRST_PART: usize = 32 << 10;
 const FRAME: usize = 64 << 10;
 const FRAMES_KEPT: usize = 6;
+const DRAW_COLORS: [u32; 4] = [0xF59E0B, 0xEF4444, 0x22C55E, 0x38BDF8];
+
+#[derive(Clone, Default)]
+pub struct Stroke {
+    pub color: u32,
+    pub pts: Vec<(f32, f32)>,
+}
+
+#[derive(Clone, Default)]
+pub struct InkState {
+    pub zoom: f32,
+    pub draw: bool,
+    pub color: u32,
+    pub strokes: Vec<Stroke>,
+    pub active: Option<Stroke>,
+}
+
+impl InkState {
+    fn new() -> Self {
+        Self { zoom: 1., draw: false, color: DRAW_COLORS[0], strokes: Vec::new(), active: None }
+    }
+}
 
 enum Text {
     Plain(Rc<str>),
@@ -109,11 +132,17 @@ struct Shared {
     want: u8,
     base: PathBuf,
     open: Rc<RefCell<HashSet<u32>>>,
+    ink: Rc<RefCell<InkState>>,
+    scale: Cell<f32>,
 }
 
 impl Shared {
     fn shown(&self, i: usize) -> bool {
         matches!(self.doc.lang.get(i), Some(&l) if l == 0 || l == self.want)
+    }
+
+    fn u(&self, v: f32) -> Pixels {
+        theme::u(v * self.scale.get())
     }
 }
 
@@ -150,24 +179,25 @@ pub struct FluxView {
 }
 
 impl FluxView {
-    fn build(doc: Doc, text: Text, base: PathBuf, lang: &str, parsed_ms: f32, open: Rc<RefCell<HashSet<u32>>>) -> Self {
+    fn build(doc: Doc, text: Text, base: PathBuf, lang: &str, parsed_ms: f32, open: Rc<RefCell<HashSet<u32>>>, ink: Rc<RefCell<InkState>>) -> Self {
         let want = if lang == "id" { 2 } else { 1 };
         let mut groups = groups(&doc, want);
         groups.shrink_to_fit();
         let list = ListState::new(groups.len(), ListAlignment::Top, px(600.));
-        Self { shared: Rc::new(Shared { text, doc, groups, want, base, open }), list, parsed_ms, pending: false }
+        let z = ink.borrow().zoom.max(0.5);
+        Self { shared: Rc::new(Shared { text, doc, groups, want, base, open, ink, scale: Cell::new(z) }), list, parsed_ms, pending: false }
     }
 
     pub fn new(src: String, base: PathBuf, lang: &str) -> Self {
-        Self::from_prepared(prepare(src), base, lang, Rc::default())
+        Self::from_prepared(prepare(src), base, lang, Rc::default(), Rc::new(RefCell::new(InkState::new())))
     }
 
-    fn from_prepared(p: Prepared, base: PathBuf, lang: &str, open: Rc<RefCell<HashSet<u32>>>) -> Self {
+    fn from_prepared(p: Prepared, base: PathBuf, lang: &str, open: Rc<RefCell<HashSet<u32>>>, ink: Rc<RefCell<InkState>>) -> Self {
         let text = match p.text {
             Ok(s) => Text::Plain(s.into()),
             Err((frames, len)) => Text::Packed { frames, len, cache: RefCell::new(Vec::new()) },
         };
-        Self::build(p.doc, text, base, lang, p.ms, open)
+        Self::build(p.doc, text, base, lang, p.ms, open, ink)
     }
 
     pub fn first_part(src: &str, base: PathBuf, lang: &str) -> Self {
@@ -185,7 +215,7 @@ impl FluxView {
 
     pub fn install(&mut self, p: Prepared, lang: &str) {
         let top = self.list.logical_scroll_top();
-        let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone());
+        let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone(), self.shared.ink.clone());
         v.list.scroll_to(ListOffset { item_ix: top.item_ix.min(v.shared.groups.len().saturating_sub(1)), offset_in_item: top.offset_in_item });
         *self = v;
     }
@@ -206,31 +236,82 @@ impl FluxView {
         self.shared.text.full()
     }
 
+    pub fn zoom(&self) -> f32 {
+        self.shared.ink.borrow().zoom
+    }
+
+    pub fn set_zoom(&self, z: f32) {
+        let z = (z * 20.).round() / 20.;
+        let z = z.clamp(0.5, 2.5);
+        self.shared.ink.borrow_mut().zoom = z;
+        self.shared.scale.set(z);
+    }
+
+    pub fn step_zoom(&self, dir: i32) {
+        let cur = self.zoom();
+        let next = if dir == 0 { 1. } else { cur + dir as f32 * 0.1 };
+        self.set_zoom(next);
+    }
+
     pub fn render(&self, notify: impl Fn(&mut App) + 'static) -> AnyElement {
         let sh = self.shared.clone();
         let state = self.list.clone();
+        let scrollbar = self.list.clone();
         let notify = Rc::new(notify);
+        let zoom = sh.ink.borrow().zoom.clamp(0.5, 2.5);
+        sh.scale.set(zoom);
         let width = sh.doc.style.width.unwrap_or(WIDTH);
         let size = sh.doc.style.size.unwrap_or(15.);
         let font = sh.doc.style.font.clone();
-        list(self.list.clone(), move |ix, _window, cx| {
-            let Some(&(first, count)) = sh.groups.get(ix) else { return div().into_any_element() };
-            let ctx = Ctx { sh: &sh, list: &state, notify: notify.clone() };
+        let sh_list = sh.clone();
+        let notify_list = notify.clone();
+        let list_el = list(self.list.clone(), move |ix, _window, cx| {
+            let Some(&(first, count)) = sh_list.groups.get(ix) else { return div().into_any_element() };
+            let ctx = Ctx { sh: &sh_list, list: &state, notify: notify_list.clone() };
             let mut col = v_flex().w_full();
             for bi in first as usize..(first + count) as usize {
-                let next = (bi + 1 < sh.doc.blocks.len() && sh.shown(bi + 1)).then(|| &sh.doc.blocks[bi + 1]);
-                col = col.child(ctx.block(&sh.doc.blocks[bi], bi, bi, next, cx));
+                let next = (bi + 1 < sh_list.doc.blocks.len() && sh_list.shown(bi + 1)).then(|| &sh_list.doc.blocks[bi + 1]);
+                col = col.child(ctx.block(&sh_list.doc.blocks[bi], bi, bi, next, cx));
             }
             h_flex()
                 .w_full()
                 .justify_center()
-                .child(div().w_full().max_w(theme::u(width)).px_8().when(ix == 0, |d| d.pt_8()).when(ix + 1 == sh.groups.len(), |d| d.pb_16()).child(col))
+                .child(div().w_full().max_w(sh_list.u(width)).px_8().when(ix == 0, |d| d.pt_8()).when(ix + 1 == sh_list.groups.len(), |d| d.pb_16()).child(col))
                 .into_any_element()
         })
         .size_full()
-        .text_size(theme::u(size))
-        .when_some(font, |l, f| l.font_family(f))
-        .into_any_element()
+        .text_size(sh.u(size))
+        .when_some(font, |l, f| l.font_family(f));
+
+        let draw_on = sh.ink.borrow().draw;
+        let has_ink = draw_on || !sh.ink.borrow().strokes.is_empty() || sh.ink.borrow().active.is_some();
+        let ink_layer = has_ink.then(|| render_ink_layer(sh.ink.clone(), self.list.clone(), notify.clone()));
+        let sh_wheel = sh.clone();
+        let notify_wheel = notify.clone();
+
+        div()
+            .id("fx-preview-wrap")
+            .relative()
+            .size_full()
+            .on_scroll(move |e: &ScrollEvent, _, cx| {
+                if !e.modifiers.control {
+                    return;
+                }
+                cx.stop_propagation();
+                let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
+                if dy.abs() < 0.5 {
+                    return;
+                }
+                let cur = sh_wheel.ink.borrow().zoom;
+                let next = (cur + if dy > 0. { 0.1 } else { -0.1 }).clamp(0.5, 2.5);
+                sh_wheel.ink.borrow_mut().zoom = next;
+                sh_wheel.scale.set(next);
+                notify_wheel(cx);
+            })
+            .child(list_el)
+            .children(ink_layer)
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&scrollbar).viewport_from_layout()))
+            .into_any_element()
     }
 }
 
@@ -311,7 +392,7 @@ impl Ctx<'_> {
             Block::Title(s) => v_flex()
                 .pb_4()
                 .gap_2()
-                .child(div().text_size(theme::u(32.)).font_weight(FontWeight::BOLD).text_color(c(theme::FG_STRONG)).child(self.rich(id("t"), &self.t(s), c(theme::FG_STRONG))))
+                .child(div().text_size(self.sh.u(32.)).font_weight(FontWeight::BOLD).text_color(c(theme::FG_STRONG)).child(self.rich(id("t"), &self.t(s), c(theme::FG_STRONG))))
                 .child(div().w(px(56.)).h(px(3.)).rounded_full().bg(accent(self.sh)))
                 .into_any_element(),
             Block::Heading(l, s) => {
@@ -322,10 +403,10 @@ impl Ctx<'_> {
                     _ => 16.,
                 };
                 div()
-                    .pt(theme::u(if l <= 2 { 22. } else { 14. }))
+                    .pt(self.sh.u(if l <= 2 { 22. } else { 14. }))
                     .pb_2()
                     .when(l <= 2, |d| d.border_b_1().border_color(c(theme::BORDER)).mb_3())
-                    .text_size(theme::u(size))
+                    .text_size(self.sh.u(size))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.rich(id("h"), &self.t(s), c(theme::FG_STRONG)))
                     .into_any_element()
@@ -345,24 +426,24 @@ impl Ctx<'_> {
                     1 | 2 => div()
                         .flex_none()
                         .mt(px(3.))
-                        .size(theme::u(15.))
+                        .size(self.sh.u(15.))
                         .rounded(px(3.))
                         .border_1()
                         .border_color(c(if check == 2 { theme::ACCENT } else { theme::BORDER_STRONG }))
-                        .when(check == 2, |d| d.bg(c(theme::ACCENT)).child(Icon::new(IconName::Check).size(theme::u(11.)).text_color(c(theme::ON_ACCENT))))
+                        .when(check == 2, |d| d.bg(c(theme::ACCENT)).child(Icon::new(IconName::Check).size(self.sh.u(11.)).text_color(c(theme::ON_ACCENT))))
                         .flex()
                         .items_center()
                         .justify_center()
                         .into_any_element(),
-                    _ if num > 0 => div().flex_none().min_w(theme::u(20.)).text_color(c(theme::FG_MUTED)).child(format!("{num}.")).into_any_element(),
-                    _ => div().flex_none().w(theme::u(20.)).pt(theme::u(9.)).child(div().size(px(5.)).rounded_full().bg(if depth == 0 { accent(self.sh) } else { c(theme::FG_DIM) })).into_any_element(),
+                    _ if num > 0 => div().flex_none().min_w(self.sh.u(20.)).text_color(c(theme::FG_MUTED)).child(format!("{num}.")).into_any_element(),
+                    _ => div().flex_none().w(self.sh.u(20.)).pt(self.sh.u(9.)).child(div().size(px(5.)).rounded_full().bg(if depth == 0 { accent(self.sh) } else { c(theme::FG_DIM) })).into_any_element(),
                 };
                 let last_in_run = !matches!(next, Some(Block::Item { .. }));
                 h_flex()
                     .items_start()
                     .gap_2()
-                    .pl(theme::u(4. + depth as f32 * 22.))
-                    .pb(theme::u(if last_in_run { 12. } else { 4. }))
+                    .pl(self.sh.u(4. + depth as f32 * 22.))
+                    .pb(self.sh.u(if last_in_run { 12. } else { 4. }))
                     .line_height(relative(1.6))
                     .child(mark)
                     .child(div().flex_1().min_w_0().child(self.rich(id("li"), &join_lines(&self.t(s), false), c(if check == 2 { theme::FG_MUTED } else { theme::FG }))))
@@ -384,7 +465,7 @@ impl Ctx<'_> {
                         .px_3()
                         .py_2p5()
                         .font_family("Cascadia Code")
-                        .text_size(theme::u(13.))
+                        .text_size(self.sh.u(13.))
                         .line_height(relative(1.5))
                         .text_color(c(theme::FG))
                         .child(self.t(body)),
@@ -403,7 +484,7 @@ impl Ctx<'_> {
                 .pt_8()
                 .pb_2()
                 .gap_2()
-                .child(Icon::new(IconName::Calendar).size(theme::u(15.)).text_color(accent(self.sh)))
+                .child(Icon::new(IconName::Calendar).size(self.sh.u(15.)).text_color(accent(self.sh)))
                 .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(self.t(s)))
                 .into_any_element(),
             Block::Unknown(s) => div().pb_2().font_family("Cascadia Code").text_xs().text_color(c(theme::FG_DIM)).child(self.t(s)).into_any_element(),
@@ -885,6 +966,110 @@ fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops
     out
 }
 
+fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn Fn(&mut App)>) -> AnyElement {
+    let ink_draw = ink.clone();
+    let list_draw = list.clone();
+    let ink_ev = ink;
+    let list_ev = list;
+    let draw_on = ink_ev.borrow().draw;
+    canvas(
+        move |bounds, window, _| draw_on.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
+        move |bounds, hitbox, window, _| {
+            let scroll_y = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_draw).y);
+            let origin = bounds.origin;
+            {
+                let st = ink_draw.borrow();
+                for s in st.strokes.iter().chain(st.active.iter()) {
+                    if s.pts.is_empty() {
+                        continue;
+                    }
+                    let col: Hsla = rgb(s.color).into();
+                    if s.pts.len() == 1 {
+                        let (x, y) = s.pts[0];
+                        let p = origin + point(px(x), px(y - scroll_y));
+                        let mut pb = PathBuilder::stroke(px(3.));
+                        pb.move_to(p);
+                        pb.line_to(p + point(px(0.5), px(0.5)));
+                        if let Ok(path) = pb.build() {
+                            window.paint_path(path, col);
+                        }
+                        continue;
+                    }
+                    let mut pb = PathBuilder::stroke(px(2.5));
+                    let (x0, y0) = s.pts[0];
+                    pb.move_to(origin + point(px(x0), px(y0 - scroll_y)));
+                    for &(x, y) in &s.pts[1..] {
+                        pb.line_to(origin + point(px(x), px(y - scroll_y)));
+                    }
+                    if let Ok(path) = pb.build() {
+                        window.paint_path(path, col);
+                    }
+                }
+            }
+            let Some(hitbox) = hitbox else { return };
+            let (ink_down, list_down, notify_down) = (ink_ev.clone(), list_ev.clone(), notify.clone());
+            let hb_down = hitbox.clone();
+            window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !hb_down.is_hovered(window) {
+                    return;
+                }
+                let sy = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_down).y);
+                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y) + sy);
+                let mut st = ink_down.borrow_mut();
+                let color = st.color;
+                st.active = Some(Stroke { color, pts: vec![pt] });
+                drop(st);
+                cx.stop_propagation();
+                notify_down(cx);
+            });
+            let (ink_move, list_move, notify_move) = (ink_ev.clone(), list_ev.clone(), notify.clone());
+            window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    let mut st = ink_move.borrow_mut();
+                    if let Some(s) = st.active.take() {
+                        if !s.pts.is_empty() {
+                            st.strokes.push(s);
+                        }
+                        drop(st);
+                        notify_move(cx);
+                    }
+                    return;
+                }
+                let mut st = ink_move.borrow_mut();
+                let Some(active) = st.active.as_mut() else { return };
+                let sy = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_move).y);
+                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y) + sy);
+                if active.pts.last().is_none_or(|&(lx, ly)| (lx - pt.0).hypot(ly - pt.1) >= 1.5) {
+                    active.pts.push(pt);
+                    drop(st);
+                    notify_move(cx);
+                }
+            });
+            let (ink_up, notify_up) = (ink_ev, notify);
+            window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
+                    return;
+                }
+                let mut st = ink_up.borrow_mut();
+                if let Some(s) = st.active.take() {
+                    if !s.pts.is_empty() {
+                        st.strokes.push(s);
+                    }
+                    drop(st);
+                    notify_up(cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+    .when(draw_on, |d| d.cursor(CursorStyle::Crosshair))
+    .into_any_element()
+}
+
 pub fn is_flux(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flux"))
 }
@@ -912,6 +1097,11 @@ impl crate::workbench::Workbench {
         let d = &self.docs[ix];
         let Some(v) = d.flux.as_ref() else { return div().into_any_element() };
         let source = d.flux_source;
+        let (zoom, draw_on, cur_color, has_strokes) = {
+            let st = v.shared.ink.borrow();
+            (st.zoom, st.draw, st.color, !st.strokes.is_empty())
+        };
+        let zoom_label: SharedString = format!("{}%", (zoom * 100.).round()).into();
         let tab = |id: &'static str, icon: IconName, label: &'static str, on: bool, want_source: bool, cx: &mut Context<Self>| {
             h_flex()
                 .id(id)
@@ -936,6 +1126,71 @@ impl crate::workbench::Workbench {
         h_flex()
             .flex_none()
             .gap_1()
+            .when(!source, |h| {
+                h.child(
+                    h_flex()
+                        .gap_0p5()
+                        .child(
+                            ui::tool_button("fx-zoom-out", IconName::ZoomOut, false)
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Zoom out (Ctrl+-, Ctrl+scroll)")).build(w, cx))
+                                .on_click(cx.listener(move |this, _, _, cx| this.flux_zoom_step(ix, -1, cx))),
+                        )
+                        .child(
+                            div()
+                                .id("fx-zoom-reset")
+                                .h(theme::u(22.))
+                                .min_w(theme::u(42.))
+                                .px_1p5()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(c(theme::FG))
+                                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Reset zoom to 100% (Ctrl+0)")).build(w, cx))
+                                .child(zoom_label)
+                                .on_click(cx.listener(move |this, _, _, cx| this.flux_zoom_step(ix, 0, cx))),
+                        )
+                        .child(
+                            ui::tool_button("fx-zoom-in", IconName::ZoomIn, false)
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Zoom in (Ctrl+=, Ctrl+scroll)")).build(w, cx))
+                                .on_click(cx.listener(move |this, _, _, cx| this.flux_zoom_step(ix, 1, cx))),
+                        ),
+                )
+                .child(
+                    ui::tool_button("fx-draw-toggle", IconName::Pencil, draw_on)
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Annotate over preview")).build(w, cx))
+                        .on_click(cx.listener(move |this, _, _, cx| this.flux_toggle_draw(ix, cx))),
+                )
+                .when(draw_on, |h| {
+                    h.children(DRAW_COLORS.into_iter().enumerate().map(|(ci, col)| {
+                        let picked = cur_color == col;
+                        div()
+                            .id(("fx-ink-col", ci))
+                            .size(theme::u(16.))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .bg(rgb(col))
+                            .border_2()
+                            .border_color(if picked { c(theme::FG_STRONG) } else { gpui_kit::transparent_black() })
+                            .on_click(cx.listener(move |this, _, _, cx| this.flux_set_ink_color(ix, col, cx)))
+                    }))
+                })
+                .when(has_strokes, |h| {
+                    h.child(
+                        ui::tool_button("fx-ink-undo", IconName::Undo, false)
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Undo last stroke")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| this.flux_undo_ink(ix, cx))),
+                    )
+                    .child(
+                        ui::tool_button("fx-ink-clear", IconName::Delete, false)
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear annotations")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| this.flux_clear_ink(ix, cx))),
+                    )
+                })
+            })
             .child(
                 h_flex()
                     .id("fx-tabs")
@@ -965,6 +1220,42 @@ impl crate::workbench::Workbench {
                 )
             })
             .into_any_element()
+    }
+
+    pub(crate) fn flux_zoom_step(&mut self, ix: usize, dir: i32, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        v.step_zoom(dir);
+        let pct = (v.zoom() * 100.).round() as i32;
+        self.status = crate::trf!("Preview zoom: {n}%"; n => pct).into();
+        cx.notify();
+    }
+
+    fn flux_toggle_draw(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        let mut st = v.shared.ink.borrow_mut();
+        st.draw = !st.draw;
+        st.active = None;
+        cx.notify();
+    }
+
+    fn flux_set_ink_color(&mut self, ix: usize, color: u32, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        v.shared.ink.borrow_mut().color = color;
+        cx.notify();
+    }
+
+    fn flux_undo_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        v.shared.ink.borrow_mut().strokes.pop();
+        cx.notify();
+    }
+
+    fn flux_clear_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        let mut st = v.shared.ink.borrow_mut();
+        st.strokes.clear();
+        st.active = None;
+        cx.notify();
     }
 
     fn flux_show(&mut self, ix: usize, source: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1075,6 +1366,20 @@ mod tests {
         let img = two + 1;
         assert!(g.contains(&(img, 1)), "an image is an entry of its own");
         assert_eq!(g.iter().map(|e| e.1).sum::<u32>() as usize, d.blocks.len());
+    }
+
+    #[test]
+    fn preview_zoom_clamps_and_steps() {
+        let v = super::FluxView::new("# Hello\n".into(), std::path::PathBuf::new(), "en");
+        assert_eq!(v.zoom(), 1.0);
+        v.step_zoom(1);
+        assert!((v.zoom() - 1.1).abs() < 1e-4);
+        v.set_zoom(5.0);
+        assert_eq!(v.zoom(), 2.5);
+        v.set_zoom(0.1);
+        assert_eq!(v.zoom(), 0.5);
+        v.step_zoom(0);
+        assert_eq!(v.zoom(), 1.0);
     }
 }
 

@@ -1464,6 +1464,13 @@ pub const ID: &[(&str, &str)] = &[
     ("Unmatched {b}", "{b} tanpa pasangan"),
     ("{b} does not close {open}", "{b} tidak menutup {open}"),
     ("Unclosed {b}", "{b} belum ditutup"),
+    ("Zoom out (Ctrl+-, Ctrl+scroll)", "Perkecil tampilan (Ctrl+-, Ctrl+scroll)"),
+    ("Reset zoom to 100% (Ctrl+0)", "Kembalikan zoom ke 100% (Ctrl+0)"),
+    ("Zoom in (Ctrl+=, Ctrl+scroll)", "Perbesar tampilan (Ctrl+=, Ctrl+scroll)"),
+    ("Annotate over preview", "Corat-coret di atas pratinjau"),
+    ("Undo last stroke", "Urungkan coretan terakhir"),
+    ("Clear annotations", "Hapus semua coretan"),
+    ("Preview zoom: {n}%", "Zoom pratinjau: {n}%"),
 ];
 
 #[cfg(test)]
