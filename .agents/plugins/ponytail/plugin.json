@@ -1,0 +1,18 @@
+{
+    "description":  "Lazy senior dev mode for AI agents. Forces the simplest, shortest solution that actually works: YAGNI, stdlib first, no unrequested abstractions.",
+    "version":  "5.3.3",
+    "author":  {
+                   "name":  "Dietrich Gebert",
+                   "url":  "https://github.com/dietrichgebert"
+               },
+    "name":  "ponytail",
+    "homepage":  "https://github.com/dietrichgebert/ponytail",
+    "repository":  "https://github.com/dietrichgebert/ponytail",
+    "logo":  "assets/logo.png",
+    "suggestedPrompts":  [
+                             "Use ponytail to implement this feature with minimal new code",
+                             "Run a ponytail review on the current diff",
+                             "Audit this repository for unnecessary abstractions and shortcuts"
+                         ],
+    "displayName":  "Ponytail"
+}
