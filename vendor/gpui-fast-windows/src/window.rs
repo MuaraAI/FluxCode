@@ -968,9 +968,21 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn zoom(&self) {
+        // FluxCode: fullscreen is a separate mode owned by toggle_fullscreen
+        // (borderless, monitor-sized); zoom only toggles maximize (#107).
+        if self.state.is_fullscreen() {
+            return;
+        }
         unsafe {
             if IsWindowVisible(self.0.hwnd).as_bool() {
-                ShowWindowAsync(self.0.hwnd, SW_MAXIMIZE).ok().log_err();
+                // FluxCode: toggle like the native caption button does
+                // (HTMAXBUTTON in events.rs). SW_MAXIMIZE on an already-maximized
+                // window is a no-op, so the restore click never restored (#107).
+                // SW_RESTORE, not the native path's SW_NORMAL: both undo a
+                // maximize, but SW_RESTORE is the canonical restore command and
+                // is what activate() above already uses.
+                let cmd = if IsZoomed(self.0.hwnd).as_bool() { SW_RESTORE } else { SW_MAXIMIZE };
+                ShowWindowAsync(self.0.hwnd, cmd).ok().log_err();
             } else if let Some(mut status) = self.state.initial_placement.take() {
                 status.state = WindowOpenState::Maximized;
                 self.state.initial_placement.set(Some(status));

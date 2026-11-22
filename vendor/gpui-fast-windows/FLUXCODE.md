@@ -1,7 +1,7 @@
 # gpui-fast-windows 0.1.13, as FluxCode builds it
 
 A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
-(Apache-2.0, see LICENSE) with three changes, in `src/directx_renderer.rs`,
+(Apache-2.0, see LICENSE) with four changes, in `src/directx_renderer.rs`,
 `src/fast/frame.rs`, `src/window.rs` and `src/events.rs`. Search for "FluxCode" to find them.
 
 1. **Path textures on demand.** Upstream makes two window-sized textures for drawing
@@ -19,4 +19,15 @@ A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
    (`DWMWA_SYSTEMBACKDROP_TYPE` = `DWMSBT_TRANSIENTWINDOW`); on older systems the move/size
    loop swaps acrylic for plain blur (state 3) until the move ends.
 
-To update: copy the new upstream version over this folder and apply the three changes again.
+4. **`zoom()` restores a maximized window** (MuaraAI/FluxCode#107). Upstream's
+   `zoom()` always sends `SW_MAXIMIZE`, which is a no-op on an already-maximized
+   window, so FluxCode's custom restore button (and titlebar double-click) could
+   never restore. It now toggles `SW_RESTORE`/`SW_MAXIMIZE` on `IsZoomed`, the
+   same thing the native caption button does (`HTMAXBUTTON` in `events.rs`).
+   `SW_RESTORE` is deliberate, not the native path's `SW_NORMAL`: both undo a
+   maximize, but `SW_RESTORE` is the canonical restore command (and what
+   `activate()` in `window.rs` uses); do not "fix" it back to `SW_NORMAL`.
+   While fullscreen, `zoom()` is a no-op — fullscreen is `toggle_fullscreen`'s
+   mode, not a maximize.
+
+To update: copy the new upstream version over this folder and apply the four changes again.
