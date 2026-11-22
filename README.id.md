@@ -1,4 +1,4 @@
-<!-- Made from README.flux by FluxCode (fluxcode --flux-to-md README.flux README.id.md). Edit README.flux, not this file. -->
+<!-- Made from C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux by FluxCode (fluxcode --flux-to-md C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.id.md). Edit C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux, not this file. -->
 
 # FluxCode
 
@@ -184,39 +184,6 @@ setelah mengecek apakah PC kamu sanggup.
 Error Python menjadi kartu berisi file, baris, dan petunjuk; kalau modulnya tidak ada, Fix
 memasangnya. Database SQLite terbuka sebagai daftar tabel, SQL, dan jumlah barisnya, sama
 seperti file Word, Excel, PDF, dan ZIP, bukan sebagai error.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/source-control.png"><img src="assets/screenshots/source-control.png" width="100%" alt="Source Control after git init in a game server folder: 2801 untracked files, with the folders holding most of them listed first, each with an Ignore button."></a>
-      <br><sub><b>Ribuan file baru</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/go-to-file.png"><img src="assets/screenshots/go-to-file.png" width="100%" alt="Go to File in the FluxMono theme: typing wbench finds workbench.rs in the src folder."></a>
-      <br><sub><b>Go to File</b></sub>
-    </td>
-  </tr>
-</table>
-
-Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabaikan folder
-yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="100%" alt="Settings, Appearance: seven color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark and FluxSky, active), over the FluxSky clouds."></a>
-      <br><sub><b>Tujuh tema warna</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/update-indonesian.png"><img src="assets/screenshots/update-indonesian.png" width="100%" alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."></a>
-      <br><sub><b>Bahasa Indonesia dan kartu update</b></sub>
-    </td>
-  </tr>
-</table>
-
-Tujuh tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
-juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
-FluxCream.
 
 ## Yang membedakannya
 

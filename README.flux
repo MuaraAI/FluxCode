@@ -294,33 +294,6 @@ Error Python menjadi kartu berisi file, baris, dan petunjuk; kalau modulnya tida
 memasangnya. Database SQLite terbuka sebagai daftar tabel, SQL, dan jumlah barisnya, sama
 seperti file Word, Excel, PDF, dan ZIP, bukan sebagai error.
 
-@all
-@gallery
-@image assets/screenshots/source-control.png width=49% link=assets/screenshots/source-control.png alt="Source Control after git init in a game server folder: 2801 untracked files, with the folders holding most of them listed first, each with an Ignore button." caption="Thousands of new files" caption-id="Ribuan file baru"
-@image assets/screenshots/go-to-file.png width=49% link=assets/screenshots/go-to-file.png alt="Go to File in the FluxMono theme: typing wbench finds workbench.rs in the src folder." caption="Go to File" caption-id="Go to File"
-@end
-
-@en
-Source Control stays fast with thousands of new files and offers to ignore the folders
-that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
-@id
-Source Control tetap cepat dengan ribuan file baru dan menawarkan untuk mengabaikan folder
-yang menampungnya. Go to File (`Ctrl+P`) menemukan file dari beberapa huruf namanya.
-
-@all
-@gallery
-@image assets/screenshots/themes.png width=49% link=assets/screenshots/themes.png alt="Settings, Appearance: seven color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark and FluxSky, active), over the FluxSky clouds." caption="Seven color themes" caption-id="Tujuh tema warna"
-@image assets/screenshots/update-indonesian.png width=49% link=assets/screenshots/update-indonesian.png alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart." caption="Bahasa Indonesia and the update card" caption-id="Bahasa Indonesia dan kartu update"
-@end
-
-@en
-Seven color themes, three interface sizes and your own background image. The interface
-also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
-@id
-Tujuh tema warna, tiga ukuran antarmuka, dan gambar latar pilihanmu sendiri. Antarmukanya
-juga tersedia dalam Bahasa Indonesia, terlihat di sini bersama kartu update pada tema
-FluxCream.
-
 @en
 ## What makes it different
 

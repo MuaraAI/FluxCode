@@ -1,4 +1,4 @@
-<!-- Made from README.flux by FluxCode (fluxcode --flux-to-md README.flux README.md). Edit README.flux, not this file. -->
+<!-- Made from C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux by FluxCode (fluxcode --flux-to-md C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.md). Edit C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux, not this file. -->
 
 # FluxCode
 
@@ -179,38 +179,6 @@ at all); Background animation makes them move, after checking what your PC can t
 A Python error becomes a card with the file, the line and a hint; for a missing module, Fix
 installs it. A SQLite database opens as its tables, SQL and row counts, like Word, Excel,
 PDF and ZIP files do, instead of an error.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/source-control.png"><img src="assets/screenshots/source-control.png" width="100%" alt="Source Control after git init in a game server folder: 2801 untracked files, with the folders holding most of them listed first, each with an Ignore button."></a>
-      <br><sub><b>Thousands of new files</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/go-to-file.png"><img src="assets/screenshots/go-to-file.png" width="100%" alt="Go to File in the FluxMono theme: typing wbench finds workbench.rs in the src folder."></a>
-      <br><sub><b>Go to File</b></sub>
-    </td>
-  </tr>
-</table>
-
-Source Control stays fast with thousands of new files and offers to ignore the folders
-that hold them. Go to File (`Ctrl+P`) finds a file from a few letters of its name.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/themes.png"><img src="assets/screenshots/themes.png" width="100%" alt="Settings, Appearance: seven color themes as cards (FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara, FluxMuara Dark and FluxSky, active), over the FluxSky clouds."></a>
-      <br><sub><b>Seven color themes</b></sub>
-    </td>
-    <td width="50%" valign="top">
-      <a href="assets/screenshots/update-indonesian.png"><img src="assets/screenshots/update-indonesian.png" width="100%" alt="The FluxCream theme with the interface in Bahasa Indonesia. A card in the corner offers a newer build, with its notes and a button to update and restart."></a>
-      <br><sub><b>Bahasa Indonesia and the update card</b></sub>
-    </td>
-  </tr>
-</table>
-
-Seven color themes, three interface sizes and your own background image. The interface
-also comes in Bahasa Indonesia, shown here with the update card in the FluxCream theme.
 
 ## What makes it different
 
