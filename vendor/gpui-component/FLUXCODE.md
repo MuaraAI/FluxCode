@@ -10,7 +10,9 @@ Ryzen 5 7535HS, so on slower PCs typing fell behind the keys (issue #92). Now th
 highlighter keeps the parser state each line starts in, parses from the edited line,
 and stops at the first later line that starts in the same state as before. A
 keystroke parses one or two lines. Lines that start in the same state share one copy
-of it. Files over 64 KB keep upstream's debounced background parse.
+of it. Files over 64 KB also run incremental `LineParse` updates on the debounced
+background thread, lines over 4 KB skip regex tokenization to avoid backtracking
+stalls on minified files, and brace-fold scanning stops above 512 KB.
 
 The tests at the end of that file check that the line-by-line result equals a full
 parse after many kinds of edits, and that a keystroke parses at most two lines.

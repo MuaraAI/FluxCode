@@ -809,7 +809,7 @@ impl Workbench {
         if !m.about.is_empty() {
             body = body.child(page_section(tr("About").into(), None).child(div().text_sm().text_color(c(theme::FG)).child(TextView::markdown("ext-about", m.about.clone()))));
         }
-        v_flex()
+        let page_el = v_flex()
             .id("ext-page")
             .key_context("ExtPage")
             .size_full()
@@ -825,8 +825,18 @@ impl Workbench {
                     cx.notify();
                 }
             }))
-            .child(body)
-            .into_any_element()
+            .child(body);
+        if cx.reduce_motion() {
+            page_el.into_any_element()
+        } else {
+            page_el
+                .with_animation(
+                    "ext-page-in",
+                    Animation::new(std::time::Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                    |el, t| el.opacity(t),
+                )
+                .into_any_element()
+        }
     }
 
     fn render_project_card(&self, pix: usize, installed: bool, divided: bool, cx: &mut Context<Self>) -> AnyElement {

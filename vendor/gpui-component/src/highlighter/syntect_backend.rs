@@ -12,7 +12,12 @@
 //! application's theme rather than a syntect theme.
 
 use std::{
-    cell::RefCell, collections::HashMap, ops::Range, rc::Rc, sync::LazyLock, time::Duration,
+    cell::RefCell,
+    collections::HashMap,
+    ops::Range,
+    rc::Rc,
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
 };
 
 use gpui::{HighlightStyle, SharedString, Task};
@@ -34,6 +39,8 @@ static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_new
 /// on; larger ones keep their shifted highlights until a background parse
 /// catches up.
 const SYNC_PARSE_MAX_BYTES: usize = 64 * 1024;
+const MAX_HIGHLIGHT_LINE_BYTES: usize = 4096;
+const MAX_FOLD_BYTES: usize = 512 * 1024;
 const PARSE_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Highlight names, ordered and non-overlapping.
@@ -145,6 +152,11 @@ fn parse_line(
         }
     };
 
+    // Skip ultra-long minified lines to avoid regex backtracking stalls.
+    if line.len() > MAX_HIGHLIGHT_LINE_BYTES {
+        return;
+    }
+
     // A line syntect cannot parse keeps the scopes it started with; the
     // next line starts over from them rather than losing the document.
     if let Ok(operations) = parser.parse_line(line, &SYNTAXES) {
@@ -165,7 +177,7 @@ fn parse_line(
 struct LineParse {
     /// The state each line of the last parsed text starts in. Lines in the
     /// same block start alike and share one copy.
-    starts: Vec<Rc<LineState>>,
+    starts: Vec<Arc<LineState>>,
     /// The length of the last parsed text.
     len: usize,
     names: ScopeNames,
@@ -212,7 +224,7 @@ impl LineParse {
                 (first, last, after)
             }
             None => {
-                self.starts = vec![Rc::new((ParseState::new(syntax), ScopeStack::new()))];
+                self.starts = vec![Arc::new((ParseState::new(syntax), ScopeStack::new()))];
                 highlights.clear();
                 (0, count, Vec::new())
             }
@@ -244,7 +256,7 @@ impl LineParse {
             let next = if **prev == state {
                 prev.clone()
             } else {
-                Rc::new(state.clone())
+                Arc::new(state.clone())
             };
             self.starts.push(next);
         }
@@ -451,6 +463,8 @@ struct SyntectInputHighlighter {
     folds: Rc<RefCell<Vec<FoldRange>>>,
     parse_task: Option<Task<()>>,
     lines: LineParse,
+    bg_state: Arc<Mutex<(LineParse, Highlights)>>,
+    pending_edits: Rc<RefCell<Vec<InputEdit>>>,
 }
 
 impl SyntectInputHighlighter {
@@ -462,6 +476,8 @@ impl SyntectInputHighlighter {
             folds: Rc::default(),
             parse_task: None,
             lines: LineParse::default(),
+            bg_state: Arc::default(),
+            pending_edits: Rc::default(),
         }
     }
 }
@@ -481,6 +497,12 @@ impl InputHighlighter for SyntectInputHighlighter {
     ) {
         if text.len() <= SYNC_PARSE_MAX_BYTES {
             self.parse_task = None;
+            self.pending_edits.borrow_mut().clear();
+            if let Ok(mut bg) = self.bg_state.lock()
+                && bg.0.len > 0
+            {
+                *bg = Default::default();
+            }
             self.lines.update(
                 self.syntax,
                 edit.as_ref(),
@@ -495,16 +517,30 @@ impl InputHighlighter for SyntectInputHighlighter {
             return;
         }
 
-        // The background parse below replaces everything, so the next small
-        // document starts over.
+        // Keep large documents incremental on the background thread using bg_state.
         self.lines = LineParse::default();
-        if let Some(edit) = edit {
-            shift(&mut self.highlights.borrow_mut(), &edit);
+        match edit {
+            Some(edit) => {
+                shift(&mut self.highlights.borrow_mut(), &edit);
+                self.pending_edits.borrow_mut().push(edit);
+            }
+            None => {
+                self.pending_edits.borrow_mut().clear();
+                if let Ok(mut bg) = self.bg_state.lock() {
+                    *bg = Default::default();
+                }
+            }
         }
+        let single_edit = {
+            let edits = self.pending_edits.borrow();
+            (edits.len() == 1).then(|| edits[0].clone())
+        };
 
         let syntax = self.syntax;
         let highlights = self.highlights.clone();
         let folds = self.folds.clone();
+        let bg_state = self.bg_state.clone();
+        let pending_edits = self.pending_edits.clone();
         let text = text.clone();
         // Replacing the task drops the previous one, which cancels a parse
         // still waiting out its debounce.
@@ -513,17 +549,23 @@ impl InputHighlighter for SyntectInputHighlighter {
             let (parsed, folded) = cx
                 .background_executor()
                 .spawn(async move {
-                    let text = text.to_string();
-                    let folded = if folding {
-                        brace_fold_ranges(&text)
+                    let parsed = {
+                        let mut guard = bg_state.lock().unwrap_or_else(|e| e.into_inner());
+                        let (ref mut bg_lines, ref mut bg_highlights) = *guard;
+                        bg_lines.update(syntax, single_edit.as_ref(), &text, bg_highlights);
+                        bg_highlights.clone()
+                    };
+                    let folded = if folding && text.len() <= MAX_FOLD_BYTES {
+                        brace_fold_ranges(&text.to_string())
                     } else {
                         Vec::new()
                     };
-                    (parse(syntax, &text), folded)
+                    (parsed, folded)
                 })
                 .await;
             *highlights.borrow_mut() = parsed;
             *folds.borrow_mut() = folded.clone();
+            pending_edits.borrow_mut().clear();
             let _ = entity.update(cx, |state, cx| {
                 state.apply_highlighter_fold_candidates(folded, cx);
             });
@@ -548,30 +590,35 @@ impl InputHighlighter for SyntectInputHighlighter {
 /// Without a syntax tree this is the structure most languages share; a
 /// language that nests by indentation alone gets no candidates.
 fn brace_fold_ranges(text: &str) -> Vec<FoldRange> {
+    if text.len() > MAX_FOLD_BYTES {
+        return Vec::new();
+    }
     let mut starts = Vec::new();
     let mut ranges = Vec::new();
 
     for (line_number, line) in text.lines().enumerate() {
-        let mut chars = line.chars().peekable();
+        let b = line.as_bytes();
+        let mut i = 0;
         let mut quote = None;
         let mut escaped = false;
-        while let Some(character) = chars.next() {
+        while i < b.len() {
+            let ch = b[i];
             match quote {
                 Some(open) => {
                     if escaped {
                         escaped = false;
-                    } else if character == '\\' {
+                    } else if ch == b'\\' {
                         escaped = true;
-                    } else if character == open {
+                    } else if ch == open {
                         quote = None;
                     }
                 }
-                None => match character {
-                    '/' if chars.peek() == Some(&'/') => break,
-                    '#' => break,
-                    '"' | '\'' | '`' => quote = Some(character),
-                    '{' => starts.push(line_number),
-                    '}' => {
+                None => match ch {
+                    b'/' if b.get(i + 1) == Some(&b'/') => break,
+                    b'#' => break,
+                    b'"' | b'\'' | b'`' => quote = Some(ch),
+                    b'{' => starts.push(line_number),
+                    b'}' => {
                         if let Some(start) = starts.pop()
                             && line_number.saturating_sub(start) >= 2
                         {
@@ -581,6 +628,7 @@ fn brace_fold_ranges(text: &str) -> Vec<FoldRange> {
                     _ => {}
                 },
             }
+            i += 1;
         }
     }
     ranges.sort_by_key(|range| range.start_line);
@@ -863,5 +911,21 @@ mod tests {
             assert!(parsed <= 2, "{key:?} parsed {parsed} of {count} lines");
         }
         assert_eq!(highlights, parse(syntax, &text));
+    }
+
+    #[test]
+    fn long_minified_lines_skip_without_breaking_following_lines() {
+        fn assert_send<T: Send>() {}
+        assert_send::<LineParse>();
+
+        let syntax = find_syntax("js").unwrap();
+        let huge = format!("const big = \"{}\";\nconst answer = 42;\n", "a".repeat(5000));
+        let mut lines = LineParse::default();
+        let mut highlights = Highlights::new();
+        lines.update(syntax, None, &Rope::from(huge.as_str()), &mut highlights);
+        let second_line_start = huge.find("const answer").unwrap();
+        assert!(highlights.iter().all(|(r, _)| r.start >= second_line_start));
+        assert!(highlights.iter().any(|(r, name)| *name == "keyword" && &huge[r.clone()] == "const"));
+        assert!(highlights.iter().any(|(r, name)| *name == "number" && &huge[r.clone()] == "42"));
     }
 }

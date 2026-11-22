@@ -20,36 +20,31 @@ pub fn read_text(path: &Path) -> Result<FileText, String> {
         return Err(format!("File is too large to open ({} MB).", meta.len() / 1024 / 1024));
     }
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
-    if bytes[..bytes.len().min(8192)].contains(&0) {
+    if crate::accel::has_zero(&bytes[..bytes.len().min(8192)]) {
         return Err("The file is binary and cannot be displayed in the editor.".into());
     }
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+    let crlf = crate::accel::scan_file_stats(bytes, LONG_LINE).crlf;
     let text = String::from_utf8_lossy(bytes);
-    let crlf = text.contains("\r\n");
     Ok(FileText { text: if crlf { text.replace("\r\n", "\n") } else { text.into_owned() }, crlf })
 }
 
 pub fn decode_text(bytes: &[u8]) -> FileText {
-    let text = match crate::viewer::decode_utf16(bytes) {
-        Some(t) => t,
-        None => String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)).into_owned(),
-    };
-    let crlf = text.contains("\r\n");
-    FileText { text: if crlf { text.replace("\r\n", "\n") } else { text }, crlf }
+    if let Some(t) = crate::viewer::decode_utf16(bytes) {
+        let crlf = t.contains("\r\n");
+        return FileText { text: if crlf { t.replace("\r\n", "\n") } else { t }, crlf };
+    }
+    let clean = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let crlf = crate::accel::scan_file_stats(clean, LONG_LINE).crlf;
+    let text = String::from_utf8_lossy(clean);
+    FileText { text: if crlf { text.replace("\r\n", "\n") } else { text.into_owned() }, crlf }
 }
 
 pub const LONG_LINE: usize = 300;
 
+#[cfg(test)]
 pub fn dominated_by_long_lines(text: &str) -> bool {
-    let (mut long, mut short) = (0usize, 0usize);
-    for line in text.lines() {
-        if line.len() >= LONG_LINE {
-            long += line.len();
-        } else {
-            short += line.len();
-        }
-    }
-    long > 0 && long > short
+    crate::accel::scan_file_stats(text.as_bytes(), LONG_LINE).dominated_by_long_lines()
 }
 
 pub fn write_text(path: &Path, text: &str, crlf: bool) -> Result<(), String> {
@@ -126,7 +121,7 @@ pub fn delete_path(path: &Path) -> Result<(), String> {
 
 
 const MAX_SEARCH_HITS: usize = 5_000;
-const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SEARCH_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct Hit {
@@ -217,8 +212,9 @@ pub fn search_until(root: &Path, query: &str, match_case: bool, whole_word: bool
         while workers.iter().any(|w| !w.is_finished()) {
             if stop() {
                 stop_flag.store(true, Ordering::Relaxed);
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
         workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
     });
@@ -239,7 +235,7 @@ pub fn search_until(root: &Path, query: &str, match_case: bool, whole_word: bool
     result
 }
 
-fn git_files(root: &Path) -> Option<Vec<PathBuf>> {
+pub(crate) fn git_files(root: &Path) -> Option<Vec<PathBuf>> {
     if !root.join(".git").exists() {
         return None;
     }
@@ -290,33 +286,67 @@ fn search_file(path: &Path, needle: &str, match_case: bool, whole_word: bool) ->
         return None;
     }
     let bytes = fs::read(path).ok()?;
-    if bytes[..bytes.len().min(8192)].contains(&0) {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let ascii = match_case || needle.is_ascii();
-    let folded: std::borrow::Cow<str> = if match_case { std::borrow::Cow::Borrowed(&text) } else if ascii { text.to_ascii_lowercase().into() } else { text.to_lowercase().into() };
-    if !folded.contains(needle) {
+    if crate::accel::has_zero(&bytes[..bytes.len().min(8192)]) {
         return None;
     }
     let mut hits = Vec::new();
-    let mut add = |n: usize, line: &str, hay: &str| {
-        if let Some(at) = find_match(hay, needle, whole_word) {
-            let match_char = hay[..at].chars().count();
-            hits.push(Hit { line: n as u32 + 1, text: preview(line, match_char) });
-        }
-        hits.len() >= MAX_SEARCH_HITS
-    };
+    let ascii = match_case || needle.is_ascii();
     if ascii {
-        for (n, (line, hay)) in text.lines().zip(folded.lines()).enumerate() {
-            if add(n, line, hay) {
-                break;
+        let nb = needle.as_bytes();
+        let find = |hay: &[u8]| {
+            if match_case {
+                crate::accel::find_bytes(hay, nb)
+            } else {
+                crate::accel::find_ascii_ci(hay, nb)
             }
+        };
+        let mut offset = 0usize;
+        let mut line_no = 1u32;
+        let mut counted_to = 0usize;
+        while offset < bytes.len() {
+            let Some(rel) = find(&bytes[offset..]) else {
+                break;
+            };
+            let pos = offset + rel;
+            let line_start = bytes[..pos].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+            let nl = bytes[pos..].iter().position(|&b| b == b'\n').map(|i| pos + i);
+            let mut line_end = nl.unwrap_or(bytes.len());
+            if line_end > line_start && bytes[line_end - 1] == b'\r' {
+                line_end -= 1;
+            }
+            if line_start > counted_to {
+                line_no += bytes[counted_to..line_start].iter().filter(|&&b| b == b'\n').count() as u32;
+                counted_to = line_start;
+            }
+            let raw_line = String::from_utf8_lossy(&bytes[line_start..line_end]);
+            let hay_line: std::borrow::Cow<str> = if match_case {
+                std::borrow::Cow::Borrowed(&raw_line)
+            } else {
+                raw_line.to_ascii_lowercase().into()
+            };
+            if let Some(at) = find_match(&hay_line, needle, whole_word) {
+                let match_char = hay_line[..at].chars().count();
+                hits.push(Hit { line: line_no, text: preview(&raw_line, match_char) });
+                if hits.len() >= MAX_SEARCH_HITS {
+                    break;
+                }
+            }
+            offset = nl.map_or(bytes.len(), |i| i + 1);
         }
     } else {
+        let text = String::from_utf8_lossy(&bytes);
+        let folded = text.to_lowercase();
+        if !folded.contains(needle) {
+            return None;
+        }
         for (n, line) in text.lines().enumerate() {
-            if add(n, line, &line.to_lowercase()) {
-                break;
+            let hay = line.to_lowercase();
+            if let Some(at) = find_match(&hay, needle, whole_word) {
+                let match_char = hay[..at].chars().count();
+                hits.push(Hit { line: n as u32 + 1, text: preview(line, match_char) });
+                if hits.len() >= MAX_SEARCH_HITS {
+                    break;
+                }
             }
         }
     }
@@ -355,5 +385,32 @@ mod tests {
         assert_eq!(t.text, "a\nb\n");
         write_text(&p, "a\nb\nc\n", t.crlf).unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"a\r\nb\r\nc\r\n");
+    }
+
+    #[test]
+    fn search_file_handles_case_whole_word_crlf_unicode_and_binary() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-search-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("sample.txt");
+        fs::write(&p, b"first line\r\nfoobar FoO\r\nCAF\xc3\x89 end\r\n").unwrap();
+
+        let fh = search_file(&p, "foo", false, true).unwrap();
+        assert_eq!(fh.hits.len(), 1);
+        assert_eq!(fh.hits[0].line, 2);
+        assert_eq!(fh.hits[0].text, "foobar FoO");
+
+        let exact = search_file(&p, "FoO", true, false).unwrap();
+        assert_eq!(exact.hits.len(), 1);
+        assert_eq!(exact.hits[0].line, 2);
+
+        let uni = search_file(&p, "café", false, false).unwrap();
+        assert_eq!(uni.hits[0].line, 3);
+
+        let bin = dir.join("bin.dat");
+        fs::write(&bin, b"foo\0bar").unwrap();
+        assert!(search_file(&bin, "foo", false, false).is_none());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

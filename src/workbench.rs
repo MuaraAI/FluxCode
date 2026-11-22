@@ -19,12 +19,17 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
 
-const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
+const READ_OFF_THREAD_BYTES: u64 = 64 * 1024;
 
 const SAVE_OFF_THREAD_BYTES: u64 = 64 * 1024;
+
+const MAX_AUTO_WRAP_BYTES: usize = 512 * 1024;
+
+const MAX_COMPLEX_LINE_BYTES: usize = 8 * 1024;
 
 actions!(
     fluxcode,
@@ -175,6 +180,7 @@ pub(crate) struct Doc {
     pub flux_lazy: bool,
     pub diff: Option<crate::diff_view::DiffDoc>,
     pub long_lines: bool,
+    pub complex: bool,
     pub wrap_override: Option<bool>,
 }
 
@@ -241,6 +247,10 @@ pub struct Workbench {
     pub(crate) settings_open: bool,
     pub(crate) settings_section: crate::settings::SettingsSection,
     pub(crate) settings_scroll: ScrollHandle,
+    pub(crate) settings_search: Entity<InputState>,
+    pub(crate) settings_focus: FocusHandle,
+    pub(crate) settings_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) settings_sec_anim: std::cell::Cell<(crate::settings::SettingsSection, u64)>,
     pub(crate) whats_new: Option<crate::whatsnew::Page>,
     pub(crate) closed_tabs: Vec<PathBuf>,
     pub(crate) collab: crate::collab::Collab,
@@ -283,6 +293,8 @@ pub struct Workbench {
     pub(crate) tabs_scroll: ScrollHandle,
     pub(crate) side_anim: std::cell::Cell<(bool, u64)>,
     pub(crate) full_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) panel_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) right_anim: std::cell::Cell<(bool, u64)>,
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
     pub(crate) term_hist_ix: Option<usize>,
@@ -294,8 +306,8 @@ pub struct Workbench {
     pub(crate) theme_menu: bool,
     pub(crate) motion_check: Option<crate::motion_check::Check>,
     pub(crate) quick: crate::quick::QuickOpen,
-    pub(crate) all_files: Rc<Vec<String>>,
-    pub(crate) all_lower: Rc<Vec<String>>,
+    pub(crate) all_files: Arc<Vec<String>>,
+    pub(crate) all_lower: Arc<Vec<String>>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -324,6 +336,8 @@ impl Workbench {
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
         let term_input = cx.new(|cx| InputState::new(window, cx));
+        let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search settings…")));
+        let settings_focus = cx.focus_handle();
         let github_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
@@ -375,6 +389,12 @@ impl Workbench {
                         }
                     }
                     _ => {}
+                }
+            }),
+            cx.subscribe_in(&settings_search, window, |this, _, ev: &InputEvent, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                    cx.notify();
                 }
             }),
         ];
@@ -455,6 +475,10 @@ impl Workbench {
             settings_open: false,
             settings_section: crate::settings::SettingsSection::Appearance,
             settings_scroll: ScrollHandle::new(),
+            settings_search,
+            settings_focus,
+            settings_anim: std::cell::Cell::new((false, 0)),
+            settings_sec_anim: std::cell::Cell::new((crate::settings::SettingsSection::Appearance, 0)),
             whats_new: None,
             closed_tabs: Vec::new(),
             last_switch: None,
@@ -500,6 +524,8 @@ impl Workbench {
             tabs_scroll: ScrollHandle::new(),
             side_anim: std::cell::Cell::new((false, 0)),
             full_anim: std::cell::Cell::new((false, 0)),
+            panel_anim: std::cell::Cell::new((false, 0)),
+            right_anim: std::cell::Cell::new((false, 0)),
             wash: std::cell::Cell::new((false, 0)),
             out_run: None,
             term_hist_ix: None,
@@ -513,8 +539,8 @@ impl Workbench {
             quick,
             tree_nodes: Vec::new(),
             expanded: std::collections::HashSet::new(),
-            all_files: Rc::default(),
-            all_lower: Rc::default(),
+            all_files: Arc::default(),
+            all_lower: Arc::default(),
             preview_server: None,
             github: crate::github::load(),
             github_input,
@@ -643,22 +669,33 @@ impl Workbench {
         .detach();
         let wsl_scan = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let all = cx
+            let (all, lower) = cx
                 .background_spawn(async move {
-                    if let Some(t) = &wsl_scan {
-                        if let Some(paths) = remote_scan(t, &root, files::MAX_ENTRIES) {
-                            return paths;
+                    let all = if let Some(paths) = wsl_scan.as_ref().and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES)) {
+                        paths
+                    } else if multi {
+                        let mut paths = Vec::new();
+                        for r in &roots {
+                            let rem = files::MAX_ENTRIES.saturating_sub(paths.len());
+                            if rem == 0 {
+                                break;
+                            }
+                            paths.extend(files::scan_paths(r, rem));
                         }
-                    }
-                    let nodes = if multi { files::scan_roots(&roots) } else { files::scan(&root) };
-                    let mut flat = Vec::new();
-                    files::flatten(&nodes, &mut flat);
-                    flat
+                        paths
+                    } else {
+                        files::scan_paths(&root, files::MAX_ENTRIES)
+                    };
+                    let lower: Vec<String> = all
+                        .iter()
+                        .map(|p| crate::workspace::rel_display_for(p, &roots, multi).to_lowercase())
+                        .collect();
+                    (all, lower)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
-                this.all_files = Rc::new(all);
+                this.all_lower = Arc::new(lower);
+                this.all_files = Arc::new(all);
                 this.ext_scan(cx);
                 cx.notify();
             });
@@ -668,7 +705,7 @@ impl Workbench {
 
     pub(crate) fn set_tree_items(&mut self, cx: &mut Context<Self>) {
         let mut dirs = std::collections::HashSet::new();
-        let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
+        let mut items = files::to_items(&self.tree_nodes, &mut dirs, &self.expanded);
         crate::explorer::insert_pending_row(
             &mut items,
             self.pending.as_ref(),
@@ -733,38 +770,38 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        if read_off_thread(&path) {
+        if read_off_thread(&path) || self.wsl.is_some() {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
-                let bytes = cx
+                let res = cx
                     .background_spawn(async move {
-                        if let Some(t) = &wsl {
-                            if let Some(bytes) = remote_read(t, &p, core::MAX_FILE_BYTES) {
-                                return Ok(bytes);
-                            }
-                        }
-                        read_head(&p)
+                        let bytes = match &wsl {
+                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&p)),
+                            None => read_head(&p),
+                        }?;
+                        Ok(prepare_file(&p, bytes))
                     })
                     .await;
-                this.update_in(cx, |this, window, cx| this.finish_open_file(path, bytes, window, cx)).ok()
+                this.update_in(cx, |this, window, cx| this.finish_open_prepared(path, res, window, cx)).ok()
             })
             .detach();
             return;
         }
-        let bytes = read_head(&path);
-        self.finish_open_file(path, bytes, window, cx);
+        let res = read_head(&path).map(|bytes| prepare_file(&path, bytes));
+        self.finish_open_prepared(path, res, window, cx);
     }
 
     pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        let bytes = match &self.wsl {
+        let res = match &self.wsl {
             Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
             None => read_head(&path),
-        };
-        self.finish_open_file(path, bytes, window, cx);
+        }
+        .map(|bytes| prepare_file(&path, bytes));
+        self.finish_open_prepared(path, res, window, cx);
     }
 
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -784,12 +821,17 @@ impl Workbench {
     }
 
     fn finish_open_file(&mut self, path: PathBuf, bytes: Result<Vec<u8>, String>, window: &mut Window, cx: &mut Context<Self>) {
+        let prep = bytes.map(|b| prepare_file(&path, b));
+        self.finish_open_prepared(path, prep, window, cx);
+    }
+
+    fn finish_open_prepared(&mut self, path: PathBuf, prep: Result<PreparedFile, String>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
             return;
         }
-        let bytes = match bytes {
-            Ok(b) => b,
+        let mut prep = match prep {
+            Ok(p) => p,
             Err(e) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 self.status = if e.contains("os error 32") || e.contains("os error 33") {
@@ -802,49 +844,37 @@ impl Workbench {
                 return;
             }
         };
-        let view = crate::viewer::view(&path, &bytes);
-        let read_only = view.is_some();
-        let (text, crlf, mut lang, mut label, banner) = match view {
-            Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
-            None => {
-                let file = core::decode_text(&bytes);
-                let first = file.text.lines().next().unwrap_or("");
-                let (lang, label) = files::language_for(&path, first);
-                (file.text, file.crlf, lang, label, None)
-            }
-        };
-        let large = text.len() > LARGE_FILE_BYTES;
-        if large && !read_only {
-            lang = "text";
-            label = "Plain Text";
+        if prep.large && !prep.read_only {
             self.status = crate::i18n::tr("Large file: syntax colors are off").into();
+        } else if prep.complex && !prep.read_only {
+            self.status = crate::i18n::tr("Long lines detected: syntax colors and folding are off").into();
         }
-        let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(&path) };
-        let is_markdown = drawable == Some(true);
-        let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
-        let (mut file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
-            (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
-            (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
-            (true, false) => (text.clone(), text),
-            _ => (String::new(), text),
-        };
-        let diff = (crate::diff_view::is_diff(lang) && !large).then(|| crate::diff_view::parse(&text));
-        let long_lines = !read_only && core::dominated_by_long_lines(&text);
-        let file = core::FileText { text, crlf };
+        let is_markdown = prep.drawable == Some(true);
         let s = &self.settings;
-        let (tab, wrap, dots) = (s.tab_size, s.word_wrap || long_lines, s.show_whitespace);
+        let too_big_for_wrap = prep.text.len() > MAX_AUTO_WRAP_BYTES;
+        let (tab, wrap, dots) = (s.tab_size, !too_big_for_wrap && (s.word_wrap || prep.long_lines), s.show_whitespace);
         let opts = crate::settings::EditorOpts::of(s);
+        let lang = prep.lang;
+        let read_only = prep.read_only;
+        let complex = prep.complex;
+        let text = std::mem::take(&mut prep.text);
+        let diff = prep.is_diff.then(|| crate::diff_view::parse(&text));
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
                 .line_number(opts.line_numbers)
-                .indent_guides(!read_only)
+                .indent_guides(!read_only && !complex)
                 .show_whitespaces(dots && !read_only)
                 .tab_size(TabSize { tab_size: tab, hard_tabs: false })
                 .soft_wrap(wrap)
-                .default_value(file.text)
+                .default_value(text)
         });
-        editor.update(cx, |e, cx| opts.apply(e, window, cx));
+        editor.update(cx, |e, cx| {
+            opts.apply(e, window, cx);
+            if complex || read_only {
+                e.set_folding(false, window, cx);
+            }
+        });
         if read_only {
             editor.update(cx, |e, cx| e.set_readonly(true, cx));
         } else {
@@ -889,17 +919,17 @@ impl Workbench {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
             .into();
-        let banner = banner.map(SharedString::from);
+        let banner = prep.banner.map(SharedString::from);
         let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
         let lang_ui = crate::fluxdoc::view::ui_lang();
         let mut rest: Option<String> = None;
-        let flux = drawable.is_some().then(|| {
-            if file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
-                let v = crate::fluxdoc::view::FluxView::first_part(&file_text_for_flux, base.clone(), lang_ui);
-                rest = Some(std::mem::take(&mut file_text_for_flux));
+        let flux = prep.drawable.is_some().then(|| {
+            if prep.file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
+                let v = crate::fluxdoc::view::FluxView::first_part(&prep.file_text_for_flux, base.clone(), lang_ui);
+                rest = Some(std::mem::take(&mut prep.file_text_for_flux));
                 v
             } else {
-                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut file_text_for_flux), base.clone(), lang_ui)
+                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut prep.file_text_for_flux), base.clone(), lang_ui)
             }
         });
         if let Some(full) = rest {
@@ -922,10 +952,10 @@ impl Workbench {
             name,
             icon,
             lang,
-            label,
+            label: prep.label,
             read_only,
             banner,
-            crlf: file.crlf,
+            crlf: prep.crlf,
             editor,
             dirty: false,
             gen: 0,
@@ -933,9 +963,10 @@ impl Workbench {
             image: None,
             flux,
             flux_source: is_markdown,
-            flux_lazy,
+            flux_lazy: prep.flux_lazy,
             diff,
-            long_lines,
+            long_lines: prep.long_lines,
+            complex,
             wrap_override: None,
         });
         self.apply_problems_to(self.docs.len() - 1, cx);
@@ -973,6 +1004,7 @@ impl Workbench {
             flux_lazy: false,
             diff: None,
             long_lines: false,
+            complex: false,
             wrap_override: None,
         });
         self.activate(self.docs.len() - 1, window, cx);
@@ -1500,8 +1532,14 @@ impl Workbench {
         cx.notify();
     }
 
-    fn on_show_settings(&mut self, _: &ShowSettings, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_show_settings(&mut self, _: &ShowSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.settings_scroll.set_offset(point(px(0.), px(0.)));
+            self.settings_focus.focus(window, cx);
+        } else {
+            self.focus.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -2104,13 +2142,18 @@ impl Workbench {
                     .relative()
                     .cursor_pointer()
                     .when(active, |s| {
-                        s.bg(c(theme::BG_EDITOR)).child(
-                            div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT)).with_animation(
+                        let line = div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT));
+                        let el = if cx.reduce_motion() {
+                            line.into_any_element()
+                        } else {
+                            line.with_animation(
                                 SharedString::from(format!("tab-line-{}", d.path.display())),
                                 Animation::new(std::time::Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
                                 |el, t| el.left(relative(0.5 * (1. - t))).right(relative(0.5 * (1. - t))),
-                            ),
-                        )
+                            )
+                            .into_any_element()
+                        };
+                        s.bg(c(theme::BG_EDITOR)).child(el)
                     })
                     .when(!active, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
@@ -2258,6 +2301,7 @@ impl Workbench {
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
         }
+        let motion = !cx.reduce_motion();
         let backdrop = theme::has_backdrop() || crate::scene::active();
         let (had, mut gen) = self.wash.get();
         if had != self.active.is_some() {
@@ -2266,7 +2310,7 @@ impl Workbench {
         }
         let wash_layer = |fade_in: bool| {
             let layer = div().absolute().top_0().left_0().size_full().bg(theme::editor_wash());
-            if gen == 0 {
+            if gen == 0 || !motion {
                 return layer.when(!fade_in, |d| d.opacity(0.)).into_any_element();
             }
             layer
@@ -2338,7 +2382,7 @@ impl Workbench {
                                 ScrollTarget::Editor(self.docs[ix].editor.clone()),
                                 cx,
                             ));
-                        if self.switch_fast {
+                        if self.switch_fast || !motion {
                             v.child(el)
                         } else {
                             v.child(
@@ -2739,10 +2783,31 @@ impl Render for Workbench {
             self.sidebar_open.then_some(self.sidebar_width),
             (self.right_dock_on() && !self.agent_full).then_some(self.agent_width),
         );
+        let motion = !cx.reduce_motion();
+        let (was_panel, mut panel_gen) = self.panel_anim.get();
+        if was_panel != self.panel_open {
+            if self.panel_open {
+                panel_gen += 1;
+            }
+            self.panel_anim.set((self.panel_open, panel_gen));
+        }
         let editor_and_panel: AnyElement = if self.panel_open {
+            let panel_body: AnyElement = if panel_gen > 0 && motion {
+                div()
+                    .size_full()
+                    .child(self.render_panel(window, cx))
+                    .with_animation(
+                        SharedString::from(format!("panel-in-{panel_gen}")),
+                        Animation::new(std::time::Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.35 + 0.65 * t).mt(px((1. - t) * 8.)),
+                    )
+                    .into_any_element()
+            } else {
+                self.render_panel(window, cx).into_any_element()
+            };
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(clip(editor_view)))
-                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(self.render_panel(window, cx).into_any_element())))
+                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(panel_body)))
                 .into_any_element()
         } else {
             editor_view
@@ -2771,7 +2836,7 @@ impl Render for Workbench {
         }
         let side_column = |this: &Self, window: &mut Window, cx: &mut Context<Self>| -> AnyElement {
             let col = div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(this.render_side_bar(window, cx));
-            if side_gen <= 1 {
+            if side_gen <= 1 || !motion {
                 return col.into_any_element();
             }
             col.with_animation(
@@ -2787,8 +2852,15 @@ impl Render for Workbench {
             full_gen += 1;
             self.full_anim.set((full, full_gen));
         }
+        let (was_settings, mut settings_gen) = self.settings_anim.get();
+        if was_settings != self.settings_open {
+            if self.settings_open {
+                settings_gen += 1;
+            }
+            self.settings_anim.set((self.settings_open, settings_gen));
+        }
         let fade = move |el: Div, key: &'static str| -> AnyElement {
-            if full_gen == 0 {
+            if full_gen == 0 || !motion {
                 return el.into_any_element();
             }
             el.with_animation(
@@ -2799,7 +2871,18 @@ impl Render for Workbench {
             .into_any_element()
         };
         let center: AnyElement = if self.settings_open {
-            div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx)).into_any_element()
+            let box_el = div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx));
+            if settings_gen > 0 && motion {
+                box_el
+                    .with_animation(
+                        SharedString::from(format!("settings-open-{settings_gen}")),
+                        Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.25 + 0.75 * t),
+                    )
+                    .into_any_element()
+            } else {
+                box_el.into_any_element()
+            }
         } else if full {
             let agent = fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_full(window, cx)), "full-in");
             if self.sidebar_open {
@@ -2819,19 +2902,36 @@ impl Render for Workbench {
         } else {
             fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in")
         };
-        let center: AnyElement = if full || self.settings_open {
+        let right_on = self.right_dock_on() && !full && !self.settings_open;
+        let (was_right, mut right_gen) = self.right_anim.get();
+        if was_right != right_on {
+            if right_on {
+                right_gen += 1;
+            }
+            self.right_anim.set((right_on, right_gen));
+        }
+        let center: AnyElement = if !right_on {
             center
-        } else if self.right_dock_on() {
+        } else {
+            let dock = div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx));
+            let dock: AnyElement = if right_gen > 1 && motion {
+                dock.with_animation(
+                    SharedString::from(format!("right-in-{right_gen}")),
+                    Animation::new(std::time::Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| d.w(px((agent_w * t).max(1.))).opacity(0.35 + 0.65 * t),
+                )
+                .into_any_element()
+            } else {
+                dock.into_any_element()
+            };
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
                 .child(handle("agent-resize", 2, self, cx))
-                .child(div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx)))
+                .child(dock)
                 .into_any_element()
-        } else {
-            center
         };
         let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(center);
         let backdrop = self.settings.background().map(|p| {
@@ -3004,6 +3104,70 @@ fn selection_guard() -> impl IntoElement {
     .size(px(0.))
 }
 
+struct PreparedFile {
+    text: String,
+    crlf: bool,
+    lang: &'static str,
+    label: &'static str,
+    banner: Option<String>,
+    read_only: bool,
+    large: bool,
+    complex: bool,
+    long_lines: bool,
+    file_text_for_flux: String,
+    drawable: Option<bool>,
+    flux_lazy: bool,
+    is_diff: bool,
+}
+
+fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
+    let view = crate::viewer::view(path, &bytes);
+    let read_only = view.is_some();
+    let (text, crlf, mut lang, mut label, banner) = match view {
+        Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
+        None => {
+            let file = core::decode_text(&bytes);
+            let first = file.text.lines().next().unwrap_or("");
+            let (lang, label) = files::language_for(path, first);
+            (file.text, file.crlf, lang, label, None)
+        }
+    };
+    let stats = crate::accel::scan_file_stats(text.as_bytes(), 300);
+    let large = text.len() > LARGE_FILE_BYTES;
+    let very_complex = !read_only && stats.max_line > MAX_COMPLEX_LINE_BYTES;
+    let complex = !read_only && (large || very_complex);
+    if complex {
+        lang = "text";
+        label = "Plain Text";
+    }
+    let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(path) };
+    let is_markdown = drawable == Some(true);
+    let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
+    let (file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
+        (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
+        (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
+        (true, false) => (text.clone(), text),
+        _ => (String::new(), text),
+    };
+    let is_diff = crate::diff_view::is_diff(lang) && !complex;
+    let long_lines = !read_only && text.len() <= MAX_AUTO_WRAP_BYTES && stats.dominated_by_long_lines();
+    PreparedFile {
+        text,
+        crlf,
+        lang,
+        label,
+        banner,
+        read_only,
+        large,
+        complex,
+        long_lines,
+        file_text_for_flux,
+        drawable,
+        flux_lazy,
+        is_diff,
+    }
+}
+
 fn read_off_thread(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
 }
@@ -3102,6 +3266,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>, String> {
 impl Workbench {
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
+        self.settings_search.update(cx, |s, cx| s.set_placeholder(tr("Search settings…"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
@@ -3198,6 +3363,12 @@ impl Workbench {
             None => target.offset(cx),
         };
         let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        if cx.reduce_motion() {
+            self.smooth = None;
+            target.set(to, cx);
+            cx.notify();
+            return;
+        }
         let bottom = match &target {
             ScrollTarget::Handle(_, h) => d.y < px(0.) && to.y <= -h.max_offset().y + px(1.),
             ScrollTarget::Editor(_) => false,
@@ -3293,7 +3464,7 @@ impl Workbench {
                     .text_color(c(theme::FG_DIM))
                     .child("Ctrl+L"),
             );
-        if !teach {
+        if !teach || cx.reduce_motion() {
             return chip.into_any_element();
         }
         let accent = c(theme::ACCENT);

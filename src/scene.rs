@@ -137,7 +137,7 @@ pub struct Backdrop {
     idle: bool,
 }
 
-const FRAME: Duration = Duration::from_millis(42);
+const FRAME: Duration = Duration::from_millis(16);
 const IDLE_FRAME: Duration = Duration::from_millis(400);
 
 impl Backdrop {
@@ -172,7 +172,7 @@ impl Render for Backdrop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.idle = !window.is_window_active();
         let scene = current();
-        let animate = ANIMATE.load(Ordering::Relaxed);
+        let animate = ANIMATE.load(Ordering::Relaxed) && !cx.reduce_motion();
         if scene.is_some() && animate {
             self.tick(cx);
         }

@@ -4,6 +4,7 @@
 #[macro_use]
 mod i18n;
 mod i18n_id;
+mod accel;
 mod acp;
 mod boot;
 mod browser;

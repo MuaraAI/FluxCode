@@ -22,6 +22,7 @@ fn main() {
         _ => utc_now(),
     };
     println!("cargo:rustc-env=FLUXCODE_BUILD={build}");
+    compile_zig_accel();
     release_builds(&build);
     pack_languages();
 
@@ -63,6 +64,80 @@ END
     let rc_path = out.join("fluxcode.rc");
     std::fs::write(&rc_path, rc).expect("write rc");
     embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional().expect("embed resources");
+}
+
+fn zig_target(rust_target: &str) -> Option<&'static str> {
+    Some(match rust_target {
+        "x86_64-pc-windows-gnu" => "x86_64-windows-gnu",
+        "x86_64-pc-windows-msvc" => "x86_64-windows-msvc",
+        "aarch64-pc-windows-msvc" => "aarch64-windows-msvc",
+        "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu",
+        "aarch64-unknown-linux-gnu" => "aarch64-linux-gnu",
+        "x86_64-apple-darwin" => "x86_64-macos",
+        "aarch64-apple-darwin" => "aarch64-macos",
+        _ => return None,
+    })
+}
+
+fn find_zig() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("ZIG").filter(|v| !v.is_empty()) {
+        return Some(std::path::PathBuf::from(p));
+    }
+    if std::process::Command::new("zig").arg("version").output().is_ok_and(|o| o.status.success()) {
+        return Some(std::path::PathBuf::from("zig"));
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let winget_zig = std::path::PathBuf::from(local).join("Microsoft/WinGet/Links/zig.exe");
+        if winget_zig.is_file() {
+            return Some(winget_zig);
+        }
+    }
+    None
+}
+
+fn compile_zig_accel() {
+    println!("cargo::rustc-check-cfg=cfg(flux_zig)");
+    println!("cargo:rerun-if-changed=zig/src/flux_accel.zig");
+    println!("cargo:rerun-if-env-changed=FLUXCODE_NO_ZIG");
+    println!("cargo:rerun-if-env-changed=ZIG");
+
+    if std::env::var("FLUXCODE_NO_ZIG").as_deref() == Ok("1") {
+        return;
+    }
+    let Some(zig) = find_zig() else { return };
+    let rust_target = std::env::var("TARGET").unwrap_or_default();
+    let Some(ztarget) = zig_target(&rust_target) else { return };
+
+    let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let src = manifest.join("zig/src/flux_accel.zig");
+    if !src.is_file() {
+        return;
+    }
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let lib_name = if rust_target.contains("windows-msvc") { "flux_accel.lib" } else { "libflux_accel.a" };
+    let out_lib = out.join(lib_name);
+
+    let run = |opt_args: &[&str]| -> bool {
+        let mut cmd = std::process::Command::new(&zig);
+        cmd.current_dir(&out)
+            .arg("build-lib")
+            .arg(&src)
+            .arg("-static")
+            .args(opt_args)
+            .args(["-fsingle-threaded", "-fno-stack-check", "-target", ztarget])
+            .arg(format!("-femit-bin={}", out_lib.display()));
+        if !rust_target.contains("windows") {
+            cmd.arg("-fPIC");
+        }
+        cmd.output().is_ok_and(|o| o.status.success()) && out_lib.is_file()
+    };
+
+    if run(&["-O", "fast"]) || run(&["-OReleaseFast"]) {
+        println!("cargo:rustc-link-search=native={}", out.display());
+        println!("cargo:rustc-link-lib=static=flux_accel");
+        println!("cargo:rustc-cfg=flux_zig");
+    }
 }
 
 fn release_builds(this_build: &str) {

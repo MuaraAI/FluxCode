@@ -8,9 +8,24 @@ pub(crate) const SKIP_DIRS: &[&str] = &[
     ".cache", ".local", ".cargo", ".rustup", ".npm", ".nvm", ".bun", ".pnpm-store", ".yarn",
     ".deno", ".volta", ".asdf", ".android", ".gradle", ".m2", ".vscode-server", ".ollama",
     ".oh-my-zsh", ".dotnet", ".nuget", ".conda", ".pyenv", ".sdkman", ".gem", ".pub-cache",
-    ".stack", ".ghcup", ".cabal", ".terraform.d",
+    ".stack", ".ghcup", ".cabal", ".terraform.d", ".svelte-kit", ".nuxt", ".output", ".turbo",
+    ".parcel-cache", ".vite", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "coverage",
+    "__snapshots__", "Pods", "DerivedData", ".zig-cache", "zig-out",
 ];
-pub(crate) const MAX_ENTRIES: usize = 20_000;
+pub(crate) const MAX_ENTRIES: usize = 150_000;
+
+fn cmp_name(a: &str, b: &str) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        for (x, y) in a.bytes().zip(b.bytes()) {
+            let ord = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        return a.len().cmp(&b.len());
+    }
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
 
 #[derive(Clone)]
 pub struct Node {
@@ -27,23 +42,42 @@ pub fn is_image(path: &Path) -> bool {
     )
 }
 
-pub fn flatten(nodes: &[Node], out: &mut Vec<String>) {
-    for n in nodes {
-        match &n.children {
-            Some(ch) => flatten(ch, out),
-            None => out.push(n.id.clone()),
+pub fn scan_paths(root: &Path, max: usize) -> Vec<String> {
+    if let Some(mut git) = crate::core::git_files(root) {
+        git.truncate(max);
+        return git.into_iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    }
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
+    while let Some(dir) = queue.pop_front() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                let name = e.file_name();
+                if let Some(s) = name.to_str() {
+                    if SKIP_DIRS.iter().any(|skip| s.eq_ignore_ascii_case(skip)) {
+                        continue;
+                    }
+                }
+                queue.push_back(e.path());
+            } else if ft.is_file() {
+                out.push(e.path().to_string_lossy().into_owned());
+            }
         }
     }
-}
-
-pub fn scan(root: &Path) -> Vec<Node> {
-    let mut budget = MAX_ENTRIES;
-    walk(root, &mut budget)
+    out
 }
 
 pub fn nodes_from_remote(dir: &Path, entries: Vec<(String, bool)>) -> Vec<Node> {
     let mut entries = entries;
-    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| cmp_name(&a.0, &b.0)));
     entries
         .into_iter()
         .map(|(name, is_dir)| {
@@ -88,7 +122,7 @@ fn list(dir: &Path) -> Vec<Node> {
             (is_dir, e.file_name().to_string_lossy().into_owned(), p)
         })
         .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| cmp_name(&a.1, &b.1)));
     entries
         .into_iter()
         .map(|(is_dir, name, path)| {
@@ -102,26 +136,13 @@ fn list(dir: &Path) -> Vec<Node> {
         .collect()
 }
 
-pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
-    let mut budget = MAX_ENTRIES;
-    roots
-        .iter()
-        .map(|r| Node {
-            id: r.to_string_lossy().into_owned(),
-            name: r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| r.display().to_string()),
-            children: Some(walk(r, &mut budget)),
-            loaded: true,
-        })
-        .collect()
-}
-
-pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
+pub fn to_items(nodes: &[Node], dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
     nodes
-        .into_iter()
-        .map(|n| match n.children {
+        .iter()
+        .map(|n| match &n.children {
             Some(ch) => {
                 dirs.insert(n.id.clone());
-                let mut item = TreeItem::new(n.id.clone(), n.name);
+                let mut item = TreeItem::new(n.id.clone(), n.name.clone());
                 item = if n.loaded {
                     item.children(to_items(ch, dirs, expanded))
                 } else {
@@ -132,11 +153,12 @@ pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, 
                 }
                 item
             }
-            None => TreeItem::new(n.id, n.name),
+            None => TreeItem::new(n.id.clone(), n.name.clone()),
         })
         .collect()
 }
 
+#[cfg(test)]
 fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
@@ -147,7 +169,7 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
             (is_dir, e.file_name().to_string_lossy().into_owned(), p)
         })
         .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| cmp_name(&a.1, &b.1)));
 
     let mut out = Vec::with_capacity(entries.len());
     let mut dirs: Vec<(usize, String, std::path::PathBuf)> = Vec::new();
@@ -547,5 +569,21 @@ mod tests {
         assert_eq!(l("deploy", "#!/bin/bash -e"), "Shell");
         assert_eq!(l("LOCK", ""), "Plain Text");
         assert_eq!(l("notes.txt", ""), "Plain Text");
+    }
+
+    #[test]
+    fn cmp_name_and_scan_paths_skip_build_dirs() {
+        assert_eq!(super::cmp_name("Alpha.rs", "beta.rs"), std::cmp::Ordering::Less);
+        assert_eq!(super::cmp_name("file", "file.rs"), std::cmp::Ordering::Less);
+        let root = std::env::temp_dir().join(format!("fluxcode-scanpaths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("src/main.rs"), b"fn main() {}").unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), b"x").unwrap();
+        let got = super::scan_paths(&root, 100);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].ends_with("main.rs"), "{got:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

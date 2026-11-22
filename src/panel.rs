@@ -7,12 +7,63 @@ use crate::workbench::*;
 use gpui_kit::component::{
     h_flex,
     highlighter::{Diagnostic, DiagnosticSeverity},
-    input::{Input, Position},
-    v_flex, Icon, IconName, Sizable,
+    input::{EditorState, Input, Position, Rope},
+    v_flex, Icon, IconName, RopeExt, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
+    if mine.is_empty() {
+        return Vec::new();
+    }
+    let mut rows: std::collections::HashMap<u32, String> = mine.iter().map(|p| (p.line.saturating_sub(1), String::new())).collect();
+    let max_row = rows.keys().copied().max().unwrap_or(0);
+    for (idx, line) in rope.iter_lines().enumerate() {
+        let r = idx as u32;
+        if let Some(slot) = rows.get_mut(&r) {
+            *slot = line.to_string();
+        }
+        if r >= max_row {
+            break;
+        }
+    }
+    mine.iter()
+        .map(|p| {
+            let row = p.line.saturating_sub(1);
+            let src = rows.get(&row).map(|s| s.trim_end_matches(['\r', '\n'])).unwrap_or("");
+            let indent = (src.len() - src.trim_start().len()) as u32;
+            let len = src.trim_end().chars().count() as u32;
+            let (a, b) = match p.caret {
+                Some((s, e)) if (indent + e as u32) <= len.max(1) && e > s => (indent + s as u32, indent + e as u32),
+                _ => (indent, len.max(indent + 1)),
+            };
+            Diagnostic::new(Position::new(row, a)..Position::new(row, b), p.message.clone())
+                .with_severity(DiagnosticSeverity::Error)
+                .with_source("python")
+        })
+        .collect()
+}
+
+fn write_diagnostics(ed: &mut EditorState, mine_diags: Vec<Diagnostic>, bracket: Option<(u32, u32, String)>, cx: &mut Context<EditorState>) {
+    let Some(set) = ed.diagnostics_mut() else { return };
+    if set.is_empty() && mine_diags.is_empty() && bracket.is_none() {
+        return;
+    }
+    set.clear();
+    for diag in mine_diags {
+        set.push(diag);
+    }
+    if let Some((row, col, msg)) = bracket {
+        set.push(
+            Diagnostic::new(Position::new(row, col)..Position::new(row, col + 1), msg)
+                .with_severity(DiagnosticSeverity::Error)
+                .with_source("FluxCode"),
+        );
+    }
+    cx.notify();
+}
 
 pub(crate) struct RunInfo {
     pub started: Instant,
@@ -505,41 +556,55 @@ impl Workbench {
     }
 
     pub(crate) fn apply_problems_to(&self, ix: usize, cx: &mut Context<Self>) {
+        const MAX_SYNC_BRACKET_BYTES: usize = 64 * 1024;
+        const MAX_BRACKET_BYTES: usize = 1024 * 1024;
+
         let Some(d) = self.docs.get(ix) else { return };
         let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
         let lang = (!d.read_only).then_some(d.lang);
+        let doc_path = d.path.clone();
+        let doc_gen = d.gen;
+        let rope_len = d.editor.read(cx).text().len();
+
+        if rope_len <= MAX_SYNC_BRACKET_BYTES {
+            d.editor.update(cx, |ed, cx| {
+                let bracket = lang.and_then(|l| crate::brackets::first_problem(&ed.value(), l));
+                let mine_diags = build_mine_diagnostics(&mine, ed.text());
+                write_diagnostics(ed, mine_diags, bracket, cx);
+            });
+            return;
+        }
+
+        let mut async_rope = None;
         d.editor.update(cx, |ed, cx| {
-            let text = ed.value();
-            let bracket = lang.and_then(|l| crate::brackets::first_problem(&text, l));
-            let Some(set) = ed.diagnostics_mut() else { return };
-            if set.is_empty() && mine.is_empty() && bracket.is_none() {
-                return;
+            let mine_diags = build_mine_diagnostics(&mine, ed.text());
+            if lang.is_some() && rope_len <= MAX_BRACKET_BYTES {
+                async_rope = Some(ed.text().clone());
             }
-            set.clear();
-            for p in &mine {
-                let row = p.line.saturating_sub(1);
-                let src = text.split('\n').nth(row as usize).unwrap_or("").trim_end_matches('\r');
-                let indent = (src.len() - src.trim_start().len()) as u32;
-                let len = src.trim_end().chars().count() as u32;
-                let (a, b) = match p.caret {
-                    Some((s, e)) if (indent + e as u32) <= len.max(1) && e > s => (indent + s as u32, indent + e as u32),
-                    _ => (indent, len.max(indent + 1)),
-                };
-                set.push(
-                    Diagnostic::new(Position::new(row, a)..Position::new(row, b), p.message.clone())
-                        .with_severity(DiagnosticSeverity::Error)
-                        .with_source("python"),
-                );
-            }
-            if let Some((row, col, msg)) = bracket {
-                set.push(
-                    Diagnostic::new(Position::new(row, col)..Position::new(row, col + 1), msg)
-                        .with_severity(DiagnosticSeverity::Error)
-                        .with_source("FluxCode"),
-                );
-            }
-            cx.notify();
+            write_diagnostics(ed, mine_diags, None, cx);
         });
+
+        if let (Some(l), Some(rope)) = (lang, async_rope) {
+            cx.spawn(async move |this, cx| {
+                let bracket = cx
+                    .background_spawn(async move {
+                        let text = rope.to_string();
+                        crate::brackets::first_problem(&text, l)
+                    })
+                    .await;
+                _ = this.update(cx, |this, cx| {
+                    let Some(d) = this.docs.iter().find(|d| same_path(&d.path, &doc_path) && d.gen == doc_gen) else {
+                        return;
+                    };
+                    let mine: Vec<Problem> = this.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
+                    d.editor.update(cx, |ed, cx| {
+                        let mine_diags = build_mine_diagnostics(&mine, ed.text());
+                        write_diagnostics(ed, mine_diags, bracket, cx);
+                    });
+                });
+            })
+            .detach();
+        }
     }
 
     pub(crate) fn open_location(&mut self, path: PathBuf, line: u32, col: u32, window: &mut Window, cx: &mut Context<Self>) {

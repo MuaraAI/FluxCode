@@ -31,7 +31,7 @@ impl Workbench {
             Some(Role::Host { server, .. }) => col.child(self.invite_card(cx)).child(row([self.people_card(), self.ways_card(server.port, cx)], false)).child(self.activity_card(cx)),
             Some(Role::Guest { addr, .. }) => col.child(self.connection_card(addr)).child(row([self.files_card(cx), self.people_card()], false)).child(self.activity_card(cx)),
         };
-        div()
+        let page_el = div()
             .id("collab-page")
             .size_full()
             .min_w_0()
@@ -39,8 +39,18 @@ impl Workbench {
             .overflow_y_scroll()
             .bg(theme::editor_wash())
             .text_sm()
-            .child(h_flex().w_full().justify_center().child(col))
-            .into_any_element()
+            .child(h_flex().w_full().justify_center().child(col));
+        if cx.reduce_motion() {
+            page_el.into_any_element()
+        } else {
+            page_el
+                .with_animation(
+                    "collab-page-in",
+                    Animation::new(std::time::Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                    |el, t| el.opacity(t),
+                )
+                .into_any_element()
+        }
     }
 
     fn page_header(&self, cx: &mut Context<Self>) -> AnyElement {

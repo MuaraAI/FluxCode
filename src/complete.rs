@@ -27,9 +27,11 @@ struct Copilot {
     copilot: crate::copilot::Copilot,
 }
 
+const MAX_COMPLETION_BYTES: usize = 512 * 1024;
+
 impl CompletionProvider for Copilot {
     fn inline_completion(&self, rope: &Rope, offset: usize, trigger: InlineCompletionContext, _: &mut Window, cx: &mut App) -> Task<Result<InlineCompletionResponse>> {
-        if !self.copilot.enabled() {
+        if !self.copilot.enabled() || rope.len() > MAX_COMPLETION_BYTES {
             return Task::ready(Ok(InlineCompletionResponse::Array(Vec::new())));
         }
         let copilot = self.copilot.clone();

@@ -16,23 +16,26 @@ fn name_of(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
 }
 
+pub(crate) fn rel_display_for(full: &str, roots: &[PathBuf], multi: bool) -> String {
+    for r in roots {
+        let rs = r.to_string_lossy();
+        if let Some(rest) = full.strip_prefix(rs.as_ref()) {
+            if rest.is_empty() || rest.starts_with(['\\', '/']) {
+                let rest = rest.trim_start_matches(['\\', '/']);
+                return if multi { format!("{}\\{rest}", name_of(r)) } else { rest.to_string() };
+            }
+        }
+    }
+    full.to_string()
+}
+
 impl Workbench {
     pub(crate) fn roots(&self) -> Vec<PathBuf> {
         self.root.iter().cloned().chain(self.workspace.extra.iter().cloned()).collect()
     }
 
     pub(crate) fn rel_display(&self, full: &str) -> String {
-        let multi = !self.workspace.extra.is_empty();
-        for r in self.roots() {
-            let rs = r.to_string_lossy();
-            if let Some(rest) = full.strip_prefix(rs.as_ref()) {
-                if rest.is_empty() || rest.starts_with(['\\', '/']) {
-                    let rest = rest.trim_start_matches(['\\', '/']);
-                    return if multi { format!("{}\\{rest}", name_of(&r)) } else { rest.to_string() };
-                }
-            }
-        }
-        full.to_string()
+        rel_display_for(full, &self.roots(), !self.workspace.extra.is_empty())
     }
 
     pub(crate) fn on_drop_paths(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {

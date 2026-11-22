@@ -242,7 +242,7 @@ impl Workbench {
                 )
                 .child(div().px_4().py_3().text_sm().text_color(c(theme::FG)).child(TextView::markdown(("wn-md", i), r.body(id).to_string())))
         });
-        v_flex()
+        let page_el = v_flex()
             .id("whats-new")
             .key_context("WhatsNew")
             .size_full()
@@ -271,8 +271,18 @@ impl Workbench {
             )
             .when(page.releases.is_empty() && !page.loading && page.error.is_none(), |v| {
                 v.child(div().w_full().max_w(theme::u(760.)).pt_6().text_sm().text_color(c(theme::FG_DIM)).child(if page.update.is_some() { tr("The new build has no notes beyond the list above.") } else { tr("No notes for this build.") }))
-            })
-            .into_any_element()
+            });
+        if cx.reduce_motion() {
+            page_el.into_any_element()
+        } else {
+            page_el
+                .with_animation(
+                    "whatsnew-in",
+                    Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+                    |el, t| el.opacity(0.25 + 0.75 * t),
+                )
+                .into_any_element()
+        }
     }
 }
 
