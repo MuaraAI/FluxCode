@@ -544,6 +544,20 @@ list, how to run them locally and what each warning means are in
 [CONTRIBUTING.md](CONTRIBUTING.md). What changed in each build:
 [CHANGELOG.md](CHANGELOG.md).
 
+## Roadmap
+
+FluxCode is under active, continuous development with hard CI budgets on binary size,
+startup speed, and memory. Here is where we are headed (full checklist and technical scope
+in [ROADMAP.md](ROADMAP.md)):
+
+| Phase | Target | Focus |
+| --- | --- | --- |
+| **Foundation** | Shipped (2026) | Single-process Rust + GPUI editor (~50 ms startup, 1.4 MB idle RAM), ACP agent workspace, Copilot ghost text, Git, Live Share, WSL2 helper, Markdown/`.flux` preview with zoom & annotations |
+| **Phase 1: Hardening** | Late 2026 - Q1 2027 | Workspace trust model, SHA-256 verified self-updates, OS credential store for tokens, ACP path containment, dirty-tab close guards |
+| **Phase 2: Language Intelligence** | Q1 - Q2 2027 | Opt-in lightweight LSP client (`rust-analyzer`, `pyright`, `tsserver`, `gopls`), inline diagnostics & go-to-definition, multi-cursor & split editors, notarized macOS builds |
+| **Phase 3: FluxCode for Android** | 2027 | Native `aarch64-linux-android` Vulkan build (zero WebView), touch & Android IME ergonomics, remote desktop/SSH + ACP agent offload, signed APK / F-Droid / Play Store release ([#117](https://github.com/MuaraAI/FluxCode/discussions/117)) |
+| **Phase 4: Extensibility & v1.0** | Late 2027+ | Sandboxed WASM extensions, first-class Remote SSH workspaces, semantic `v1.0` release channels |
+
 ## The icon
 
 The mark is a meander: one unbroken line that turns only at right angles and never

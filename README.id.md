@@ -569,6 +569,20 @@ pull request dulu. Daftar lengkapnya, cara menjalankannya di lokal, dan arti tia
 peringatan ada di [CONTRIBUTING.md](CONTRIBUTING.md). Apa yang berubah di tiap build:
 [CHANGELOG.md](CHANGELOG.md).
 
+## Roadmap
+
+FluxCode dikembangkan secara aktif dan berkelanjutan dengan batas CI yang ketat pada ukuran
+binary, kecepatan startup, dan pemakaian memori. Berikut arah pengembangan kami (daftar
+lengkap dan detail teknisnya ada di [ROADMAP.md](ROADMAP.md)):
+
+| Fase | Target | Fokus |
+| --- | --- | --- |
+| **Fondasi** | Rilis (2026) | Editor satu proses Rust + GPUI (~50 ms startup, 1,4 MB RAM idle), workspace agent ACP, inline Copilot, Git, Live Share, helper WSL2, pratinjau Markdown/`.flux` dengan zoom & corat-coret |
+| **Fase 1: Pengamanan** | Akhir 2026 - Q1 2027 | Model workspace trust, verifikasi SHA-256 untuk auto-update, penyimpanan token di credential store OS, isolasi path ACP, pengaman tab belum tersimpan |
+| **Fase 2: LSP & Editor Pro** | Q1 - Q2 2027 | Klien LSP ringan opt-in (`rust-analyzer`, `pyright`, `tsserver`, `gopls`), diagnostik & go-to-definition, multi-cursor & split editor, notarisasi macOS |
+| **Fase 3: FluxCode untuk Android** | 2027 | Build native `aarch64-linux-android` Vulkan (tanpa WebView), ergonomi layar sentuh & IME Android, koneksi remote desktop/SSH + AI agent ACP, rilis APK / F-Droid / Play Store ([#117](https://github.com/MuaraAI/FluxCode/discussions/117)) |
+| **Fase 4: Ekstensibilitas & v1.0** | Akhir 2027+ | Extension WASM ter-sandbox, workspace Remote SSH penuh, rilis versi stabil `v1.0` |
+
 ## Ikonnya
 
 <img src="assets/icon.png" width="96" align="right" alt="The FluxCode icon: a square meander, one ivory hook and one ochre hook locked together, on a near-black tile.">
