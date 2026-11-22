@@ -2,7 +2,7 @@
 
 # FluxCode
 
-**English** · [Bahasa Indonesia](README.id.md)
+**English** · [Bahasa Indonesia](README.id.md) · [Roadmap (2026-2027)](ROADMAP.md) · [Discussions](https://github.com/MuaraAI/FluxCode/discussions)
 
 FluxCode is a native, GPU-rendered code editor for Windows, macOS, and Linux written in
 Rust. It ships as a single 16 MB binary with an integrated AI agent workspace, a
@@ -12,9 +12,13 @@ process ([benchmark](#benchmark)), and sends zero telemetry.
 
 Built at [MuaraAI](https://github.com/MuaraAI) by engineers with deep Rust systems
 experience and over six years of building and running production SaaS products. Open source
-under GPL-3.0-or-later and actively developed in the open.
+under GPL-3.0-or-later and actively developed in the open, with continuous builds from
+`main` and a public [2026-2027 Roadmap](ROADMAP.md) (security hardening, opt-in LSP, and
+native Android in 2027).
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
+[![Last commit](https://img.shields.io/github/last-commit/MuaraAI/FluxCode?label=last%20commit)](https://github.com/MuaraAI/FluxCode/commits/main)
+[![Build](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 <a href="assets/screenshots/agent-workspace.png"><img src="assets/screenshots/hero.jpg" width="100%" alt="A 16 MB code editor with AI agents built in: the title over a dusk sky, and below it FluxCode with the agent filling the window, rising out of a bank of clouds. Saved chats on the left, the conversation in the middle, the files it changed on the right."></a>

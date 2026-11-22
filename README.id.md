@@ -2,7 +2,7 @@
 
 # FluxCode
 
-[English](README.md) · **Bahasa Indonesia**
+[English](README.md) · **Bahasa Indonesia** · [Roadmap (2026-2027)](ROADMAP.md) · [Diskusi](https://github.com/MuaraAI/FluxCode/discussions)
 
 FluxCode adalah editor kode native yang dirender GPU untuk Windows, macOS, dan Linux,
 ditulis dalam Rust. Dikemas sebagai satu binary 16 MB dengan workspace agent AI terintegrasi,
@@ -13,9 +13,12 @@ saat idle dalam satu proses ([benchmark](#benchmark)), dan tanpa telemetri sama 
 Dibangun di [MuaraAI](https://github.com/MuaraAI) oleh tim engineer berpengalaman di
 sistem Rust yang telah membangun dan menjalankan produk SaaS produksi sejak 6 tahun lalu
 hingga sekarang. Open source di bawah lisensi GPL-3.0-or-later dan terus dikembangkan
-secara terbuka.
+secara aktif lewat rilis berkelanjutan dari `main` serta [Roadmap 2026-2027](ROADMAP.md)
+(pengamanan inti, LSP ringan, hingga rilis native Android di 2027).
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
+[![Last commit](https://img.shields.io/github/last-commit/MuaraAI/FluxCode?label=last%20commit)](https://github.com/MuaraAI/FluxCode/commits/main)
+[![Build](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 <a href="assets/screenshots/agent-workspace.png"><img src="assets/screenshots/hero.id.jpg" width="100%" alt="Editor kode 16 MB dengan agen AI di dalamnya: judul di atas langit senja, dan di bawahnya FluxCode dengan agen memenuhi jendela, muncul dari balik awan. Daftar chat di kiri, percakapan di tengah, file yang diubahnya di kanan."></a>

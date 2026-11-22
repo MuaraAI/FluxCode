@@ -12,9 +12,9 @@
 # FluxCode
 
 @en
-**English** · [Bahasa Indonesia](README.id.md)
+**English** · [Bahasa Indonesia](README.id.md) · [Roadmap (2026-2027)](ROADMAP.md) · [Discussions](https://github.com/MuaraAI/FluxCode/discussions)
 @id
-[English](README.md) · **Bahasa Indonesia**
+[English](README.md) · **Bahasa Indonesia** · [Roadmap (2026-2027)](ROADMAP.md) · [Diskusi](https://github.com/MuaraAI/FluxCode/discussions)
 
 @en
 FluxCode is a native, GPU-rendered code editor for Windows, macOS, and Linux written in
@@ -25,7 +25,9 @@ process ([benchmark](#benchmark)), and sends zero telemetry.
 
 Built at [MuaraAI](https://github.com/MuaraAI) by engineers with deep Rust systems
 experience and over six years of building and running production SaaS products. Open source
-under GPL-3.0-or-later and actively developed in the open.
+under GPL-3.0-or-later and actively developed in the open, with continuous builds from
+`main` and a public [2026-2027 Roadmap](ROADMAP.md) (security hardening, opt-in LSP, and
+native Android in 2027).
 @id
 FluxCode adalah editor kode native yang dirender GPU untuk Windows, macOS, dan Linux,
 ditulis dalam Rust. Dikemas sebagai satu binary 16 MB dengan workspace agent AI terintegrasi,
@@ -36,10 +38,13 @@ saat idle dalam satu proses ([benchmark](#benchmark)), dan tanpa telemetri sama 
 Dibangun di [MuaraAI](https://github.com/MuaraAI) oleh tim engineer berpengalaman di
 sistem Rust yang telah membangun dan menjalankan produk SaaS produksi sejak 6 tahun lalu
 hingga sekarang. Open source di bawah lisensi GPL-3.0-or-later dan terus dikembangkan
-secara terbuka.
+secara aktif lewat rilis berkelanjutan dari `main` serta [Roadmap 2026-2027](ROADMAP.md)
+(pengamanan inti, LSP ringan, hingga rilis native Android di 2027).
 
 @all
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
+[![Last commit](https://img.shields.io/github/last-commit/MuaraAI/FluxCode?label=last%20commit)](https://github.com/MuaraAI/FluxCode/commits/main)
+[![Build](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MuaraAI/FluxCode/actions/workflows/build.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 @en
