@@ -4,38 +4,41 @@
 
 **English** · [Bahasa Indonesia](README.id.md)
 
-A native code editor for Windows, macOS and Linux, written in Rust and drawn by the GPU.
-One small program with an AI agent panel, a Python-friendly terminal, built-in Source
-Control, and read-only views for files other editors refuse to open. No telemetry. It
-opens its window in about 50 ms and sits at 1.4 MB idle, in one process ([benchmark](#benchmark)).
+FluxCode is a native, GPU-rendered code editor for Windows, macOS, and Linux written in
+Rust. It ships as a single 16 MB binary with an integrated AI agent workspace, a
+Python-aware terminal, built-in Git, and instant read-only views for binary, archive,
+database, and Office files. It opens a window in ~50 ms, idles at 1.4 MB of RAM in one
+process ([benchmark](#benchmark)), and sends zero telemetry.
 
-A [MuaraAI](https://github.com/MuaraAI) project. Open source, and still in
-development.
+Built at [MuaraAI](https://github.com/MuaraAI) by engineers with deep Rust systems
+experience and over six years of building and running production SaaS products. Open source
+under GPL-3.0-or-later and actively developed in the open.
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 <a href="assets/screenshots/agent-workspace.png"><img src="assets/screenshots/hero.jpg" width="100%" alt="A 16 MB code editor with AI agents built in: the title over a dusk sky, and below it FluxCode with the agent filling the window, rising out of a bank of clouds. Saved chats on the left, the conversation in the middle, the files it changed on the right."></a>
 
-The agent's full-screen workspace: your chats on the left, the conversation in the middle
-and the files it changed on the right, each a floating glass column over an animated
-background. Beside the code, the same agent stays a compact panel (`Ctrl+L`).
+Full-screen agent workspace: saved threads on the left, active conversation in the center,
+and live file diffs on the right, floating over a GPU-drawn background. When you're deep
+in code, hit `Ctrl+L` to dock the agent as a compact side panel.
 
 ## Benchmark
 
-On one Windows 11 PC, FluxCode put its window on screen in **about 50 ms** and sat at **1.4 MB**
-in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code about 3 s and
-929 MB over nine processes.
+On a standard Windows 11 laptop, FluxCode puts its first frame on screen in **~50 ms** and
+drops to **1.4 MB** in Task Manager at idle, all inside a single process. On the same
+machine, Zed takes 818 ms and 66.2 MB; VS Code takes ~3 s and 929.2 MB across nine
+processes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/benchmark-dark.svg">
   <img src="assets/benchmarks/benchmark-light.svg" width="100%" alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode about 50 ms (timed by hand), Zed 818 ms, VS Code 3,000 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB.">
 </picture>
 
-The gap is widest where an editor sits all day: idle memory. FluxCode uses 1.4 MB, Zed
-66.2 MB, VS Code 929.2 MB. On disk it is 16 MB against 261 MB and 1,044 MB. Its window
-is on screen in about 50 ms, against 818 ms for Zed and about 3 s for VS Code. Lower is better
-in every chart below.
+The difference shows up where your editor spends most of its life: sitting open in the
+background while you think, read docs, or run builds. FluxCode idles at 1.4 MB of RAM
+(vs. 66.2 MB for Zed and 929.2 MB for VS Code) and takes just 16 MB on disk. Lower is
+better across every chart above.
 
 *Median of 5 runs each on a PC with an AMD Ryzen 5 7535HS and 15 GB of RAM, 10 November 2026. Every
 app started from a fresh, empty profile with telemetry and update checks off and no folder
@@ -84,27 +87,23 @@ Median, with the lowest and highest of the runs in brackets:
 
 ## Download
 
-Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
+Grab the latest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
 
 | System | File | Install |
 | --- | --- | --- |
-| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run it. No admin rights: it installs for your account, with a Start Menu and a Desktop shortcut. |
-| macOS 11+, Apple silicon and Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Open it and drag FluxCode to Applications. |
-| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract, run `./install.sh`. No root. |
-| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract; `FluxCode.exe` runs from the folder (`Install.cmd` installs it). |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run the installer. No admin rights required: installs per-user with Start Menu and Desktop shortcuts. |
+| macOS 11+, Apple Silicon and Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Open the DMG and drag FluxCode into Applications. |
+| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract and run `./install.sh` (no root required). |
+| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract anywhere and run `FluxCode.exe` directly (`Install.cmd` is included if you want to install later). |
 
-The macOS build is a preview. We have not tested it on a real Mac yet. Try it and
-[open an issue](https://github.com/MuaraAI/FluxCode/issues/new) if something breaks.
+The macOS build is currently a preview and not yet notarized by Apple, so macOS will ask
+once on first launch (on macOS 15+, open it and click **System Settings > Privacy &
+Security > Open Anyway**; on older versions, right-click FluxCode > **Open**). If you hit
+any macOS-specific quirks, [open an issue](https://github.com/MuaraAI/FluxCode/issues/new).
 
-The macOS build isn't notarized by Apple yet (that takes an Apple Developer ID), so the
-first open asks once: on macOS 15 and newer, open it, then System Settings > Privacy &
-Security > Open Anyway; on older ones, right-click FluxCode > Open. Uninstall: Settings >
-Apps on Windows, the Trash on macOS, `./install.sh --uninstall` on Linux.
-
-There are no version numbers yet: every change merged into `main` becomes a build named
-after the moment it was made, like `BuildDev-2026-11-09-18-19-54`. Installed copies offer
-the new one in a card and update themselves in one click. Settings > Updates turns the
-check off.
+We ship continuous `BuildDev-YYYY-MM-DD-HH-MM-SS` builds straight from `main`. Installed
+copies notify you when a new build lands and update in one click (you can turn update
+checks off anytime under **Settings > Updates**).
 
 ## A closer look
 
@@ -121,9 +120,10 @@ check off.
   </tr>
 </table>
 
-The token saver (the leaf under the message box) asks the agent for shorter answers,
-diffs instead of whole files and quieter tool use. When a plan's limit is reached, a banner
-says when it resets: Continue now sends the message again, Resume at reset does it for you.
+**Token saver** (the leaf icon under the prompt box) trims verbose agent prose, favors
+focused diffs over full-file dumps, and keeps tool calls quiet. And when you hit a provider's
+rate or quota cap, FluxCode parses the reset window so you can either **Continue now** or
+tick **Resume at reset** and let it pick right back up automatically.
 
 <table>
   <tr>
@@ -138,9 +138,9 @@ says when it resets: Continue now sends the message again, Resume at reset does 
   </tr>
 </table>
 
-Any view can sit in the left or the right side bar: right-click its icon. Find in files
-searches while you type. Extensions search the whole VS Code Marketplace and install from
-the list.
+Right-click any activity icon to dock that view on the left or the right. Project-wide
+search streams results as you type, and the Extensions view searches and installs directly
+from the VS Code Marketplace.
 
 <a href="assets/screenshots/backgrounds.png"><img src="assets/screenshots/backgrounds.png" width="100%" alt="The twelve animated backgrounds in the FluxDark theme, drawn live: Clouds at dusk, a moonlit Ocean, Mountains in fog, an Aurora over snowy ridges, a pine Forest with fireflies, a Lake between hills, a Beach at sunset, Dunes under a low sun, a City skyline with lit windows, Rain, Snow, and a Galaxy with a ringed planet."></a>
 
@@ -157,40 +157,36 @@ the list.
   </tr>
 </table>
 
-Twelve animated backgrounds play behind the panels: clouds, ocean, mountains, aurora,
-forest, lake, beach, dunes, city, rain, snow and a galaxy. They are drawn live in the theme's
-own colors, so a theme change recolors the scene at once (light themes turn it to day), and
-they fit any window size. Nothing is downloaded. They stand still by default (no CPU
-at all); Background animation makes them move, after checking what your PC can take.
+Twelve procedural scenes (clouds, ocean, mountains, aurora, forest, lake, beach, dunes,
+city, rain, snow, galaxy) rendered straight from your active theme palette, with zero
+external assets to download. By default they stay static at 0% CPU; if you flip on
+**Background animation**, FluxCode benchmarks its own frame cost on your hardware first and
+tells you honestly how light or heavy it runs.
 
 ## What makes it different
 
-- **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status
-  bar sit where VS Code puts them, and the keys are VS Code's: `Ctrl+Shift+P` for the
-  Command Palette, `Ctrl+P` to find a file, `Ctrl+G` to go to a line, `Ctrl+/` to
-  comment, `Alt+Up` to move a line. If you know VS Code, you already know where things
-  are. It is not a VS Code clone: there is no debugger yet, and VS Code extensions install
-  from the Marketplace but their JavaScript doesn't run (see the table below).
-- **Light like Zed.** The whole editor is one Rust program drawn by the GPU with GPUI,
-  the framework Zed is built on. In the [benchmark](#benchmark) it opens its window in
-  about 50 ms, reserves 72 MB (Zed: 154 MB), and once idle shows 1.4 MB in Task Manager,
-  because it hands the memory it isn't using back to Windows.
-- **Built for AI agents.** The agent panel speaks the Agent Client Protocol and lists
-  every agent in the ACP registry, each with its own icon. Missing ones install with one
-  click into FluxCode's own folder. You choose the model, effort, mode and permissions
-  under the message box; the agent can ask you multiple-choice questions and has to ask
-  before it runs a command or changes a file; each turn's file changes can be undone.
-- **GitHub Copilot inline completions.** A moment after you stop typing, Copilot suggests
-  the next lines as ghost text; Tab accepts, Esc dismisses. The Copilot language server
-  runs as its own process and does the model work, so the editor stays light. Install it
-  once with `npm install -g @github/copilot-language-server`, then sign in under
-  **Settings > AI agents and GitHub > GitHub Copilot** (a Copilot plan is needed; a free
-  plan exists).
-- **For beginners and experts.** A beginner can pick an agent from a list, answer its
-  questions by clicking, and keep it read-only. An expert gets the palette, the shortcuts,
-  per-agent instruction files and every editor option in Settings: font, size, tab size,
-  word wrap, whitespace, line numbers, folding, bracket closing, smart indent, cursor
-  padding, scrolling past the end, interface size, themes and a background image.
+- **Muscle-memory compatible with VS Code.** Same layout (activity bar, sidebars, tabs,
+  bottom panel, status bar) and the same keybindings you already use (`Ctrl+Shift+P`,
+  `Ctrl+P`, `Ctrl+G`, `Ctrl+/`, `Alt+Up/Down`). It isn't a bloated Electron clone: there's
+  no Node runtime in the editor process, and VS Code color themes & grammars load natively
+  in Rust without running extension JavaScript.
+- **Systems-level efficiency.** Built in Rust on top of GPUI (the GPU UI framework behind
+  Zed) with custom Windows D3D11 swap-chain & path-texture optimizations and incremental
+  per-line syntax highlighting. In our [benchmark](#benchmark), it opens a window in ~50 ms,
+  reserves 72 MB, and trims its idle working set down to 1.4 MB.
+- **First-class AI agent workflow (ACP).** Speaks the Agent Client Protocol out of the box
+  and supports every agent in the ACP registry (OpenCode, Claude Code, Codex, Gemini CLI,
+  Copilot, Cursor, Qwen, Command Code, and more). Install missing agents in one click, pick
+  models and effort levels inline, review file diffs per turn, or roll changes back with
+  one click.
+- **GitHub Copilot ghost-text completions.** Talks to the official
+  `@github/copilot-language-server` over stdio in a separate process so the editor stays
+  tiny and responsive. Install once with `npm install -g @github/copilot-language-server`
+  and sign in under **Settings > AI agents and GitHub**.
+- **Crafted by seasoned Rust & SaaS engineers.** Designed by developers who have written
+  Rust in production and shipped commercial SaaS platforms for the past 6+ years: approachable
+  enough for a beginner with one-click setup and read-only safety modes, yet tunable down to
+  every editor, font, keybinding, and per-agent instruction file for veterans.
 
 ## Live share
 

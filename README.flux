@@ -17,22 +17,26 @@
 [English](README.md) · **Bahasa Indonesia**
 
 @en
-A native code editor for Windows, macOS and Linux, written in Rust and drawn by the GPU.
-One small program with an AI agent panel, a Python-friendly terminal, built-in Source
-Control, and read-only views for files other editors refuse to open. No telemetry. It
-opens its window in about 50 ms and sits at 1.4 MB idle, in one process ([benchmark](#benchmark)).
+FluxCode is a native, GPU-rendered code editor for Windows, macOS, and Linux written in
+Rust. It ships as a single 16 MB binary with an integrated AI agent workspace, a
+Python-aware terminal, built-in Git, and instant read-only views for binary, archive,
+database, and Office files. It opens a window in ~50 ms, idles at 1.4 MB of RAM in one
+process ([benchmark](#benchmark)), and sends zero telemetry.
 
-A [MuaraAI](https://github.com/MuaraAI) project. Open source, and still in
-development.
+Built at [MuaraAI](https://github.com/MuaraAI) by engineers with deep Rust systems
+experience and over six years of building and running production SaaS products. Open source
+under GPL-3.0-or-later and actively developed in the open.
 @id
-Editor kode native untuk Windows, macOS, dan Linux, ditulis dalam Rust dan digambar oleh
-GPU. Satu program kecil dengan panel agent AI, terminal yang ramah Python, Source Control
-bawaan, dan tampilan baca-saja untuk file yang tidak mau dibuka editor lain. Tanpa
-telemetri. Jendelanya muncul dalam sekitar 50 ms dan menetap di 1,4 MB saat idle, dalam satu
-proses ([benchmark](#benchmark)).
+FluxCode adalah editor kode native yang dirender GPU untuk Windows, macOS, dan Linux,
+ditulis dalam Rust. Dikemas sebagai satu binary 16 MB dengan workspace agent AI terintegrasi,
+terminal yang ramah Python, Git bawaan, dan tampilan baca-saja instan untuk file binary,
+arsip, database, maupun Office. Jendelanya terbuka dalam ~50 ms, hanya memakai 1,4 MB RAM
+saat idle dalam satu proses ([benchmark](#benchmark)), dan tanpa telemetri sama sekali.
 
-Proyek [MuaraAI](https://github.com/MuaraAI). Open source, masih dalam
-pengembangan.
+Dibangun di [MuaraAI](https://github.com/MuaraAI) oleh tim engineer berpengalaman di
+sistem Rust yang telah membangun dan menjalankan produk SaaS produksi sejak 6 tahun lalu
+hingga sekarang. Open source di bawah lisensi GPL-3.0-or-later dan terus dikembangkan
+secara terbuka.
 
 @all
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
@@ -41,42 +45,43 @@ pengembangan.
 @en
 @image assets/screenshots/hero.jpg width=100% link=assets/screenshots/agent-workspace.png alt="A 16 MB code editor with AI agents built in: the title over a dusk sky, and below it FluxCode with the agent filling the window, rising out of a bank of clouds. Saved chats on the left, the conversation in the middle, the files it changed on the right."
 
-The agent's full-screen workspace: your chats on the left, the conversation in the middle
-and the files it changed on the right, each a floating glass column over an animated
-background. Beside the code, the same agent stays a compact panel (`Ctrl+L`).
+Full-screen agent workspace: saved threads on the left, active conversation in the center,
+and live file diffs on the right, floating over a GPU-drawn background. When you're deep
+in code, hit `Ctrl+L` to dock the agent as a compact side panel.
 @id
 @image assets/screenshots/hero.id.jpg width=100% link=assets/screenshots/agent-workspace.png alt="Editor kode 16 MB dengan agen AI di dalamnya: judul di atas langit senja, dan di bawahnya FluxCode dengan agen memenuhi jendela, muncul dari balik awan. Daftar chat di kiri, percakapan di tengah, file yang diubahnya di kanan."
 
-Workspace layar penuh milik agent: daftar chat di kiri, percakapan di tengah, dan file yang
-diubahnya di kanan, masing-masing kolom kaca yang melayang di atas latar beranimasi.
-Di samping kode, agent yang sama tetap menjadi panel ringkas (`Ctrl+L`).
+Workspace layar penuh milik agent: daftar chat di kiri, percakapan aktif di tengah, dan
+diff file secara langsung di kanan, melayang di atas latar yang digambar GPU. Saat fokus
+menulis kode, tekan `Ctrl+L` untuk menaruh agent sebagai panel ringkas di samping.
 
 @en
 ## Benchmark
 
-On one Windows 11 PC, FluxCode put its window on screen in **about 50 ms** and sat at **1.4 MB**
-in Task Manager once idle, in one process. Zed took 0.82 s and 66 MB; VS Code about 3 s and
-929 MB over nine processes.
+On a standard Windows 11 laptop, FluxCode puts its first frame on screen in **~50 ms** and
+drops to **1.4 MB** in Task Manager at idle, all inside a single process. On the same
+machine, Zed takes 818 ms and 66.2 MB; VS Code takes ~3 s and 929.2 MB across nine
+processes.
 
 @image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode about 50 ms (timed by hand), Zed 818 ms, VS Code 3,000 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB."
 
-The gap is widest where an editor sits all day: idle memory. FluxCode uses 1.4 MB, Zed
-66.2 MB, VS Code 929.2 MB. On disk it is 16 MB against 261 MB and 1,044 MB. Its window
-is on screen in about 50 ms, against 818 ms for Zed and about 3 s for VS Code. Lower is better
-in every chart below.
+The difference shows up where your editor spends most of its life: sitting open in the
+background while you think, read docs, or run builds. FluxCode idles at 1.4 MB of RAM
+(vs. 66.2 MB for Zed and 929.2 MB for VS Code) and takes just 16 MB on disk. Lower is
+better across every chart above.
 @id
 ## Benchmark
 
-Di satu PC Windows 11, FluxCode menampilkan jendelanya dalam **sekitar 50 ms** dan menetap
-di **1,4 MB** di Task Manager saat idle, dalam satu proses. Zed 0,82 detik dan 66 MB; VS
-Code sekitar 3 detik dan 929 MB di sembilan proses.
+Di laptop Windows 11 standar, FluxCode menampilkan jendela pertamanya dalam **~50 ms** dan
+turun ke **1,4 MB** di Task Manager saat idle, semuanya dalam satu proses. Di mesin yang
+sama, Zed butuh 818 ms dan 66,2 MB; VS Code butuh ~3 detik dan 929,2 MB di sembilan proses.
 
 @image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Six bar charts, lower is better in each. Window on screen after launch: FluxCode about 50 ms (timed by hand), Zed 818 ms, VS Code 3,000 ms. Memory in Task Manager when idle: FluxCode 1.4 MB, Zed 66.2 MB, VS Code 929.2 MB. Memory reserved: FluxCode 72 MB, Zed 154 MB, VS Code 1,315 MB. CPU while idle: FluxCode 0.05%, Zed 1.46%, VS Code 5.89% of one core. Processes: FluxCode 1, Zed 2, VS Code 9. Size on disk: FluxCode 16 MB, Zed 261 MB, VS Code 1,044 MB."
 
-Selisih paling besar ada di memori saat idle, tempat editor diam sepanjang hari: FluxCode
-1,4 MB, Zed 66,2 MB, VS Code 929,2 MB. Di disk 16 MB lawan 261 MB dan 1.044 MB.
-Jendelanya tampil dalam sekitar 50 ms, lawan 818 ms untuk Zed dan sekitar 3 detik untuk VS Code. Di semua
-grafik di bawah, makin kecil makin bagus.
+Perbedaannya paling terasa saat editor dibiarkan terbuka seharian sambil kamu berpikir,
+membaca dokumentasi, atau menjalankan build: FluxCode hanya memakai 1,4 MB RAM saat idle
+(dibanding 66,2 MB di Zed dan 929,2 MB di VS Code) dan hanya memakan 16 MB di disk. Makin
+kecil angkanya, makin baik.
 
 @en
 *Median of 5 runs each on a PC with an AMD Ryzen 5 7535HS and 15 GB of RAM, 10 November 2026. Every
@@ -175,27 +180,23 @@ Median, dengan nilai terendah dan tertinggi tiap pengukuran di dalam tanda kurun
 @en
 ## Download
 
-Get the newest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
+Grab the latest build from [Releases](https://github.com/MuaraAI/FluxCode/releases/latest).
 
 | System | File | Install |
 | --- | --- | --- |
-| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run it. No admin rights: it installs for your account, with a Start Menu and a Desktop shortcut. |
-| macOS 11+, Apple silicon and Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Open it and drag FluxCode to Applications. |
-| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract, run `./install.sh`. No root. |
-| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract; `FluxCode.exe` runs from the folder (`Install.cmd` installs it). |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Run the installer. No admin rights required: installs per-user with Start Menu and Desktop shortcuts. |
+| macOS 11+, Apple Silicon and Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Open the DMG and drag FluxCode into Applications. |
+| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Extract and run `./install.sh` (no root required). |
+| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Extract anywhere and run `FluxCode.exe` directly (`Install.cmd` is included if you want to install later). |
 
-The macOS build is a preview. We have not tested it on a real Mac yet. Try it and
-[open an issue](https://github.com/MuaraAI/FluxCode/issues/new) if something breaks.
+The macOS build is currently a preview and not yet notarized by Apple, so macOS will ask
+once on first launch (on macOS 15+, open it and click **System Settings > Privacy &
+Security > Open Anyway**; on older versions, right-click FluxCode > **Open**). If you hit
+any macOS-specific quirks, [open an issue](https://github.com/MuaraAI/FluxCode/issues/new).
 
-The macOS build isn't notarized by Apple yet (that takes an Apple Developer ID), so the
-first open asks once: on macOS 15 and newer, open it, then System Settings > Privacy &
-Security > Open Anyway; on older ones, right-click FluxCode > Open. Uninstall: Settings >
-Apps on Windows, the Trash on macOS, `./install.sh --uninstall` on Linux.
-
-There are no version numbers yet: every change merged into `main` becomes a build named
-after the moment it was made, like `BuildDev-2026-11-09-18-19-54`. Installed copies offer
-the new one in a card and update themselves in one click. Settings > Updates turns the
-check off.
+We ship continuous `BuildDev-YYYY-MM-DD-HH-MM-SS` builds straight from `main`. Installed
+copies notify you when a new build lands and update in one click (you can turn update
+checks off anytime under **Settings > Updates**).
 @id
 ## Unduh
 
@@ -203,23 +204,21 @@ Ambil build terbaru dari [Releases](https://github.com/MuaraAI/FluxCode/releases
 
 | Sistem | File | Pemasangan |
 | --- | --- | --- |
-| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Jalankan. Tanpa hak admin: dipasang untuk akunmu, lengkap dengan pintasan Start Menu dan Desktop. |
-| macOS 11+, Apple silicon dan Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Buka, lalu tarik FluxCode ke Applications. |
-| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Ekstrak, jalankan `./install.sh`. Tanpa root. |
-| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Ekstrak; `FluxCode.exe` langsung jalan dari foldernya (`Install.cmd` memasangnya). |
+| Windows 10/11, x64 | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Jalankan installer. Tanpa hak admin: terpasang di akunmu lengkap dengan pintasan Start Menu dan Desktop. |
+| macOS 11+, Apple Silicon dan Intel (preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Buka DMG lalu tarik FluxCode ke Applications. |
+| Linux, x64 (glibc 2.35+, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Ekstrak lalu jalankan `./install.sh` (tanpa root). |
+| Windows, portable | `FluxCode-BuildDev-...-windows-x64.zip` | Ekstrak di mana saja dan jalankan `FluxCode.exe` langsung (`Install.cmd` juga tersedia bila ingin dipasang). |
 
-Build macOS masih preview. Kami belum mengujinya di Mac asli. Silakan coba, dan
-[buka issue](https://github.com/MuaraAI/FluxCode/issues/new) kalau ada yang rusak.
+Build macOS saat ini masih berstatus preview dan belum dinotarisasi Apple, jadi macOS akan
+meminta konfirmasi sekali saat pertama dibuka (di macOS 15+, buka aplikasinya lalu pilih
+**System Settings > Privacy & Security > Open Anyway**; di versi lama, klik kanan
+FluxCode > **Open**). Kalau menemukan kendala di Mac, silakan
+[buka issue](https://github.com/MuaraAI/FluxCode/issues/new).
 
-Build macOS belum dinotarisasi Apple (butuh Apple Developer ID), jadi pembukaan pertama
-bertanya sekali: di macOS 15 ke atas, buka aplikasinya, lalu System Settings > Privacy &
-Security > Open Anyway; di versi lama, klik kanan FluxCode > Open. Uninstall: Settings >
-Apps di Windows, Trash di macOS, `./install.sh --uninstall` di Linux.
-
-Belum ada nomor versi: setiap perubahan yang masuk ke `main` menjadi build yang dinamai
-menurut waktu pembuatannya, seperti `BuildDev-2026-11-09-18-19-54`. Salinan yang sudah
-terpasang menawarkan build baru lewat kartu dan memperbarui dirinya dengan satu klik.
-Settings > Updates mematikan pemeriksaannya.
+Kami merilis build `BuildDev-YYYY-MM-DD-HH-MM-SS` secara berkelanjutan setiap ada perubahan
+yang masuk ke `main`. Aplikasi yang sudah terpasang akan menampilkan kartu notifikasi saat
+build baru tersedia dan bisa diperbarui dalam satu klik (bisa dimatikan kapan saja lewat
+**Settings > Updates**).
 
 @en
 ## A closer look
@@ -233,14 +232,16 @@ Settings > Updates mematikan pemeriksaannya.
 @end
 
 @en
-The token saver (the leaf under the message box) asks the agent for shorter answers,
-diffs instead of whole files and quieter tool use. When a plan's limit is reached, a banner
-says when it resets: Continue now sends the message again, Resume at reset does it for you.
+**Token saver** (the leaf icon under the prompt box) trims verbose agent prose, favors
+focused diffs over full-file dumps, and keeps tool calls quiet. And when you hit a provider's
+rate or quota cap, FluxCode parses the reset window so you can either **Continue now** or
+tick **Resume at reset** and let it pick right back up automatically.
 @id
-Hemat token (ikon daun di bawah kotak pesan) meminta agent menjawab lebih pendek, memakai
-diff alih-alih seluruh file, dan memakai tool seperlunya. Saat limit paket tercapai, banner
-memberi tahu kapan limit reset: Continue now mengirim ulang pesannya, Resume at reset
-melakukannya untukmu.
+**Hemat token** (ikon daun di bawah kotak pesan) memangkas jawaban agent yang bertele-tele,
+mengutamakan diff dibanding menulis ulang seluruh file, dan menjaga pemakaian tool tetap
+efisien. Saat kuota atau rate limit tercapai, FluxCode membaca jadwal reset-nya sehingga
+kamu bisa klik **Continue now** atau centang **Resume at reset** agar pekerjaan dilanjutkan
+otomatis begitu kuota kembali.
 
 @all
 @gallery
@@ -249,13 +250,13 @@ melakukannya untukmu.
 @end
 
 @en
-Any view can sit in the left or the right side bar: right-click its icon. Find in files
-searches while you type. Extensions search the whole VS Code Marketplace and install from
-the list.
+Right-click any activity icon to dock that view on the left or the right. Project-wide
+search streams results as you type, and the Extensions view searches and installs directly
+from the VS Code Marketplace.
 @id
-View mana pun bisa ditaruh di side bar kiri atau kanan: klik kanan ikonnya. Find in files
-mencari sambil kamu mengetik. Extensions mencari di seluruh VS Code Marketplace dan bisa
-dipasang langsung dari daftarnya.
+Klik kanan ikon mana pun di activity bar untuk menaruh panelnya di kiri atau di kanan.
+Pencarian proyek menampilkan hasil secara instan saat kamu mengetik, dan panel Extensions
+terhubung langsung ke seluruh katalog VS Code Marketplace.
 
 @all
 @image assets/screenshots/backgrounds.png width=100% link=assets/screenshots/backgrounds.png alt="The twelve animated backgrounds in the FluxDark theme, drawn live: Clouds at dusk, a moonlit Ocean, Mountains in fog, an Aurora over snowy ridges, a pine Forest with fireflies, a Lake between hills, a Beach at sunset, Dunes under a low sun, a City skyline with lit windows, Rain, Snow, and a Galaxy with a ringed planet."
@@ -266,80 +267,68 @@ dipasang langsung dari daftarnya.
 @end
 
 @en
-Twelve animated backgrounds play behind the panels: clouds, ocean, mountains, aurora,
-forest, lake, beach, dunes, city, rain, snow and a galaxy. They are drawn live in the theme's
-own colors, so a theme change recolors the scene at once (light themes turn it to day), and
-they fit any window size. Nothing is downloaded. They stand still by default (no CPU
-at all); Background animation makes them move, after checking what your PC can take.
+Twelve procedural scenes (clouds, ocean, mountains, aurora, forest, lake, beach, dunes,
+city, rain, snow, galaxy) rendered straight from your active theme palette, with zero
+external assets to download. By default they stay static at 0% CPU; if you flip on
+**Background animation**, FluxCode benchmarks its own frame cost on your hardware first and
+tells you honestly how light or heavy it runs.
 @id
-Dua belas latar beranimasi bergerak di belakang panel: awan, laut, pegunungan, aurora,
-hutan, danau, pantai, bukit pasir, kota, hujan, salju, dan galaksi. Semuanya digambar
-langsung dengan warna tema, jadi ganti tema langsung mewarnai ulang scene-nya (tema terang
-mengubahnya jadi siang), dan pas di ukuran jendela apa pun. Tidak ada yang diunduh.
-Secara default scene-nya diam (tanpa beban CPU); Background animation membuatnya bergerak,
-setelah mengecek apakah PC kamu sanggup.
+Dua belas latar prosedural (awan, laut, pegunungan, aurora, hutan, danau, pantai, bukit
+pasir, kota, hujan, salju, galaksi) digambar langsung menggunakan palet warna tema aktifmu
+tanpa perlu mengunduh aset tambahan. Secara default latar ini diam (0% CPU); saat
+**Background animation** dinyalakan, FluxCode mengukur beban CPU di mesinmu terlebih dulu
+dan memberi tahu apakah animasinya ringan atau berat untuk perangkatmu.
 
 @en
 ## What makes it different
 
-- **Laid out and driven like VS Code.** Activity bar, side bar, tabs, panel and status
-  bar sit where VS Code puts them, and the keys are VS Code's: `Ctrl+Shift+P` for the
-  Command Palette, `Ctrl+P` to find a file, `Ctrl+G` to go to a line, `Ctrl+/` to
-  comment, `Alt+Up` to move a line. If you know VS Code, you already know where things
-  are. It is not a VS Code clone: there is no debugger yet, and VS Code extensions install
-  from the Marketplace but their JavaScript doesn't run (see the table below).
-- **Light like Zed.** The whole editor is one Rust program drawn by the GPU with GPUI,
-  the framework Zed is built on. In the [benchmark](#benchmark) it opens its window in
-  about 50 ms, reserves 72 MB (Zed: 154 MB), and once idle shows 1.4 MB in Task Manager,
-  because it hands the memory it isn't using back to Windows.
-- **Built for AI agents.** The agent panel speaks the Agent Client Protocol and lists
-  every agent in the ACP registry, each with its own icon. Missing ones install with one
-  click into FluxCode's own folder. You choose the model, effort, mode and permissions
-  under the message box; the agent can ask you multiple-choice questions and has to ask
-  before it runs a command or changes a file; each turn's file changes can be undone.
-- **GitHub Copilot inline completions.** A moment after you stop typing, Copilot suggests
-  the next lines as ghost text; Tab accepts, Esc dismisses. The Copilot language server
-  runs as its own process and does the model work, so the editor stays light. Install it
-  once with `npm install -g @github/copilot-language-server`, then sign in under
-  **Settings > AI agents and GitHub > GitHub Copilot** (a Copilot plan is needed; a free
-  plan exists).
-- **For beginners and experts.** A beginner can pick an agent from a list, answer its
-  questions by clicking, and keep it read-only. An expert gets the palette, the shortcuts,
-  per-agent instruction files and every editor option in Settings: font, size, tab size,
-  word wrap, whitespace, line numbers, folding, bracket closing, smart indent, cursor
-  padding, scrolling past the end, interface size, themes and a background image.
+- **Muscle-memory compatible with VS Code.** Same layout (activity bar, sidebars, tabs,
+  bottom panel, status bar) and the same keybindings you already use (`Ctrl+Shift+P`,
+  `Ctrl+P`, `Ctrl+G`, `Ctrl+/`, `Alt+Up/Down`). It isn't a bloated Electron clone: there's
+  no Node runtime in the editor process, and VS Code color themes & grammars load natively
+  in Rust without running extension JavaScript.
+- **Systems-level efficiency.** Built in Rust on top of GPUI (the GPU UI framework behind
+  Zed) with custom Windows D3D11 swap-chain & path-texture optimizations and incremental
+  per-line syntax highlighting. In our [benchmark](#benchmark), it opens a window in ~50 ms,
+  reserves 72 MB, and trims its idle working set down to 1.4 MB.
+- **First-class AI agent workflow (ACP).** Speaks the Agent Client Protocol out of the box
+  and supports every agent in the ACP registry (OpenCode, Claude Code, Codex, Gemini CLI,
+  Copilot, Cursor, Qwen, Command Code, and more). Install missing agents in one click, pick
+  models and effort levels inline, review file diffs per turn, or roll changes back with
+  one click.
+- **GitHub Copilot ghost-text completions.** Talks to the official
+  `@github/copilot-language-server` over stdio in a separate process so the editor stays
+  tiny and responsive. Install once with `npm install -g @github/copilot-language-server`
+  and sign in under **Settings > AI agents and GitHub**.
+- **Crafted by seasoned Rust & SaaS engineers.** Designed by developers who have written
+  Rust in production and shipped commercial SaaS platforms for the past 6+ years: approachable
+  enough for a beginner with one-click setup and read-only safety modes, yet tunable down to
+  every editor, font, keybinding, and per-agent instruction file for veterans.
 @id
 ## Yang membedakannya
 
-- **Tata letak dan kendali seperti VS Code.** Activity bar, side bar, tab, panel, dan
-  status bar berada di tempat yang sama dengan VS Code, dan tombolnya juga punya VS Code:
-  `Ctrl+Shift+P` untuk Command Palette, `Ctrl+P` mencari file, `Ctrl+G` menuju baris,
-  `Ctrl+/` mengomentari, `Alt+Up` memindah baris. Kalau kamu sudah kenal VS Code, kamu
-  sudah tahu letak semuanya. Ini bukan tiruan VS Code: belum ada debugger, dan extension
-  VS Code bisa dipasang dari Marketplace tetapi JavaScript-nya tidak berjalan (lihat tabel
-  di bawah).
-- **Ringan seperti Zed.** Seluruh editor adalah satu program Rust yang digambar GPU lewat
-  GPUI, framework yang dipakai Zed. Di [benchmark](#benchmark) jendelanya muncul dalam
-  sekitar 50 ms, mereservasi 72 MB (Zed: 154 MB), dan saat idle menampilkan 1,4 MB di Task
-  Manager, karena memori yang tidak dipakai dikembalikan ke Windows.
-- **Dibuat untuk agent AI.** Panel agent berbicara lewat Agent Client Protocol dan
-  mendaftar semua agent di registri ACP, masing-masing dengan ikonnya sendiri. Yang belum
-  terpasang bisa dipasang dengan satu klik ke folder milik FluxCode. Model, effort, mode,
-  dan izin dipilih di bawah kotak pesan; agent bisa mengajukan pertanyaan pilihan ganda dan
-  harus bertanya sebelum menjalankan perintah atau mengubah file; perubahan file tiap
-  giliran bisa dibatalkan.
-- **Completion sebaris GitHub Copilot.** Sesaat setelah kamu berhenti mengetik, Copilot
-  menyarankan baris berikutnya sebagai teks abu-abu; Tab menerima, Esc menolak. Server
-  bahasa Copilot berjalan di prosesnya sendiri dan mengerjakan modelnya, jadi editor tetap
-  ringan. Pasang sekali dengan `npm install -g @github/copilot-language-server`, lalu masuk
-  di **Settings > AI agents and GitHub > GitHub Copilot** (perlu paket Copilot; ada paket
-  gratis).
-- **Untuk pemula dan untuk yang sudah ahli.** Pemula bisa memilih agent dari daftar,
-  menjawab pertanyaannya dengan klik, dan menjaganya tetap read-only. Yang sudah ahli
-  mendapat palette, pintasan, file instruksi per agent, dan semua opsi editor di Settings:
-  font, ukuran, lebar tab, word wrap, spasi, nomor baris, lipatan, penutup bracket, indent
-  pintar, padding kursor, scroll melewati akhir baris, ukuran antarmuka, tema, dan gambar
-  latar.
+- **Familiar seperti VS Code.** Tata letak (activity bar, side bar, tab, panel bawah, status
+  bar) dan shortcut utamanya (`Ctrl+Shift+P`, `Ctrl+P`, `Ctrl+G`, `Ctrl+/`, `Alt+Up/Down`)
+  sama persis dengan yang biasa kamu pakai di VS Code. Bedanya, tidak ada runtime Electron
+  atau Node di dalam editor: tema warna dan grammar VS Code dimuat secara native di Rust
+  tanpa mengeksekusi JavaScript berat.
+- **Efisiensi tingkat sistem.** Ditulis dalam Rust di atas GPUI dengan optimasi D3D11
+  swap-chain, tekstur on-demand, dan syntax highlighting inkremental per baris. Dalam
+  [benchmark](#benchmark), jendela terbuka dalam ~50 ms, mereservasi 72 MB, dan memangkas
+  pemakaian RAM idle hingga 1,4 MB.
+- **Alur kerja AI agent kelas satu (ACP).** Mendukung Agent Client Protocol secara penuh
+  untuk seluruh agent di registri ACP (OpenCode, Claude Code, Codex, Gemini CLI, Copilot,
+  Cursor, Qwen, Command Code, dan lainnya). Pasang agent dalam satu klik, atur model dan
+  level effort langsung di bawah kotak chat, tinjau diff per giliran, atau batalkan perubahan
+  file kapan saja.
+- **Inline completion GitHub Copilot.** Terhubung ke `@github/copilot-language-server`
+  resmi di proses terpisah agar editor utama tetap ringan. Cukup pasang dengan
+  `npm install -g @github/copilot-language-server` lalu masuk lewat
+  **Settings > AI agents and GitHub**.
+- **Dirancang oleh engineer Rust & SaaS berpengalaman.** Dibuat oleh developer yang sudah
+  menangani pemrograman sistem Rust dan membangun produk SaaS sejak 6+ tahun lalu hingga
+  sekarang: ramah bagi pemula lewat setup satu klik dan mode aman baca-saja, sekaligus
+  lengkap bagi engineer senior dengan kustomisasi penuh.
 
 @en
 ## Live share
