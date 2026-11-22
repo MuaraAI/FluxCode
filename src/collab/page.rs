@@ -1,8 +1,4 @@
-//! The Live share page: it opens in the editor area (the people icon in the activity
-//! bar). Before a session it offers two choices, host this folder or join with a code,
-//! side by side on a wide window and one under the other on a narrow one. While a
-//! session runs, the thing people need most comes first: the invite code for a host,
-//! the connection for a guest. Then who is in, how guests get in, and the edits.
+//! The Live share page: it opens in the editor area (the people icon in the activity bar).
 
 use super::{my_name, reach, Role};
 use crate::i18n::tr;
@@ -314,8 +310,7 @@ impl Workbench {
             None => reach::State::No(tr("No network connection.").into()),
         };
         let open = [&lan, &reach.upnp, &reach.ipv6, &reach.relay].iter().filter(|s| matches!(s, reach::State::Ready(_))).count();
-        // The public relay is not ours, so calling it MuaraAI would be a lie the
-        // moment our own relay is off.
+        // The public relay is not ours, so calling it MuaraAI would be a lie the moment our own relay is off.
         let on_public = matches!(&reach.relay, reach::State::Ready(a) if !reach::is_primary_relay(a));
         let relay_name = if on_public { tr("Relay (public)") } else { tr("Relay (MuaraAI)") };
         let full = co.ways_open;
@@ -520,7 +515,6 @@ impl Workbench {
     }
 }
 
-// ---------------------------------------------------------------- pieces
 
 /// What went wrong, in the words of whoever found it (they say the cause and what to do).
 fn error_banner(e: String, cx: &mut Context<Workbench>) -> AnyElement {
@@ -543,8 +537,7 @@ fn error_banner(e: String, cx: &mut Context<Workbench>) -> AnyElement {
         .into_any_element()
 }
 
-/// A row of cards that wraps to one per row on a narrow window. `even`: both as tall
-/// as the taller one (their buttons line up at the bottom).
+/// A row of cards that wraps to one per row on a narrow window.
 fn row(cards: [AnyElement; 2], even: bool) -> Div {
     h_flex()
         .w_full()
@@ -556,7 +549,7 @@ fn row(cards: [AnyElement; 2], even: bool) -> Div {
         .children(cards.into_iter().map(|c| v_flex().flex_grow(1.).flex_shrink(1.).flex_basis(theme::u(CARD_MIN)).min_w_0().overflow_hidden().child(c)))
 }
 
-/// A card: a small titled box. `aside` sits at the right of the title.
+/// A card: a small titled box.
 fn card(icon: IconName, title: &'static str, count: Option<String>, aside: Option<AnyElement>) -> Div {
     v_flex()
         .w_full()
@@ -612,8 +605,7 @@ fn info_line(label: &'static str, value: String, mono: bool) -> Div {
         .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).when(mono, |d| d.font_family(MONO)).child(value))
 }
 
-/// One way in: a mark, its name, and its address or why it isn't open. Folded, that
-/// fits one line; unfolded, the reason wraps and a hint follows.
+/// One way in: a mark, its name, and its address or why it isn't open.
 fn way_row(ix: usize, name: &'static str, st: &reach::State, hint: Option<&'static str>, full: bool) -> AnyElement {
     let (detail, mono, mark): (SharedString, bool, AnyElement) = match st {
         reach::State::Trying => (tr("Checking…").into(), false, Spinner::new().icon(IconName::LoaderCircle).small().color(c(theme::FG_MUTED)).into_any_element()),

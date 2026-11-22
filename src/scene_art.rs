@@ -1,16 +1,4 @@
 //! The animated backgrounds, drawn live in the theme's own colors.
-//!
-//! Every scene is a handful of GPU primitives a frame: gradients, rounded quads and
-//! blurred shapes (GPUI's gaussian shadows, which make soft clouds, fog, glows and
-//! nebulae for almost nothing). There is no video to download or decode and no
-//! picture: the colors come from the active palette through `theme::live`, so a theme
-//! change recolors the scene in the same frame, and mid-fade it fades with the panels.
-//! On a light theme the scenes turn to day, so dark text keeps its contrast through the
-//! translucent panels.
-//!
-//! Everything is laid out in fractions of the area it fills and counts scale with that
-//! area, so the same code draws the window's backdrop and the small previews in
-//! Settings.
 
 use crate::theme::{self, mix, Tok};
 use gpui_kit::*;
@@ -68,8 +56,7 @@ pub fn mood() -> Mood {
             base: editor,
         }
     } else {
-        // Day: pale sky and land, a few steps off the paper, never dark enough to fight
-        // the text drawn over the panels.
+        // Day: pale sky and land, a few steps off the paper, never dark enough to fight the text drawn over the panels.
         let b = editor;
         Mood {
             dark: false,
@@ -107,8 +94,7 @@ fn sway(t: f32, period: f32, phase: f32) -> f32 {
     (t / period * TAU + phase).sin()
 }
 
-/// The same hue, its saturation times `k` (themes' colors are muted on purpose; a
-/// night sky or an aurora wants a little more color than a panel does).
+/// The same hue, its saturation times `k` (themes' colors are muted on purpose.
 fn vivid(hex: u32, k: f32) -> u32 {
     let mut c = Hsla::from(rgb(hex));
     c.s = (c.s * k).min(1.);
@@ -164,10 +150,7 @@ thread_local! {
     static FRAME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// The picture of a ridge: `top(xf)` is where the land starts at `xf` (0..1 across),
-/// as a fraction of the picture's height. Filled solid below it, with the edge pixel
-/// covered as far as the land reaches into it (three samples across, so steep sides
-/// are smooth too). Made once per size, color and shape.
+/// The picture of a ridge: `top(xf)` is where the land starts at `xf` (0..1 across), as a fraction of the picture's height.
 fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc<RenderImage>> {
     let frame = FRAME.with(|f| f.get());
     if let Some(img) = RIDGES.with(|r| {
@@ -199,8 +182,7 @@ fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc
     Some(img)
 }
 
-/// After a cached frame: let go of the pictures it didn't use (another scene, size or
-/// theme), out of the GPU atlas too.
+/// After a cached frame: let go of the pictures it didn't use (another scene, size or theme), out of the GPU atlas too.
 fn sweep(window: &mut Window) {
     let frame = FRAME.with(|f| f.get());
     let old: Vec<_> = RIDGES.with(|r| {
@@ -233,8 +215,7 @@ impl Art<'_> {
         self.win.paint_quad(quad(r, px(radius), c, px(0.), transparent_black(), BorderStyle::default()));
     }
 
-    /// A vertical gradient over `from..to` (fractions of the height), through `stops`
-    /// (positions 0..1 within that range).
+    /// A vertical gradient over `from..to` (fractions of the height), through `stops` (positions 0..1 within that range).
     fn grad(&mut self, from: f32, to: f32, stops: &[(f32, Hsla)]) {
         let (x, w) = (self.x, self.w);
         for p in stops.windows(2) {
@@ -326,12 +307,7 @@ impl Art<'_> {
         }
     }
 
-    /// Land up to a ridge: its foot at `base`, peaks up to `amp` higher (fractions of
-    /// the height), in `c`.
-    ///
-    /// Ridges stand still, so behind the panels each is drawn once into a picture (with
-    /// smooth edges) and shown again every frame: a few sprites instead of thousands of
-    /// strips a frame. Small previews, drawn once, use the strips directly.
+    /// Land up to a ridge: its foot at `base`, peaks up to `amp` higher (fractions of the height), in `c`.
     fn ridge(&mut self, kind: Ridge, base: f32, amp: f32, seed: u32, c: u32) {
         let top = self.y + self.h * (base - amp) - 2.;
         let band = self.y + self.h - top;
@@ -527,8 +503,7 @@ impl Art<'_> {
     }
 }
 
-/// The scenes, by id (see `scene::Scene`). `cached`: the backdrop, drawn every frame,
-/// keeps its still layers as pictures; a preview drawn now and then doesn't.
+/// The scenes, by id (see `scene::Scene`).
 pub fn paint(id: &str, b: Bounds<Pixels>, t: f32, cached: bool, window: &mut Window) {
     let m = mood();
     let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
@@ -564,8 +539,7 @@ pub fn paint(id: &str, b: Bounds<Pixels>, t: f32, cached: bool, window: &mut Win
     }
 }
 
-/// The website's dusk: stars, a glow where the sun went down, and banks of cloud
-/// drifting at their own depths.
+/// The website's dusk: stars, a glow where the sun went down, and banks of cloud drifting at their own depths.
 fn clouds(a: &mut Art) {
     let m = a.m;
     a.sky(&[(0., m.ink), (0.3, m.top), (0.55, m.mid), (0.7, m.low), (0.86, mix(m.low, m.ink, 0.5)), (1., m.ink)]);

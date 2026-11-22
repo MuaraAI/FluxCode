@@ -1,21 +1,4 @@
 //! Isolation for the agent, so agents (and the user) don't run into each other.
-//!
-//! **Worktree.** One switch gives the chat its own git worktree: a second checkout
-//! of the repository on its own branch, `fluxcode/agent-<time>`, kept in
-//! `<repo>/.fluxcode/worktrees/<time>` (listed in `.git/info/exclude`, so it never
-//! shows as a change). The agent starts there, so its edits, builds and commands
-//! leave the user's checkout alone, and two FluxCode windows each with an agent never
-//! touch the same files. `.env` files (ignored by git, so not in a new checkout) are
-//! copied over. When the work is good, Merge commits it on the branch and merges the
-//! branch into the checkout the user has open; Remove throws the worktree away. The
-//! pattern is the one Claude Code (`--worktree`), Cursor, Conductor, Zed and VS Code
-//! use for parallel agents (git-scm.com/docs/git-worktree).
-//!
-//! **Accounts.** Claude and OpenCode keep their sign-in in a folder; pointing a run at
-//! another folder runs it as another account, side by side with the first:
-//! `CLAUDE_CONFIG_DIR` for Claude (Anthropic documents it for exactly this) and
-//! `XDG_DATA_HOME` for OpenCode (its auth database lives under it). Each account is a
-//! folder under FluxCode's app data; adding one opens a console to sign in to it.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -60,8 +43,7 @@ pub fn family(id: &str) -> Option<&'static str> {
     }
 }
 
-/// The account's folder holds a sign-in: Claude's credentials file (or an OAuth account
-/// or API key in its config), OpenCode's auth database with at least one provider.
+/// The account's folder holds a sign-in: Claude's credentials file (or an OAuth account or API key in its config), OpenCode's auth database with at least one provider.
 pub fn signed_in(a: &Account) -> bool {
     let has = |p: PathBuf, any: &[&str]| std::fs::read_to_string(p).is_ok_and(|s| any.iter().any(|k| s.contains(k)));
     match a.family.as_str() {
@@ -70,8 +52,7 @@ pub fn signed_in(a: &Account) -> bool {
     }
 }
 
-/// Drop added accounts that were never signed in to (their folders too), and a choice
-/// that pointed at one.
+/// Drop added accounts that were never signed in to (their folders too), and a choice that pointed at one.
 pub fn prune_accounts(s: &mut crate::settings::Settings) {
     let (keep, gone): (Vec<Account>, Vec<Account>) = s.agent_accounts.drain(..).partition(signed_in);
     s.agent_accounts = keep;
@@ -86,8 +67,7 @@ pub fn prune_accounts(s: &mut crate::settings::Settings) {
     s.save();
 }
 
-/// Delete an added account's sign-in folder: only one FluxCode made itself (under its
-/// `accounts` folder), never a folder a hand-edited setting points at.
+/// Delete an added account's sign-in folder: only one FluxCode made itself (under its `accounts` folder), never a folder a hand-edited setting points at.
 fn forget_dir(a: &Account) {
     if a.dir.parent().and_then(Path::file_name).is_some_and(|n| n == "accounts") {
         let _ = std::fs::remove_dir_all(&a.dir);
@@ -178,8 +158,7 @@ impl Workbench {
         }
     }
 
-    /// Work in `folder` (None: the folder open in the editor). A chat that already
-    /// talked restarts its agent there and carries on.
+    /// Work in `folder` (None: the folder open in the editor).
     pub(crate) fn agent_use_folder(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
         let folder = folder.or_else(|| self.root.clone());
         if folder == self.agent.folder {
@@ -354,9 +333,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A new sign-in folder with a console to sign in to it. It joins the list (and is
-    /// used) only once the sign-in lands in the folder; a console closed without signing
-    /// in leaves nothing behind.
+    /// A new sign-in folder with a console to sign in to it.
     fn agent_add_account(&mut self, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
         if self.agent.account_wait.is_some() {
@@ -409,8 +386,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Sign out of an added account: its sign-in folder is deleted and the default
-    /// account is used again.
+    /// Sign out of an added account: its sign-in folder is deleted and the default account is used again.
     fn agent_sign_out(&mut self, name: String, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
         let Some(pos) = self.settings.agent_accounts.iter().position(|a| a.family == f && a.name == name) else { return };
@@ -423,8 +399,7 @@ impl Workbench {
         if was_current {
             self.agent.items.push(Item::Branch(crate::trf!("Signed out of {name}; using the default account."; name => name)));
             self.agent_restart_here(cx);
-            // The agent that ran as it may still hold files in the folder: delete it
-            // once that process is gone.
+            // The agent that ran as it may still hold files in the folder: delete it once that process is gone.
             cx.background_spawn(async move {
                 std::thread::sleep(std::time::Duration::from_secs(4));
                 forget_dir(&a);
@@ -437,10 +412,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The header's one "more" button: the harness's mode (Claude's permission modes:
-    /// ask, accept edits, bypass, plan), its own worktree, the account, the side it docks
-    /// on, and its settings. These used to be five icons and a chip under the message
-    /// box; they are things set once in a while, so they share one menu.
+    /// The header's one "more" button: the harness's mode (Claude's permission modes: ask, accept edits, bypass, plan), its own worktree, the account, the side it docks on, and its settings.
     pub(crate) fn render_agent_more(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on = self.agent.worktree.is_some();
         let (fam, accounts) = self.agent_accounts();
@@ -537,7 +509,6 @@ impl Workbench {
     }
 
     /// The strip under the header while the chat has a worktree: where, Merge, Remove.
-    /// A chat in another folder than the open one gets a strip naming it instead.
     pub(crate) fn render_worktree_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(f) = self.agent_other_folder() {
             let open = f.clone();

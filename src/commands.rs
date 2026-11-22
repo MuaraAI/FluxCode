@@ -1,18 +1,11 @@
-//! VS Code's commands and shortcuts that FluxCode adds on top of the editor's own:
-//! line editing (Ctrl+/, Alt+Up/Down, Shift+Alt+Up/Down, Ctrl+Shift+K, Ctrl+Enter),
-//! Go to Line (Ctrl+G), the Command Palette (Ctrl+Shift+P, F1), zoom, reopening a
-//! closed tab and closing all of them, and the word-wrap toggle (Alt+Z).
-//!
-//! The palette lists every command with its shortcut, from `COMMANDS`, so the list,
-//! the bindings in `workbench::bind_keys` and the README table stay one set.
+//! VS Code's commands and shortcuts that FluxCode adds on top of the editor's own: line editing (Ctrl+/, Alt+Up/Down, Shift+Alt+Up/Down, Ctrl+Shift+K, Ctrl+Enter), Go to Line (Ctrl+G), the Command Palette (Ctrl+Shift+P, F1), zoom, reopening a closed tab and closing all of them, and the word-wrap toggle (Alt+Z).
 
 use crate::editor_cmds::{self, Edit};
 use crate::workbench::*;
 use gpui_kit::component::input::Position;
 use gpui_kit::*;
 
-/// One palette entry: its name (translated when shown), the shortcut as VS Code
-/// writes it, and the action it runs.
+/// One palette entry: its name (translated when shown), the shortcut as VS Code writes it, and the action it runs.
 pub struct Command {
     pub label: &'static str,
     pub keys: &'static str,
@@ -119,8 +112,7 @@ impl Workbench {
         self.edit_active(w, cx, |t, sel, _| Some(editor_cmds::insert_line(t, sel, true)));
     }
 
-    /// Alt+Z: wrap this file's lines or not, for this file only (as in VS Code; the
-    /// default for every file is the setting in Settings > Editor).
+    /// Alt+Z: wrap this file's lines or not, for this file only (as in VS Code; the default for every file is the setting in Settings > Editor).
     pub(crate) fn on_toggle_word_wrap(&mut self, _: &ToggleWordWrap, w: &mut Window, cx: &mut Context<Self>) {
         self.toggle_wrap(w, cx);
     }

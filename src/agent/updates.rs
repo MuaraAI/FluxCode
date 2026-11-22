@@ -1,15 +1,4 @@
 //! Updates for the agents FluxCode installed itself from the ACP registry.
-//!
-//! An install records the registry version it came from (`Launch::version`). A while
-//! after start, and every six hours, the saved registry is refreshed when it is a day
-//! old and compared with what is installed: every agent with a newer version gets a
-//! card in the top right corner, one under another, with what it is and the two
-//! versions. "Update" installs the new version next to the old one (the same installer
-//! as the first install, with its progress), then the next chat uses it; a chat that is
-//! running keeps the version it started with.
-//!
-//! Copies the user installed on PATH (npm, a package manager) are theirs to update:
-//! FluxCode doesn't know their version and doesn't touch them.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -41,8 +30,7 @@ pub(crate) struct Pending {
     pub step: Step,
 }
 
-/// True when version `a` is newer than `b`: compared number by number ("2.10.0" after
-/// "2.9.3"); versions that aren't numbers count as newer when they differ.
+/// True when version `a` is newer than `b`: compared number by number ("2.10.0" after "2.9.3").
 pub(crate) fn newer(a: &str, b: &str) -> bool {
     let nums = |v: &str| -> Vec<u64> { v.trim_start_matches('v').split(|ch: char| !ch.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect() };
     let (x, y) = (nums(a), nums(b));
@@ -86,8 +74,7 @@ impl Workbench {
                         if crate::acp::registry_stale() {
                             let _ = crate::acp::refresh_registry();
                         }
-                        // Icons are kept per registry version: a fresh registry names new
-                        // ones, and the cards show each agent's icon.
+                        // Icons are kept per registry version: a fresh registry names new ones, and the cards show each agent's icon.
                         crate::acp::fetch_icons();
                         available(&crate::acp::registry())
                     })
@@ -277,8 +264,7 @@ impl Workbench {
                 .top(theme::u(44.))
                 .right(theme::u(12.))
                 .w(theme::u(340.))
-                // One glass panel, painted after everything under it (deferred), so the
-                // page's text can't show through.
+                // One glass panel, painted after everything under it (deferred), so the page's text can't show through.
                 .child(deferred(v_flex().id("ag-updates").occlude().p_2().gap_2().glass_pop().child(head).children(cards)))
                 .into_any_element(),
         )

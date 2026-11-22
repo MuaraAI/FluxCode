@@ -1,21 +1,4 @@
-//! The install animation in the agent panel, drawn natively each frame (no video, no
-//! images): a few filled paths, tessellated by GPUI and drawn on the GPU.
-//!
-//! - Downloading: a ring of liquid. Its edges move like smoke, an ochre band flows
-//!   around it, and it thickens toward the centre with the real byte count, so it is
-//!   a full disc when the last byte arrives. With no known size it stays a thin ring
-//!   that swirls, which says "working" without claiming a percentage.
-//! - Checking: the full disc breathes while the checksum runs.
-//! - Unpacking ("fluxbox"): the liquid sinks into a box, the lids swing open and the
-//!   contents rise out, as many as tar reports writing; the liquid inside drains as
-//!   the count reaches the archive's total.
-//! - Done: the disc with a check drawn in. Failed: the ring stops, breaks open and
-//!   turns the danger color; nothing moves after that.
-//!
-//! Cost: the view owns its own ~30 fps timer and only it re-renders (not the
-//! workbench); the timer ends when the view is dropped or the failure has been drawn.
-//! Under the system's reduce-motion setting the liquid holds still and only the fill
-//! level changes.
+//! The install animation in the agent panel, drawn natively each frame (no video, no images): a few filled paths, tessellated by GPUI and drawn on the GPU.
 
 use crate::acp::{Phase, Snapshot, Tracker};
 use crate::theme::{self, c};
@@ -29,7 +12,7 @@ pub struct InstallAnim {
     tracker: Tracker,
     born: Instant,
     last: Instant,
-    /// Eased fill level, 0..1. Only rises.
+    /// Eased fill level, 0..1.
     fill: f32,
     /// 1 when the size is known (a fill level), 0 for the swirl; eased between.
     known: f32,
@@ -238,8 +221,7 @@ impl Frame {
         let t = self.t;
         let inner = inner_radius(r, self.fill, self.known, t);
         let n = 112;
-        // Smoke: three faint, loose layers round the outside, each drifting on its own,
-        // so the edge feathers instead of ending in a line.
+        // Smoke: three faint, loose layers round the outside, each drifting on its own, so the edge feathers instead of ending in a line.
         for k in 0..3 {
             let k = k as f32;
             let outer = blob(cx, cy, r * (1.03 + 0.035 * k), r * (0.05 + 0.025 * k), t * (0.55 + 0.17 * k), 4.0 + 1.9 * k, n);
@@ -260,8 +242,7 @@ impl Frame {
                 fill(window, &[a, b], self.fg.opacity((0.09 - 0.03 * k) * alpha));
             }
         }
-        // The flow: ochre streaks running round inside the liquid, tapered at both ends,
-        // faster while the size is unknown; they fade once the install is done.
+        // The flow: ochre streaks running round inside the liquid, tapered at both ends, faster while the size is unknown.
         let calm = if self.phase == Phase::Done { 1. - ease(self.since / 0.3) } else { 1. };
         if calm <= 0. {
             return;
@@ -354,8 +335,7 @@ impl Frame {
     }
 }
 
-/// A streak along the circle of radius `mid`, `half` wide at its middle and pointed at
-/// both ends, ending at angle `head` and `len` radians long.
+/// A streak along the circle of radius `mid`, `half` wide at its middle and pointed at both ends, ending at angle `head` and `len` radians long.
 fn comet(cx: f32, cy: f32, mid: f32, half: f32, head: f32, len: f32, amp: f32, t: f32) -> Vec<(f32, f32)> {
     let steps = 40;
     let at = |i: usize| {

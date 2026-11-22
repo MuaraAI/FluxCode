@@ -1,23 +1,4 @@
-//! What the agent is doing, as one connected timeline: thinking, reading, editing,
-//! running a command, searching. Every step is a row on the same rail, so a turn reads
-//! as one sequence instead of a pile of boxes.
-//!
-//! Motion has one job each, and nothing else moves:
-//! - a step that is running has its icon in the accent and a thin line sweeping under
-//!   it (the same sweep as a web search);
-//! - when it finishes, the label changes from "Reading" to "Read" with a short
-//!   cross-fade, the sweep is gone, and the time it took appears;
-//! - a new step slides in once, 6 px, in 160 ms.
-//!
-//! Two or more steps in a row fold into one group line ("Worked · 3 thoughts, 5
-//! tools · 12 s") that opens with a click; while the agent is on it, its newest step
-//! shows under the line. Rows have no hover tooltips: the row already says what it is.
-//! Animations run only while something changes, so an idle chat costs nothing.
-//!
-//! References: AI Elements' Reasoning ("Thought for N seconds", shimmer while
-//! streaming) and Chain of Thought, assistant-ui's grouped tool calls, HeroUI's streaming
-//! steps, Zed's tool cards, GAIA's collapsible tool timeline, Hightouch's agent activity
-//! log, Warp's command blocks, Perplexity's Searching / Reading / Writing steps.
+//! What the agent is doing, as one connected timeline: thinking, reading, editing, running a command, searching.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -45,8 +26,7 @@ pub fn verbs(kind: &str) -> (&'static str, &'static str, IconName) {
     }
 }
 
-/// Agents that send web tools as kind `other` with the tool's bare name (OpenCode's
-/// `websearch`, `webfetch`): the kind they mean, and what the row says they worked on.
+/// Agents that send web tools as kind `other` with the tool's bare name (OpenCode's `websearch`, `webfetch`): the kind they mean, and what the row says they worked on.
 pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str)> {
     if !matches!(kind, "other" | "") {
         return None;
@@ -58,8 +38,7 @@ pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str
     }
 }
 
-/// What a step works on, from its title: "Read src/main.rs" → "src/main.rs" (the
-/// verb is said by the row), "`cargo build`" → "cargo build" (shown as code).
+/// What a step works on, from its title: "Read src/main.rs" → "src/main.rs" (the verb is said by the row), "`cargo build`" → "cargo build" (shown as code).
 pub fn target(title: &str, kind: &str) -> (String, bool) {
     let t = title.trim();
     if let Some(cmd) = t.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
@@ -113,8 +92,7 @@ pub struct Step<'a> {
     /// A thought: its last line, shown dim after the label.
     pub note: Option<String>,
     pub open: bool,
-    /// An opened thought's full text: it sits inside the step, so the rail runs down
-    /// beside it to the next step.
+    /// An opened thought's full text: it sits inside the step, so the rail runs down beside it to the next step.
     pub detail: Option<String>,
 }
 
@@ -181,8 +159,7 @@ impl Workbench {
                 })
             })
             .when(what.is_empty(), |h| h.child(div().flex_1()))
-            // Time and chevron sit in fixed columns, so every row's time lines up on the
-            // right whether the row opens or not.
+            // Time and chevron sit in fixed columns, so every row's time lines up on the right whether the row opens or not.
             .child(
                 div()
                     .flex_none()
@@ -225,8 +202,7 @@ impl Workbench {
         let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
-            // The chat puts 8 px between items: a step joined to the one above eats it,
-            // so the rail runs on without a gap.
+            // The chat puts 8 px between items: a step joined to the one above eats it, so the rail runs on without a gap.
             .when(s.joined_up, |d| d.mt(px(-8.)))
             .gap_2()
             .items_stretch()

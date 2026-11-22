@@ -1,5 +1,4 @@
-//! Child processes with streamed output (ported from `start_process` in
-//! `src-tauri/src/lib.rs`). Output arrives on a channel the workbench drains.
+//! Child processes with streamed output (ported from `start_process` in `src-tauri/src/lib.rs`).
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::collections::HashMap;
@@ -48,9 +47,7 @@ pub fn shell_command(line: &str) -> Command {
     }
 }
 
-/// Python of the workspace venv if there is one; else on Windows the `py`
-/// launcher when installed (what python.org installs and what people type, so
-/// Run uses the same Python their `py -m pip install` went to), else `python`.
+/// Python of the workspace venv if there is one.
 pub fn python(workspace: Option<&Path>) -> String {
     if let Some(ws) = workspace {
         for venv in [".venv", "venv", "env"] {
@@ -194,7 +191,7 @@ pub fn strip_ansi(s: &str) -> String {
                     }
                 }
                 Some(']') => {
-                    // OSC ... BEL or ST
+                    // OSC ...
                     while let Some(n) = it.next() {
                         if n == '\u{7}' || n == '\u{1b}' {
                             break;

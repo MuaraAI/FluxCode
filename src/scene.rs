@@ -1,15 +1,4 @@
-//! Animated backgrounds behind the panels: twelve scenes drawn live (`scene_art`) in
-//! the active theme's colors, or none.
-//!
-//! They replace the pixel videos (rendered ASCII cells, 3-5 MB each, downloaded and then
-//! decoded frame by frame): a scene is now a few thousand GPU primitives a frame and no
-//! file at all, follows the theme the moment it changes, and fits any window size.
-//!
-//! The scene is its own view under the workbench, which is drawn as a cached view
-//! (`Shell`): a new frame repaints the backdrop and replays the workbench's last frame
-//! instead of rebuilding it. It moves 24 times a second while the window is in
-//! front, a few times a second behind other windows, and not at all when the animation
-//! is off in Settings.
+//! Animated backgrounds behind the panels: twelve scenes drawn live (`scene_art`) in the active theme's colors, or none.
 
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -48,8 +37,7 @@ impl Scene {
         Scene::Space,
     ];
 
-    /// The id saved in settings.json. Five kept the ids of the pixel videos they
-    /// replace, so a saved choice carries over.
+    /// The id saved in settings.json.
     pub fn id(self) -> &'static str {
         match self {
             Scene::Sky => "sky",
@@ -117,8 +105,7 @@ fn clock() -> f32 {
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
-/// A scene drawn into its element's bounds, standing still at `t` seconds (Settings'
-/// previews), in the theme's colors at the time it is drawn.
+/// A scene drawn into its element's bounds, standing still at `t` seconds (Settings' previews), in the theme's colors at the time it is drawn.
 pub fn preview(scene: Scene, t: f32) -> impl IntoElement {
     canvas(|_, _, _| (), move |b, _, window, _| crate::scene_art::paint(scene.id(), b, t, false, window)).size_full()
 }
@@ -137,10 +124,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-component's Root sets the rem to its 13 px text size on every render; the
-        // workbench resets it when it renders, but as a cached view it often doesn't (a
-        // popup opening re-renders only Root), and the whole interface would be laid out
-        // at 13 px. Shell renders whenever Root does, before the workbench is laid out.
+        // gpui-component's Root sets the rem to its 13 px text size on every render.
         window.set_rem_size(crate::theme::rem());
         let mut style = StyleRefinement::default();
         style.size.width = Some(relative(1.).into());
@@ -164,8 +148,7 @@ pub struct Backdrop {
     idle: bool,
 }
 
-/// 24 frames a second in front: the motions are slow (clouds, fog and stars move less
-/// than a pixel a frame), so this reads as smooth for about a fifth less work than 30.
+/// 24 frames a second in front: the motions are slow (clouds, fog and stars move less than a pixel a frame), so this reads as smooth for about a fifth less work than 30.
 const FRAME: Duration = Duration::from_millis(42);
 const IDLE_FRAME: Duration = Duration::from_millis(400);
 

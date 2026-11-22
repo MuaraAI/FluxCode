@@ -1,14 +1,4 @@
 //! Token saver: response-style packs that make the agent spend fewer tokens.
-//!
-//! A pack is a few lines of guidance sent with a message, not a setting of the agent:
-//! - Caveman (Lite / Full / Ultra): shorter answers, from "no filler" to telegraphic.
-//! - Lean code: changed lines or a small diff, never whole unchanged files.
-//! - Quiet tools: read and print only what the task needs.
-//!
-//! The guidance goes out with the next message when the packs change (or a new session
-//! starts), then again every few turns so a long chat doesn't drift; in between nothing
-//! is added, so the packs themselves cost almost nothing. Turning every pack off sends
-//! one line that cancels the earlier guidance.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -173,9 +163,7 @@ impl Workbench {
             .when(n > 0, |d| d.child(n.to_string()))
     }
 
-    /// How full the context is (0..1): the agent's own count when it sends one, else an
-    /// estimate (about 4 characters a token, over a 200K window) of what was said
-    /// since the last compaction.
+    /// How full the context is (0..1): the agent's own count when it sends one, else an estimate (about 4 characters a token, over a 200K window) of what was said since the last compaction.
     pub(crate) fn agent_context_fill(&self) -> f32 {
         if let Some(l) = self.agent.usage.live.as_ref().filter(|l| l.size > 0 && l.used > 0) {
             return l.used as f32 / l.size as f32;
@@ -191,10 +179,7 @@ impl Workbench {
         chars as f32 / 4. / DEFAULT_WINDOW as f32
     }
 
-    /// After a turn: when auto compact is on and the context is past its mark, compact
-    /// it. With the agent's own `/compact` (Claude, OpenCode, ...) that runs quietly in
-    /// the same session; otherwise the chat goes on in a fresh session that carries the
-    /// recent messages. True when a compaction started (the caller waits for it).
+    /// After a turn: when auto compact is on and the context is past its mark, compact it.
     pub(crate) fn agent_auto_compact(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.settings.saver_compact || self.agent.compacting {
             return false;
@@ -233,10 +218,7 @@ impl Workbench {
         }
     }
 
-    /// The token saver panel, floating over the chat above the message box. One line
-    /// per option (what it does is in its tooltip), the level and the compact mark as
-    /// small segmented controls under their option, in liquid glass. Never taller than
-    /// the room above the message box; what doesn't fit scrolls.
+    /// The token saver panel, floating over the chat above the message box.
     pub(crate) fn render_saver_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.agent.saver.open {
             return None;
@@ -248,7 +230,7 @@ impl Workbench {
         let (panel_top, composer_top) = self.agent.geom.get();
         let room = if composer_top > panel_top + 120. { composer_top - panel_top - 24. } else { 420. };
 
-        // One option: a line icon, the name, its switch. The tooltip says what it does.
+        // One option: a line icon, the name, its switch.
         let row = |key: &'static str, icon: Ico, title: &'static str, tip: SharedString, checked: bool, cx: &mut Context<Self>, set: fn(&mut Workbench, bool, &mut Context<Workbench>)| {
             h_flex()
                 .id(SharedString::from(format!("sv-row-{key}")))

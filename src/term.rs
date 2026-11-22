@@ -1,18 +1,8 @@
 //! The terminal's smarts, kept free of UI so they can be unit tested:
-//!
-//! - `autocorrect`: `pip i` → `pip install`, typos in command names (`pyhton`),
-//!   and file names that don't exist but have one close match
-//!   (`-r reqirmemts.txt` → `-r requirements.txt`, `py app` → `py app.py`).
-//! - `classify`: how one output line should look (error, warning, notice,
-//!   traceback frame, ...), so stderr is no longer painted red wholesale.
-//! - `parse_python_error`: the last Python traceback in a run, reduced to what
-//!   the error card shows: error type, message, file:line, the code line, a
-//!   plain-language hint and, when there is an obvious fix, a command to run it.
 
 use std::path::{Path, PathBuf};
 
-/// How a line of terminal output is drawn. Every kind maps to one theme token
-/// in `panel.rs`, so the same meaning always gets the same color.
+/// How a line of terminal output is drawn.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LineKind {
     Normal,
@@ -34,8 +24,7 @@ pub enum LineKind {
     Fixed,
     /// The end of a command: exit status and time.
     Status,
-    /// The outcome under a status line: what a build produced (FluxCompile's jar
-    /// line), or, with `err`, the line that says why the command failed.
+    /// The outcome under a status line: what a build produced (FluxCompile's jar line), or, with `err`, the line that says why the command failed.
     Result,
     /// `@@ -5,3 +5,4 @@` in a diff.
     Hunk,
@@ -48,7 +37,6 @@ pub enum LineKind {
     Blank,
 }
 
-// ------------------------------------------------------------ edit distance
 
 /// Optimal string alignment distance (Levenshtein + adjacent swaps), on chars.
 pub fn distance(a: &str, b: &str) -> usize {
@@ -108,7 +96,6 @@ fn closest<'a>(word: &str, candidates: impl IntoIterator<Item = &'a str>) -> Opt
     if tie { None } else { best.map(|b| b.0) }
 }
 
-// ------------------------------------------------------------ tokens
 
 /// Byte spans of the words in a command line; quoted words keep their quotes.
 fn tokens(line: &str) -> Vec<(usize, usize)> {
@@ -148,8 +135,7 @@ pub fn is_python(token: &str) -> bool {
     matches!(program_name(token).as_str(), "py" | "python" | "python3" | "pythonw" | "pyw")
 }
 
-/// Commands the auto-correct knows. A typo is only fixed toward one of these,
-/// and only when the typed name is not a real program on PATH.
+/// Commands the auto-correct knows.
 const KNOWN: &[&str] = &[
     "python", "python3", "py", "pip", "pip3", "pipx", "uv", "node", "npm", "npx", "pnpm", "yarn", "bun",
     "deno", "git", "cargo", "rustc", "code", "cd", "dir", "cls", "clear", "echo", "type", "where", "mkdir",
@@ -212,7 +198,6 @@ fn entries(dir: &Path) -> Vec<(String, bool)> {
 }
 
 /// A file argument that doesn't exist: the one existing file it most likely means.
-/// `want_ext` lists extensions to try when the name has none (`py app` → `app.py`).
 fn fix_file(arg: &str, cwd: &Path, want_ext: &[&str]) -> Option<String> {
     let raw = unquote(arg);
     if raw.is_empty() || raw.starts_with('-') || raw.contains(['*', '?', '<', '>', '|']) || cwd.join(raw).exists() {
@@ -232,8 +217,7 @@ fn fix_file(arg: &str, cwd: &Path, want_ext: &[&str]) -> Option<String> {
             }
         }
     }
-    // A script name cut short or slightly off (`py ap`, `py aap`): match the
-    // stems of files with the expected extension.
+    // A script name cut short or slightly off (`py ap`, `py aap`): match the stems of files with the expected extension.
     let stem_hit = (!want_ext.is_empty() && !name.contains('.') && name.chars().count() >= 2)
         .then(|| {
             let lower = name.to_lowercase();
@@ -270,9 +254,7 @@ pub struct Correction {
     pub fixes: Vec<(String, String)>,
 }
 
-/// Fix the obvious slips in a command line before it runs. Only safe rewrites:
-/// pip sub-command aliases and typos, a misspelled command name, and file
-/// arguments that don't exist but have exactly one close match.
+/// Fix the obvious slips in a command line before it runs.
 pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     let spans = tokens(line);
     if spans.is_empty() {
@@ -282,7 +264,7 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     // (span index, replacement)
     let mut edits: Vec<(usize, String)> = Vec::new();
 
-    // 1. The command name.
+    // 1.
     let first = words[0];
     let first_lower = first.to_ascii_lowercase();
     let mut program = program_name(first);
@@ -340,7 +322,7 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
         python_script_from = Some(1);
     }
 
-    // 3. The script for python / node, and the file for type.
+    // 3.
     let script = |from: usize, exts: &[&str], edits: &mut Vec<(usize, String)>| {
         for i in from..words.len() {
             let w = words[i];
@@ -395,9 +377,7 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     Some(Correction { line: out, fixes })
 }
 
-/// Tab in the terminal: complete the last word as a path (or a command name
-/// when it is the only word). Returns the new line and, when several names
-/// match, the list to show.
+/// Tab in the terminal: complete the last word as a path (or a command name when it is the only word).
 pub fn complete(line: &str, cwd: &Path) -> (Option<String>, Vec<String>) {
     let start = line.rfind(' ').map_or(0, |i| i + 1);
     let word = line[start..].trim_start_matches('"');
@@ -446,7 +426,6 @@ pub fn complete(line: &str, cwd: &Path) -> (Option<String>, Vec<String>) {
     }
 }
 
-// ------------------------------------------------------------ classification
 
 fn is_ident_path(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
@@ -529,8 +508,7 @@ pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
     Some((path.to_string(), line))
 }
 
-/// The kind of one finished (or growing) output line. `prev` is the kind of the
-/// line above it, so a traceback's code and caret lines can be recognized.
+/// The kind of one finished (or growing) output line.
 pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     let t = text.trim_start();
     let indented = text.len() != t.len();
@@ -631,7 +609,6 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     LineKind::Normal
 }
 
-// ------------------------------------------------------------ Python errors
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PyError {
@@ -795,7 +772,6 @@ fn advise(kind: &str, msg: &str, python: &str, cwd: &Path) -> (Option<String>, O
 }
 
 /// The last Python error in a block of output lines (`(text, kind)` as classified).
-/// `python` is the interpreter used, for the fix command.
 pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) -> Option<PyError> {
     let err_ix = lines.iter().rposition(|(t, k)| *k == LineKind::Err && python_error_line(t).is_some())?;
     let (kind, message) = python_error_line(lines[err_ix].0)?;
@@ -847,8 +823,7 @@ pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) 
     })
 }
 
-/// What went wrong in a finished command, for the card: a Python error, a script
-/// Python can't find, or a command Windows doesn't know.
+/// What went wrong in a finished command, for the card: a Python error, a script Python can't find, or a command Windows doesn't know.
 pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cwd: &Path) -> Option<PyError> {
     if let Some(e) = parse_python_error(lines, python, cwd) {
         return Some(e);
@@ -893,10 +868,6 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
 }
 
 /// Break a long message into rows for the card (the panel list has fixed-height rows).
-/// The line that says why a failed command failed, shown under its status line:
-/// the first compiler error with a file:line, else what Gradle says went wrong,
-/// else the last specific error line. `None` when the output doesn't say, or when
-/// the reason is already one of the last lines above the status.
 pub fn failure_reason(lines: &[(&str, LineKind)]) -> Option<String> {
     let generic = |t: &str| {
         let t = t.trim_start();
@@ -923,9 +894,7 @@ fn home_lower() -> &'static str {
     })
 }
 
-/// How a line reads on screen: pip's long "already satisfied … site-packages"
-/// lines become "customtkinter 6.0.0 is already installed", and the home folder
-/// becomes `~`. The stored text stays as printed (links and error parsing use it).
+/// How a line reads on screen: pip's long "already satisfied … site-packages" lines become "customtkinter 6.0.0 is already installed", and the home folder becomes `~`.
 pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
     if let Some(rest) = text.strip_prefix("Requirement already satisfied: ") {
         let pkg = rest.split(" in ").next().unwrap_or(rest).trim();
@@ -960,10 +929,7 @@ pub fn display_text(text: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
-/// Split a line into rows of at most `cols` characters, breaking after a space,
-/// `\` or `/` when one is near the end, so paths wrap at a folder boundary.
-/// Returns byte ranges.
-/// `hang` is how many fewer fit on the rows after the first (they are indented).
+/// Split a line into rows of at most `cols` characters, breaking after a space, `\` or `/` when one is near the end, so paths wrap at a folder boundary.
 pub fn wrap_ranges(s: &str, first: usize, hang: usize) -> Vec<(usize, usize)> {
     let first = first.max(8);
     let rest = first.saturating_sub(hang).max(8);
@@ -1000,8 +966,7 @@ pub fn elapsed(d: std::time::Duration) -> String {
     }
 }
 
-/// `C:\Users\me\Documents\proj\src` → `~\Documents\proj\src`; inside the open
-/// folder, from the folder's own name.
+/// `C:\Users\me\Documents\proj\src` → `~\Documents\proj\src`; inside the open folder, from the folder's own name.
 pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     if let Some(root) = root {
         if let Ok(rel) = cwd.strip_prefix(root) {
@@ -1017,9 +982,7 @@ pub fn short_cwd(cwd: &Path, root: Option<&Path>) -> String {
     cwd.display().to_string()
 }
 
-/// A path cut from the left to at most `max` characters, keeping whole folder
-/// names where it can: `~\Documents\Project Pribadi\app` → `…\Project Pribadi\app`.
-/// The end of a path says where you are; the start is what can go.
+/// A path cut from the left to at most `max` characters, keeping whole folder names where it can: `~\Documents\Project Pribadi\app` → `…\Project Pribadi\app`.
 pub fn fit_path_left(path: &str, max: usize) -> String {
     let n = path.chars().count();
     if n <= max {

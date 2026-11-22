@@ -1,11 +1,4 @@
-//! Tidy an agent's text before it is drawn as Markdown, so it reads as cleanly as the
-//! agent meant it to:
-//! - choices written inline ("… pilihannya (a) panel kompak, atau (b) panel penuh.")
-//!   become a list, one choice per line, with the letter in bold;
-//! - a thought streamed as one long run gets a paragraph break after a sentence that
-//!   ends one line of reasoning and starts the next ("…too small. But actually…").
-//! Code blocks are left exactly as they are. The text is only copied when something
-//! changes, so the common case costs one scan.
+//! Tidy an agent's text before it is drawn as Markdown, so it reads as cleanly as the agent meant it to: - choices written inline ("… pilihannya (a) panel kompak, atau (b) panel penuh.") become a list, one choice per line, with the letter in bold.
 
 use std::borrow::Cow;
 
@@ -62,7 +55,7 @@ fn split_choices(line: &str, out: &mut String) -> bool {
         let end = m.get(k + 1).map_or(line.len(), |n| n.0);
         let body = line[at + 3..end].trim();
         let body = if k + 1 < m.len() { trim_joiner(body) } else { body };
-        // The last choice may run on into a closing sentence: "… vanilla. Atau kalau …".
+        // The last choice may run on into a closing sentence: "… vanilla.
         let (body, tail) = match (k + 1 == m.len()).then(|| body.find(". ")).flatten() {
             Some(dot) => (&body[..=dot], body[dot + 1..].trim()),
             None => (body, ""),
@@ -113,7 +106,7 @@ pub fn thought(text: &str) -> String {
     while let Some((i, ch)) = chars.next() {
         out.push(ch);
         run = if ch == '\n' { 0 } else { run + 1 };
-        // ". But", "? So", "! Now": a new line of thought after a long stretch.
+        // ".
         if matches!(ch, '.' | '?' | '!') && run > 220 && t[i + 1..].starts_with(' ') {
             let next = t[i + 1..].trim_start();
             if next.chars().next().is_some_and(char::is_uppercase) {

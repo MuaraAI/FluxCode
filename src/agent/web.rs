@@ -1,10 +1,4 @@
-//! A web search (or a page read) in the chat, drawn as what it is: the query, the
-//! sources it found, each a click away, instead of a generic "Tool" row.
-//!
-//! Motion, after Perplexity's and ChatGPT's search steps: while it runs, a thin line
-//! sweeps under the title (the one moving thing, and only while there is something
-//! to wait for); when results come in, the rows appear one after another, 40 ms apart,
-//! once. Nothing loops after that.
+//! A web search (or a page read) in the chat, drawn as what it is: the query, the sources it found, each a click away, instead of a generic "Tool" row.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};

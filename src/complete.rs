@@ -1,13 +1,4 @@
 //! Suggestions in the code editor come from GitHub Copilot only.
-//!
-//! The editor asks for one a moment after typing stops, shows it dimmed after
-//! the cursor (ghost text), and Tab accepts it. There is no local completion
-//! menu: the old word / keyword / Emmet menu opened on almost every key, and
-//! while a menu is open the editor never asks for ghost text, so it kept
-//! Copilot from showing anything.
-//!
-//! Timing follows VS Code: the editor waits only a short moment (VS Code's
-//! default is 50 ms) and the Copilot server applies its own debounce.
 
 use anyhow::Result;
 use gpui_kit::component::input::{CompletionProvider, EditorState, Rope};
@@ -41,8 +32,7 @@ struct Copilot {
 }
 
 impl CompletionProvider for Copilot {
-    /// Copilot ghost text. The request runs on a background thread; when Copilot
-    /// is off, signed out, or its server is missing, this quietly returns nothing.
+    /// Copilot ghost text.
     fn inline_completion(&self, rope: &Rope, offset: usize, trigger: InlineCompletionContext, _: &mut Window, cx: &mut App) -> Task<Result<InlineCompletionResponse>> {
         if !self.copilot.enabled() {
             return Task::ready(Ok(InlineCompletionResponse::Array(Vec::new())));

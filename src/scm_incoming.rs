@@ -1,12 +1,4 @@
-//! New commits on the remote, before you pull them: Source Control fetches quietly in
-//! the background, and when the branch's upstream has commits this checkout doesn't,
-//! a card at the top lists each one (title, author, when) with Pull and Not now. A
-//! commit opens to the files it changed; a file opens its diff in the Output panel.
-//!
-//! Light: one `git fetch --quiet --prune` every five minutes while a repository with an
-//! upstream is open (and when the window comes back after two minutes away), with no
-//! prompts (a background fetch never asks for a password); the commit list is read only
-//! when the branch is behind, and a commit's files only when it is opened.
+//! New commits on the remote, before you pull them: Source Control fetches quietly in the background, and when the branch's upstream has commits this checkout doesn't, a card at the top lists each one (title, author, when) with Pull and Not now.
 
 use crate::i18n::tr;
 use crate::scm::{code_color, Commit};
@@ -222,9 +214,7 @@ impl Workbench {
         .detach();
     }
 
-    /// The Incoming section at the top of Source Control: what the remote has that you
-    /// don't. Drawn like the Changes and Graph sections (no card), each commit like a
-    /// Graph row with a hollow dot, since it isn't in this checkout yet.
+    /// The Incoming section at the top of Source Control: what the remote has that you don't.
     pub(crate) fn render_scm_incoming(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.scm_has_incoming() {
             return None;

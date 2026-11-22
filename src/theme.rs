@@ -1,24 +1,4 @@
-//! Color themes: FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara (light and dark)
-//! and FluxSky (the website's dusk, with its clouds behind the panels).
-//!
-//! Changing theme fades: for `FADE` every color is mixed from the old palette to the
-//! new one (`fade_from`), so the whole window glides into the new colors instead of
-//! jumping.
-//!
-//! Every color in the UI is a token (`theme::FG`, `theme::ACCENT`, ...). `c(token)`
-//! reads the active palette, so switching themes only needs `set` + `apply` and a
-//! redraw; no call site changes. Raw hex colors (file-type badges) go through `c`
-//! too and stay as they are.
-//!
-//! With a background image, the panel surfaces become translucent: the image
-//! shows through every panel at the chosen strength, and more on the right side
-//! of the editor than on the code side (see `editor_wash`). The secondary text
-//! colors were chosen so they still reach WCAG AA (4.5:1) over a bright image at
-//! the default strength; see `Visibility`.
-//!
-//! Installed VS Code color themes add palettes at run time (`set_extra`, built by
-//! `ext::vsx_theme`); they carry their own code colors, where the built-in palettes
-//! use gpui-kit's default syntax theme.
+//! Color themes: FluxDark, FluxCream, FluxMono, FluxRed, FluxMuara (light and dark) and FluxSky (the website's dusk, with its clouds behind the panels).
 
 use gpui_kit::component::highlighter::HighlightThemeStyle;
 use gpui_kit::component::{Theme, ThemeMode};
@@ -106,8 +86,7 @@ pub struct Palette {
     pub(crate) folder: u32,
     pub(crate) select: u32,
     pub(crate) selection: u32,
-    /// Code colors of its own (a VS Code theme's `tokenColors`); `None` keeps
-    /// gpui-kit's default syntax theme for dark or light.
+    /// Code colors of its own (a VS Code theme's `tokenColors`); `None` keeps gpui-kit's default syntax theme for dark or light.
     pub(crate) syntax: Option<&'static HighlightThemeStyle>,
 }
 
@@ -144,14 +123,7 @@ impl Palette {
     }
 }
 
-// The palettes come from the icon: ink ground, ivory text, one ochre accent (the
-// colors of a meander painted on a Geometric-period pot). Accents are muted on
-// purpose; color marks state (focus, the primary action, errors), not decoration.
-//
-// Contrast (checked with a script, WCAG 2.1): fg, muted, dim, accent text and the
-// state colors are >= 4.5:1 on every surface, and still >= 4.5:1 over a white (dark
-// themes) or black (FluxCream) image pixel at the Balanced strength. Text on accent
-// fills >= 5.1:1.
+// The palettes come from the icon: ink ground, ivory text, one ochre accent (the colors of a meander painted on a Geometric-period pot).
 pub static PALETTES: [Palette; 7] = [
     Palette {
         id: "flux-dark",
@@ -271,8 +243,7 @@ pub static PALETTES: [Palette; 7] = [
         name: "FluxMuara",
         note: "Mist canvas, river-blue accent",
         dark: false,
-        // The Muara AI brand palette (DESIGN.md, UBSI-API landing page): mist water
-        // canvas, white crystal surfaces, riverbed ink and one river current blue.
+        // The Muara AI brand palette (DESIGN.md, UBSI-API landing page): mist water canvas, white crystal surfaces, riverbed ink and one river current blue.
         title: 0xeaf3f9,
         side: 0xf0f7fb,
         editor: 0xffffff,
@@ -302,8 +273,7 @@ pub static PALETTES: [Palette; 7] = [
         name: "FluxMuara Dark",
         note: "Night water, river-blue accent",
         dark: true,
-        // The same Muara AI palette at night: riverbed ink surfaces (the design's
-        // code-block colors) with the river current blue lifted for the dark canvas.
+        // The same Muara AI palette at night: riverbed ink surfaces (the design's code-block colors) with the river current blue lifted for the dark canvas.
         title: 0x0e1922,
         side: 0x111e2a,
         editor: 0x131b26,
@@ -333,9 +303,7 @@ pub static PALETTES: [Palette; 7] = [
         name: "FluxSky",
         note: "Dusk sky and clouds, peach accent",
         dark: true,
-        // The website's dusk (fluxcode.muaraai.com): violet night surfaces from the top
-        // of its sky, the warm horizon glow as the accent. Picked with no background of
-        // its own, it brings the drifting clouds behind the panels (`scene::Scene::Sky`).
+        // The website's dusk (fluxcode.muaraai.com): violet night surfaces from the top of its sky, the warm horizon glow as the accent.
         title: 0x15131f,
         side: 0x191626,
         editor: 0x1c1929,
@@ -373,7 +341,7 @@ fn now_ms() -> u64 {
     CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
 }
 
-/// Fade from `old` into whatever `set` selects next. Call it before `set`.
+/// Fade from `old` into whatever `set` selects next.
 pub fn fade_from(old: &'static Palette) {
     FADE_AT.store(now_ms(), Ordering::Relaxed);
     FROM.store(old as *const Palette as *mut Palette, Ordering::Relaxed);
@@ -410,8 +378,7 @@ fn now(t: Tok) -> Hsla {
     }
 }
 
-/// A token's color right now as hex, mid-fade the mix: for drawings that take their
-/// colors from the theme (the animated backgrounds), so they change with it.
+/// A token's color right now as hex, mid-fade the mix: for drawings that take their colors from the theme (the animated backgrounds), so they change with it.
 pub fn live(t: Tok) -> u32 {
     let to = palette().hex(t);
     match fade() {
@@ -444,8 +411,7 @@ pub enum Visibility {
     Subtle,
     #[default]
     Balanced,
-    /// Above the level the text colors were checked at: dim text can drop below
-    /// 4.5:1 over very bright pictures. Settings says so next to the option.
+    /// Above the level the text colors were checked at: dim text can drop below 4.5:1 over very bright pictures.
     Strong,
 }
 
@@ -470,8 +436,7 @@ impl Visibility {
     }
 }
 
-/// Size of the whole interface (text, rows, bars, icons). The editor's own font
-/// size is a separate setting.
+/// Size of the whole interface (text, rows, bars, icons).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, Default)]
 pub enum UiSize {
     Compact,
@@ -527,8 +492,7 @@ pub fn rem() -> gpui_kit::Pixels {
 /// 0 = no image, otherwise Visibility index + 1.
 static IMAGE: AtomicU8 = AtomicU8::new(0);
 static GLASS: AtomicBool = AtomicBool::new(false);
-/// The backdrop is a drawn scene, not a photo: its colors are calm and mid-dark, so the
-/// panels can let much more of it through and text keeps its contrast.
+/// The backdrop is a drawn scene, not a photo: its colors are calm and mid-dark, so the panels can let much more of it through and text keeps its contrast.
 static SCENE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_scene_backdrop(on: bool) {
@@ -553,8 +517,7 @@ pub fn palette() -> &'static Palette {
     if p.is_null() {
         &PALETTES[0]
     } else {
-        // SAFETY: `ACTIVE` only ever holds a pointer made from a `&'static Palette`
-        // (an element of `PALETTES` or a leaked extension palette), never freed.
+        // SAFETY: `ACTIVE` only ever holds a pointer made from a `&'static Palette` (an element of `PALETTES` or a leaked extension palette), never freed.
         unsafe { &*p }
     }
 }
@@ -573,8 +536,7 @@ pub fn find(id: &str) -> Option<&'static Palette> {
     EXTRA.read().unwrap_or_else(|e| e.into_inner()).iter().copied().find(|p| p.id == id)
 }
 
-/// Replace the palettes from installed VS Code themes. The active one stays as it
-/// is until the next `set` (which falls back to FluxDark if its theme is gone).
+/// Replace the palettes from installed VS Code themes.
 pub fn set_extra(list: Vec<&'static Palette>) {
     *EXTRA.write().unwrap_or_else(|e| e.into_inner()) = list;
 }
@@ -616,14 +578,12 @@ pub fn c(p: impl Into<Paint>) -> Hsla {
         Paint::Tok(t) => {
             let col: Hsla = now(t);
             match (image(), t) {
-                // Panels become translucent over the image; the title bar and popovers stay
-                // nearly solid (menus and window buttons sit on them).
+                // Panels become translucent over the image; the title bar and popovers stay nearly solid (menus and window buttons sit on them).
                 (Some(v), Tok::BgTitle) => col.opacity(1. - strength(v) * 0.5),
                 (Some(v), Tok::BgSide) => col.opacity(1. - strength(v) * 0.8),
                 (Some(v), Tok::BgEditor) => col.opacity(1. - strength(v) * 0.6),
                 (Some(v), Tok::BgElevated) => col.opacity(1. - strength(v) * 0.3),
-                // Glass over the blurred desktop: the code surface stays nearly solid
-                // for contrast, the chrome around it lets more through.
+                // Glass over the blurred desktop: the code surface stays nearly solid for contrast, the chrome around it lets more through.
                 (None, Tok::BgTitle) if glass() => col.opacity(0.72),
                 (None, Tok::BgSide) if glass() => col.opacity(0.76),
                 (None, Tok::BgEditor) if glass() => col.opacity(0.88),
@@ -634,9 +594,7 @@ pub fn c(p: impl Into<Paint>) -> Hsla {
     }
 }
 
-/// A file-type color for icons. On the light theme the bright language colors
-/// are darkened so the outline icons keep enough contrast on paper; `None` is
-/// the neutral icon color.
+/// A file-type color for icons.
 pub fn tint(hex: Option<u32>) -> Hsla {
     match hex {
         None => c(FG_MUTED),
@@ -648,11 +606,7 @@ pub fn tint(hex: Option<u32>) -> Hsla {
     }
 }
 
-/// The editor surface. With an image, a left-to-right wash: the code side lets
-/// 60% of the image strength through, the far right all of it, so the picture
-/// lives where code usually is not.
-/// The welcome page over a scene or picture: a light shade, enough for its text and
-/// shortcuts to read on a bright sky, while the picture still shows through.
+/// The editor surface.
 pub fn welcome_tint() -> Background {
     let base: Hsla = rgb(palette().editor).into();
     let a = if palette().dark { 0.6 } else { 0.62 };
@@ -664,8 +618,7 @@ pub fn editor_wash() -> Background {
     match image() {
         None if glass() => base.opacity(0.88).into(),
         None => base.into(),
-        // The code side keeps the photo-level strength even over a scene, so text
-        // always sits on a calm surface; the scene's extra strength shows at the right.
+        // The code side keeps the photo-level strength even over a scene, so text always sits on a calm surface.
         Some(v) => linear_gradient(
             90.,
             linear_color_stop(base.opacity(1. - v.strength() * 0.6), 0.45),
@@ -691,8 +644,7 @@ pub fn apply(cx: &mut App) {
         t.radius_lg = gpui_kit::px(6.);
 
         let k = &mut t.colors;
-        // Inputs and the title bar (which blends title_bar with this) use it; the code
-        // editor gets its own clear background below so the wash behind it shows.
+        // Inputs and the title bar (which blends title_bar with this) use it.
         k.background = c(BG_EDITOR);
         k.foreground = c(FG);
         k.muted = c(BG_ELEVATED);
@@ -740,8 +692,7 @@ pub fn apply(cx: &mut App) {
         k.scrollbar_thumb = c(BORDER_STRONG);
         k.scrollbar_thumb_hover = c(FG_DIM);
 
-        // The code editor paints its own background and gutter from the syntax theme's
-        // style block, not from the colors above: point those at the palette too.
+        // The code editor paints its own background and gutter from the syntax theme's style block, not from the colors above: point those at the palette too.
         let mut hl = (*t.highlight_theme).clone();
         // A VS Code theme brings its own code and diagnostic colors.
         if let Some(own) = p.syntax {
@@ -750,8 +701,7 @@ pub fn apply(cx: &mut App) {
         }
         let st = &mut hl.style;
         st.editor_background = Some(if image().is_some() { gpui_kit::transparent_black() } else { c(BG_EDITOR) });
-        // The line numbers sit on the same surface as the code (the syntax theme's own
-        // gutter color would be a solid stripe over a backdrop).
+        // The line numbers sit on the same surface as the code (the syntax theme's own gutter color would be a solid stripe over a backdrop).
         st.editor_gutter_background = st.editor_background;
         st.editor_foreground = Some(c(FG));
         st.editor_active_line = Some(c(FG).opacity(0.05));
@@ -782,9 +732,7 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    /// The contract stated in the palette comment above: text colors reach 4.5:1
-    /// on every surface the UI paints text over, and text on an accent fill is
-    /// even clearer. A new palette must pass this before it ships.
+    /// The contract stated in the palette comment above: text colors reach 4.5:1 on every surface the UI paints text over, and text on an accent fill is even clearer.
     #[test]
     fn every_palette_is_readable_on_every_surface() {
         let text = [Tok::Fg, Tok::FgStrong, Tok::FgMuted, Tok::FgDim, Tok::AccentText, Tok::Blue, Tok::Green, Tok::Warn, Tok::Danger, Tok::Folder];
@@ -833,16 +781,12 @@ mod tests {
     }
 }
 
-/// The fill of a liquid glass card: translucent, lit from the top edge down. Without
-/// glass it is the plain raised surface, so cards still read as cards.
+/// The fill of a liquid glass card: translucent, lit from the top edge down.
 pub fn glass_fill() -> Background {
     glass_with(0.9, 0.84)
 }
 
-/// A floating surface's liquid glass (menus, popovers, toasts, the token saver):
-/// translucent, a little lighter at the top like light caught in glass, over a
-/// soft shadow. GPUI can't blur what is under a panel, so it stays opaque enough
-/// for text on top to read; with liquid glass off in Settings it is solid.
+/// A floating surface's liquid glass (menus, popovers, toasts, the token saver): translucent, a little lighter at the top like light caught in glass, over a soft shadow.
 pub fn glass_pop_fill() -> Background {
     let base: Hsla = now(Tok::BgElevated);
     if !glass() {
@@ -850,8 +794,7 @@ pub fn glass_pop_fill() -> Background {
     }
     let dark = palette().dark;
     let top = Hsla { l: (base.l + if dark { 0.05 } else { 0.03 }).clamp(0., 1.), ..base };
-    // Nearly solid: without a blur, even a tenth of the chat's white text under a
-    // dark panel reads through it.
+    // Nearly solid: without a blur, even a tenth of the chat's white text under a dark panel reads through it.
     let (a_top, a_bottom) = (0.97, 0.95);
     linear_gradient(180., linear_color_stop(top.opacity(a_top), 0.), linear_color_stop(base.opacity(a_bottom), 1.))
 }

@@ -1,13 +1,4 @@
 //! Drawing a Flux document in FluxCode, light at any size:
-//!
-//! - The document is a GPUI `list` of small groups of blocks (a heading starts one, a
-//!   big block such as a flowchart or an image is one on its own): only the groups in
-//!   view are laid out and painted, and the list keeps one entry per group, not per
-//!   block. Inline marks are worked out as a block comes into view.
-//! - A large document's text is kept DEFLATE-packed in 64 KiB frames; drawing unpacks
-//!   just the frames on screen (a few stay unpacked). The blocks hold byte offsets.
-//! - A large document opens with its first part read at once and drawn; the rest is
-//!   read and packed on another thread, then takes its place.
 
 use super::{arg, args, cells, flow, inline, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
 use crate::theme::{self, c};
@@ -110,7 +101,7 @@ pub struct Prepared {
     ms: f32,
 }
 
-/// Read a document and pack its text when it is large. Runs anywhere (no UI).
+/// Read a document and pack its text when it is large.
 pub fn prepare(src: String) -> Prepared {
     let t = std::time::Instant::now();
     let doc = super::parse(&src);
@@ -342,7 +333,7 @@ impl Ctx<'_> {
         .into_any_element()
     }
 
-    /// One block. `pos`: its index among the blocks around it; `next`: the block after it.
+    /// One block.
     fn block(&self, b: &Block, bi: usize, pos: usize, next: Option<&Block>, cx: &mut App) -> AnyElement {
         let id = |k: &str| ElementId::Name(format!("fx-{k}-{bi}").into());
         match *b {
@@ -417,8 +408,7 @@ impl Ctx<'_> {
                 .bg(c(theme::BG_EDITOR))
                 .overflow_hidden()
                 .when(!lang.is_empty(), |v| v.child(div().px_3().pt_2().text_xs().text_color(c(theme::FG_DIM)).child(lang)))
-                // Long lines wrap: a sideways scroller here would also catch the wheel
-                // while the page is being scrolled past it.
+                // Long lines wrap: a sideways scroller here would also catch the wheel while the page is being scrolled past it.
                 .child(
                     div()
                         .px_3()
@@ -493,8 +483,7 @@ impl Ctx<'_> {
         if p.is_absolute() { p } else { self.sh.base.join(p) }
     }
 
-    /// One picture: `width=` in px or %, `dark=` another file for dark themes, `link=`
-    /// what a click opens.
+    /// One picture: `width=` in px or %, `dark=` another file for dark themes, `link=` what a click opens.
     fn picture(&self, a: super::Span, id: usize) -> AnyElement {
         // The directive's own text, and its arguments as spans of it.
         let arg_text = self.t(a);
@@ -915,8 +904,7 @@ impl Ctx<'_> {
     }
 }
 
-/// Highlights may overlap (a link in bold): GPUI wants them sorted and apart, so later
-/// ones split earlier ones and the pieces combine.
+/// Highlights may overlap (a link in bold): GPUI wants them sorted and apart, so later ones split earlier ones and the pieces combine.
 fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     if hl.len() < 2 {
         return hl;
@@ -949,9 +937,7 @@ pub fn is_flux(path: &std::path::Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("flux"))
 }
 
-/// What a file draws, from its extension: `Some(true)` for Markdown (drawn through
-/// the shim, Source first), `Some(false)` for Flux (drawn directly, Preview first),
-/// None for everything the plain editor shows.
+/// What a file draws, from its extension: `Some(true)` for Markdown (drawn through the shim, Source first), `Some(false)` for Flux (drawn directly, Preview first), None for everything the plain editor shows.
 pub fn drawable_kind(path: &std::path::Path) -> Option<bool> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -961,8 +947,7 @@ pub fn drawable_kind(path: &std::path::Path) -> Option<bool> {
     }
 }
 
-/// The bar's export-to-Markdown button writes `.md` next to a Flux document; a
-/// Markdown file already is one.
+/// The bar's export-to-Markdown button writes `.md` next to a Flux document; a Markdown file already is one.
 pub fn shows_md_export(path: &std::path::Path) -> bool {
     is_flux(path)
 }
@@ -973,9 +958,7 @@ pub fn ui_lang() -> &'static str {
 }
 
 impl crate::workbench::Workbench {
-    /// A drawn document's actions, small enough to sit at the right end of the
-    /// breadcrumb row instead of taking a row of their own: Preview / Source, and
-    /// (Flux only) Markdown export. What the document holds is in the tooltip.
+    /// A drawn document's actions, small enough to sit at the right end of the breadcrumb row instead of taking a row of their own: Preview / Source, and (Flux only) Markdown export.
     pub(crate) fn render_flux_bar(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         use crate::i18n::tr;
         let d = &self.docs[ix];
@@ -1037,8 +1020,7 @@ impl crate::workbench::Workbench {
             .into_any_element()
     }
 
-    /// Switch a Flux document between its drawing and its source (drawn from the text
-    /// in the editor, edits and all).
+    /// Switch a Flux document between its drawing and its source (drawn from the text in the editor, edits and all).
     fn flux_show(&mut self, ix: usize, source: bool, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.docs.len() {
             return;
@@ -1054,8 +1036,7 @@ impl crate::workbench::Workbench {
         if !source && self.docs[ix].flux_source {
             let d = &mut self.docs[ix];
             let mut text = d.editor.read(cx).value().to_string();
-            // A Markdown document draws the shim's output of its text, never the raw
-            // file: rebuild it here, or every Preview click would draw the raw page.
+            // A Markdown document draws the shim's output of its text, never the raw file: rebuild it here, or every Preview click would draw the raw page.
             if crate::fluxdoc::view::drawable_kind(&d.path) == Some(true) {
                 text = crate::fluxdoc::gfm::to_flux(&text);
             }

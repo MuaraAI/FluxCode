@@ -17,12 +17,10 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 
-/// The id of the row a new file or folder is typed into. It starts with a
-/// control character, so it can never be a real path.
+/// The id of the row a new file or folder is typed into.
 pub(crate) const PENDING_ROW_ID: &str = "\u{1}pending";
 
-/// A stray press ends the name being typed only when there is nothing
-/// to lose: a non-empty name survives it (the press is swallowed).
+/// A stray press ends the name being typed only when there is nothing to lose: a non-empty name survives it (the press is swallowed).
 fn stray_press_keeps_input(pending: &Option<PendingOp>, typed: &str) -> bool {
     matches!(
         pending,
@@ -31,9 +29,6 @@ fn stray_press_keeps_input(pending: &Option<PendingOp>, typed: &str) -> bool {
 }
 
 /// Put the typing row first inside the folder a new file or folder goes into.
-/// The workspace root itself is not a row when one folder is open, so the row
-/// goes at the top of the list then. Rename and delete type in place, so they
-/// need no row here.
 pub(crate) fn insert_pending_row(items: &mut Vec<TreeItem>, pending: Option<&PendingOp>, root: Option<&Path>) {
     let Some(dir) = (match pending {
         Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => Some(d),
@@ -59,8 +54,7 @@ pub(crate) fn insert_pending_row(items: &mut Vec<TreeItem>, pending: Option<&Pen
     }
 }
 
-/// What a rebuild of the tree items means for showing the active file. The file
-/// is there: a show that gave up may try again. The file is gone: its show is void.
+/// What a rebuild of the tree items means for showing the active file.
 pub(crate) fn update_reveal_state(
     shown: bool,
     revealed: &mut Option<String>,
@@ -89,11 +83,7 @@ impl Workbench {
         }
         let view = cx.entity();
         let active_path = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned());
-        // Follow the active tab: its folders open and its row scrolls into view, like
-        // VS Code's "reveal active file". Runs only while the explorer is on screen (so a
-        // hidden side bar costs nothing and catches up when shown), once per tab change.
-        // The tab counts as shown only once it is found: an expand rebuilds the
-        // items, and counting it before the find would show it again and move the view.
+        // Follow the active tab: its folders open and its row scrolls into view, like VS Code's "reveal active file".
         let inside = |p: &String| self.roots().iter().any(|r| Path::new(p).starts_with(r));
         let show = active_path.clone().filter(|p| {
             self.revealed.borrow().as_deref() != Some(p.as_str())
@@ -103,8 +93,7 @@ impl Workbench {
         if let Some(p) = show {
             let id = SharedString::from(p.clone());
             let found = self.tree.update(cx, |t, cx| {
-                // One linear scan in the common case: `index_of` walks every
-                // expanded row, so three calls per switch cost O(entries) x 3.
+                // One linear scan in the common case: `index_of` walks every expanded row, so three calls per switch cost O(entries) x 3.
                 let mut ix = t.index_of(&id);
                 if ix.is_none() {
                     t.reveal_item(&id, ScrollStrategy::Center, cx);
@@ -121,8 +110,7 @@ impl Workbench {
             if found {
                 *self.revealed.borrow_mut() = Some(p);
             } else {
-                // Not in the tree (still loading, or never listed): stop trying
-                // until the items change, or every render would redo this scan.
+                // Not in the tree (still loading, or never listed): stop trying until the items change, or every render would redo this scan.
                 *self.reveal_tried.borrow_mut() = Some(p);
             }
         }
@@ -141,17 +129,13 @@ impl Workbench {
         let list = tree(&self.tree, move |ix, entry, _selected, _window, cx| {
             let item = entry.item();
             let id = item.id.to_string();
-            // The row a new name is typed into, and the rows being renamed or deleted:
-            // they draw as an input or a confirm instead of the file's row.
+            // The row a new name is typed into, and the rows being renamed or deleted: they draw as an input or a confirm instead of the file's row.
             if id == PENDING_ROW_ID {
                 let icon = match &pending {
                     Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true))
                         .size(theme::u(13.))
                         .text_color(c(theme::FOLDER)),
-                    // New file: the icon follows what is typed, like VS Code, so
-                    // `file.py` shows the Python icon before Enter is pressed.
-                    // The workbench redraws on every change while a name is
-                    // pending, so this stays live as the user types.
+                    // New file: the icon follows what is typed, like VS Code, so `file.py` shows the Python icon before Enter is pressed.
                     _ => {
                         let typed = name_input.read(cx).value();
                         if typed.is_empty() {
@@ -176,8 +160,7 @@ impl Workbench {
                             .size(theme::u(13.))
                             .text_color(c(theme::FOLDER))
                     } else {
-                        // Rename: the icon follows the typed name too, falling
-                        // back to the file's own icon while the field is empty.
+                        // Rename: the icon follows the typed name too, falling back to the file's own icon while the field is empty.
                         let typed = name_input.read(cx).value();
                         let name: &str = if typed.is_empty() {
                             &item.label
@@ -198,7 +181,6 @@ impl Workbench {
                 }
             }
             // While a name is being typed, the old selection is hidden.
-            // The file open in the editor keeps its marker.
             let naming = pending.is_some();
             let is_open = active_path.as_deref() == Some(id.as_str());
             let is_sel = !naming && selected.as_deref() == Some(id.as_str());
@@ -222,8 +204,7 @@ impl Workbench {
                 Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint))
             };
             let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
-            // Git decorations like VS Code: the letter on the right, the name in its color,
-            // and a dot on folders that contain changes.
+            // Git decorations like VS Code: the letter on the right, the name in its color, and a dot on folders that contain changes.
             let key = id.replace('/', "\\").to_lowercase();
             let mark = if is_dir { None } else { marks.get(&key).copied() };
             let dir_dirty = is_dir && dirty_dirs.contains(&key);
@@ -233,11 +214,7 @@ impl Workbench {
                 None if dir_dirty => c(theme::WARN),
                 None => c(theme::FG),
             };
-            // The row's id is its file path, not its position: GPUI tracks
-            // hover by element id, so with a position id the hover tint
-            // stayed on the slot and jumped to the wrong file when the
-            // input row was inserted above it and every row shifted down.
-            // With the path as the id the hover follows the file.
+            // The row's id is its file path, not its position: GPUI tracks hover by element id, so with a position id the hover tint stayed on the slot and jumped to the wrong file when the input row was inserted above it and every row shifted down.
             ListItem::new(id.clone())
                 .w_full()
                 .h(theme::u(20.))
@@ -249,8 +226,7 @@ impl Workbench {
                         .w_full()
                         .gap_1()
                         .pr_2()
-                        // The tree doesn't hand its text style to rows, so size each row here
-                        // (13 px at the default interface size, like VS Code).
+                        // The tree doesn't hand its text style to rows, so size each row here (13 px at the default interface size, like VS Code).
                         .text_size(theme::u(11.5))
                         .text_color(label_color)
                         .child(lead)
@@ -274,8 +250,7 @@ impl Workbench {
                             this.selected = Some(path.clone());
                             if !is_dir {
                                 this.agent.user_nav = Some(std::time::Instant::now());
-                                // Picked from the side bar over the agent's full screen: the
-                                // file is what the user wants to see, so the editor comes back.
+                                // Picked from the side bar over the agent's full screen: the file is what the user wants to see, so the editor comes back.
                                 this.agent_full = false;
                                 this.open_file(path, window, cx);
                             }
@@ -286,17 +261,7 @@ impl Workbench {
                 .on_mouse_down(MouseButton::Left, {
                     let view = view.clone();
                     move |_, window, cx| {
-                        // A press elsewhere ends the name being typed, like VS
-                        // Code. This runs on mouse down, before the click is
-                        // made, so the input row is already gone when the
-                        // click lands: the tree selects the row under the
-                        // mouse with its new index, and the click still
-                        // opens it. Cancelling in the click handler instead
-                        // would leave the tree selecting one row too far
-                        // down, and the click would not fire at all if the
-                        // row still carried its old position id.
-                        // A typed name is not thrown away silently: if the
-                        // field holds a name, the press is swallowed instead.
+                        // A press elsewhere ends the name being typed, like VS Code.
                         let keep = {
                             let w = view.read(cx);
                             stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
@@ -317,14 +282,7 @@ impl Workbench {
                     let tree_state = tree_state.clone();
                     let item = item.clone();
                     move |_, window, cx| {
-                        // While a name is being typed, a right-click only
-                        // closes the input. The menu stays shut: it is built
-                        // from the row index captured before this press, and
-                        // that index shifts when the input row goes away, so
-                        // the menu would act on the wrong row. One more
-                        // right-click opens it, on the row it names.
-                        // A typed name survives the press too: the menu stays
-                        // shut and the input stays open.
+                        // While a name is being typed, a right-click only closes the input.
                         let keep = {
                             let w = view.read(cx);
                             stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
@@ -338,10 +296,7 @@ impl Workbench {
                             cx.stop_propagation();
                             return;
                         }
-                        // Right-click picks the row first, like VS Code: the
-                        // highlight, the tree's own selection, and the action
-                        // target all move to it. The menu opens on the same
-                        // press, after this runs, so it acts on this row.
+                        // Right-click picks the row first, like VS Code: the highlight, the tree's own selection, and the action target all move to it.
                         let path = PathBuf::from(item.id.as_ref());
                         view.update(cx, |this, cx| {
                             this.selected = Some(path);
@@ -380,8 +335,6 @@ impl Workbench {
             .key_context("Explorer")
             .context_menu(move |menu, _window, _cx| {
                 // Empty space in the Explorer: the menu acts on the workspace root.
-                // A row's own menu fires first and stops this one, so the two never
-                // both open.
                 if let Some(root) = &root {
                     *root_target.borrow_mut() = Some(root.clone());
                 }
@@ -397,8 +350,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Folder an explorer action applies to: the right-clicked / selected
-    /// item (its parent when it is a file), else the workspace root.
+    /// Folder an explorer action applies to: the right-clicked / selected item (its parent when it is a file), else the workspace root.
     fn target_dir(&self) -> Option<PathBuf> {
         let t = self.ctx_target.borrow_mut().take().or_else(|| self.selected.clone());
         match t {
@@ -416,7 +368,6 @@ impl Workbench {
     }
 
     /// The file icon the pending row shows for the name typed so far.
-    /// None for a new folder (fixed icon) and when no name is being typed.
     pub(crate) fn pending_file_icon(
         &self,
         cx: &App,
@@ -455,8 +406,7 @@ impl Workbench {
     ) {
         self.view = SideView::Explorer;
         self.sidebar_open = true;
-        // A new file or folder types inside its folder: open the folder first, so
-        // the row is on screen. A folder that was never opened loads now.
+        // A new file or folder types inside its folder: open the folder first, so the row is on screen.
         if let PendingOp::NewFile(d) | PendingOp::NewFolder(d) = &op {
             self.tree_expanded(d.to_string_lossy().into_owned(), cx);
         }
@@ -474,14 +424,12 @@ impl Workbench {
             s.set_placeholder(placeholder, window, cx);
             s.focus(window, cx);
         });
-        // The icon gate starts from what is painted now, so the first
-        // keystroke is judged against the right icon.
+        // The icon gate starts from what is painted now, so the first keystroke is judged against the right icon.
         self.pending_icon = self.pending_file_icon(cx);
         cx.notify();
     }
 
-    /// Drop the name being typed, or the delete confirm, and put focus back on
-    /// the Explorer.
+    /// Drop the name being typed, or the delete confirm, and put focus back on the Explorer.
     pub(crate) fn cancel_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending.take().is_some() {
             self.set_tree_items(cx);
@@ -593,12 +541,6 @@ impl Workbench {
 }
 
 /// A tree row with a text input in it, for a new file, a new folder, or a rename.
-/// Exactly one tree row tall: the tree lays its rows out at one height, so a
-/// taller box would paint over its neighbours. The xsmall input is exactly
-/// one row tall, but its focus ring draws outside its own edge, in the ring
-/// colour on top of its ring-coloured border, so a focused input looked like
-/// a thick line sitting on the row below. The ring is off here: the row's
-/// selected background and the input's own thin border mark the focus.
 fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> ListItem {
     ListItem::new(ix)
         .w_full()
@@ -607,8 +549,7 @@ fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>
         .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
         .bg(c(theme::SELECT))
-        // A click here only focuses the input; without this the tree would
-        // also select the row and fold its folder.
+        // A click here only focuses the input; without this the tree would also select the row and fold its folder.
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
             h_flex()
@@ -635,8 +576,7 @@ fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>
         )
 }
 
-/// The row of a file or folder being deleted: its name as a question, with
-/// Delete and Cancel buttons in place of the row. Same height as every row.
+/// The row of a file or folder being deleted: its name as a question, with Delete and Cancel buttons in place of the row.
 fn delete_row(ix: usize, depth: usize, path: &Path, view: &Entity<Workbench>) -> ListItem {
     let name = short(path);
     let del = view.clone();

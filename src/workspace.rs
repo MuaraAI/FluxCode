@@ -1,12 +1,4 @@
 //! Several folders in one window, and files or folders dropped on it.
-//!
-//! The first folder is the main one: the terminal starts there, Source Control
-//! and the agent work in it. Folders added next to it show as their own roots
-//! in the explorer and are searched by Go to File, Find in Files and `@`.
-//!
-//! Dropping a folder on the window asks whether to add it to the workspace or
-//! switch the window to it (with no folder open it just opens). Dropped files
-//! open in tabs.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -33,8 +25,7 @@ impl Workbench {
         self.root.iter().cloned().chain(self.workspace.extra.iter().cloned()).collect()
     }
 
-    /// A path as the lists show it: relative to its folder, and with the folder's
-    /// name in front when the workspace has more than one.
+    /// A path as the lists show it: relative to its folder, and with the folder's name in front when the workspace has more than one.
     pub(crate) fn rel_display(&self, full: &str) -> String {
         let multi = !self.workspace.extra.is_empty();
         for r in self.roots() {

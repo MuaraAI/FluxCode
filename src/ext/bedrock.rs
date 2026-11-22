@@ -1,5 +1,4 @@
-//! Minecraft Bedrock add-ons: check the manifests, pack `.mcpack` / `.mcaddon`, copy
-//! the packs into the game's development folders, and write a new add-on.
+//! Minecraft Bedrock add-ons: check the manifests, pack `.mcpack` / `.mcaddon`, copy the packs into the game's development folders, and write a new add-on.
 
 use super::Project;
 use serde_json::Value;
@@ -140,7 +139,7 @@ fn version_ok(v: &Value) -> bool {
     }
 }
 
-/// Problems in an add-on's manifests: (pack folder, message). Empty: all good.
+/// Problems in an add-on's manifests: (pack folder, message).
 pub fn validate(list: &[Pack]) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     let mut seen: Vec<(String, PathBuf)> = Vec::new();
@@ -270,8 +269,7 @@ pub fn pack(project: &Project) -> Result<Vec<String>, String> {
     Ok(vec![format!("Packed {} files into {shown} ({} KB). Double-click it to import into Minecraft.", files, bytes.len() / 1024 + 1)])
 }
 
-/// The game's com.mojang folders, newest layout first (the GDK build since 1.21.120 keeps
-/// them under %APPDATA%\Minecraft Bedrock; the Store build under LocalState).
+/// The game's com.mojang folders, newest layout first (the GDK build since 1.21.120 keeps them under %APPDATA%\Minecraft Bedrock.
 pub fn com_mojang() -> Vec<PathBuf> {
     let mut c = Vec::new();
     if cfg!(windows) {
@@ -309,8 +307,7 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<usize> {
     Ok(n)
 }
 
-/// Copy each pack into development_behavior_packs / development_resource_packs, so the
-/// game loads the current files (reopen the world to see changes).
+/// Copy each pack into development_behavior_packs / development_resource_packs, so the game loads the current files (reopen the world to see changes).
 pub fn deploy(project: &Project) -> Result<Vec<String>, String> {
     let list = packs(&project.dir);
     let base = com_mojang().into_iter().next().ok_or("Minecraft Bedrock's data folder (com.mojang) isn't on this PC: start the game once, then try again.")?;
@@ -362,7 +359,6 @@ pub fn facts(p: &Project) -> String {
     format!(" Packs: {}.{target}", names.join(", "))
 }
 
-// ------------------------------------------------------------------ new add-on
 
 /// A random version 4 UUID.
 pub fn uuid4() -> String {
@@ -373,8 +369,7 @@ pub fn uuid4() -> String {
     format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
-/// Write `parent/<Name>/BP` and `RP`: a behavior pack that needs its resource pack, a
-/// function to try (`/function hello`), and the pack names in en_US.lang.
+/// Write `parent/<Name>/BP` and `RP`: a behavior pack that needs its resource pack, a function to try (`/function hello`), and the pack names in en_US.lang.
 pub fn new_addon(parent: &Path, name: &str) -> Result<PathBuf, String> {
     let name = name.trim();
     if name.is_empty() {

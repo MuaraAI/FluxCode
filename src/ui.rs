@@ -1,8 +1,4 @@
-//! Small shared building blocks: the text button used on the welcome screen,
-//! in the Run view, the explorer and Settings.
-//!
-//! Motion is limited to hover and pressed states (no lifts, bounces or entrance
-//! animations): an editor is looked at for hours, so the chrome stays still.
+//! Small shared building blocks: the text button used on the welcome screen, in the Run view, the explorer and Settings.
 
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
@@ -56,8 +52,7 @@ impl Workbench {
     }
 }
 
-/// A small square icon button for an editor's own actions (word wrap, zoom):
-/// muted, lit with the accent while its option is `on`.
+/// A small square icon button for an editor's own actions (word wrap, zoom): muted, lit with the accent while its option is `on`.
 pub fn tool_button(id: impl Into<ElementId>, icon: impl Into<component::Icon>, on: bool) -> Stateful<Div> {
     div()
         .id(id)
@@ -75,12 +70,7 @@ pub fn tool_button(id: impl Into<ElementId>, icon: impl Into<component::Icon>, o
         .child(icon.into().size(theme::u(14.)))
 }
 
-/// The FluxCode mark, the meander from the app icon, drawn from rectangles so it
-/// needs no image file and takes theme colors. `a` is the first hook (ivory in the
-/// icon), `b` the second (ochre). `size` is the width in px before UI scaling.
-///
-/// The line runs on a 0..8 grid with stroke and gap of one ninth of the width each;
-/// it is point-symmetric about the centre, where the two hooks meet.
+/// The FluxCode mark, the meander from the app icon, drawn from rectangles so it needs no image file and takes theme colors.
 pub fn meander(size: f32, a: Hsla, b: Hsla) -> Div {
     const HALF_A: [(f32, f32); 6] = [(2., 8.), (8., 8.), (8., 2.), (2., 2.), (2., 4.), (4., 4.)];
     const HALF_B: [(f32, f32); 6] = [(4., 4.), (6., 4.), (6., 6.), (0., 6.), (0., 0.), (6., 0.)];

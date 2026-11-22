@@ -1,13 +1,4 @@
-//! Source Control, natively: the same view as VS Code's (changes, commit box,
-//! push/pull/sync, graph) plus GitHub pull requests and Actions "deploys".
-//!
-//! VS Code's git extension (checked in its shipped `extensions/git/dist/main.js`)
-//! runs `git status -z -uall`, then `for-each-ref` and `rev-list --left-right
-//! --count` for the branch and ahead/behind. Here one
-//! `git status --porcelain=v2 --branch -z -uall` gives all of that in a single
-//! process, and the log and GitHub calls only run while their section is open.
-//! Commits use `git commit --quiet --file -` (message on stdin) like VS Code,
-//! including its "smart commit": with nothing staged, everything is committed.
+//! Source Control, natively: the same view as VS Code's (changes, commit box, push/pull/sync, graph) plus GitHub pull requests and Actions "deploys".
 
 use crate::i18n::tr;
 use crate::proc;
@@ -193,7 +184,6 @@ pub fn code_color(code: char) -> theme::Tok {
     }
 }
 
-// ------------------------------------------------------------ parsing
 
 /// `git status --porcelain=v2 --branch -z -uall` → files and branch state.
 pub fn parse_status(out: &str) -> RepoStatus {
@@ -256,7 +246,6 @@ fn find_url(s: &str) -> Option<String> {
     Some(s[i..].split_whitespace().next()?.trim_end_matches(['.', ',', ')']).to_string())
 }
 
-// ------------------------------------------------------------ running git / gh
 
 #[derive(Clone)]
 pub enum Step {
@@ -274,9 +263,7 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
         Step::Git(a, i) => ("git", a, i.clone()),
         Step::Gh(a) => ("gh", a, None),
     };
-    // `git` runs inside the distro for a WSL folder, so it sees Linux paths and
-    // line endings. `gh` stays on Windows: it is a network tool, and it finds the
-    // repo through the UNC path.
+    // `git` runs inside the distro for a WSL folder, so it sees Linux paths and line endings.
     let target = matches!(step, Step::Git(..)).then_some(target).flatten();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut cmd = match &target {
@@ -366,8 +353,7 @@ fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget
     Snapshot { repo: Some(repo), status, log, incoming }
 }
 
-/// Rows drawn per section. Thousands of rows (each with its buttons) made the
-/// panel slow; past this the list says how many more there are.
+/// Rows drawn per section.
 const MAX_ROWS: usize = 200;
 
 /// "… and N more" under a capped section.
@@ -777,7 +763,6 @@ impl Workbench {
         .detach();
     }
 
-    // ------------------------------------------------------------ render
 
     pub(crate) fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.scm;
@@ -1037,8 +1022,7 @@ impl Workbench {
                 this.scm_stage(None, true, cx);
             })))
         }));
-        // Lots of untracked files (a server folder, build output): offer to ignore the
-        // folders they are in, biggest first, before listing them.
+        // Lots of untracked files (a server folder, build output): offer to ignore the folders they are in, biggest first, before listing them.
         let untracked = st.changes.iter().filter(|c| c.code == 'U').count();
         if untracked > 200 {
             let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -1284,7 +1268,6 @@ impl Workbench {
             }))
     }
 
-    // ------------------------------------------------------------ actions
 
     pub(crate) fn on_scm_show(&mut self, _: &ScmShow, _: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Scm;
@@ -1328,8 +1311,7 @@ impl Workbench {
         }
     }
 
-    /// Undo "Initialize Repository": the `.git` folder goes to the Recycle Bin
-    /// (history and settings with it); the project's files are not touched.
+    /// Undo "Initialize Repository": the `.git` folder goes to the Recycle Bin (history and settings with it); the project's files are not touched.
     fn scm_remove_git(&mut self, cx: &mut Context<Self>) {
         self.scm.confirm_uninit = false;
         let Some(repo) = self.scm.repo.clone() else { return };

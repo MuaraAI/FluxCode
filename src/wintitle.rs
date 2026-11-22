@@ -1,13 +1,4 @@
-//! Windows title bar behavior that does not depend on GPUI's window-control
-//! hit areas.
-//!
-//! Why: with GPUI Fast, a frame that reuses the workbench's cached paint (for
-//! example when only the editor's caret blinks) keeps normal hitboxes and click
-//! listeners but drops the min/max/close/drag "window control" areas. The X
-//! button then needs a first click to repaint before a second one closes. So on
-//! Windows the buttons are plain click handlers, and dragging hands the move to
-//! Windows the classic way: release the capture and post WM_NCLBUTTONDOWN with
-//! HTCAPTION, which also keeps Aero Snap.
+//! Windows title bar behavior that does not depend on GPUI's window-control hit areas.
 
 #[cfg(windows)]
 mod imp {
@@ -30,8 +21,7 @@ mod imp {
     const WM_NCLBUTTONDOWN: u32 = 0x00A1;
     const HTCAPTION: usize = 2;
 
-    /// When we posted the move (ms since start); the mouse-down GPUI reports for our
-    /// own posted message must not start another one.
+    /// When we posted the move (ms since start); the mouse-down GPUI reports for our own posted message must not start another one.
     static POSTED_AT: AtomicU64 = AtomicU64::new(0);
 
     fn now_ms() -> u64 {
@@ -69,9 +59,7 @@ pub use imp::begin_move;
 #[cfg(not(windows))]
 pub fn begin_move() {}
 
-/// Ask for the user's attention while FluxCode is in the background: the taskbar button
-/// flashes until the window comes to the front (an agent waiting for a permission).
-/// Nothing happens when FluxCode is already the window in front.
+/// Ask for the user's attention while FluxCode is in the background: the taskbar button flashes until the window comes to the front (an agent waiting for a permission).
 #[cfg(windows)]
 pub fn flash_attention() {
     #[repr(C)]

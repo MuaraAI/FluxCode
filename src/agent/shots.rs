@@ -1,12 +1,4 @@
-//! Pictures the agent shows: screenshots its tools take (a browser or desktop
-//! screenshot, an image a tool read) and images in its answers.
-//!
-//! ACP sends them as image blocks (`{"type": "image", "data": <base64>, "mimeType"}`)
-//! inside a tool call's `content` or `rawOutput`, or as a message chunk. Each picture
-//! is written once to a cache folder (named by its hash, so a repeat costs nothing)
-//! and the chat keeps only the path: a strip of previews under the step, which can be
-//! folded away, and a full-screen viewer on click (arrows between pictures, Esc
-//! closes, "Open in a tab" puts it in the editor's image viewer).
+//! Pictures the agent shows: screenshots its tools take (a browser or desktop screenshot, an image a tool read) and images in its answers.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -43,8 +35,7 @@ fn cache_dir() -> PathBuf {
     crate::settings::config_dir().join("agent-images")
 }
 
-/// Every image block in `v` (any depth: tool content wraps them differently per
-/// agent), saved to the cache. Blocks that aren't images, or aren't base64, are skipped.
+/// Every image block in `v` (any depth: tool content wraps them differently per agent), saved to the cache.
 pub fn collect(v: &Value) -> Vec<Shot> {
     let mut out = Vec::new();
     walk(v, &mut out, 0);
@@ -158,8 +149,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Under a step: the pictures it produced, as previews in a row (one tall preview
-    /// when it is a single picture), with a header to fold them away.
+    /// Under a step: the pictures it produced, as previews in a row (one tall preview when it is a single picture), with a header to fold them away.
     pub(crate) fn render_shots(&self, i: usize, shots: &[Shot], hidden: bool, cx: &mut Context<Self>) -> AnyElement {
         let n = shots.len();
         let label: SharedString = if n == 1 { tr("Screenshot").into() } else { crate::trf!("{n} screenshots"; n => n).into() };
@@ -238,8 +228,7 @@ impl Workbench {
         col.into_any_element()
     }
 
-    /// The full-screen viewer over the whole window: the picture fitted, a dim
-    /// backdrop that fades in, arrows between pictures, and its actions on top.
+    /// The full-screen viewer over the whole window: the picture fitted, a dim backdrop that fades in, arrows between pictures, and its actions on top.
     pub(crate) fn render_lightbox(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let lb = self.agent.lightbox.as_ref()?;
         let shot = lb.shots.get(lb.ix)?.clone();

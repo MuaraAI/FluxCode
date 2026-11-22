@@ -1,11 +1,4 @@
-//! "Can this PC take the moving background?" Asked when Background animation is turned
-//! on in Settings: FluxCode measures its own CPU time for a few seconds while the scene
-//! moves, reads the PC's cores, memory and whether it runs on battery, and says plainly
-//! whether that is light, fine or heavy here.
-//!
-//! The measurement is the process's own CPU time (GetProcessTimes on Windows,
-//! /proc/self/stat on Linux), so it counts everything FluxCode drew in that time, the
-//! scene and the panels over it: what turning it on really costs on this machine.
+//! "Can this PC take the moving background?" Asked when Background animation is turned on in Settings: FluxCode measures its own CPU time for a few seconds while the scene moves, reads the PC's cores, memory and whether it runs on battery, and says plainly whether that is light, fine or heavy here.
 
 /// How the moving background suits this PC.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -143,8 +136,7 @@ fn on_battery() -> bool {
     }
 }
 
-/// The verdict for `core_pct` (percent of one core the measurement found, None when it
-/// can't be read here) on a PC with `s`, and the sentence that says it.
+/// The verdict for `core_pct` (percent of one core the measurement found, None when it can't be read here) on a PC with `s`, and the sentence that says it.
 pub fn verdict(core_pct: Option<f32>, s: Specs) -> (Level, String) {
     let ram = s.ram_gb.map(|g| format!("{:.0} GB", g.round())).unwrap_or_else(|| "?".into());
     let spec = crate::trf!("{cores} cores, {ram} RAM"; cores => s.cores, ram => ram);

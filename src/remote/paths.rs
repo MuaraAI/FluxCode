@@ -1,8 +1,4 @@
 //! Windows paths that point inside a WSL2 distro, and the Linux paths they mean.
-//!
-//! Windows reaches a distro's files through `\\wsl.localhost\<distro>\...` (or the
-//! older `\\wsl$\...`), so the file code needs no change. Only commands have to be
-//! translated, and that is what `WslTarget` carries.
 
 use std::path::{Path, PathBuf};
 
@@ -43,9 +39,6 @@ impl WslTarget {
 }
 
 /// `\\wsl.localhost\Ubuntu\home\me` -> ("Ubuntu", "home\me").
-/// Also accepts `\\wsl$\...` and the `\\?\UNC\...` form `canonicalize()` returns.
-/// Forward slashes and mixed separators are treated as backslashes, so a path
-/// written `//wsl.localhost/Ubuntu/home/me` still matches.
 fn split(path: &Path) -> Option<(String, String)> {
     let s = path.to_string_lossy().replace('/', "\\");
     let s = if let Some(rest) = crate::docs::strip_prefix_ignore_ascii_case(&s, r"\\?\UNC\") {

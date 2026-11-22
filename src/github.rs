@@ -1,7 +1,4 @@
-//! GitHub account, ported from `src-tauri/src/github.rs`: a personal access
-//! token (verified against api.github.com with the system `curl.exe`, so no
-//! HTTP client is compiled in) or the token of an existing GitHub CLI login.
-//! Passed to terminal commands and OpenCode as `GH_TOKEN` / `GITHUB_TOKEN`.
+//! GitHub account, ported from `src-tauri/src/github.rs`: a personal access token (verified against api.github.com with the system `curl.exe`, so no HTTP client is compiled in) or the token of an existing GitHub CLI login.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -53,8 +50,7 @@ pub fn gh_on_path() -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(exe).is_file()))
 }
 
-/// Ask api.github.com who the token belongs to. The token goes to curl through
-/// stdin (`--config -`), never on the command line.
+/// Ask api.github.com who the token belongs to.
 fn verify(token: &str) -> Result<(String, String), String> {
     let token = token.trim();
     if token.is_empty() || token.contains(|c: char| c.is_whitespace() || c == '"') {

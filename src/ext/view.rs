@@ -1,15 +1,4 @@
-//! The Extensions view (left), an extension's page (editor area), the project tasks in
-//! the Run view, and running them.
-//!
-//! Layout, after looking at how other tools do it: a list in the sidebar with a search
-//! box and Installed / This folder / All (VS Code's Extensions view, Zed's Installed
-//! filter, JetBrains' Marketplace and Installed tabs); a row is an icon, the name and
-//! version, one line on what it does and an Install button (VS Code, Nova, Obsidian);
-//! the details open in the editor area, since the sidebar is too narrow for them (VS
-//! Code's extension editor); the page lists what the extension adds and needs (Zed's
-//! "provides", Raycast's command list), with the folder's own projects first.
-//! VS Code Marketplace extensions get their own tab and a section under All
-//! (market_view.rs).
+//! The Extensions view (left), an extension's page (editor area), the project tasks in the Run view, and running them.
 
 use super::{Filter, Manifest, Project, Task, Tool};
 use crate::i18n::tr;
@@ -74,8 +63,7 @@ pub(super) fn tile(name: &str, size: f32) -> Div {
         .child(Icon::new(icon(name)).size(theme::u(size * 0.55)).text_color(c(theme::FG_STRONG)))
 }
 
-/// A section of the extension page: a title, maybe one line under it, then its content
-/// (the caller adds it).
+/// A section of the extension page: a title, maybe one line under it, then its content (the caller adds it).
 fn page_section(title: SharedString, note: Option<SharedString>) -> Div {
     v_flex()
         .w_full()
@@ -96,8 +84,7 @@ fn rare(t: &Task) -> bool {
 /// Rows under a project's main button before the rest go behind More.
 const SHOWN: usize = 5;
 
-/// A project's tasks laid out: the main one (the manifest's `primary`, else the first),
-/// the ones shown as rows, and the ones behind More (rare ones and any past `SHOWN`).
+/// A project's tasks laid out: the main one (the manifest's `primary`, else the first), the ones shown as rows, and the ones behind More (rare ones and any past `SHOWN`).
 pub(crate) fn arrange(tasks: &[Task]) -> (Option<usize>, Vec<usize>, Vec<usize>) {
     let main = tasks.iter().position(|t| t.primary).or(if tasks.is_empty() { None } else { Some(0) });
     let (mut rows, mut more) = (Vec::new(), Vec::new());
@@ -123,9 +110,7 @@ fn task_tip(t: &Task) -> SharedString {
     }
 }
 
-/// The main action of a group in the Run view: a full-width button, with a spinner in
-/// place of its icon while it runs. `accent`: the accent fill, for the one group the
-/// view leads with; the others get a quieter filled button.
+/// The main action of a group in the Run view: a full-width button, with a spinner in place of its icon while it runs.
 pub(crate) fn run_main_button(id: ElementId, ic: Ico, label: SharedString, running: bool, accent: bool, tip: SharedString) -> Stateful<Div> {
     let (fg, icon_fg) = if accent { (theme::ON_ACCENT, theme::ON_ACCENT) } else { (theme::FG_STRONG, theme::ACCENT_TEXT) };
     h_flex()
@@ -222,8 +207,7 @@ impl super::Ext {
 }
 
 impl Workbench {
-    /// Every manifest FluxCode has counts as installed: the Extensions view lists the
-    /// VS Code Marketplace only, so nothing there turns a built-in off any more.
+    /// Every manifest FluxCode has counts as installed: the Extensions view lists the VS Code Marketplace only, so nothing there turns a built-in off any more.
     pub(crate) fn ext_installed(&self, id: &str) -> bool {
         self.ext_manifest(id).is_some() || self.settings.extensions.iter().any(|e| e == id)
     }
@@ -327,7 +311,6 @@ impl Workbench {
         super::agent_notes(&self.ext.catalog, &all, &self.ext.found, &self.roots())
     }
 
-    // ------------------------------------------------------------ running tasks
 
     /// Save the open files of a project, like Run's "save before run".
     fn ext_save_under(&mut self, dir: &Path, cx: &mut Context<Self>) {
@@ -407,8 +390,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// A long-running task (a dev server, `cargo run`, a Minecraft server) in the
-    /// Terminal: it keeps going and reads what you type there.
+    /// A long-running task (a dev server, `cargo run`, a Minecraft server) in the Terminal: it keeps going and reads what you type there.
     fn ext_run_in_terminal(&mut self, project: &Project, line: &str, jdk: Option<&super::java::Jdk>, cx: &mut Context<Self>) {
         self.panel_open = true;
         self.panel_tab = PanelTab::Terminal;
@@ -479,8 +461,7 @@ impl Workbench {
         self.ext.fold_scan = lines.len().saturating_sub(1).max(start);
     }
 
-    /// The Output panel's last task ended: say what FluxCompile built, then run the
-    /// follow-up step if it succeeded.
+    /// The Output panel's last task ended: say what FluxCompile built, then run the follow-up step if it succeeded.
     pub(crate) fn ext_after_run(&mut self, code: Option<i32>, cx: &mut Context<Self>) {
         let running = self.ext.running.take();
         if let Some(ix) = self.ext.fold_line.take() {
@@ -637,14 +618,12 @@ impl Workbench {
         cx.notify();
     }
 
-    // ------------------------------------------------------------ the sidebar view
 
     /// The Extensions side bar: the VS Code Marketplace (market_view.rs).
     pub(crate) fn render_ext_view(&self, cx: &mut Context<Self>) -> AnyElement {
         self.render_market_view(cx)
     }
 
-    // ------------------------------------------------------------ the page
 
     pub(crate) fn render_ext_page(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
         if id.starts_with(super::market_view::PAGE) {
@@ -653,8 +632,7 @@ impl Workbench {
         let Some(m) = self.ext_manifest(id).cloned() else { return div().into_any_element() };
         let installed = self.ext_installed(&m.id);
 
-        // Header: icon, name, one meta line and the summary, with the actions on the
-        // right. On a narrow editor area the actions drop below the text.
+        // Header: icon, name, one meta line and the summary, with the actions on the right.
         let mut meta: Vec<String> = Vec::new();
         if !m.category.is_empty() {
             meta.push(m.category.clone());
@@ -692,8 +670,7 @@ impl Workbench {
                 this.ext.page = None;
                 cx.notify();
             })));
-        // The title shares its line with the actions; when the two don't fit (the title
-        // would get narrower than ~160 px) the actions move under it.
+        // The title shares its line with the actions; when the two don't fit (the title would get narrower than ~160 px) the actions move under it.
         let title = h_flex()
             .w_full()
             .flex_wrap()
@@ -885,8 +862,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// One project on the page: its name and folder, its main task as a button and the
-    /// other tasks in a menu next to it (a row of every task wrapped into a cloud).
+    /// One project on the page: its name and folder, its main task as a button and the other tasks in a menu next to it (a row of every task wrapped into a cloud).
     fn render_project_card(&self, pix: usize, installed: bool, divided: bool, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.ext.found[pix];
         let rel = self.rel_display(&p.dir.to_string_lossy());
@@ -960,12 +936,8 @@ impl Workbench {
         .into_any_element()
     }
 
-    // ------------------------------------------------------------ the Run view
 
-    /// The project the Run view leads with (its main button gets the accent): the one
-    /// holding the active file (the innermost), else the first. Only projects with more
-    /// than one task count: a lone shortcut like Preview index.html never leads. The
-    /// bool: the active file is inside it.
+    /// The project the Run view leads with (its main button gets the accent): the one holding the active file (the innermost), else the first.
     pub(crate) fn ext_lead(&self) -> (Option<usize>, bool) {
         let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
         let ok = |i: usize, p: &Project| self.ext_installed(&p.ext) && self.ext.tasks.get(i).is_some_and(|t| t.len() > 1);
@@ -1003,12 +975,7 @@ impl Workbench {
             }))
     }
 
-    /// The folder's projects and their tasks, at the top of the Run view: per project
-    /// a header, its main task as a full-width button, the next few as quiet rows and
-    /// the rare ones (Clean, Add Gradle wrapper) behind More. Projects an extension
-    /// would build but isn't installed for get one line each below.
-    /// `lead`: the project whose main button gets the accent (None: the active file
-    /// leads instead, see `render_run_view`).
+    /// The folder's projects and their tasks, at the top of the Run view: per project a header, its main task as a full-width button, the next few as quiet rows and the rare ones (Clean, Add Gradle wrapper) behind More.
     pub(crate) fn render_ext_run(&self, lead: Option<usize>, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.ext.found.is_empty() {
             return None;

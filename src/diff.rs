@@ -1,7 +1,4 @@
-//! Line diff for the agent's changes: how many lines it added and removed in a
-//! file, and a unified diff to read them. Common lines at the start and end are
-//! cut off first, so a small edit in a big file costs almost nothing; the middle
-//! goes through a longest-common-subsequence table, capped in size.
+//! Line diff for the agent's changes: how many lines it added and removed in a file, and a unified diff to read them.
 
 /// Above this many cells in the middle part, counts are estimated and no diff text is made.
 const MAX_CELLS: usize = 4_000_000;
@@ -114,11 +111,7 @@ pub fn unified(name: &str, old: &str, new: &str) -> String {
     out
 }
 
-/// The steps from `old` to `new` as a person would type them: removed lines go in one
-/// step per block, added lines appear one per step, top to bottom. Each step is the
-/// whole text at that point and the line being worked on (for the cursor). At most
-/// `max` steps (evenly picked); the last step is always `new` itself. Empty if the
-/// file is too large to diff or nothing changed.
+/// The steps from `old` to `new` as a person would type them: removed lines go in one step per block, added lines appear one per step, top to bottom.
 pub fn typing_frames(old: &str, new: &str, max: usize) -> Vec<(String, u32)> {
     let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     let Some(o) = ops(&a, &b) else { return Vec::new() };

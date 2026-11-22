@@ -1,9 +1,4 @@
-//! The agent's full-screen workspace: chats on the left, the conversation in the
-//! middle, the files it changed on the right, each a floating glass column.
-//!
-//! The docked chat stays compact (one column beside the code); this is where the agent
-//! gets the room for everything. Columns give way as the window narrows: the changes
-//! column goes first, then the chats, and each can be shown or hidden from the top bar.
+//! The agent's full-screen workspace: chats on the left, the conversation in the middle, the files it changed on the right, each a floating glass column.
 
 use super::{ago, when_label, Item, HISTORY_FILE};
 use crate::i18n::tr;
@@ -69,8 +64,7 @@ impl Workbench {
         let left = self.agent.full.left && w >= MEDIUM;
         let right = self.agent.full.right && w >= WIDE;
         let gap = theme::u(10.);
-        // The gap beside a side column is its edge: drag it to make the column wider
-        // or narrower (the width is kept in Settings).
+        // The gap beside a side column is its edge: drag it to make the column wider or narrower (the width is kept in Settings).
         let edge = |id: &'static str, which: u8, this: &Self, cx: &mut Context<Self>| {
             let on = this.resizing == which;
             div()
@@ -201,8 +195,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Left column: new chat, the view menu (date, recent, folder, agent, working,
-    /// archive), then the chats in their groups; the one answering is marked.
+    /// Left column: new chat, the view menu (date, recent, folder, agent, working, archive), then the chats in their groups.
     fn render_full_chats(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use super::chats::{self, ChatView};
         let a = &self.agent;
@@ -223,8 +216,7 @@ impl Workbench {
             Local.from_local_datetime(&midnight).single().map(|t| t.timestamp_millis() as u64).unwrap_or(now)
         };
         let all = chats::groups(&a.history, view, &busy_ids, now, today_start);
-        // Compact (the default): only what is working, open or pinned; the rest one
-        // click away. The archive and the working view always list everything.
+        // Compact (the default): only what is working, open or pinned; the rest one click away.
         let foldable = !matches!(view, ChatView::Archived | ChatView::Working);
         let show_all = self.settings.chat_show_all || !foldable;
         let (groups, hidden) = if show_all { (all, 0) } else { chats::compact(all, &a.history, &busy_ids, a.chat_id) };
@@ -255,8 +247,7 @@ impl Workbench {
                         .text_color(c(theme::FG_DIM))
                         .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_MUTED)))
                         .child(Icon::new(if folded { Ico::ChevronRight } else { Ico::ChevronDown }).size(theme::u(11.)))
-                        // A small dot in the group's color beside a calm label: told apart
-                        // at a glance without a loud pill.
+                        // A small dot in the group's color beside a calm label: told apart at a glance without a loud pill.
                         .children(pill.map(|col| div().flex_none().size(px(6.)).rounded_full().bg(col.opacity(0.85))))
                         .child(div().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
                         .child(div().text_color(c(theme::FG_DIM)).font_weight(FontWeight::NORMAL).child(idx.len().to_string()))
@@ -551,9 +542,7 @@ fn recency_color(r: super::chats::Recency) -> Option<Hsla> {
     }
 }
 
-/// One chat in the left column: title (a pin when pinned), when it last changed
-/// with a coloured recency mark, and which agent; while it answers a spinning mark
-/// and "Working". Archived chats are dimmed.
+/// One chat in the left column: title (a pin when pinned), when it last changed with a coloured recency mark, and which agent.
 fn chat_row(id: impl Into<ElementId>, title: String, when: SharedString, f: Flags) -> Stateful<Div> {
     let Flags { current, working, archived, pinned, mark } = f;
     h_flex()
@@ -624,8 +613,7 @@ fn row_action(id: impl Into<ElementId>, icon: Ico, tip: &'static str) -> Statefu
         .child(Icon::new(icon).size(theme::u(13.)))
 }
 
-/// A group heading's text, translated when it is one of the fixed ones (a folder
-/// or agent name is shown as it is).
+/// A group heading's text, translated when it is one of the fixed ones (a folder or agent name is shown as it is).
 fn tr_dyn(s: &str) -> String {
     match s {
         "Working now" => tr("Working now").into(),

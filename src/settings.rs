@@ -1,5 +1,4 @@
-//! Settings and session, stored as JSON in the user's config folder
-//! (`%APPDATA%\FluxCode-GPUI` on Windows).
+//! Settings and session, stored as JSON in the user's config folder (`%APPDATA%\FluxCode-GPUI` on Windows).
 
 use crate::i18n::tr;
 use crate::theme::{self, c, UiSize, Visibility, PALETTES};
@@ -66,20 +65,16 @@ pub struct Settings {
     pub agent_auto_approve: bool,
     /// Palette id, see `theme::PALETTES` and `theme::all` (installed VS Code themes).
     pub theme: String,
-    /// A picture of the user's choice behind the panels. Only the path is stored;
-    /// the file stays where it is and is never copied.
+    /// A picture of the user's choice behind the panels.
     pub bg_image: Option<PathBuf>,
     pub bg_visibility: Visibility,
     /// Size of the menus, bars, lists and icons (not the editor font).
     pub ui_size: UiSize,
-    /// OpenCode docks on the right of the editor (like a chat beside the code)
-    /// instead of in the left side bar.
+    /// OpenCode docks on the right of the editor (like a chat beside the code) instead of in the left side bar.
     pub agent_right: bool,
-    /// Views shown in the right side bar instead of the left ("search", "scm", "run",
-    /// "extensions", "explorer"); the agent's side is `agent_right`.
+    /// Views shown in the right side bar instead of the left ("search", "scm", "run", "extensions", "explorer"); the agent's side is `agent_right`.
     pub right_views: Vec<String>,
-    /// Liquid glass: the window takes the system's blur, panels turn translucent over it,
-    /// and floating cards get a lit edge.
+    /// Liquid glass: the window takes the system's blur, panels turn translucent over it, and floating cards get a lit edge.
     pub glass: bool,
     /// Token saver packs on ("caveman", "lean", "quiet") and Caveman's level.
     pub saver_packs: Vec<String>,
@@ -89,44 +84,32 @@ pub struct Settings {
     pub saver_compact_at: u8,
     /// Send the waiting message again by itself when a usage limit resets.
     pub resume_at_reset: bool,
-    /// The animated scene behind the panels (an id of `scene::Scene`, or "none"); a
-    /// background image takes its place while one is set.
+    /// The animated scene behind the panels (an id of `scene::Scene`, or "none"); a background image takes its place while one is set.
     pub bg_scene: String,
     /// The scene FluxSky's clouds replaced, given back when another theme is picked.
     pub bg_scene_before_sky: String,
-    /// The scene moves (off, the default: a still picture that costs nothing while you
-    /// work). It replaced `bg_anim`, which was on by default: under the new name every
-    /// install starts with it off once, and turning it on checks what the PC can take
-    /// (`motion_check`).
+    /// The scene moves (off, the default: a still picture that costs nothing while you work).
     pub bg_motion: bool,
-    /// When the agent edits a file, the editor opens it and shows the change being
-    /// typed in, line by line, with the view following it.
+    /// When the agent edits a file, the editor opens it and shows the change being typed in, line by line, with the view following it.
     pub agent_follow_edits: bool,
-    /// Extra Claude / OpenCode sign-ins (agent/worktree.rs), and the one each uses
-    /// (family → account name; none: the default sign-in).
+    /// Extra Claude / OpenCode sign-ins (agent/worktree.rs), and the one each uses (family → account name; none: the default sign-in).
     pub agent_accounts: Vec<crate::agent::worktree::Account>,
     pub agent_account: std::collections::HashMap<String, String>,
-    /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id
-    /// ("opencode-v2", "mura", ...).
+    /// Which agent harness the panel runs: "auto" (Mura when installed), an agent id ("opencode-v2", "mura", ...).
     pub agent_cli: String,
-    /// Turn the agent process off after this many idle minutes (0 = never). It
-    /// resumes the same session on the next message.
+    /// Turn the agent process off after this many idle minutes (0 = never).
     pub agent_idle_min: u32,
     /// Interface language: "auto" (Indonesian when Windows is), "en" or "id".
     pub language: String,
-    /// Agent settings picked in the panel (ACP config options such as model,
-    /// effort and mode), as "harness:option" → value. Applied to each new
-    /// session when the harness still offers that value.
+    /// Agent settings picked in the panel (ACP config options such as model, effort and mode), as "harness:option" → value.
     pub agent_options: std::collections::HashMap<String, String>,
-    /// What the agent may do without asking: "read" (read only), "write" (read and
-    /// edit files; commands ask) or "full". Empty: from the old auto-approve switch.
+    /// What the agent may do without asking: "read" (read only), "write" (read and edit files; commands ask) or "full".
     pub agent_access: String,
     /// The level Full access falls back to when it is switched off: "read" or "write".
     pub agent_access_off: String,
     /// A permission request flashes the taskbar button while FluxCode is in the background.
     pub agent_notify: bool,
-    /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or
-    /// Chromium), a browser id, or "off".
+    /// The browser the agents drive (`browser.rs`): "auto" (Chrome, else Brave, Edge or Chromium), a browser id, or "off".
     pub agent_browser: String,
     /// Run that browser without a window.
     pub agent_browser_headless: bool,
@@ -139,18 +122,15 @@ pub struct Settings {
     /// Agent full screen: the chats and changes columns' widths, as dragged (0: default).
     pub full_left_w: f32,
     pub full_right_w: f32,
-    /// The chat list shows every chat; off (the default) shows only the ones working,
-    /// open or pinned, with the rest one click away.
+    /// The chat list shows every chat; off (the default) shows only the ones working, open or pinned, with the rest one click away.
     pub chat_show_all: bool,
     /// Chat list groups folded shut, by heading.
     pub chat_collapsed: Vec<String>,
     /// Look for new development builds on GitHub at start and every 6 hours.
     pub update_check: bool,
-    /// Read WSL folders through the helper inside the distro instead of the 9p
-    /// share. Off by default: it installs and runs a program in the distro.
+    /// Read WSL folders through the helper inside the distro instead of the 9p share.
     pub wsl_helper: bool,
     /// The HTML preview notice: shown before the preview runs its WebView.
-    /// The "Do not show again" box in the notice turns it off.
     #[cfg(feature = "embedded-preview")]
     #[serde(default = "default_true")]
     pub preview_webview_notice: bool,
@@ -162,19 +142,16 @@ pub struct Settings {
     pub auto_close: bool,
     /// A new line keeps (and after `{` / `:` adds) indentation.
     pub smart_indent: bool,
-    /// Lines kept visible above and below the cursor when it moves (VS Code's
-    /// cursorSurroundingLines). 0: the editor's default.
+    /// Lines kept visible above and below the cursor when it moves (VS Code's cursorSurroundingLines). 0: the editor's default.
     pub cursor_padding: u32,
     /// The editor scrolls past its last line.
     pub scroll_past_end: bool,
     /// GitHub Copilot ghost-text suggestions (the Copilot language server).
-    /// Off means no server runs and no suggestion is ever asked for.
     #[serde(default = "default_true")]
     pub copilot: bool,
     /// The build that ran last, so a new one can open its release notes once.
     pub last_build: String,
     /// Settings revision, for one-time changes of defaults on existing installs.
-    /// Missing in an older file means 0 (not the struct default, which is current).
     #[serde(default)]
     pub rev: u32,
 }
@@ -245,8 +222,7 @@ impl Settings {
         EXISTED.get_or_init(|| config_dir().join("settings.json").is_file());
         let mut s: Self = load_json("settings.json");
         if s.rev < 1 {
-            // 0.9: whitespace dots are off by default (they cluttered long lines);
-            // Settings → Whitespace dots turns them back on.
+            // 0.9: whitespace dots are off by default (they cluttered long lines); Settings → Whitespace dots turns them back on.
             s.show_whitespace = false;
         }
         if s.agent_cli == "opencode" {
@@ -370,8 +346,7 @@ impl Session {
     }
 }
 
-/// One page of the Settings UI. The left navigation lists these, and the
-/// main area shows one at a time.
+/// One page of the Settings UI.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
     Appearance,
@@ -436,8 +411,7 @@ impl SettingsSection {
         }
     }
 
-    /// True when any setting in this section differs from its default, for
-    /// the dot on the nav row.
+    /// True when any setting in this section differs from its default, for the dot on the nav row.
     pub(crate) fn modified(self, w: &Workbench) -> bool {
         let s = &w.settings;
         match self {
@@ -473,9 +447,7 @@ impl SettingsSection {
     }
 }
 
-/// One setting inside a card: title and short description on the left, the
-/// control at the right edge. Rows share the card's hairline dividers, so
-/// this helper draws none of its own.
+/// One setting inside a card: title and short description on the left, the control at the right edge.
 fn settings_row(title: &'static str, desc: SharedString, control: AnyElement) -> AnyElement {
     h_flex()
         .w_full()
@@ -495,8 +467,7 @@ fn settings_row(title: &'static str, desc: SharedString, control: AnyElement) ->
         .into_any_element()
 }
 
-/// A bordered card holding one setting row per child, with a hairline
-/// between rows.
+/// A bordered card holding one setting row per child, with a hairline between rows.
 fn settings_card(rows: Vec<AnyElement>) -> AnyElement {
     let n = rows.len();
     v_flex()
@@ -514,8 +485,7 @@ fn settings_card(rows: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-/// The animated backgrounds as a grid of small live previews, each in the active
-/// theme's colors; a click shows it behind the panels at once.
+/// The animated backgrounds as a grid of small live previews, each in the active theme's colors; a click shows it behind the panels at once.
 fn scene_cards(current: &str, cx: &mut Context<Workbench>) -> Div {
     h_flex().w_full().flex_wrap().gap_2().children(crate::scene::Scene::ALL.into_iter().map(|sc| {
         let on = current == sc.id();
@@ -545,8 +515,7 @@ fn scene_cards(current: &str, cx: &mut Context<Workbench>) -> Div {
     }))
 }
 
-/// The six theme palettes as a grid of swatch cards. Extracted unchanged
-/// from the old flat settings page.
+/// The six theme palettes as a grid of swatch cards.
 fn theme_cards(cx: &mut Context<Workbench>) -> Div {
     // Theme cards: a strip of the palette's own colors, its name and one line.
     let active_theme = theme::palette().id;
@@ -632,9 +601,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Background animation on or off. On, it first says what it costs, then measures it:
-    /// FluxCode's own CPU time over a few seconds of the moving scene, set against the
-    /// PC's cores, memory and power (`motion_check`).
+    /// Background animation on or off.
     pub(crate) fn toggle_bg_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::motion_check::{self, Check};
         self.settings.bg_motion = !self.settings.bg_motion;
@@ -669,9 +636,7 @@ impl Workbench {
     pub(crate) fn set_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let old = theme::palette();
         self.settings.theme = id.into();
-        // FluxSky is the website's dusk: its drifting clouds come with it (unless a
-        // picture of your own is set), and the scene they replaced comes back with the
-        // next theme.
+        // FluxSky is the website's dusk: its drifting clouds come with it (unless a picture of your own is set), and the scene they replaced comes back with the next theme.
         let sky = crate::scene::Scene::Sky.id();
         if id == "flux-sky" && old.id != id && self.settings.bg_image.is_none() && self.settings.bg_scene != sky {
             self.settings.bg_scene_before_sky = std::mem::replace(&mut self.settings.bg_scene, sky.into());
@@ -730,9 +695,7 @@ impl Workbench {
         SettingsSection::ALL.iter().copied().filter(|s| cfg!(windows) || *s != SettingsSection::Windows).collect()
     }
 
-    /// The section the page is scrolled to: the first one still showing more than a
-    /// strip under the top edge. At the very bottom, a short last section the user
-    /// picked in the list counts as reached even though it can't scroll to the top.
+    /// The section the page is scrolled to: the first one still showing more than a strip under the top edge.
     fn settings_in_view(&self, sections: &[SettingsSection]) -> SettingsSection {
         let h = &self.settings_scroll;
         if h.bounds_for_item(0).is_none() {
@@ -751,9 +714,7 @@ impl Workbench {
         sections[ix]
     }
 
-    /// Settings as one page: the list of sections on the left, and every section, from
-    /// Appearance down to About, in one scroll on the right. A row in the list jumps to
-    /// its section; the list follows the scroll.
+    /// Settings as one page: the list of sections on the left, and every section, from Appearance down to About, in one scroll on the right.
     pub(crate) fn render_settings(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let sections = Self::settings_sections();
         let active = self.settings_in_view(&sections);
@@ -784,15 +745,13 @@ impl Workbench {
                     .px_10()
                     .pt_8()
                     .children(blocks)
-                    // Room under the last section, so the short ones at the end can come
-                    // up to the top when picked in the list.
+                    // Room under the last section, so the short ones at the end can come up to the top when picked in the list.
                     .child(div().flex_none().h(theme::u(360.))),
             )
             .into_any_element()
     }
 
-    /// The left list: one row per section, an accent bar on the one in view, and a dot
-    /// on rows whose section differs from the defaults. Close sits at its top.
+    /// The left list: one row per section, an accent bar on the one in view, and a dot on rows whose section differs from the defaults.
     fn render_settings_nav(&self, sections: &[SettingsSection], active: SettingsSection, cx: &mut Context<Self>) -> AnyElement {
         let close_btn = self.action_button("settings-close", tr("Close"), crate::ui::Kind::Plain, cx, |this, _, cx| {
             this.settings_open = false;
@@ -857,12 +816,10 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Builds the content of one section (the page builds them all, one under another;
-    /// the agents list and the soul files' places come from caches and a few file checks).
+    /// Builds the content of one section (the page builds them all, one under another.
     fn settings_section_content(&self, section: SettingsSection, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.settings;
-        // Same behaviour as the old flat page: each control applies the
-        // setting and saves it at once.
+        // Same behaviour as the old flat page: each control applies the setting and saves it at once.
         let stepper = |id: &'static str, value: String, f: fn(&mut Workbench, i32)| {
             h_flex()
                 .gap_1()
@@ -1249,8 +1206,7 @@ impl Workbench {
 }
 
 impl Workbench {
-    /// Every installed agent with its instruction files: where each one is, and Open
-    /// (or Create, when it isn't there yet).
+    /// Every installed agent with its instruction files: where each one is, and Open (or Create, when it isn't there yet).
     fn render_soul_files(&self, cx: &mut Context<Self>) -> AnyElement {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
         let installed = crate::acp::installed();
@@ -1324,8 +1280,7 @@ impl Workbench {
     fn copilot_signin_result(&mut self, r: Result<String, String>, cx: &mut Context<Self>) {
         match r {
             Ok(code) if code.is_empty() => self.status = tr("Signed in to Copilot").into(),
-            // The device code goes on the clipboard: paste it on the GitHub page the
-            // browser opened, then Authorize.
+            // The device code goes on the clipboard: paste it on the GitHub page the browser opened, then Authorize.
             Ok(code) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(code));
                 self.status = tr("Sign-in code copied: paste it on the GitHub page that opened, then click Authorize.").into();
@@ -1425,8 +1380,7 @@ impl Workbench {
                                     })
                                     .ok()
                                     .flatten();
-                                // Start it now, so Settings moves on to the sign-in step
-                                // instead of waiting for the next suggestion request.
+                                // Start it now, so Settings moves on to the sign-in step instead of waiting for the next suggestion request.
                                 if let Some(copilot) = installed {
                                     let started = cx.background_spawn(async move { copilot.start() }).await;
                                     _ = this.update(cx, |this, cx| {
@@ -1557,8 +1511,7 @@ impl Workbench {
     }
 }
 
-/// While npm installs the Copilot server: a spinner, what is happening and how long
-/// it usually takes, and a bar that keeps moving (npm reports no progress to show).
+/// While npm installs the Copilot server: a spinner, what is happening and how long it usually takes, and a bar that keeps moving (npm reports no progress to show).
 fn install_progress() -> AnyElement {
     v_flex()
         .w_full()
@@ -1595,8 +1548,7 @@ fn install_progress() -> AnyElement {
 mod tests {
     use super::Settings;
 
-    /// The WebView notice is on unless the user turned it off: a fresh
-    /// install shows it, and so does a settings file written before it existed.
+    /// The WebView notice is on unless the user turned it off: a fresh install shows it, and so does a settings file written before it existed.
     #[test]
     #[cfg(feature = "embedded-preview")]
     fn webview_notice_is_on_by_default() {

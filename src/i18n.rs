@@ -1,13 +1,4 @@
 //! Interface language: English (the source text), Indonesian, French or Malay.
-//!
-//! Indonesian lives in `i18n_id.rs`; French and Malay in `i18n/fr.tsv` and
-//! `i18n/ms.tsv` (`English<TAB>translation`), deflated into the binary by build.rs
-//! and unpacked the first time the language is used.
-//!
-//! `tr("Open Folder")` returns the text in the chosen language; English is the
-//! key, so a missing translation shows English instead of a blank. `trf!` does
-//! the same for text with values in it: `trf!("Saved {0}"; 0 => name)`. A
-//! translation may move a `{name}` anywhere in its sentence.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -64,8 +55,6 @@ fn system_language() -> u8 {
         fn GetUserDefaultLCID() -> u32;
     }
     // Primary language ids (low 10 bits): Indonesian 0x21, French 0x0c, Malay 0x3e.
-    // The display language wins; else the regional format (many PCs run an English
-    // Windows with local formats).
     let pick = |l: u32| match l & 0x3ff {
         0x21 => Some(ID),
         0x0c => Some(FR),
@@ -203,8 +192,7 @@ mod tests {
 
     #[test]
     fn every_language_pack_translates_its_strings() {
-        // Read the packs directly: switching the global language here would race the
-        // other tests, which expect English.
+        // Read the packs directly: switching the global language here would race the other tests, which expect English.
         static FR: std::sync::OnceLock<super::Table> = std::sync::OnceLock::new();
         static MS: std::sync::OnceLock<super::Table> = std::sync::OnceLock::new();
         for (code, t) in [("fr", super::table_packed(&FR, super::PACK_FR)), ("ms", super::table_packed(&MS, super::PACK_MS))] {

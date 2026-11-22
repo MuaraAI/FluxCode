@@ -1,11 +1,4 @@
-//! Live bracket check (issue #105): the first unmatched or mismatched `()[]{}`
-//! in a file, underlined as you type. No parser and no grammar, so the binary
-//! stays the size it is: a stack, with strings and comments skipped.
-//!
-//! ponytail: knows quotes and comments per language, not the grammar, so a C++
-//! raw string `R"(...)"`, a JS regex like `/[/` or a heredoc can confuse it. When
-//! real syntax errors are wanted, feed LSP `publishDiagnostics` into the same
-//! underline instead (panel.rs `apply_problems_to`).
+//! Live bracket check (issue #105): the first unmatched or mismatched `()[]{}` in a file, underlined as you type.
 
 /// Files bigger than this are not checked (the scan runs on the UI thread).
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -23,8 +16,7 @@ struct Syntax {
 
 const C_LIKE: Syntax = Syntax { line: &["//"], block: true, quotes: b"\"", raw: false };
 
-/// Languages where brackets always pair up. Markdown, HTML, shell `case`
-/// and plain text use lone brackets on purpose, so they are left alone.
+/// Languages where brackets always pair up.
 fn syntax(lang: &str) -> Option<Syntax> {
     Some(match lang {
         "python" => Syntax { line: &["#"], block: false, quotes: b"\"'", raw: false },
@@ -41,8 +33,7 @@ fn syntax(lang: &str) -> Option<Syntax> {
     })
 }
 
-/// Walks the text byte by byte, keeping the 0-based row and the column in
-/// characters (what `Position` uses).
+/// Walks the text byte by byte, keeping the 0-based row and the column in characters (what `Position` uses).
 struct Cursor<'a> {
     b: &'a [u8],
     i: usize,
@@ -101,8 +92,7 @@ impl Cursor<'_> {
     }
 }
 
-/// The first bracket problem in `text`: its row, column (in characters) and
-/// message. `None` when the brackets pair up, or the language isn't checked.
+/// The first bracket problem in `text`: its row, column (in characters) and message.
 pub(crate) fn first_problem(text: &str, lang: &str) -> Option<(u32, u32, String)> {
     let syn = syntax(lang)?;
     if text.len() > MAX_BYTES {

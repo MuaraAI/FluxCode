@@ -1,13 +1,4 @@
-//! VS Code's line commands, as pure text edits: given the text and the selection
-//! (UTF-8 byte offsets), each returns the byte range to replace, the new text for
-//! it, and where the selection goes afterwards. The workbench applies the edit with
-//! the editor's own `replace`, so each command is one Undo step.
-//!
-//! - Toggle line comment (Ctrl+/)
-//! - Move line up / down (Alt+Up / Alt+Down)
-//! - Copy line up / down (Shift+Alt+Up / Shift+Alt+Down)
-//! - Delete line (Ctrl+Shift+K)
-//! - Insert line below / above (Ctrl+Enter / Ctrl+Shift+Enter)
+//! VS Code's line commands, as pure text edits: given the text and the selection (UTF-8 byte offsets), each returns the byte range to replace, the new text for it, and where the selection goes afterwards.
 
 use std::ops::Range;
 
@@ -20,7 +11,6 @@ pub struct Edit {
 }
 
 /// Byte range of the whole lines the selection touches, without the last newline.
-/// A selection ending at the start of a line does not include that line (as in VS Code).
 fn line_block(text: &str, sel: &Range<usize>) -> Range<usize> {
     let start = text[..sel.start.min(text.len())].rfind('\n').map_or(0, |i| i + 1);
     let mut end_at = sel.end.min(text.len());
@@ -48,9 +38,7 @@ pub fn comment_prefix(file_name: &str) -> Option<&'static str> {
     })
 }
 
-/// Toggle a line comment on every line the selection touches. When every non-blank
-/// line is already commented the markers come off; otherwise they go on, at the
-/// smallest indentation of the block (blank lines stay blank).
+/// Toggle a line comment on every line the selection touches.
 pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> Edit {
     let block = line_block(text, &sel);
     let lines: Vec<&str> = text[block.clone()].split('\n').collect();
@@ -94,7 +82,7 @@ pub fn toggle_comment(text: &str, sel: Range<usize>, prefix: &str) -> Edit {
     Edit { range: block, text: new, select }
 }
 
-/// Move the touched lines one line up (`up`) or down. None at the top or bottom.
+/// Move the touched lines one line up (`up`) or down.
 pub fn move_lines(text: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
     let block = line_block(text, &sel);
     let body = &text[block.clone()];
@@ -119,8 +107,7 @@ pub fn move_lines(text: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
     }
 }
 
-/// Duplicate the touched lines above (`up`, the selection stays on the upper copy)
-/// or below (the selection moves to the lower copy).
+/// Duplicate the touched lines above (`up`, the selection stays on the upper copy) or below (the selection moves to the lower copy).
 pub fn copy_lines(text: &str, sel: Range<usize>, up: bool) -> Edit {
     let block = line_block(text, &sel);
     let body = &text[block.clone()];
@@ -129,8 +116,7 @@ pub fn copy_lines(text: &str, sel: Range<usize>, up: bool) -> Edit {
     Edit { range: block, text: new, select: sel.start + shift..sel.end + shift }
 }
 
-/// Delete the touched lines, newline included; the caret goes to the start of the
-/// line that takes their place.
+/// Delete the touched lines, newline included; the caret goes to the start of the line that takes their place.
 pub fn delete_lines(text: &str, sel: Range<usize>) -> Edit {
     let block = line_block(text, &sel);
     let (range, caret) = if block.end < text.len() {
@@ -144,8 +130,7 @@ pub fn delete_lines(text: &str, sel: Range<usize>) -> Edit {
     Edit { range, text: String::new(), select: caret..caret }
 }
 
-/// A new line below (or above) the caret's line, with the same indentation, and the
-/// caret on it.
+/// A new line below (or above) the caret's line, with the same indentation, and the caret on it.
 pub fn insert_line(text: &str, sel: Range<usize>, above: bool) -> Edit {
     let block = line_block(text, &(sel.start..sel.start));
     let line = &text[block.clone()];

@@ -1,10 +1,4 @@
-//! Left and right side bars: any view (Explorer, Search, Source Control, Run,
-//! Extensions, the agent) can live on either side, as in VS Code's secondary side bar.
-//!
-//! The activity bar keeps every icon; a view moved right opens in the right dock when
-//! its icon is clicked, and the dock's header lists the views that live there.
-//! Right-click an icon to move its view. The agent's side stays `settings.agent_right`
-//! (older settings files and the agent's own "move" button keep working).
+//! Left and right side bars: any view (Explorer, Search, Source Control, Run, Extensions, the agent) can live on either side, as in VS Code's secondary side bar.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -65,8 +59,7 @@ impl Workbench {
         self.pop_shut = Some((key, std::time::Instant::now()));
     }
 
-    /// The popover's button was clicked: false when that same press just closed it from
-    /// outside (mouse down closes it, the click would open it again).
+    /// The popover's button was clicked: false when that same press just closed it from outside (mouse down closes it, the click would open it again).
     pub(crate) fn pop_may_open(&mut self, key: &'static str) -> bool {
         !matches!(self.pop_shut.take(), Some((k, at)) if k == key && at.elapsed().as_millis() < 400)
     }
@@ -151,8 +144,7 @@ impl Workbench {
         }))
     }
 
-    /// The right side bar: the agent's own dock, or any other view with a tab strip of
-    /// the views that live on the right.
+    /// The right side bar: the agent's own dock, or any other view with a tab strip of the views that live on the right.
     pub(crate) fn render_right_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.right_view == SideView::Agent {
             return self.render_agent_dock(window, cx);
@@ -160,8 +152,7 @@ impl Workbench {
         self.render_view_panel(self.right_view, true, window, cx)
     }
 
-    /// Icon tabs for the views on the right, shown in the right dock's header when
-    /// more than one view lives there.
+    /// Icon tabs for the views on the right, shown in the right dock's header when more than one view lives there.
     pub(crate) fn render_right_tabs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let views: Vec<SideView> = SideView::ALL.into_iter().filter(|v| self.on_right(*v)).collect();
         if views.len() < 2 {

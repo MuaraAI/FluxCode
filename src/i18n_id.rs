@@ -1,11 +1,6 @@
 //! Indonesian interface text, keyed by the English source text.
-//!
-//! Tone: everyday Indonesian a developer uses, not formal government copy. Git
-//! and tooling words people say in English anyway (commit, push, branch,
-//! terminal, workspace) stay English. `{name}` slots may move within a line.
 
 pub const ID: &[(&str, &str)] = &[
-    // ------------------------------------------------------------ title bar and menus
     ("File", "File"),
     ("Edit", "Edit"),
     ("View", "Tampilan"),
@@ -68,7 +63,6 @@ pub const ID: &[(&str, &str)] = &[
     ("FluxCode", "FluxCode"),
     ("Search files in {f}", "Cari file di {f}"),
     ("Go to File (Ctrl+P)", "Cari file (Ctrl+P)"),
-    // ------------------------------------------------------------ side bar
     ("EXPLORER", "EXPLORER"),
     ("SEARCH", "CARI"),
     ("RUN", "JALANKAN"),
@@ -86,7 +80,6 @@ pub const ID: &[(&str, &str)] = &[
     ("{0}{1} results in {2} files", "{0}{1} hasil di {2} file"),
     ("Match Case", "Huruf besar/kecil harus sama"),
     ("Match Whole Word", "Cocokkan kata utuh"),
-    // ------------------------------------------------------------ explorer
     ("Rename...", "Ganti Nama..."),
     ("Delete", "Hapus"),
     ("Copy Path", "Salin Path"),
@@ -98,7 +91,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Cancel", "Batal"),
     ("\"{name}\" is not a valid name", "\"{name}\" tidak bisa dipakai sebagai nama"),
     ("Open Folder", "Buka Folder"),
-    // ------------------------------------------------------------ workspace and drops
     ("Remove Folder from Workspace", "Keluarkan Folder dari Workspace"),
     ("Added {n} to the workspace", "{n} ditambahkan ke workspace"),
     ("1 folder", "1 folder"),
@@ -116,7 +108,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Open {what}", "Buka {what}"),
     ("Add to workspace", "Tambah ke workspace"),
     ("Switch to it", "Pindah ke folder ini"),
-    // ------------------------------------------------------------ editor and views
     ("Saved {0}", "{0} tersimpan"),
     ("Save failed: {e}", "Gagal menyimpan: {e}"),
     ("Large file: syntax colors are off", "File besar: warna sintaks dimatikan"),
@@ -151,7 +142,6 @@ pub const ID: &[(&str, &str)] = &[
         "PDF · {pages_s}{size} · tidak ada teks yang bisa dibaca (hasil scan atau font khusus), yang tampil isi byte-nya",
     ),
     ("SQLite database · {size} · {tables} tables with their SQL and row counts, read only", "Database SQLite · {size} · {tables} tabel beserta SQL dan jumlah barisnya, hanya baca"),
-    // ------------------------------------------------------------ terminal and output
     ("TERMINAL", "TERMINAL"),
     ("OUTPUT", "OUTPUT"),
     ("Type a command, then press Enter", "Ketik perintah, lalu tekan Enter"),
@@ -188,10 +178,8 @@ pub const ID: &[(&str, &str)] = &[
     ("Do not show again", "Jangan tampilkan lagi"),
     ("Continue", "Lanjutkan"),
     ("Live Preview: {url} (reloads on save)", "Live Preview: {url} (muat ulang tiap disimpan)"),
-    // ------------------------------------------------------------ Go to File
     ("Type part of a file name", "Ketik sebagian nama file"),
     ("No file matches. Try fewer letters.", "Tidak ada file yang cocok. Coba lebih sedikit huruf."),
-    // ------------------------------------------------------------ Source Control
     ("Message (Enter to commit)", "Pesan commit (Enter untuk commit)"),
     ("Source Control is busy, try again in a moment", "Source Control lagi sibuk, coba lagi sebentar"),
     ("Synced with the remote", "Sudah sinkron dengan remote"),
@@ -224,7 +212,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Pulled", "Pull selesai"),
     ("Pushed", "Push selesai"),
     ("Fetched", "Fetch selesai"),
-    // ------------------------------------------------------------ settings
     ("Appearance", "Tampilan"),
     ("Color theme. Ctrl+K Ctrl+T switches to the next one from anywhere.", "Tema warna. Ctrl+K Ctrl+T ganti ke tema berikutnya dari mana saja."),
     ("Color theme: {name}", "Tema warna: {name}"),
@@ -285,7 +272,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Sign in with token", "Masuk pakai token"),
     ("Use GitHub CLI login", "Pakai login GitHub CLI"),
     ("Personal access token", "Personal access token"),
-    // ------------------------------------------------------------ agent panel
     ("Ask {name}…", "Tanya {name}…"),
     ("Choose the agent", "Pilih agent"),
     ("No saved chats yet. Chats are saved after each answer.", "Belum ada chat tersimpan. Chat disimpan setiap selesai menjawab."),
@@ -744,7 +730,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Sent as soon as {name} is ready", "Dikirim begitu {name} siap"),
     ("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it", "Belum terkirim: {name} gagal jalan. Ganti agent di menu judul, pesannya akan dikirim ke sana"),
     ("Sent with your next message", "Dikirim bersama pesan berikutnya"),
-    // ------------------------------------------------------------ agent picker and installs
     ("Download", "Unduh"),
     ("Get", "Ambil"),
     ("Agent settings", "Pengaturan agent"),
@@ -786,7 +771,6 @@ pub const ID: &[(&str, &str)] = &[
     ("{done} of {total} files", "{done} dari {total} file"),
     ("{done} files", "{done} file"),
     ("{name} wasn't installed", "{name} gagal dipasang"),
-    // ------------------------------------------------------------ command palette, settings, what's new
     (
         "A new line keeps the indentation, and indents one more level after { or :.",
         "Baris baru mengikuti indentasi, dan masuk satu level lagi setelah { atau :.",
@@ -905,7 +889,6 @@ pub const ID: &[(&str, &str)] = &[
     ("What's new in FluxCode", "Yang baru di FluxCode"),
     ("Word wrap off", "Word wrap mati"),
     ("Word wrap on", "Word wrap nyala"),
-    // ------------------------------------------------------------ agent questions, removal, soul files
     ("Agent instructions (soul files)", "Instruksi agent (file soul)"),
     ("Answer “{q}” first.", "Jawab “{q}” dulu."),
     (
@@ -943,7 +926,6 @@ pub const ID: &[(&str, &str)] = &[
     ("{name} asks", "{name} bertanya"),
     ("{name}'s own commands appear once it is on", "Perintah {name} muncul setelah dinyalakan"),
     ("↑↓ choose · Tab fills · Enter runs · Esc closes", "↑↓ pilih · Tab isi · Enter jalankan · Esc tutup"),
-    // ------------------------------------------------------------ live share
     ("Activity", "Aktivitas"),
     ("Connecting…", "Menyambung…"),
     ("Copy invite code", "Salin kode undangan"),
@@ -991,7 +973,6 @@ pub const ID: &[(&str, &str)] = &[
     ("{m} min ago", "{m} menit lalu"),
     ("{name} joined the session", "{name} bergabung ke sesi"),
     ("{name} left the session", "{name} keluar dari sesi"),
-    // ------------------------------------------------------------ update notes
     ("Builds since yours", "Build sejak versimu"),
     ("Could not read the new build's notes. {why}", "Catatan build baru tidak bisa dibaca. {why}"),
     ("Reading the new build's notes…", "Membaca catatan build baru…"),
@@ -1198,7 +1179,6 @@ pub const ID: &[(&str, &str)] = &[
         "{name} is found; its tools for agents ({pkg}, about 15 MB) aren't installed yet.",
         "{name} ditemukan; tool untuk agent ({pkg}, sekitar 15 MB) belum dipasang.",
     ),
-    // ------------------------------------------------------------ agent settings, permissions, terminal selection
     ("Agent settings: model, permissions, browser", "Pengaturan agent: model, izin, browser"),
     ("Waiting for you", "Menunggu kamu"),
     ("{name} is waiting for you", "{name} menunggu jawabanmu"),
@@ -1255,7 +1235,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Copy the selection (Ctrl+C)", "Salin yang diblok (Ctrl+C)"),
     ("Show {n} earlier", "Tampilkan {n} sebelumnya"),
     ("· {n} hidden", "· {n} tersembunyi"),
-    // ------------------------------------------------------------ tabs menu, agent steps, worktree, accounts
     ("More · mode: {m}", "Lainnya · mode: {m}"),
     ("Own worktree (on): remove it", "Worktree sendiri (aktif): hapus"),
     ("Work in its own git worktree", "Kerja di git worktree sendiri"),
@@ -1316,7 +1295,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Check for new development builds and whether FluxCode looks for them.", "Memeriksa build pengembangan baru dan apakah FluxCode mencarinya."),
     ("What FluxCode is, where its code lives, and how to report a problem.", "Apa itu FluxCode, di mana kodenya, dan cara melaporkan masalah."),
     ("Agent instructions", "Instruksi agent"),
-    // ------------------------------------------------------------ side bars, glass, agent workspace
     ("Move to Left Side Bar", "Pindah ke Side Bar Kiri"),
     ("Move to Right Side Bar", "Pindah ke Side Bar Kanan"),
     ("Run and Debug", "Jalankan dan Debug"),
@@ -1362,7 +1340,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Turn the agent on to read your limits.", "Nyalakan agent untuk membaca limit kamu."),
     ("Limits show here once the agent reports them.", "Limit muncul di sini setelah agent melaporkannya."),
     ("Experimental", "Eksperimental"),
-    // ------------------------------------------------------------ animated backgrounds
     ("Ocean", "Laut"),
     ("River", "Sungai"),
     ("Beach", "Pantai"),
@@ -1372,7 +1349,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Animated background", "Latar animasi"),
     ("Background animation", "Animasi latar"),
     ("Your background image shows instead. Remove it to see the scene.", "Gambar latar kamu yang tampil. Hapus gambarnya untuk melihat scene."),
-    // ------------------------------------------------------------ backgrounds, search
     ("{0} more matches", "{0} hasil lagi"),
     ("Checking Copilot…", "Memeriksa Copilot…"),
     ("Ready, signed in as {user}. Suggestions appear as ghost text a moment after you stop typing; Tab accepts.", "Siap, masuk sebagai {user}. Saran muncul sebagai teks abu-abu sesaat setelah kamu berhenti mengetik; Tab untuk menerima."),

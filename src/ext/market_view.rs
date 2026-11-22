@@ -1,8 +1,4 @@
-//! The Extensions side bar: the VS Code Marketplace, all of it. Pages of 50 load as
-//! the list scrolls (a virtual list: only the rows in view are built), icons load for
-//! the rows near the viewport, and every page fetched is kept in memory, so typing
-//! back to an earlier query shows it at once. An extension's page opens in the
-//! editor area beside the built-in pages.
+//! The Extensions side bar: the VS Code Marketplace, all of it.
 
 use super::market::{self, Busy, Item, Query, Sort};
 use super::view::tile;
@@ -78,8 +74,7 @@ impl Workbench {
         Query::new(&self.ext.query.read(cx).value(), m.sort, m.category)
     }
 
-    /// The query box changed: on the Marketplace tab, search once typing pauses
-    /// (at once when the answer is cached). The Installed tab filters as you type.
+    /// The query box changed: on the Marketplace tab, search once typing pauses (at once when the answer is cached).
     pub(crate) fn market_query_changed(&mut self, cx: &mut Context<Self>) {
         if self.ext.filter == Filter::Market {
             self.market_search(DEBOUNCE_MS, cx);
@@ -87,18 +82,14 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Show the current query: from the cache when its first page is there, else
-    /// from the gallery after `delay` ms. Each call bumps the generation; a wait or an
-    /// answer that belongs to an older one is dropped. The old list stays (dimmed)
-    /// until the new one is here.
+    /// Show the current query: from the cache when its first page is there, else from the gallery after `delay` ms.
     pub(crate) fn market_search(&mut self, delay: u64, cx: &mut Context<Self>) {
         let q = self.market_query(cx);
         let m = &mut self.ext.market;
         m.kicked.set(true);
         m.generation += 1;
         let generation = m.generation;
-        // Back to what the list shows (typed and erased): keep it, pages and all; the
-        // bump above already dropped the request in flight.
+        // Back to what the list shows (typed and erased): keep it, pages and all; the bump above already dropped the request in flight.
         if m.shown.as_ref() == Some(&q) {
             if m.loading {
                 m.loading = false;
@@ -198,9 +189,7 @@ impl Workbench {
         .detach();
     }
 
-    /// The list drew `range`: ask for the next page near the end, and queue the
-    /// icons of the rows in and around the viewport (nearest first, replacing what
-    /// was queued for rows scrolled away).
+    /// The list drew `range`: ask for the next page near the end, and queue the icons of the rows in and around the viewport (nearest first, replacing what was queued for rows scrolled away).
     fn market_in_view(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let n = self.ext.market.items.len();
         if n > 0 && range.end + PREFETCH_ROWS >= n {
@@ -361,10 +350,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// After `native::load`: the theme list may have changed (and the active theme with
-    /// it, if its extension was removed or updated), so the palette is applied again.
-    /// `installed` names an extension just installed: if it brings color themes, the
-    /// note says where they are.
+    /// After `native::load`: the theme list may have changed (and the active theme with it, if its extension was removed or updated), so the palette is applied again.
     fn vsx_applied_changed(&mut self, installed: &str, cx: &mut Context<Self>) {
         self.settings.apply_backdrop();
         theme::apply(cx);
@@ -460,9 +446,7 @@ impl Workbench {
         }
     }
 
-    /// One row, readable at a 260 px side bar: the name alone on the first line, the
-    /// description on the second, then the publisher (with its check when verified),
-    /// installs, rating and the button, as in VS Code. Always `ROW_H` tall.
+    /// One row, readable at a 260 px side bar: the name alone on the first line, the description on the second, then the publisher (with its check when verified), installs, rating and the button, as in VS Code.
     fn market_row(
         &self,
         keys: (&'static str, &'static str),
@@ -523,8 +507,7 @@ impl Workbench {
                             .text_color(c(theme::FG_MUTED))
                             .child(it.short.clone()),
                     )
-                    // Publisher, numbers and the button share the last line; the
-                    // publisher gives way first but always keeps a readable stub.
+                    // Publisher, numbers and the button share the last line; the publisher gives way first but always keeps a readable stub.
                     .child(
                         h_flex()
                             .w_full()
@@ -602,8 +585,7 @@ impl Workbench {
         }
     }
 
-    /// Sort and category in one small menu at the end of the tabs row: the label
-    /// says what is applied, the menu changes it.
+    /// Sort and category in one small menu at the end of the tabs row: the label says what is applied, the menu changes it.
     fn market_filters(&self, cx: &mut Context<Self>) -> AnyElement {
         let q = self.market_query(cx);
         let current = q.category;
@@ -648,8 +630,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// The Extensions side bar: search, the Marketplace / Installed tabs, the sort and
-    /// category on the Marketplace tab, then the list.
+    /// The Extensions side bar: search, the Marketplace / Installed tabs, the sort and category on the Marketplace tab, then the list.
     pub(crate) fn render_market_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let m = &self.ext.market;
         let on_market = self.ext.filter == Filter::Market;
@@ -778,8 +759,7 @@ impl Workbench {
                 if !q.split_whitespace().all(|w| hay.contains(w)) {
                     continue;
                 }
-                // The search's entry when it has the same extension: its numbers, and
-                // the newer version for the page's Update.
+                // The search's entry when it has the same extension: its numbers, and the newer version for the page's Update.
                 let item = m
                     .items
                     .iter()
@@ -1100,8 +1080,7 @@ impl Workbench {
                 .child(tr("Loading the README…"))
                 .into_any_element(),
             Some(Ok(t)) => {
-                // Pictures come from the cache once fetched; until then (or when one
-                // can't be fetched) they stay out rather than showing a broken frame.
+                // Pictures come from the cache once fetched; until then (or when one can't be fetched) they stay out rather than showing a broken frame.
                 let images = m.readme_images.get(&id).cloned().unwrap_or_default();
                 let gen = images.len();
                 div()

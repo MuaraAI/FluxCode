@@ -1,17 +1,4 @@
 //! Extensions: what FluxCode can build, run, pack and preview, as small manifests.
-//!
-//! An extension is one JSON file (`extension.json`): which projects it is for (a file
-//! that must exist, maybe with some text in it), the tasks it adds (a command line, or
-//! a native step written in Rust for what a shell line can't do, like packing a
-//! Bedrock add-on), the tools it needs (with a winget id to install them), and notes
-//! that tell an AI agent how such a project works. There is no extension runtime: a
-//! manifest is data, so installing one costs a few KB and nothing runs until you
-//! click a task.
-//!
-//! The catalog ships inside FluxCode (`extensions/*.json`, compiled in), plus any
-//! manifest placed in `~/.fluxcode/extensions/<id>/extension.json`; all of them are
-//! always on. The Extensions view lists VS Code extensions instead: they come from
-//! its Marketplace (`market`) and live apart, in `~/.fluxcode/vscode-extensions`.
 
 pub mod bedrock;
 pub mod compile;
@@ -44,8 +31,7 @@ const BUILTIN: &[&str] = &[
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Rule {
-    /// A file name or the end of a path (`src/main/resources/plugin.yml`); the last
-    /// part may be `*.ext`.
+    /// A file name or the end of a path (`src/main/resources/plugin.yml`); the last part may be `*.ext`.
     pub file: String,
     /// Text the file must contain (all of it).
     #[serde(default)]
@@ -58,8 +44,7 @@ pub struct TaskDef {
     pub label: String,
     #[serde(default)]
     pub icon: String,
-    /// The command line, run in the project folder. `{gradle}`, `{mvn}`, `{python}`,
-    /// `{npm}` and `{name}` are filled in.
+    /// The command line, run in the project folder.
     #[serde(default)]
     pub run: String,
     /// A step FluxCode does itself (`paper.deploy`, `bedrock.pack`, ...).
@@ -71,8 +56,7 @@ pub struct TaskDef {
     /// Hidden when one of these is there.
     #[serde(default)]
     pub unless: String,
-    /// Shown only when the build file (build.gradle.kts, build.gradle, pom.xml or
-    /// package.json) has this text, like a plugin id.
+    /// Shown only when the build file (build.gradle.kts, build.gradle, pom.xml or package.json) has this text, like a plugin id.
     #[serde(default)]
     pub uses: String,
     /// A native step to run after the command succeeds.
@@ -125,8 +109,7 @@ pub struct Manifest {
     pub about: String,
     #[serde(default)]
     pub detect: Vec<Rule>,
-    /// Marker files of a project's top folder, most important first: the first
-    /// one found going up from the matched file decides.
+    /// Marker files of a project's top folder, most important first: the first one found going up from the matched file decides.
     #[serde(default)]
     pub root: Vec<String>,
     /// Packs found side by side become one project (a Bedrock add-on).
@@ -204,7 +187,6 @@ pub fn remove_file(m: &Manifest) {
     }
 }
 
-// ------------------------------------------------------------------ detection
 
 /// A folder an extension is for.
 #[derive(Clone, Debug, PartialEq)]
@@ -260,8 +242,7 @@ fn rule_hits(rule: &Rule, path: &str) -> bool {
     rule.contains.iter().all(|c| text.contains(c.as_str()))
 }
 
-/// The project folder for a matched file: the first root marker found going up
-/// (inside `top`), else the file's own folder.
+/// The project folder for a matched file: the first root marker found going up (inside `top`), else the file's own folder.
 fn project_dir(m: &Manifest, file: &Path, top: &Path) -> PathBuf {
     let start = file.parent().unwrap_or(file);
     for marker in &m.root {
@@ -279,8 +260,7 @@ fn project_dir(m: &Manifest, file: &Path, top: &Path) -> PathBuf {
     start.to_path_buf()
 }
 
-/// Every project each extension is for, from the workspace's file list. Blocking:
-/// it reads the few files whose rule needs their text.
+/// Every project each extension is for, from the workspace's file list.
 pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<Project> {
     let mut found: Vec<Project> = Vec::new();
     for m in catalog {
@@ -338,7 +318,6 @@ fn group(list: Vec<Project>) -> Vec<Project> {
     out
 }
 
-// ------------------------------------------------------------------ tasks
 
 /// A task ready to run for one project.
 #[derive(Clone, Debug, PartialEq)]
@@ -407,8 +386,7 @@ pub fn npm_scripts(dir: &Path) -> Vec<String> {
     v.get("scripts").and_then(|s| s.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
 }
 
-/// The tasks a project gets from its extension (checks files on disk: off the UI thread
-/// when there are many).
+/// The tasks a project gets from its extension (checks files on disk: off the UI thread when there are many).
 pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
     let mut out = Vec::new();
     for t in &m.tasks {
@@ -454,7 +432,6 @@ pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
     out
 }
 
-// ------------------------------------------------------------------ tools
 
 /// A program on PATH (with PATHEXT on Windows), without starting a process.
 pub fn which(cmd: &str) -> Option<PathBuf> {
@@ -510,10 +487,8 @@ pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
         .collect()
 }
 
-// ------------------------------------------------------------------ agent context
 
-/// What the agent is told about the projects installed extensions are for: which
-/// tool builds each, with which command, and the extension's notes.
+/// What the agent is told about the projects installed extensions are for: which tool builds each, with which command, and the extension's notes.
 pub fn agent_notes(catalog: &[Manifest], installed: &[String], found: &[Project], top: &[PathBuf]) -> Option<String> {
     let mut s = String::new();
     let mut noted: Vec<&str> = Vec::new();
@@ -579,8 +554,7 @@ pub struct Ext {
     pub note: Option<String>,
     /// (project, task id) running in the Output panel.
     pub running: Option<(usize, String)>,
-    /// FluxCompile's folding of Gradle's task lines: where the scan is, how many were
-    /// folded, and the progress line that stands for them.
+    /// FluxCompile's folding of Gradle's task lines: where the scan is, how many were folded, and the progress line that stands for them.
     pub fold_scan: usize,
     pub fold_count: usize,
     pub fold_line: Option<usize>,

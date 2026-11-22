@@ -1,18 +1,4 @@
-//! Usage: how much of the plan's limits and of the context window the agent has used,
-//! in a panel of its own instead of typing `/usage`.
-//!
-//! Two sources, both from the agent itself:
-//! - `usage_update` notifications (Claude Agent sends one per step): context tokens
-//!   used and the window's size, the session's cost, and the 5-hour and 7-day limits
-//!   with when each resets. These keep the meter under the message box live.
-//! - The agent's own `/usage` and `/context` commands, run quietly when the panel
-//!   opens (they cost no tokens): every limit (the Fable one too), the session's
-//!   tokens, and what uses the limits most.
-//!
-//! Limits can't be reset from an app: each window resets by itself at the time shown.
-//! What can be asked for is usage credits (`/usage-credits`), which the organization's
-//! admin may have turned off; the panel runs it only after a confirmation and shows the
-//! agent's answer.
+//! Usage: how much of the plan's limits and of the context window the agent has used, in a panel of its own instead of typing `/usage`.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -244,8 +230,7 @@ pub struct UsageState {
 }
 
 impl UsageState {
-    /// Every limit known: (name, % used, when it resets). The `/usage` report names them
-    /// all; without it, the live windows the agent sends with each step.
+    /// Every limit known: (name, % used, when it resets).
     pub fn limit_rows(&self, now: i64) -> Vec<(String, f32, Option<String>)> {
         let window_of = |name: &str| -> Option<&Window> {
             let l = self.live.as_ref()?;
@@ -374,8 +359,7 @@ impl Workbench {
         self.agent.usage.live.is_some() || self.agent.commands.iter().any(|c| c.name == "usage")
     }
 
-    /// A usage button was clicked: close the panel when it is open, else open it (unless
-    /// this same press just closed it from outside).
+    /// A usage button was clicked: close the panel when it is open, else open it (unless this same press just closed it from outside).
     pub(crate) fn agent_usage_toggle(&mut self, cx: &mut Context<Self>) {
         let may = self.pop_may_open("usage");
         if self.agent.usage.open {
@@ -448,8 +432,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The meter under the message box: how full the context is, as a ring (and the
-    /// share beside it when there's room). Opens the usage panel.
+    /// The meter under the message box: how full the context is, as a ring (and the share beside it when there's room).
     pub(crate) fn render_context_meter(&self, narrow: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.agent.usage;
         let l = u.live.as_ref()?;
@@ -480,8 +463,7 @@ impl Workbench {
         )
     }
 
-    /// The limits at the foot of the full-screen changes column: always in view (the
-    /// list of changes above it scrolls), with the context window under them.
+    /// The limits at the foot of the full-screen changes column: always in view (the list of changes above it scrolls), with the context window under them.
     pub(crate) fn render_limits_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let u = &self.agent.usage;
         let now = unix_now();

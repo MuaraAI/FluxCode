@@ -1,11 +1,4 @@
-//! Usage limit reached: a banner above the message box instead of a line lost in the
-//! chat, with when the limit resets, "Continue now" (send again) and "Resume at reset"
-//! (FluxCode sends again by itself once the window has reset).
-//!
-//! The limit shows up two ways: the prompt fails with an error that names it, or the
-//! agent answers with its own notice ("You've hit your weekly limit · resets 12pm").
-//! Either way the reset time comes from the live usage windows when one is full, else
-//! from the clock time in the message.
+//! Usage limit reached: a banner above the message box instead of a line lost in the chat, with when the limit resets, "Continue now" (send again) and "Resume at reset" (FluxCode sends again by itself once the window has reset).
 
 use super::{Item, Status};
 use crate::i18n::tr;
@@ -135,8 +128,7 @@ impl Workbench {
             }
         });
         let resume = self.settings.resume_at_reset;
-        // Two groups that wrap: the notice (its text wraps too, never cut) and the
-        // controls, which drop to a line of their own when the column is narrow.
+        // Two groups that wrap: the notice (its text wraps too, never cut) and the controls, which drop to a line of their own when the column is narrow.
         let notice = h_flex()
             .flex_1()
             .min_w(theme::u(180.))

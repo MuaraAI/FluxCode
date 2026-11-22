@@ -1,8 +1,4 @@
-//! Go to File (Ctrl+P, or a click on the search box in the title bar), like
-//! VS Code's Quick Open: type part of a name, Enter opens the file.
-//!
-//! The file list comes from the explorer's scan (no extra disk walk), and the
-//! match is a small subsequence score, so it stays instant on large folders.
+//! Go to File (Ctrl+P, or a click on the search box in the title bar), like VS Code's Quick Open: type part of a name, Enter opens the file.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -17,17 +13,14 @@ use std::path::PathBuf;
 
 const MAX_HITS: usize = 60;
 
-/// Score `path` for `query` (both compared lower-case): every query character
-/// must appear in order. Matches in the file name, at word starts and in a row
-/// score higher; shorter paths win ties.
+/// Score `path` for `query` (both compared lower-case): every query character must appear in order.
 #[cfg(test)]
 pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
     let q: Vec<u8> = query.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
     fuzzy_lower(&q, path.to_lowercase().as_bytes())
 }
 
-/// `fuzzy` on an already lower-cased query and path (bytes, so a keystroke over
-/// thousands of files allocates nothing). Non-ASCII bytes still match exactly.
+/// `fuzzy` on an already lower-cased query and path (bytes, so a keystroke over thousands of files allocates nothing).
 pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     if q.is_empty() {
         return Some(0);
@@ -51,8 +44,7 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
         prev = Some(pos);
         at = pos + 1;
     }
-    // Typed text found whole beats letters scattered along the path: name starts
-    // with it, name contains it, path contains it.
+    // Typed text found whole beats letters scattered along the path: name starts with it, name contains it, path contains it.
     let name = &p[name_start..];
     let contains = |hay: &[u8]| hay.windows(q.len()).any(|w| w == q);
     if name.starts_with(q) {
@@ -593,8 +585,6 @@ impl Workbench {
     fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {
         let q = &self.quick;
         // The rest of the window dims so the eye goes to the box; a click there closes it.
-        // (A real blur would re-render the whole window under it every frame; a dim layer
-        // costs nothing.) The box sits centered under the title bar's search box.
         let fade = || Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint());
         div()
             .absolute()

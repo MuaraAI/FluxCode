@@ -1,19 +1,4 @@
-//! Ways for guests outside the host's network to reach the host's PC, with no server of
-//! ours. All are tried together when hosting starts; each one that works becomes an
-//! address in the invite code, and guests race them all (`net::join`).
-//!
-//! - **IPv6**: when the ISP gives the PC a public IPv6 address, guests with IPv6
-//!   connect straight to it.
-//! - **Router port (UPnP)**: the PC asks the home router to forward the session port,
-//!   the way game servers open theirs, and reads the router's public address. That
-//!   can't help behind carrier-grade NAT (the router's own address is then private),
-//!   which is detected and said.
-//! - **Relay (bore.pub)**: a free public TCP tunnel (github.com/ekzhang/bore). The PC
-//!   keeps one connection to bore.pub open; bore.pub gives it a public port and passes
-//!   each guest's bytes through. Session traffic is encrypted with the invite code's
-//!   secret before it leaves either PC, so the relay only ever sees ciphertext.
-//!
-//! All of it is plain std networking on a few threads, and it stops with the session.
+//! Ways for guests outside the host's network to reach the host's PC, with no server of ours.
 
 use crate::i18n::tr;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -36,16 +21,13 @@ const PRIMARY_RELAY_HOST: &str = "live.muaraai.com";
 const FALLBACK_RELAY_HOST: &str = "bore.pub";
 const RELAY_CONTROL_PORT: u16 = 7835;
 
-/// Where to try, in order. A build without a secret cannot complete the
-/// handshake a protected relay asks for, so the primary is left out entirely
-/// instead of failing on every session and filling the relay's log.
+/// Where to try, in order.
 pub fn endpoints() -> Vec<RelayEndpoint> {
     endpoints_from(&|k| std::env::var(k).ok(), option_env!("FLUXCODE_RELAY_SECRET"))
 }
 
 fn endpoints_from(get: &dyn Fn(&str) -> Option<String>, baked: Option<&'static str>) -> Vec<RelayEndpoint> {
-    // Set-but-empty means "do not use a secret": it must beat the baked one, or a
-    // developer could not point a release build at the public relay.
+    // Set-but-empty means "do not use a secret": it must beat the baked one, or a developer could not point a release build at the public relay.
     let secret = match get("FLUXCODE_RELAY_SECRET") {
         Some(s) => Some(s).filter(|s| !s.is_empty()),
         None => baked.map(str::to_string).filter(|s| !s.is_empty()),
@@ -65,8 +47,7 @@ fn endpoints_from(get: &dyn Fn(&str) -> Option<String>, baked: Option<&'static s
 /// Hosts we hand out, resolved once: [`is_relay_addr`] runs on the render path.
 static RELAY_HOSTS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| endpoints().into_iter().map(|e| e.host).collect());
 
-/// Host of our own relay, when one is configured. The fallback is somebody
-/// else's service; the UI must not call it MuaraAI.
+/// Host of our own relay, when one is configured.
 static PRIMARY_HOST: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| primary_host_of(&endpoints()));
 
 fn primary_host_of(eps: &[RelayEndpoint]) -> Option<String> {
@@ -131,15 +112,12 @@ impl Reach {
     }
 
     /// Anyone outside this network can join: through the router's port or the relay.
-    /// (A public IPv6 address only helps guests with IPv6, and the router may still
-    /// block it, so it doesn't count here.)
     pub fn internet(&self) -> bool {
         [&self.upnp, &self.relay].iter().any(|s| matches!(s, State::Ready(_)))
     }
 }
 
-/// Probes running for one session. Dropping it closes the relay and removes the router
-/// mapping.
+/// Probes running for one session.
 pub struct Probes {
     pub state: Arc<Mutex<Reach>>,
     stop: Arc<AtomicBool>,
@@ -168,7 +146,6 @@ impl Drop for Probes {
 }
 
 /// Start every probe for a host listening on `port` (`ipv6`: it listens on IPv6 too).
-/// The receiver gets a message whenever a probe's state changes.
 pub fn start(port: u16, ipv6: bool) -> (Probes, UnboundedReceiver<()>) {
     let lan = crate::collab::net::lan_ip();
     let state = Arc::new(Mutex::new(Reach { lan: lan.clone(), ipv6: State::Trying, upnp: State::Trying, relay: State::Trying }));
@@ -206,8 +183,7 @@ pub fn start(port: u16, ipv6: bool) -> (Probes, UnboundedReceiver<()>) {
     {
         let (st, stop2, ctl) = (state.clone(), stop.clone(), relay_control.clone());
         std::thread::spawn(move || loop {
-            // Guests already through keep their connection; a new tunnel gets a new
-            // port, so the invite code changes with it.
+            // Guests already through keep their connection; a new tunnel gets a new port, so the invite code changes with it.
             let r = relay(port, &stop2, &ctl, &|addr| set(&st, &tx, |g| g.relay = State::Ready(addr)));
             if stop2.load(Ordering::Relaxed) {
                 break;
@@ -228,10 +204,8 @@ pub fn start(port: u16, ipv6: bool) -> (Probes, UnboundedReceiver<()>) {
     (Probes { state, stop, relay_control, upnp_undo }, rx)
 }
 
-// ---------------------------------------------------------------- IPv6
 
-/// This PC's public IPv6 address, if it has one: the source address of the route to a
-/// public IPv6 host (nothing is sent), when it is a global one.
+/// This PC's public IPv6 address, if it has one: the source address of the route to a public IPv6 host (nothing is sent), when it is a global one.
 pub fn public_ipv6() -> Option<Ipv6Addr> {
     let s = UdpSocket::bind("[::]:0").ok()?;
     s.connect("[2001:4860:4860::8888]:80").ok()?;
@@ -252,7 +226,6 @@ pub fn is_private_v4(ip: &Ipv4Addr) -> bool {
     ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || (o[0] == 100 && (o[1] & 0xc0) == 64)
 }
 
-// ---------------------------------------------------------------- UPnP
 
 /// Ask the router (UPnP IGD) to forward `port` to this PC, and read its public address.
 fn upnp_map(port: u16, lan: &str, undo: &Mutex<Option<(String, String, u16)>>) -> State {
@@ -387,11 +360,8 @@ fn soap(control: &str, service: &str, action: &str, args: &str) -> Result<String
     http("POST", control, Some(&format!("{service}#{action}")), &body)
 }
 
-// ---------------------------------------------------------------- relay
 
-/// The largest control frame we will read. Real ones are a few dozen bytes; the
-/// bound stops a relay (or something on the path) from growing the buffer until
-/// the host runs out of memory.
+/// The largest control frame we will read.
 const MAX_CONTROL_FRAME: usize = 64 << 10;
 
 /// One null-terminated JSON frame from a bore stream.
@@ -415,8 +385,7 @@ fn write_frame(w: &mut TcpStream, v: &serde_json::Value) -> std::io::Result<()> 
     w.write_all(&b)
 }
 
-/// Answer to a relay's `Challenge`. `bore` keys its HMAC with SHA-256 of the
-/// secret and signs the challenge's 16 raw UUID bytes, not its printed form.
+/// Answer to a relay's `Challenge`.
 fn challenge_tag(secret: &str, challenge: &str) -> Result<String, String> {
     use hmac::Mac;
     use sha2::Digest;
@@ -441,10 +410,7 @@ fn relay_connect(ep: &RelayEndpoint) -> std::io::Result<TcpStream> {
     Err(last)
 }
 
-/// Keep a public port open on a relay and pass each guest through to `port` on this
-/// PC. Tries our relay first and falls back to the public one, so a session still
-/// works when our own is down. `Ok(label)` means the tunnel closed after opening;
-/// `Err` means nothing could be opened at all.
+/// Keep a public port open on a relay and pass each guest through to `port` on this PC.
 fn relay(port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &dyn Fn(String)) -> Result<String, String> {
     let eps = endpoints();
     if eps.is_empty() {
@@ -466,9 +432,7 @@ fn relay(port: u16, stop: &AtomicBool, ctl: &Mutex<Option<TcpStream>>, ready: &d
     Err(failures.join(" "))
 }
 
-/// Tunnels one relay session will hold open at once. Each is a thread and two
-/// sockets, and the relay decides when to send a `Connection`, so the cap is what
-/// keeps a hostile or confused relay from spending the host's threads.
+/// Tunnels one relay session will hold open at once.
 const MAX_TUNNELS: usize = 32;
 
 /// One attempt against a single relay.
@@ -505,13 +469,7 @@ fn relay_open(ep: &RelayEndpoint, port: u16, stop: &AtomicBool, ctl: &Mutex<Opti
     Ok(ep.host.clone())
 }
 
-/// Prove we know the relay's secret, when it has one. A relay started with
-/// `--secret` speaks first: it sends a UUID challenge and ignores everything
-/// until we answer.
-///
-/// A relay without one says nothing here, so with a secret configured and no
-/// `Challenge` something is wrong: answering with `Authenticate` would be ignored
-/// and the next frame misread, so say what happened instead.
+/// Prove we know the relay's secret, when it has one.
 fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReader<TcpStream>) -> Result<(), String> {
     let Some(secret) = ep.secret.as_deref() else { return Ok(()) };
     let relay = ep.host.clone();
@@ -524,17 +482,12 @@ fn relay_auth(ep: &RelayEndpoint, control: &mut TcpStream, reader: &mut BufReade
 }
 
 /// One guest through the relay: claim its connection, then copy bytes both ways.
-/// It must go back to the same relay that handed out the port, and prove the
-/// secret again — every control connection is authenticated, not just the first.
 fn relay_accept(id: &str, port: u16, ep: &RelayEndpoint) -> std::io::Result<()> {
     let mut remote = relay_connect(ep)?;
     let mut reader = BufReader::new(remote.try_clone()?);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(10)));
     relay_auth(ep, &mut remote, &mut reader).map_err(std::io::Error::other)?;
-    // The timeout lives on the socket, not the handle, so the copy loop would
-    // inherit it: a guest that only reads sends nothing, and after 10 s the
-    // tunnel would tear itself down. Clearing it must succeed, or the tunnel is a
-    // trap for every quiet guest.
+    // The timeout lives on the socket, not the handle, so the copy loop would inherit it: a guest that only reads sends nothing, and after 10 s the tunnel would tear itself down.
     remote.set_read_timeout(None)?;
     write_frame(&mut remote, &serde_json::json!({ "Accept": id }))?;
     let local = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(3))?;
@@ -682,8 +635,7 @@ mod tests {
         assert!(!Reach::local_only(None).internet());
     }
 
-    /// What this PC's network allows, as the host's panel would show it:
-    /// `cargo test probe_this_network -- --ignored --nocapture`.
+    /// What this PC's network allows, as the host's panel would show it: `cargo test probe_this_network -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn probe_this_network() {
@@ -695,9 +647,7 @@ mod tests {
         println!("{:#?}", p.snapshot());
     }
 
-    /// A whole session through bore.pub: a guest given only the relay's address joins
-    /// the host, and the two exchange encrypted messages both ways.
-    /// Needs the internet: `cargo test session_through_the_relay -- --ignored`.
+    /// A whole session through bore.pub: a guest given only the relay's address joins the host, and the two exchange encrypted messages both ways.
     #[test]
     #[ignore]
     fn session_through_the_relay() {
@@ -746,7 +696,6 @@ mod tests {
     }
 
     /// The real relay, end to end: a guest reaches a local echo server through bore.pub.
-    /// Needs the internet: `cargo test relay_round_trip -- --ignored`.
     #[test]
     #[ignore]
     fn relay_round_trip() {
@@ -781,9 +730,7 @@ mod tests {
         });
     }
 
-    /// A relay started with `--secret`, end to end: the handshake is what makes
-    /// this work, so it proves the wire order against the real bore binary.
-    /// Needs `bore` on PATH (or at /tmp/bore): `cargo test relay_round_trip_with_secret -- --ignored`.
+    /// A relay started with `--secret`, end to end: the handshake is what makes this work, so it proves the wire order against the real bore binary.
     #[test]
     #[ignore]
     fn relay_round_trip_with_secret() {
@@ -837,10 +784,7 @@ mod tests {
         let _ = srv.kill();
     }
 
-    /// A guest that only reads sends nothing for minutes. The accept path used to
-    /// leave a 10 s read timeout on the socket that the copy loop inherited, so
-    /// the tunnel tore itself down while the guest was idle. Needs `bore`:
-    /// `cargo test idle_guest_survives -- --ignored --test-threads=1`.
+    /// A guest that only reads sends nothing for minutes.
     #[test]
     #[ignore]
     fn idle_guest_survives() {
@@ -877,8 +821,7 @@ mod tests {
         let stop = std::sync::atomic::AtomicBool::new(false);
         let ctl = std::sync::Mutex::new(None);
         let (tx, rx) = std::sync::mpsc::channel();
-        // No panic inside the scope: unwinding past it would skip the shutdown and
-        // leave the relay thread reading heartbeats until the test binary exits.
+        // No panic inside the scope: unwinding past it would skip the shutdown and leave the relay thread reading heartbeats until the test binary exits.
         let outcome: Result<(), String> = std::thread::scope(|sc| {
             sc.spawn(|| {
                 let _ = super::relay_open(&ep, local, &stop, &ctl, &|a| tx.send(a).unwrap());
@@ -916,7 +859,6 @@ mod tests {
     }
 
     /// A wrong secret must fail with a readable error, not a panic or a hang.
-    /// Needs `bore` on PATH (or at /tmp/bore): `cargo test wrong_secret_is_refused -- --ignored --test-threads=1`.
     #[test]
     #[ignore]
     fn wrong_secret_is_refused() {

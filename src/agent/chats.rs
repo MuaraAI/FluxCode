@@ -1,8 +1,4 @@
-//! The chat list's views: how saved chats are grouped and ordered (by date, most
-//! recent, folder, agent), which are working now, and the archive.
-//!
-//! A chat nobody touched for `AUTO_ARCHIVE_DAYS` moves to the archive by itself
-//! (out of the way, never deleted); one the user takes back out stays out.
+//! The chat list's views: how saved chats are grouped and ordered (by date, most recent, folder, agent), which are working now, and the archive.
 
 use super::Chat;
 
@@ -56,12 +52,10 @@ impl ChatView {
     }
 }
 
-/// A group heading (empty for an ungrouped list) and the indexes into `history`
-/// it holds, in order.
+/// A group heading (empty for an ungrouped list) and the indexes into `history` it holds, in order.
 pub type Groups = Vec<(String, Vec<usize>)>;
 
-/// The chats `view` shows, grouped. `busy` are the chats answering now;
-/// `now` and `today_start` are Unix ms (today_start: local midnight).
+/// The chats `view` shows, grouped.
 pub fn groups(history: &[Chat], view: ChatView, busy: &[u64], now: u64, today_start: u64) -> Groups {
     let mut idx: Vec<usize> = (0..history.len())
         .filter(|&i| {
@@ -150,8 +144,7 @@ pub fn recency(updated: u64, today_start: u64) -> Recency {
     }
 }
 
-/// The compact list: the chats that stay in view (working, open, pinned) and how many
-/// are folded behind "Show all".
+/// The compact list: the chats that stay in view (working, open, pinned) and how many are folded behind "Show all".
 pub fn compact(groups: Groups, history: &[Chat], busy: &[u64], open: Option<u64>) -> (Groups, usize) {
     let mut hidden = 0;
     let mut out: Groups = Vec::new();
@@ -171,9 +164,7 @@ pub fn folder_name(path: &str) -> String {
     t.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(t).to_string()
 }
 
-/// Archive what nobody touched for `AUTO_ARCHIVE_DAYS` (except `keep_id`, the
-/// open chat, and chats the user took back out of the archive). True when
-/// something moved.
+/// Archive what nobody touched for `AUTO_ARCHIVE_DAYS` (except `keep_id`, the open chat, and chats the user took back out of the archive).
 pub fn auto_archive(history: &mut [Chat], now: u64, keep_id: Option<u64>) -> bool {
     let limit = AUTO_ARCHIVE_DAYS * 86_400_000;
     let mut moved = false;

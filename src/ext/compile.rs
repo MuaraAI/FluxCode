@@ -1,19 +1,4 @@
 //! FluxCompile: how FluxCode builds a Java project.
-//!
-//! The compiling itself is the project's own build (Gradle or Maven, as its authors set
-//! it up), because only that build knows its dependencies, shading and resources.
-//! FluxCompile decides how that build runs and what you see of it:
-//! - the JDK the project asks for (`java::best_jdk`), on JAVA_HOME and PATH;
-//! - Gradle with its local build cache (unless the project turns it off); parallel
-//!   projects and the configuration cache only when the project turns them on itself,
-//!   since forcing them breaks builds that wire projects together or use plugins that
-//!   don't support them (Gradle's docs; EssentialsX wires its projects with
-//!   afterEvaluate, for one). The daemon stays warm between builds (Gradle's default);
-//!   FluxCompile never changes its JVM settings, which would start a second daemon;
-//! - the output folded: one progress line instead of a line per Gradle task (failed
-//!   tasks still show), then one line saying what was built, read from the jar;
-//! - the plugin's own name and version (from the plugin.yml inside the jar) for the
-//!   file it deploys and to find older copies in the server's plugins folder.
 
 use super::java::{self, Server};
 use super::Project;
@@ -25,9 +10,7 @@ fn gradle_property(dir: &Path, key: &str) -> Option<String> {
     text.lines().map(str::trim).find_map(|l| l.strip_prefix(key).and_then(|r| r.trim_start().strip_prefix('=')).map(|v| v.trim().to_string()))
 }
 
-/// Flags FluxCompile adds to a Gradle build in `dir`: the local build cache unless the
-/// project turns it off, plain console output. What the project's gradle.properties
-/// turns on (parallel, configuration cache, ...) Gradle uses by itself.
+/// Flags FluxCompile adds to a Gradle build in `dir`: the local build cache unless the project turns it off, plain console output.
 pub fn gradle_flags(dir: &Path) -> String {
     let mut f = Vec::new();
     if gradle_property(dir, "org.gradle.caching").as_deref() != Some("false") {
@@ -86,8 +69,7 @@ pub fn summary(p: &Project, took: &str) -> Option<String> {
     Some(format!("{what} · {kb} KB · {took} · {rel}"))
 }
 
-/// Copy the built plugin into the server's plugins folder as `<Name>-<version>.jar`,
-/// replacing every other jar there that is the same plugin (by the name inside it).
+/// Copy the built plugin into the server's plugins folder as `<Name>-<version>.jar`, replacing every other jar there that is the same plugin (by the name inside it).
 pub fn deploy(project: &Project, roots: &[PathBuf]) -> Result<Vec<String>, String> {
     let yml = java::plugin_yml(&project.dir);
     let declared = yml.as_ref().map(|y| y.name.clone()).unwrap_or_default();

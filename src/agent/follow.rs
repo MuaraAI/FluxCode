@@ -1,13 +1,4 @@
-//! Follow the agent's edits. When it changes a file, the file comes up in the editor
-//! and the change is typed in the way a person would: removed lines go, added lines
-//! appear one by one from the top, and the cursor (so the view) rides along.
-//!
-//! It is a replay of what is already on disk, never in the agent's way: the agent
-//! goes on at once, a replay takes at most ~40 frames (well under a second), and a
-//! newer edit finishes the running replay on the spot. Files edited at the same time
-//! all reload at once; the newest one is the one replayed. Nothing replays into a
-//! file with unsaved changes of the user's, and the focus stays where the user has it
-//! (typing in the chat goes on while the editor follows).
+//! Follow the agent's edits.
 
 use crate::core;
 use crate::workbench::Workbench;
@@ -19,10 +10,7 @@ use std::time::Duration;
 /// Frames in one replay at most, and time between them.
 const FRAMES: usize = 40;
 const FRAME_MS: u64 = 16;
-/// Each frame sets the whole text (and the editor colors it again), so a replay gets a
-/// budget of bytes: a small file is typed in 40 steps, a 50 KB one in 8, and from
-/// ~100 KB on (under 4 steps) the file just reloads. The motion stays smooth because
-/// no frame ever does more work than a 10 KB file's.
+/// Each frame sets the whole text (and the editor colors it again), so a replay gets a budget of bytes: a small file is typed in 40 steps, a 50 KB one in 8, and from ~100 KB on (under 4 steps) the file just reloads.
 const BYTE_BUDGET: usize = 400 * 1024;
 const MIN_FRAMES: usize = 4;
 /// After the user picks a tab or a file, the editor stays with them this long.
@@ -60,8 +48,7 @@ impl Workbench {
         self.agent_finish_replay(window, cx);
         let Ok(f) = core::read_text(&p) else { return };
         self.collab_mark_ai(&p);
-        // What the file looked like before: the open editor's text, else as the agent
-        // found it (the Changes card keeps it).
+        // What the file looked like before: the open editor's text, else as the agent found it (the Changes card keeps it).
         let open = self.docs.iter().position(|d| d.path == p);
         let before = match open {
             Some(ix) if self.docs[ix].dirty || self.docs[ix].image.is_some() => return,

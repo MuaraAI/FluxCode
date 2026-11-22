@@ -1,7 +1,4 @@
-//! Read-only views of files a text editor can't show: Office documents and PDFs
-//! as their text, archives as a file list, SQLite databases as their tables, and
-//! any other binary file as a hex dump. Everything is read natively with the
-//! ZIP reader in `docs.rs` and `miniz_oxide` (already in the build).
+//! Read-only views of files a text editor can't show: Office documents and PDFs as their text, archives as a file list, SQLite databases as their tables, and any other binary file as a hex dump.
 
 use std::path::Path;
 
@@ -153,7 +150,6 @@ fn hex_view(bytes: &[u8], banner: &str) -> View {
     View { text: hex_dump(bytes), lang: "text", label: crate::i18n::tr("Hex"), banner: banner.to_string() }
 }
 
-// ---------------------------------------------------------------- archives
 
 fn zip_view(bytes: &[u8], size: &str) -> Option<View> {
     let entries = crate::docs::zip_entries(bytes)?;
@@ -175,11 +171,8 @@ fn zip_view(bytes: &[u8], size: &str) -> Option<View> {
     })
 }
 
-// ---------------------------------------------------------------- PDF
 
-/// Text of a PDF: inflate its content streams and collect the strings drawn
-/// with Tj / TJ / ' / ". Works for most PDFs made from documents; scanned
-/// pages and fonts with custom encodings have no extractable text.
+/// Text of a PDF: inflate its content streams and collect the strings drawn with Tj / TJ / ' / ".
 pub fn pdf_text(b: &[u8]) -> String {
     let mut out = String::new();
     let mut at = 0;
@@ -336,10 +329,8 @@ fn count(h: &[u8], n: &[u8]) -> usize {
     h.windows(n.len()).filter(|w| *w == n).count()
 }
 
-// ---------------------------------------------------------------- SQLite
 
-/// Tables, indexes and views of an SQLite database with their SQL and row
-/// counts, read straight from the file's b-tree pages (no SQLite library).
+/// Tables, indexes and views of an SQLite database with their SQL and row counts, read straight from the file's b-tree pages (no SQLite library).
 fn sqlite_view(b: &[u8], size: &str) -> View {
     let page = match u16::from_be_bytes([b[16], b[17]]) {
         1 => 65536,

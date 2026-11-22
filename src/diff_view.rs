@@ -1,10 +1,4 @@
-//! A `.diff` / `.patch` tab drawn like a code review, compact enough for a narrow
-//! panel: added lines on green with `+`, removed ones on red with `-`, one line-number
-//! column (the new file's number, the old one's for a removed line), each hunk as a
-//! slim "line N" divider, and the file's name in the bar instead of `---` / `+++`.
-//! Long lines wrap to the width instead of running off it. Rows go through a virtual
-//! list (each row's height measured once), so a diff of any size costs only the rows
-//! on screen. "Open file" opens the file the diff is of; "Edit as text" the patch.
+//! A `.diff` / `.patch` tab drawn like a code review, compact enough for a narrow panel: added lines on green with `+`, removed ones on red with `-`, one line-number column (the new file's number, the old one's for a removed line), each hunk as a slim "line N" divider, and the file's name in the bar instead of `---` / `+++`.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};

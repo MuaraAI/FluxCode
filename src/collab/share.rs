@@ -1,9 +1,4 @@
 //! What a Live Share session is allowed to send to guests.
-//!
-//! The filter is authoritative on the host and used in two places: the file
-//! list a guest sees on join, and the guard on every `Open` request. Hiding a
-//! file from the list is not enough on its own — a guest can ask for any path
-//! under the shared folder, so the same rules have to refuse the request too.
 
 use crate::files::SKIP_DIRS;
 
@@ -11,20 +6,11 @@ use crate::files::SKIP_DIRS;
 const DENIED_DIRS: &[&str] = &[".aws", ".ssh"];
 
 /// Both separators count as separators on Windows, where a guest can send either.
-/// On Linux and macOS `\` is an ordinary character in a file name, so treating it
-/// as a separator would make such a file unreachable rather than unsafe.
 fn is_sep(c: char) -> bool {
     c == '/' || (cfg!(windows) && c == '\\')
 }
 
-/// Split a relative path into components, or `None` when it is not a path we
-/// are willing to resolve at all.
-///
-/// This is the security-critical half. On Windows `\Users\me\.git\config` is a
-/// *rooted* path: joining it onto the shared folder drops the folder and the
-/// guest reads anywhere on the disk, so a leading separator, a drive letter and a
-/// component Windows would trim of trailing dots or spaces are all refused
-/// rather than resolved to something else.
+/// Split a relative path into components, or `None` when it is not a path we are willing to resolve at all.
 pub fn safe_components(rel: &str) -> Option<Vec<String>> {
     if rel.is_empty() {
         return None;
@@ -51,11 +37,6 @@ pub fn safe_components(rel: &str) -> Option<Vec<String>> {
 }
 
 /// Would a file system that folds case resolve `name` to `denied`?
-///
-/// ASCII folding is not enough: NTFS's upcase table maps `ı` (U+0131) to `I` and
-/// `ſ` (U+017F) to `S`, so `.gıt/config` and `.ſsh/config` open the real `.git`
-/// and `.ssh`. Comparing both directions in full Unicode closes that, and costs
-/// nothing for the ASCII names that make up the list.
 fn folds_to(name: &str, denied: &str) -> bool {
     name.eq_ignore_ascii_case(denied) || name.to_uppercase() == denied.to_uppercase() || name.to_lowercase() == denied.to_lowercase()
 }
@@ -64,9 +45,7 @@ fn denied_dir(comp: &str) -> bool {
     SKIP_DIRS.iter().any(|d| folds_to(comp, d)) || DENIED_DIRS.iter().any(|d| folds_to(comp, d))
 }
 
-/// Names that are never worth sending: dotfiles that hold credentials and
-/// private keys by any common naming scheme. Compared with the same folding as
-/// [`denied_dir`], because Windows resolves `.SSH/config` to the real directory.
+/// Names that are never worth sending: dotfiles that hold credentials and private keys by any common naming scheme.
 fn denied_name(name: &str) -> bool {
     let starts = |p: &str| name.get(..p.len()).is_some_and(|s| folds_to(s, p));
     let ends = |p: &str| name.len().checked_sub(p.len()).and_then(|i| name.get(i..)).is_some_and(|s| folds_to(s, p));
@@ -147,8 +126,7 @@ mod tests {
 
     #[test]
     fn refuses_windows_separators_and_rooted_paths() {
-        // A backslash is a separator only on Windows; on Linux it is an ordinary
-        // character, and refusing it there would hide a real file.
+        // A backslash is a separator only on Windows; on Linux it is an ordinary character, and refusing it there would hide a real file.
         if cfg!(windows) {
             assert!(!is_shareable(r"..\x"));
             assert!(!is_shareable(r"a\..\b"));
@@ -183,8 +161,7 @@ mod tests {
 
     #[test]
     fn refuses_names_that_fold_to_a_denied_one() {
-        // NTFS's upcase table maps these to ASCII: `.gıt` opens `.git`, `.ſsh`
-        // opens `.ssh`. ASCII-only folding would let both through.
+        // NTFS's upcase table maps these to ASCII: `.gıt` opens `.git`, `.ſsh` opens `.ssh`.
         assert!(!is_shareable(".gıt/config"), "dotless i uppercases to I on NTFS");
         assert!(!is_shareable(".ſsh/config"), "long s uppercases to S on NTFS");
         assert!(!is_shareable(".ssh/CONFIG"));

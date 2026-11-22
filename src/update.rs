@@ -1,16 +1,4 @@
 //! Development-build updates from GitHub Releases.
-//!
-//! Every push to `main` publishes a release tagged `BuildDev-YYYY-MM-DD-HH-MM-SS`
-//! (see `.github/workflows/build.yml`). FluxCode asks GitHub for the release list
-//! at start and every 6 hours, and offers the newest build when its tag sorts after
-//! the running one. The request carries no identifier: no build ID, no machine or
-//! user ID, no cookie. It is one plain `GET` through the system `curl`, the same
-//! way the GitHub sign-in works, so no HTTP stack is compiled in.
-//!
-//! Installing replaces the running executable in place: the new file is written
-//! next to it, the running one is renamed to `<name>.old` (Windows allows renaming
-//! a running exe, Linux allows replacing it), the new one takes its name, and the
-//! app restarts. The `.old` file is removed on the next start.
 
 use gpui_kit::component::{h_flex, v_flex, Icon, IconName, Sizable};
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -24,9 +12,7 @@ use crate::workbench::Workbench;
 /// This build, e.g. `BuildDev-2026-11-09-17-30-12` (set by build.rs).
 pub const BUILD: &str = env!("FLUXCODE_BUILD");
 const RELEASES: &str = "https://api.github.com/repos/MuaraAI/FluxCode/releases?per_page=20";
-/// The same releases as a feed on github.com: read when the API says no. The API answers
-/// 60 requests an hour per internet address, and many people can share one address
-/// (a mobile network, an office), so it runs out without anyone doing anything wrong.
+/// The same releases as a feed on github.com: read when the API says no.
 const FEED: &str = "https://github.com/MuaraAI/FluxCode/releases.atom";
 const DOWNLOAD: &str = "https://github.com/MuaraAI/FluxCode/releases/download";
 /// How often a running FluxCode looks again.
@@ -41,9 +27,7 @@ const ASSET_SUFFIX: &str = "macos-universal.tar.gz";
 #[cfg(not(any(windows, target_os = "macos")))]
 const ASSET_SUFFIX: &str = "linux-x64.tar.gz";
 
-/// The executable alone, xz-compressed: about 30% smaller than the archive above. A
-/// release that has it is updated from it; the archive stays in every release for the
-/// copies of FluxCode made before this file existed (they only know the archive).
+/// The executable alone, xz-compressed: about 30% smaller than the archive above.
 #[cfg(windows)]
 const XZ_SUFFIX: &str = "windows-x64.update.xz";
 #[cfg(target_os = "macos")]
@@ -89,7 +73,6 @@ fn curl() -> std::process::Command {
 }
 
 /// Ask GitHub for the newest BuildDev release that has a file for this platform.
-/// `Ok(None)`: this build is the newest.
 pub fn check() -> Result<Option<Release>, String> {
     match get(RELEASES, true).and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|e| e.to_string())) {
         Ok(list) => Ok(newest(&list, BUILD)),
@@ -113,10 +96,7 @@ fn get(url: &str, api: bool) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-/// The check through the releases feed. The feed has no file list, but every build
-/// names its files the same way, so the file's address follows from the tag; its size
-/// comes from asking for the file's headers. A build without the xz file (made before
-/// it existed) falls back to the archive.
+/// The check through the releases feed.
 fn check_feed() -> Result<Option<Release>, String> {
     let body = get(FEED, false)?;
     let list = feed_releases(&String::from_utf8_lossy(&body));
@@ -132,8 +112,7 @@ fn check_feed() -> Result<Option<Release>, String> {
     Ok(Some(best))
 }
 
-/// The size of a file on GitHub, from its headers after the redirect to the download
-/// host. None: no such file.
+/// The size of a file on GitHub, from its headers after the redirect to the download host.
 fn size_of(url: &str) -> Option<u64> {
     let out = curl().args(["-s", "-f", "-I", "-L", "--max-time", "20", "-H", "User-Agent: FluxCode", url]).output().ok()?;
     if !out.status.success() {
@@ -150,8 +129,7 @@ fn size_of(url: &str) -> Option<u64> {
         .filter(|n| *n > 0)
 }
 
-/// The feed's entries in the shape of the API's list, so `newest` reads both: the tag,
-/// the notes as Markdown bullets, the page, and this platform's xz file (size unknown).
+/// The feed's entries in the shape of the API's list, so `newest` reads both: the tag, the notes as Markdown bullets, the page, and this platform's xz file (size unknown).
 fn feed_releases(xml: &str) -> serde_json::Value {
     let list: Vec<serde_json::Value> = xml
         .split("<entry>")
@@ -181,8 +159,7 @@ fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
 }
 
-/// The release notes' HTML as the Markdown the card reads: paragraphs, `## ` headings
-/// and `- ` bullets, up to the download table.
+/// The release notes' HTML as the Markdown the card reads: paragraphs, `## ` headings and `- ` bullets, up to the download table.
 fn feed_notes(html: &str) -> String {
     let html = html.split("<h2>Download</h2>").next().unwrap_or_default();
     let mut md = html
@@ -216,8 +193,7 @@ fn feed_notes(html: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
-/// The newest release in GitHub's list that is newer than `current` and carries
-/// this platform's archive. Tags are zero-padded, so they sort as text.
+/// The newest release in GitHub's list that is newer than `current` and carries this platform's archive.
 fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
     let mut between: Vec<(String, String)> = list
         .as_array()?
@@ -262,7 +238,6 @@ fn newest(list: &serde_json::Value, current: &str) -> Option<Release> {
 }
 
 /// The first sentence of up to `n` bullets from the notes, without Markdown marks.
-/// A bullet can wrap over several indented lines.
 pub fn highlights(notes: &str, n: usize) -> Vec<String> {
     let mut bullets: Vec<String> = Vec::new();
     let mut open = false;
@@ -339,8 +314,7 @@ fn unpack_xz(archive: &Path) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// An executable for this system, by its first bytes: nothing else is ever put in place
-/// of the running one.
+/// An executable for this system, by its first bytes: nothing else is ever put in place of the running one.
 fn looks_like_exe(b: &[u8]) -> bool {
     if cfg!(windows) {
         b.starts_with(b"MZ")
@@ -396,8 +370,7 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    // The archive holds one folder with the `fluxcode` binary in it (on macOS, inside
-    // FluxCode.app).
+    // The archive holds one folder with the `fluxcode` binary in it (on macOS, inside FluxCode.app).
     let found = std::fs::read_dir(&dir)
         .map_err(|e| e.to_string())?
         .flatten()
@@ -440,8 +413,7 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
         return Err(e.to_string());
     }
     let _ = std::fs::remove_file(archive);
-    // macOS: the app's signature covers its executable; sign the bundle again (ad hoc,
-    // as it was made) so it still verifies with the new one.
+    // macOS: the app's signature covers its executable; sign the bundle again (ad hoc, as it was made) so it still verifies with the new one.
     #[cfg(target_os = "macos")]
     if let Some(app) = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app")) {
         // The old binary would be sealed in with it (a running one can be unlinked here).
@@ -465,17 +437,14 @@ fn install(archive: &Path, tag: &str) -> Result<PathBuf, String> {
 pub fn cleanup() {
     if let Ok(exe) = std::env::current_exe() {
         if std::fs::remove_file(sibling(&exe, "old")).is_ok() {
-            // First start after an update: in case the shell drew the taskbar from its cache
-            // before the restart, tell it again.
+            // First start after an update: in case the shell drew the taskbar from its cache before the restart, tell it again.
             refresh_icon(&exe);
         }
         let _ = std::fs::remove_file(sibling(&exe, "new"));
     }
 }
 
-/// Tell Windows the exe changed. The taskbar and Start Menu take the icon of the shortcut
-/// that points at the exe, and the shell caches it by path: an update that brings a new
-/// icon kept showing the old one until the cache was rebuilt.
+/// Tell Windows the exe changed.
 fn refresh_icon(exe: &Path) {
     #[cfg(windows)]
     {
@@ -627,8 +596,7 @@ impl Workbench {
         .detach();
     }
 
-    /// A new build was found and its toast was put away: the title bar keeps a small
-    /// Update button (like Zed's and Chrome's) so it isn't lost.
+    /// A new build was found and its toast was put away: the title bar keeps a small Update button (like Zed's and Chrome's) so it isn't lost.
     pub(crate) fn update_waiting(&self) -> Option<&Release> {
         match &self.update.phase {
             Phase::Available(r) if self.update.hidden.as_deref() == Some(r.tag.as_str()) => Some(r),
@@ -637,8 +605,6 @@ impl Workbench {
     }
 
     /// The toast in the bottom-right corner: new build, download progress, or what failed.
-    /// Short on purpose: one title, one line about the build, one about what changed,
-    /// and the actions. The full notes are behind What's new.
     pub(crate) fn render_update(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let u = &self.update;
         let rel = match &u.phase {
@@ -661,9 +627,7 @@ impl Workbench {
             Phase::Failed(..) => tr("The update did not finish"),
             _ => tr("Update ready"),
         };
-        // A small, quiet toast: one line with the title and the actions, one dim line
-        // under it (what changed, or the download's progress). Which build, and the
-        // one installed, are in the title's tooltip.
+        // A small, quiet toast: one line with the title and the actions, one dim line under it (what changed, or the download's progress).
         let full: SharedString = if tag.is_empty() {
             SharedString::default()
         } else {
@@ -930,8 +894,7 @@ mod tests {
 
 #[cfg(test)]
 mod real_file {
-    /// `FX_XZ=path cargo test --bin fluxcode real_update_file -- --ignored`: a real
-    /// `.update.xz` from CI decodes to an executable.
+    /// `FX_XZ=path cargo test --bin fluxcode real_update_file -- --ignored`: a real `.update.xz` from CI decodes to an executable.
     #[test]
     #[ignore]
     fn real_update_file() {

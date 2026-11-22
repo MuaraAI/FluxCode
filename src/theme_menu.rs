@@ -1,6 +1,4 @@
-//! The color theme from the status bar: its name there opens a small list above it,
-//! each theme drawn as a little editor in its own colors (surface, side bar, a line of
-//! text, the accent), so you pick by looking. Escape or a click outside closes it.
+//! The color theme from the status bar: its name there opens a small list above it, each theme drawn as a little editor in its own colors (surface, side bar, a line of text, the accent), so you pick by looking.
 
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};

@@ -53,12 +53,10 @@ pub struct Peer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum Msg {
-    // ---- guest -> host
     Hello { name: String, github: bool, build: String },
     Open { path: String },
     Edit { path: String, rev: u64, op: Op, #[serde(default)] ai: Option<AiInfo> },
     Cursor { path: String, line: u32 },
-    // ---- host -> guest
     Welcome { you: u64, host: String, folder: String, files: Vec<String>, peers: Vec<Peer> },
     Peers { peers: Vec<Peer> },
     Snapshot { path: String, rev: u64, text: String },
@@ -67,7 +65,6 @@ pub enum Msg {
     /// The host took your edit; it is now revision `rev`.
     Ack { path: String, rev: u64 },
     Refused { why: String },
-    // ---- both
     Bye { why: String },
 }
 

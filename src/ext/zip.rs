@@ -1,5 +1,4 @@
-//! A small ZIP writer for `.mcpack` and `.mcaddon` files: deflate from miniz_oxide
-//! (already compiled for the editor), stored when that isn't smaller, UTF-8 names.
+//! A small ZIP writer for `.mcpack` and `.mcaddon` files: deflate from miniz_oxide (already compiled for the editor), stored when that isn't smaller, UTF-8 names.
 
 const TABLE: [u32; 256] = {
     let mut t = [0u32; 256];
@@ -51,7 +50,7 @@ fn u32le(v: &mut Vec<u8>, n: u32) {
 const DOS_DATE: u16 = (1 << 5) | 1;
 
 impl Zip {
-    /// Add a file. `name` uses `/` between folders.
+    /// Add a file.
     pub fn add(&mut self, name: &str, data: &[u8]) {
         let crc = crc32(data);
         let deflated = miniz_oxide::deflate::compress_to_vec(data, 6);
@@ -169,8 +168,7 @@ pub fn list(zip: &[u8]) -> Option<Vec<Listed>> {
     Some(out)
 }
 
-/// A listed entry's bytes, stored or deflated. None past `max` bytes: the inflater
-/// stops there, whatever size the entry claims.
+/// A listed entry's bytes, stored or deflated.
 pub fn read(zip: &[u8], e: &Listed, max: usize) -> Option<Vec<u8>> {
     if e.size > max {
         return None;

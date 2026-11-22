@@ -1,10 +1,4 @@
-//! Talking to a WSL2 distro: the distro list, its home folder, and the commands
-//! that run a line or a program inside it.
-//!
-//! `wsl.exe -- <command>` runs the command through the user's default shell, so
-//! `$` and quotes in the arguments are expanded before the command sees them.
-//! `--exec` skips that shell and passes the arguments through unchanged, which is
-//! why every command here uses it.
+//! Talking to a WSL2 distro: the distro list, its home folder, and the commands that run a line or a program inside it.
 
 use std::process::Command;
 
@@ -94,8 +88,6 @@ pub fn program_command(target: &WslTarget, cwd: &str, program: &str, args: &[&st
 }
 
 /// A program that runs inside the distro with environment variables set there.
-/// Windows environment variables do not cross into the distro on their own, so
-/// the quiet-git settings have to be exported by the shell that starts it.
 pub fn program_command_env(target: &WslTarget, cwd: &str, env: &[(&str, &str)], program: &str, args: &[&str]) -> Command {
     let mut exports = String::new();
     for (k, v) in env {

@@ -1,19 +1,4 @@
-//! What installed VS Code extensions do in FluxCode without VS Code's extension host:
-//! the declarative parts of `contributes`, applied natively.
-//!
-//! - `themes`: each color theme becomes a palette in the theme menu and Settings,
-//!   with the theme's code colors (`vsx_theme`).
-//! - `languages`: file extensions and file names an extension adds pick a language
-//!   for files FluxCode doesn't already know (`files::language_for` asks `language`).
-//!
-//! `grammars` are not loaded: gpui-kit's syntect set is built once, inside the
-//! library, from bat's grammar collection, with no way to add a TextMate grammar
-//! (see docs/vscode-extensions.md). A contributed language is highlighted when that
-//! set knows it by its file extension.
-//!
-//! `load` reads the extension folders (blocking, a few small files and the theme
-//! JSON); it runs at startup before the first frame, and again after an install
-//! or uninstall.
+//! What installed VS Code extensions do in FluxCode without VS Code's extension host: the declarative parts of `contributes`, applied natively.
 
 use super::market;
 use super::vsx_theme;
@@ -34,8 +19,7 @@ pub struct Applied {
     pub failed: Vec<String>,
 }
 
-/// A language an extension adds: the highlighter token, the status-bar name, and
-/// the file name endings (`.svelte`, `.blade.php`) and exact names that select it.
+/// A language an extension adds: the highlighter token, the status-bar name, and the file name endings (`.svelte`, `.blade.php`) and exact names that select it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lang {
     pub token: &'static str,
@@ -46,15 +30,14 @@ pub struct Lang {
 
 static APPLIED: RwLock<Option<HashMap<String, Applied>>> = RwLock::new(None);
 static LANGS: RwLock<Vec<Lang>> = RwLock::new(Vec::new());
-/// Palettes already built, by theme file and label: loading again (after another
-/// install) reuses them instead of leaking a second copy.
+/// Palettes already built, by theme file and label: loading again (after another install) reuses them instead of leaking a second copy.
 static BUILT: Mutex<Option<HashMap<(PathBuf, String), &'static Palette>>> = Mutex::new(None);
 
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Read every installed extension and apply what it declares. Blocking.
+/// Read every installed extension and apply what it declares.
 pub fn load() {
     let mut applied = HashMap::new();
     let mut palettes = Vec::new();
@@ -163,8 +146,7 @@ fn theme(
     Ok(p)
 }
 
-/// A palette for FluxCode from a read theme file (leaked: palettes live as long as
-/// the app, like the built-in ones).
+/// A palette for FluxCode from a read theme file (leaked: palettes live as long as the app, like the built-in ones).
 pub fn palette(
     file: &vsx_theme::ThemeFile,
     dark: bool,
@@ -206,8 +188,6 @@ pub fn palette(
 }
 
 /// `contributes.languages[]` → a `Lang`, or nothing if it adds no file types.
-/// The token is the first file extension (syntect finds grammars by extension),
-/// else the language id.
 pub fn language_of(l: &Value, localize: &mut dyn FnMut(&str) -> String) -> Option<Lang> {
     let id = l.get("id").and_then(Value::as_str)?.trim();
     let strings = |k: &str| -> Vec<String> {
@@ -262,8 +242,6 @@ pub fn language_of(l: &Value, localize: &mut dyn FnMut(&str) -> String) -> Optio
 }
 
 /// The language an installed extension gives a file name (lower case), if any.
-/// `multi_dot` limits the match to endings with two or more dots (`.blade.php`),
-/// which are asked before FluxCode's own table so they win over its `.php`.
 pub fn language(name: &str, multi_dot: bool) -> Option<(&'static str, &'static str)> {
     let langs = LANGS.read().unwrap_or_else(|e| e.into_inner());
     lookup(&langs, name, multi_dot)
@@ -365,9 +343,7 @@ mod tests {
         );
     }
 
-    /// Network: searches the Marketplace, installs real theme extensions into
-    /// `%USERPROFILE%` (point it at a scratch folder) and checks what FluxCode makes
-    /// of them. `cargo test --bin fluxcode marketplace_themes -- --ignored --nocapture`
+    /// Network: searches the Marketplace, installs real theme extensions into `%USERPROFILE%` (point it at a scratch folder) and checks what FluxCode makes of them.
     #[test]
     #[ignore]
     fn marketplace_themes_end_to_end() {

@@ -394,7 +394,6 @@ def main():
                 sys.exit(f"name {n} is in both {seen_name[n]} and {ident}")
             seen_name[n] = ident
     write_rust()
-    write_preview()
     langs = sum(1 for i in ICONS if i[3] or i[4])
     print(f"{len(ICONS)} icons, {len(seen_ext)} extensions, {len(seen_name)} file names ({langs} mapped kinds)")
 

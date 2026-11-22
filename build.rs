@@ -1,24 +1,6 @@
 //! Build ID and Windows resources.
-//!
-//! FluxCode has no version number while it is in development. Each build is named
-//! after the moment it was made: `BuildDev-YYYY-MM-DD-HH-MM-SS`. CI and
-//! `packaging/windows/build.ps1` pass it in `FLUXCODE_BUILD` (Asia/Jakarta time);
-//! a plain `cargo build` falls back to the current UTC time. The app reads it as
-//! `env!("FLUXCODE_BUILD")` and the updater compares it with release tags.
-//!
-//! On Windows the FluxCode icon becomes resource ID 1 (GPUI uses it for the window
-//! and taskbar) and the build ID goes into the version info Explorer shows. The .rc
-//! file is written into OUT_DIR because MinGW windres breaks on spaces in paths.
-//!
-//! The What's new page names the build each release came in. Git knows: the commit that
-//! added a release's `@title en:` line to changelog.flux, then the first `BuildDev-*`
-//! tag that contains it. A release no tag contains yet came in the build being made.
-//! The answers go into OUT_DIR/release_builds.rs; without git or tags they're empty
-//! and the page shows dates only.
 
-/// French and Malay interface text: `i18n/<lang>.tsv` deflated into OUT_DIR, so each
-/// adds a few dozen KB to the binary and is only unpacked when chosen. A missing file
-/// packs as empty (the interface then stays in English for that language).
+/// French and Malay interface text: `i18n/<lang>.tsv` deflated into OUT_DIR, so each adds a few dozen KB to the binary and is only unpacked when chosen.
 fn pack_languages() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());

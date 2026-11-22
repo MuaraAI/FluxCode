@@ -1,10 +1,4 @@
 //! GitHub-flavored Markdown, bent into Flux so one renderer can draw it.
-//!
-//! `to_flux` is a pure, line-based rewrite: image links become `@image` directives,
-//! GitHub's `> [!NOTE]` alerts become Flux callouts, a YAML front-matter block and
-//! pure-HTML lines disappear, and inline HTML tags are unwrapped (their text stays).
-//! Code fences are copied verbatim: a `![x](y)` line inside one is code, not a picture.
-//! Everything else passes through unchanged.
 
 pub fn to_flux(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
@@ -39,9 +33,7 @@ pub fn to_flux(src: &str) -> String {
             out.push('\n');
             continue;
         }
-        // GitHub alert: a quote whose first line names a callout kind. The quoted lines
-        // that follow are its body; the block ends at the first non-quote line, which
-        // stays unread for the main loop.
+        // GitHub alert: a quote whose first line names a callout kind.
         if let Some(kind) = alert_kind(t) {
             out.push_str(kind);
             out.push('\n');
@@ -57,8 +49,7 @@ pub fn to_flux(src: &str) -> String {
             out.push('\n');
             continue;
         }
-        // A line that is nothing but HTML tags carries no text: drop it. Otherwise the
-        // tags come off the text itself, outside code spans.
+        // A line that is nothing but HTML tags carries no text: drop it.
         let stripped = strip_html(line, &mut in_comment);
         if stripped.is_empty() {
             continue;
@@ -85,8 +76,7 @@ fn alert_kind(line: &str) -> Option<&'static str> {
     None
 }
 
-/// The quoted lines after an alert header, with their `>` markers taken off. A line
-/// that does not start with `>` ends the block and is left for the main loop.
+/// The quoted lines after an alert header, with their `>` markers taken off.
 fn alert_body<'a, I: Iterator<Item = &'a str>>(header: &str, lines: &mut std::iter::Peekable<I>) -> Vec<String> {
     let mut body = Vec::new();
     let mut rest = header.trim().trim_start_matches('>').trim_start();
@@ -113,8 +103,7 @@ fn alert_body<'a, I: Iterator<Item = &'a str>>(header: &str, lines: &mut std::it
 /// `![alt](path)` and `[![alt](path)](link)` lines become `@image` directives.
 fn image_directive(line: &str) -> Option<String> {
     let t = line.trim();
-    // Only image lines get here, so the markup bytes exist: past `![` for a plain
-    // image, past `[![` for a link around one.
+    // Only image lines get here, so the markup bytes exist: past `![` for a plain image, past `[![` for a link around one.
     let nested = t.starts_with("[![");
     if !nested && !t.starts_with("![") {
         return None;
@@ -135,8 +124,7 @@ fn image_directive(line: &str) -> Option<String> {
     Some(directive(&alt, path, link))
 }
 
-/// `alt` up to the next `]`, then `(target)`, in `t` after `skip` bytes. Returns
-/// (alt, target, the text left over).
+/// `alt` up to the next `]`, then `(target)`, in `t` after `skip` bytes.
 fn bracket_target(t: &str, skip: usize) -> Option<(String, &str, &str)> {
     let t = &t[skip..];
     let alt_close = t.find(']')?;
@@ -145,9 +133,7 @@ fn bracket_target(t: &str, skip: usize) -> Option<(String, &str, &str)> {
     Some((alt.to_string(), target, rest))
 }
 
-/// `(target)` at the start of `s`: the target and what follows. A quoted `"Title"`
-/// after the path is dropped (GitHub display titles mean nothing here), and the
-/// angle form `(<path>)` is tolerated.
+/// `(target)` at the start of `s`: the target and what follows.
 fn parens(s: &str) -> Option<(&str, &str)> {
     let inner = s.strip_prefix('(')?;
     let close = inner.find(')')?;
@@ -175,9 +161,7 @@ fn directive(alt: &str, path: &str, link: Option<&str>) -> String {
     out
 }
 
-/// HTML tags come off the text, their content stays; a `<` inside a code span
-/// (`` `<div>` ``) is left alone, and so is a lone `<` that opens no tag. HTML
-/// comments vanish, even across lines (`in_comment` carries the open one in).
+/// HTML tags come off the text, their content stays.
 fn strip_html(line: &str, in_comment: &mut bool) -> String {
     let mut out = String::with_capacity(line.len());
     let mut in_code = false;
@@ -197,8 +181,7 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
         }
         if *in_comment {
             match line[i..].find("-->") {
-                // The comment ends mid-line; the text after it stays. `rel` counts
-                // from the current byte (already consumed), so it needs rel + 2 more.
+                // The comment ends mid-line; the text after it stays.
                 Some(rel) => {
                     for _ in 0..rel + 2 {
                         chars.next();
@@ -218,8 +201,7 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
                     }
                     continue;
                 }
-                // It stays open past this line: the rest of the line is comment,
-                // the text before it still counts.
+                // It stays open past this line: the rest of the line is comment, the text before it still counts.
                 None => {
                     *in_comment = true;
                     break;
@@ -227,8 +209,7 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
             }
         }
         if ch == '<' {
-            // A tag opens with a letter or `/` right after `<`; anything else is text
-            // (like `a < b` or `<3`).
+            // A tag opens with a letter or `/` right after `<`; anything else is text (like `a < b` or `<3`).
             let opens_tag = chars.peek().is_some_and(|(_, n)| n.is_ascii_alphabetic() || *n == '/');
             if opens_tag {
                 if let Some(end) = line[i..].find('>') {
@@ -312,8 +293,7 @@ mod tests {
         assert_eq!(to_flux("use `<!--` marker\n"), "use `<!--` marker\n");
     }
 
-    /// The shipped generated files must draw without a single HTML comment or
-    /// details block left over (the report that started this: `</details>` on screen).
+    /// The shipped generated files must draw without a single HTML comment or details block left over (the report that started this: `</details>` on screen).
     #[test]
     fn generated_files_draw_without_html() {
         for f in ["README.md", "README.id.md", "docs/flux.md"] {
@@ -323,8 +303,7 @@ mod tests {
                 assert!(!l.contains("<!--"), "{f}: {l}");
             }
             if f != "docs/flux.md" {
-                // The Flux guide quotes `<details><summary>` inside code spans on
-                // purpose; the README pair has no reason to carry one.
+                // The Flux guide quotes `<details><summary>` inside code spans on purpose; the README pair has no reason to carry one.
                 for l in out.lines() {
                     assert!(!l.contains("</details>") && !l.contains("<details>"), "{f}: {l}");
                 }
@@ -348,8 +327,7 @@ mod tests {
         assert_eq!(to_flux(src), src);
     }
 
-    /// A line whose first characters are multibyte (an arrow, "Über…") once
-    /// panicked the byte slice in the image scanner; it must pass through.
+    /// A line whose first characters are multibyte (an arrow, "Über…") once panicked the byte slice in the image scanner; it must pass through.
     #[test]
     fn lines_starting_with_multibyte_characters_pass_through() {
         let src = "→ forward\nÜber all of it\n![Übersicht](plan.png)\n";

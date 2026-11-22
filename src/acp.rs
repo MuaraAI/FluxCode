@@ -1,21 +1,4 @@
 //! The ACP agents the panel can talk to, and how each one is found, installed and started.
-//!
-//! Every agent speaks the Agent Client Protocol over stdio, so FluxCode only needs a
-//! command line per agent. Three places can supply it, checked in this order:
-//!
-//! 1. An install FluxCode made itself, under `~/.fluxcode/agents/<id>/launch.json`.
-//! 2. A copy the user installed themselves (the names in `KNOWN`): FluxCode looks
-//!    where Windows does, on the PATH as the registry has it now (not only as it was
-//!    when FluxCode started) and in the folders installers use (npm, pnpm, bun,
-//!    Scoop, WinGet, `~/.local/bin`). An agent that is already there is never
-//!    downloaded again.
-//! 3. Nothing yet: the picker shows a download button, which installs from the
-//!    official ACP registry (cdn.agentclientprotocol.com). Native binaries are
-//!    preferred; npm packages go into the agent's own folder (not the global npm),
-//!    and are started with `node` directly, without npx in between.
-//!
-//! The registry is one JSON file, fetched with the system curl at most once a day and
-//! only when the picker needs it. Nothing here runs at start-up.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,13 +21,10 @@ pub struct Known {
     pub path: &'static [(&'static str, &'static [&'static str])],
 }
 
-/// The picker's main list, roughly by how many people use each one. Every other
-/// registry agent shows under "More agents".
+/// The picker's main list, roughly by how many people use each one.
 pub const KNOWN: &[Known] = &[
     Known { id: "mura", name: "Mura", by: "MuaraAI", path: &[("mura", &["acp"])] },
-    // OpenCode 2: the registry's native build from opencode.ai, installed by FluxCode
-    // (checked against its SHA-256), not an npm copy on PATH, whose launcher starts a
-    // Node.js process in front of the agent.
+    // OpenCode 2: the registry's native build from opencode.ai, installed by FluxCode (checked against its SHA-256), not an npm copy on PATH, whose launcher starts a Node.js process in front of the agent.
     Known { id: "opencode-v2", name: "OpenCode 2", by: "Anomaly · open source", path: &[] },
     Known { id: "claude-acp", name: "Claude Agent", by: "Anthropic", path: &[("claude-agent-acp", &[]), ("claude-code-acp", &[])] },
     Known { id: "codex-acp", name: "Codex", by: "OpenAI", path: &[("codex-acp", &[])] },
@@ -53,9 +33,7 @@ pub const KNOWN: &[Known] = &[
     Known { id: "cursor", name: "Cursor", by: "Anysphere", path: &[("cursor-agent", &["acp"])] },
     Known { id: "qwen-code", name: "Qwen Code", by: "Alibaba", path: &[("qwen", &["--acp"])] },
     Known { id: "kimi-code", name: "Kimi Code", by: "Moonshot AI", path: &[] },
-    // Command Code: installed by the user (`npm i -g command-code`); FluxCode only
-    // detects it. Not in the ACP registry, so the picker opens its docs instead of
-    // a download. The bare `cmd` bin is skipped: on Windows it is cmd.exe.
+    // Command Code: installed by the user (`npm i -g command-code`); FluxCode only detects it.
     Known {
         id: "commandcode",
         name: "Command Code",
@@ -78,9 +56,7 @@ pub enum Place {
     Project(&'static str),
 }
 
-/// The files each agent reads for its standing instructions (its "soul"), as each
-/// project documents them. Mura's own character is built into the program; it reads
-/// the project's MURA.md / AGENTS.md / CLAUDE.md.
+/// The files each agent reads for its standing instructions (its "soul"), as each project documents them.
 pub fn instruction_files(id: &str) -> &'static [Place] {
     use Place::*;
     match id {
@@ -101,20 +77,17 @@ pub fn known(id: &str) -> Option<&'static Known> {
     KNOWN.iter().find(|k| k.id == id)
 }
 
-/// The agents FluxCode recommends (tested most, best with its agent panel): the
-/// picker marks them "Recommended" and lists them first.
+/// The agents FluxCode recommends (tested most, best with its agent panel): the picker marks them "Recommended" and lists them first.
 pub fn recommended(id: &str) -> bool {
     matches!(id, "opencode-v2" | "opencode" | "commandcode" | "claude-acp")
 }
 
-/// Agents still being built: the picker marks them "Not available" and they can't be
-/// picked (Mura is still in progress).
+/// Agents still being built: the picker marks them "Not available" and they can't be picked (Mura is still in progress).
 pub fn experimental(id: &str) -> bool {
     id == "mura"
 }
 
 /// A setting an agent takes on its command line because it doesn't offer it over ACP.
-/// FluxCode shows it like the agent's own settings and restarts the agent to change it.
 pub struct FlagOpt {
     pub id: &'static str,
     pub name: &'static str,
@@ -123,7 +96,6 @@ pub struct FlagOpt {
 }
 
 /// GitHub Copilot CLI (1.0.108) sends no models over ACP; `--model` picks one.
-/// (`--reasoning-effort` is left out: Copilot refuses to start when the model can't take it.)
 const COPILOT_FLAGS: &[FlagOpt] = &[FlagOpt { id: "model", name: "Model", category: "model", flag: "--model" }];
 
 pub fn flag_opts(agent: &str) -> &'static [FlagOpt] {
@@ -137,8 +109,6 @@ pub fn flag_opts(agent: &str) -> &'static [FlagOpt] {
 pub const FLAG_DEFAULT: &str = "default";
 
 /// The choices of a command-line setting: (value, "Provider/Name", description).
-/// Copilot's models come from `copilot help config`, read once in the background; until
-/// then (or if that fails) only the default is offered.
 pub fn flag_choices(agent: &str, opt: &str) -> Vec<(String, String, String)> {
     static COPILOT: Mutex<Option<Vec<String>>> = Mutex::new(None);
     static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -245,8 +215,7 @@ impl Launch {
             crate::proc::command(&s)
         };
         c.args(&self.args);
-        // Windows' PATH as it is now, so an agent finds node, git and its own helpers
-        // even when they were installed after FluxCode started.
+        // Windows' PATH as it is now, so an agent finds node, git and its own helpers even when they were installed after FluxCode started.
         c.env("PATH", fresh_path());
         for (k, v) in &self.env {
             c.env(k, v);
@@ -266,10 +235,6 @@ fn launch_file(id: &str) -> PathBuf {
 }
 
 /// The full path of `exe` on PATH (with Windows' executable extensions).
-///
-/// Looking up 16 agents by probing every PATH folder for every extension cost about
-/// 50 ms of start-up; instead each PATH folder is listed once (per `forget`) into a
-/// name index, and lookups are hash hits. The first folder on PATH wins, as in a shell.
 pub fn which(exe: &str) -> Option<PathBuf> {
     let gen = GEN.load(std::sync::atomic::Ordering::Relaxed);
     let index = {
@@ -284,11 +249,7 @@ pub fn which(exe: &str) -> Option<PathBuf> {
     exts.iter().find_map(|e| index.get(&key(e)).filter(|p| p.is_file()).cloned())
 }
 
-/// The PATH as Windows has it now, not as it was when FluxCode started: FluxCode's own
-/// PATH first, then the user's and the machine's from the registry (an agent installed
-/// while FluxCode runs, or a FluxCode started from a shortcut with an old environment,
-/// is still found), then the folders installers put agents in without touching PATH.
-/// Agents started by FluxCode get this PATH too, so an npm agent finds `node`.
+/// The PATH as Windows has it now, not as it was when FluxCode started: FluxCode's own PATH first, then the user's and the machine's from the registry (an agent installed while FluxCode runs, or a FluxCode started from a shortcut with an old environment, is still found), then the folders installers put agents in without touching PATH.
 pub fn fresh_path() -> std::ffi::OsString {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     #[cfg(windows)]
@@ -310,9 +271,7 @@ pub fn fresh_path() -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
 
-/// Folders agent installers use that may not be on PATH: npm, pnpm, bun, Volta and
-/// Scoop shims, WinGet links, `~/.local/bin` (Claude Code, Mura, uv), and the agents'
-/// own installers (`~/.opencode/bin`, GitHub Copilot CLI, Cursor's agent).
+/// Folders agent installers use that may not be on PATH: npm, pnpm, bun, Volta and Scoop shims, WinGet links, `~/.local/bin` (Claude Code, Mura, uv), and the agents' own installers (`~/.opencode/bin`, GitHub Copilot CLI, Cursor's agent).
 fn install_dirs() -> Vec<PathBuf> {
     let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let mut out = Vec::new();
@@ -335,9 +294,7 @@ fn install_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// An npm `.cmd` shim whose only job is to start a native program next to it
-/// (`"%dp0%\node_modules\@opencode\cli\bin\opencode.exe" %*`): that program, so no
-/// cmd.exe sits between FluxCode and the agent. Shims that start `node` stay as they are.
+/// An npm `.cmd` shim whose only job is to start a native program next to it (`"%dp0%\node_modules\@opencode\cli\bin\opencode.exe" %*`): that program, so no cmd.exe sits between FluxCode and the agent.
 fn shim_target(cmd: &Path) -> Option<PathBuf> {
     let ext = cmd.extension()?.to_str()?.to_ascii_lowercase();
     if ext != "cmd" {
@@ -379,9 +336,7 @@ static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 /// The PATH folders' files for one `GEN` (see `which`).
 static INDEX: Mutex<(u64, Option<std::sync::Arc<HashMap<String, PathBuf>>>)> = Mutex::new((0, None));
 
-/// Look at the PC again for agents installed or removed outside FluxCode (blocking: run
-/// it off the UI thread). The folders are listed first and the new list takes over in
-/// one step, so the picker never lists the folders itself while it is open.
+/// Look at the PC again for agents installed or removed outside FluxCode (blocking: run it off the UI thread).
 pub fn rescan() {
     let index = std::sync::Arc::new(path_index());
     let next = GEN.load(std::sync::atomic::Ordering::Relaxed) + 1;
@@ -392,8 +347,7 @@ pub fn rescan() {
     let _ = installed();
 }
 
-/// Where an agent can be started from, if anywhere. Results are cached until
-/// `forget` (an install or uninstall), so the panel can ask on every frame.
+/// Where an agent can be started from, if anywhere.
 pub fn locate(id: &str) -> Option<Launch> {
     static CACHE: Mutex<(u64, Option<HashMap<String, Option<Launch>>>)> = Mutex::new((0, None));
     let gen = GEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -405,8 +359,7 @@ pub fn locate(id: &str) -> Option<Launch> {
     map.entry(id.to_string()).or_insert_with(|| find(id)).clone()
 }
 
-/// Ids of the agents that can start now: the known ones found on this PC (in the
-/// known list's order), then registry agents FluxCode installed. Cached like `locate`.
+/// Ids of the agents that can start now: the known ones found on this PC (in the known list's order), then registry agents FluxCode installed.
 pub fn installed() -> Vec<String> {
     static CACHE: Mutex<(u64, Vec<String>)> = Mutex::new((0, Vec::new()));
     let gen = GEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -451,8 +404,7 @@ fn find(id: &str) -> Option<Launch> {
         return crate::agent::find_opencode().map(|cmd| Launch { cmd, args: vec!["acp".into()], ..Default::default() });
     }
     if id == "opencode-v2" {
-        // FluxCode's own install (the launch file above), else an OpenCode 2 the user
-        // installed (npm's native build, or the opencode.ai installer): never v1.
+        // FluxCode's own install (the launch file above), else an OpenCode 2 the user installed (npm's native build, or the opencode.ai installer): never v1.
         return opencode_v2().map(|(cmd, _)| Launch { cmd, args: vec!["acp".into()], ..Default::default() });
     }
     k.path.iter().find_map(|(exe, args)| {
@@ -460,9 +412,7 @@ fn find(id: &str) -> Option<Launch> {
     })
 }
 
-/// An OpenCode 2 already on this PC, with its version: the native program behind npm's
-/// `opencode` / `opencode2` shims (`@opencode/cli`), or `opencode.exe` on PATH or in
-/// `~/.opencode/bin`. OpenCode 1 (`opencode-ai`) speaks an older ACP and is skipped.
+/// An OpenCode 2 already on this PC, with its version: the native program behind npm's `opencode` / `opencode2` shims (`@opencode/cli`), or `opencode.exe` on PATH or in `~/.opencode/bin`.
 fn opencode_v2() -> Option<(PathBuf, String)> {
     let mut cands: Vec<PathBuf> = Vec::new();
     for name in ["opencode2", "opencode"] {
@@ -489,8 +439,7 @@ fn major(v: &str) -> u32 {
     v.trim_start_matches('v').split('.').next().and_then(|m| m.trim().parse().ok()).unwrap_or(0)
 }
 
-/// A program's version: from the npm package.json above it when there is one (no
-/// process started), else from `<program> --version`, asked once per file and size.
+/// A program's version: from the npm package.json above it when there is one (no process started), else from `<program> --version`, asked once per file and size.
 fn program_version(exe: &Path) -> Option<String> {
     for up in exe.ancestors().skip(1).take(3) {
         if let Ok(text) = std::fs::read_to_string(up.join("package.json")) {
@@ -528,9 +477,7 @@ fn program_version(exe: &Path) -> Option<String> {
     v
 }
 
-/// The agent's own command-line program when it is on this PC but speaks ACP only
-/// through a bridge FluxCode still has to add (Claude Code, Codex): its name, for the
-/// picker to say so instead of offering a plain download.
+/// The agent's own command-line program when it is on this PC but speaks ACP only through a bridge FluxCode still has to add (Claude Code, Codex): its name, for the picker to say so instead of offering a plain download.
 pub fn cli_without_bridge(id: &str) -> Option<&'static str> {
     let (exe, name) = match id {
         "claude-acp" => ("claude", "Claude Code"),
@@ -540,7 +487,6 @@ pub fn cli_without_bridge(id: &str) -> Option<&'static str> {
     which(exe).map(|_| name)
 }
 
-// ---- the registry ----
 
 /// One agent from the ACP registry.
 #[derive(Clone, Debug)]
@@ -633,7 +579,6 @@ pub fn registry() -> std::sync::Arc<Vec<Entry>> {
 }
 
 /// Fetch the registry in the background when the saved copy is old (once at a time).
-/// The picker shows the fresh list the next time it opens.
 pub fn refresh_registry_soon() {
     static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !registry_stale() {
@@ -661,8 +606,7 @@ pub fn registry_stale() -> bool {
         .is_none_or(|age| age > REGISTRY_MAX_AGE)
 }
 
-/// What a curl error means, in a sentence: curl's own message names exit codes
-/// ("curl: (7) Failed to connect to ... port 443 after 2017 ms").
+/// What a curl error means, in a sentence: curl's own message names exit codes ("curl: (7) Failed to connect to ... port 443 after 2017 ms").
 pub fn curl_error(stderr: &str) -> String {
     let e = stderr.trim();
     let code = e.split_once("curl: (").and_then(|(_, r)| r.split_once(')')).and_then(|(n, _)| n.parse::<u32>().ok());
@@ -708,7 +652,6 @@ pub fn refresh_registry() -> Result<(), String> {
 }
 
 /// An agent's display name: the known list, then the registry, then the id itself.
-/// OpenCode, either entry (both run the same program and share its config and sessions).
 pub fn is_opencode(id: &str) -> bool {
     id == "opencode" || id == "opencode-v2"
 }
@@ -725,19 +668,12 @@ pub fn display_name(id: &str) -> String {
     registry().iter().find(|e| e.id == id).map(|e| e.name.clone()).unwrap_or_else(|| id.to_string())
 }
 
-// ---- icons ----
-//
-// The registry gives every agent a 16x16 SVG in `currentColor`. FluxCode keeps a copy
-// per agent version under `<config>/acp-icons`, fetched in one curl call for all
-// missing ones, so a logo that changes upstream arrives with the agent's next version.
-// The SVGs are drawn as masks in the theme's text color (`svg()`), so they cost one
-// small cached texture each.
+// The registry gives every agent a 16x16 SVG in `currentColor`.
 
 /// The asset path prefix `main.rs` serves from the icon folder.
 pub const ICON_ASSETS: &str = "acp-icons/";
 
-/// Command Code is not in the ACP registry, so nothing fetches its icon; the
-/// mark ships with the app and is served like the fetched ones.
+/// Command Code is not in the ACP registry, so nothing fetches its icon; the mark ships with the app and is served like the fetched ones.
 const COMMANDCODE_ICON: &str = include_str!("../assets/acp-icons/commandcode.svg");
 
 pub fn icons_dir() -> PathBuf {
@@ -749,7 +685,7 @@ fn icon_file_name(e: &Entry) -> String {
     format!("{}@{}.svg", clean(&e.id), clean(&e.version))
 }
 
-/// The asset path of an agent's icon, when it is on disk. Cached like `locate`.
+/// The asset path of an agent's icon, when it is on disk.
 pub fn icon_asset(id: &str) -> Option<String> {
     static CACHE: Mutex<(u64, Option<HashMap<String, Option<String>>>)> = Mutex::new((0, None));
     let gen = GEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -791,8 +727,7 @@ pub fn fetch_icons_soon() {
     std::thread::spawn(fetch_icons);
 }
 
-/// Download every registry icon not on disk yet (one curl process, in parallel), keep
-/// the ones that are SVG, and drop copies of older versions. Blocking.
+/// Download every registry icon not on disk yet (one curl process, in parallel), keep the ones that are SVG, and drop copies of older versions.
 pub fn fetch_icons() {
     let reg = registry();
     let dir = icons_dir();
@@ -840,7 +775,6 @@ fn is_svg(b: &[u8]) -> bool {
     b.len() < 65536 && head.contains("<svg")
 }
 
-// ---- installing ----
 
 /// What an install is doing, shared with the panel's progress animation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -868,8 +802,7 @@ impl Phase {
     }
 }
 
-/// One moment of an install: the phase, and how far it is when that can be measured
-/// (bytes downloaded, files unpacked). `total` 0 means unknown.
+/// One moment of an install: the phase, and how far it is when that can be measured (bytes downloaded, files unpacked).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
     pub phase: Phase,
@@ -916,9 +849,7 @@ impl Tracker {
     }
 }
 
-/// Install an agent from the registry into `~/.fluxcode/agents/<id>` and return how
-/// to start it. Blocking: downloads and unpacks, or runs npm, reporting to `t`. A
-/// failed install leaves nothing behind.
+/// Install an agent from the registry into `~/.fluxcode/agents/<id>` and return how to start it.
 pub fn install(entry: &Entry, t: &Tracker) -> Result<Launch, String> {
     let method = entry.method().ok_or_else(|| format!("{} has no download for this system ({}).", entry.name, platform()))?;
     let root = agents_dir().join(&entry.id);
@@ -1097,8 +1028,7 @@ pub fn package_name(spec: &str) -> &str {
     }
 }
 
-/// The script a package's `bin` points at: the one named like the package when there
-/// are several.
+/// The script a package's `bin` points at: the one named like the package when there are several.
 fn npm_bin(pkg_dir: &Path, name: &str) -> Option<PathBuf> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(pkg_dir.join("package.json")).ok()?).ok()?;
     let rel = match v.get("bin")? {
@@ -1131,8 +1061,7 @@ pub fn zip_count(archive: &Path) -> u64 {
     zip_count_in(&buf)
 }
 
-/// The entry count in the last end-of-central-directory record of `tail` (0 if none,
-/// or a ZIP64 archive, whose count lives elsewhere).
+/// The entry count in the last end-of-central-directory record of `tail` (0 if none, or a ZIP64 archive, whose count lives elsewhere).
 pub fn zip_count_in(tail: &[u8]) -> u64 {
     (0..tail.len().saturating_sub(21))
         .rev()
@@ -1142,9 +1071,7 @@ pub fn zip_count_in(tail: &[u8]) -> u64 {
         .map_or(0, u64::from)
 }
 
-/// Unpack with the system tar (Windows 10+ ships bsdtar, which reads ZIP too). With
-/// `-v`, tar names each entry as it writes it, which is the progress: entries
-/// written out of the ZIP's count (unknown for tarballs).
+/// Unpack with the system tar (Windows 10+ ships bsdtar, which reads ZIP too).
 fn unpack(archive: &Path, into: &Path, t: &Tracker) -> Result<(), String> {
     use std::io::BufRead;
     let tar = if cfg!(windows) {
@@ -1246,9 +1173,7 @@ mod tests {
 
     #[test]
     fn commandcode_is_known_and_avoids_windows_cmd() {
-        // npm's command-code ships four bins (cmd, cmdc, commandcode, command-code),
-        // but probing the bare `cmd` would find Windows' own cmd.exe and start it
-        // with "acp", so the known entry lists the unambiguous names only.
+        // npm's command-code ships four bins (cmd, cmdc, commandcode, command-code), but probing the bare `cmd` would find Windows' own cmd.exe and start it with "acp", so the known entry lists the unambiguous names only.
         let k = known("commandcode").expect("Command Code is in the known list");
         assert!(k.path.iter().all(|(exe, _)| *exe != "cmd"));
         assert!(k
@@ -1262,8 +1187,7 @@ mod tests {
     }
     #[test]
     fn commandcode_icon_is_bundled() {
-        // Command Code is not in the ACP registry, so nothing fetches its icon;
-        // the mark ships with the app and is served like the fetched ones.
+        // Command Code is not in the ACP registry, so nothing fetches its icon; the mark ships with the app and is served like the fetched ones.
         let path = icon_asset("commandcode").expect("the bundled Command Code icon");
         assert_eq!(path, format!("{ICON_ASSETS}commandcode.svg"));
         let bytes = load_icon(&path).expect("the bundled icon's bytes");
@@ -1362,8 +1286,7 @@ mod tests {
 
 #[cfg(test)]
 mod install_errors {
-    //! Every way an install can go wrong, against local `file://` archives (curl and tar
-    //! are the same programs a real install uses; no network).
+    //! Every way an install can go wrong, against local `file://` archives (curl and tar are the same programs a real install uses; no network).
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {

@@ -1,18 +1,4 @@
-//! A Flux document as GitHub Markdown, so a `README.flux` can show on GitHub as the
-//! `README.md` made from it. What GitHub has, Flux maps to; what it doesn't, degrades:
-//!
-//! | Flux | GitHub Markdown |
-//! | --- | --- |
-//! | `@flow` | a ` ```mermaid ` flowchart (GitHub draws it) |
-//! | `@note`, `@tip`, `@warn`, `@danger` | `> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`, `> [!CAUTION]` |
-//! | `@details` | `<details><summary>` |
-//! | `@table` | a pipe table with the same alignment |
-//! | `@image ... width=` | `<img width=...>` |
-//! | `@gallery` | a table: the images side by side, each with its caption under it |
-//! | `@video` | the poster image, linked to the video |
-//! | `{kbd X}` | `<kbd>X</kbd>` |
-//! | `@toc` | a list of links to the headings |
-//! | `@style`, `{color=...}`, `==mark==` | dropped (GitHub has no colors): the text stays |
+//! A Flux document as GitHub Markdown, so a `README.flux` can show on GitHub as the `README.md` made from it.
 
 use super::{arg, args, cells, flow, text, Align, Block, Doc, Kind};
 
@@ -123,8 +109,7 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
     // Rows of one table come one after another: their number counts up from 0.
     let mut row_n = 0u32;
     for (bi, b) in blocks.iter().enumerate() {
-        // List items run on after list items, and rows after rows of the same table;
-        // everything else is a paragraph of its own.
+        // List items run on after list items, and rows after rows of the same table; everything else is a paragraph of its own.
         let runs_on = match (bi.checked_sub(1).map(|p| &blocks[p]), b) {
             (Some(Block::Item { .. }), Block::Item { .. }) => true,
             (Some(Block::Row { table: a, .. }), Block::Row { table: z, .. }) => a == z,
@@ -204,8 +189,7 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
                     }
                     Kind::Columns => emit(doc, src, inner, out, prefix, want),
                     Kind::Gallery => {
-                        // A table keeps the images in line at any page width, and gives
-                        // each its caption right under it.
+                        // A table keeps the images in line at any page width, and gives each its caption right under it.
                         let imgs: Vec<super::Span> = inner.iter().filter_map(|b| if let Block::Image(a) = b { Some(*a) } else { None }).collect();
                         let share = 100 / imgs.len().max(1);
                         line(out, prefix, "<table>");
@@ -242,8 +226,7 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
             }
             Block::ColBreak => {}
             Block::Toc => {
-                // Only the headings this language shows: a bilingual document would
-                // otherwise list every section twice.
+                // Only the headings this language shows: a bilingual document would otherwise list every section twice.
                 for &h in &doc.headings {
                     if !matches!(doc.lang.get(h as usize), Some(&l) if l == 0 || l == want) {
                         continue;
@@ -262,8 +245,7 @@ fn emit(doc: &Doc, src: &str, blocks: &[Block], out: &mut String, prefix: &str, 
     }
 }
 
-/// An image in GitHub Markdown: `![alt](path)` when that says it all, else HTML for a
-/// width, alignment, link or dark-theme version (`<picture>`).
+/// An image in GitHub Markdown: `![alt](path)` when that says it all, else HTML for a width, alignment, link or dark-theme version (`<picture>`).
 fn image_md(src: &str, a: super::Span) -> String {
     image_md_width(src, a, None)
 }
@@ -305,10 +287,7 @@ fn sep(t: &super::Table) -> String {
     format!("| {} |", cols.join(" | "))
 }
 
-/// `fluxcode --flux-to-md IN.flux OUT.md [--lang en|id] [--check]`: write OUT.md,
-/// or with `--check` only say whether it is up to date (exit code 1 when not).
-/// `--lang` picks the `@en` / `@id` sections; `en` is the default because that is
-/// what GitHub shows and what a first-time reader needs.
+/// `fluxcode --flux-to-md IN.flux OUT.md [--lang en|id] [--check]`: write OUT.md, or with `--check` only say whether it is up to date (exit code 1 when not).
 pub fn cli(args: &[String]) -> i32 {
     let mut files: Vec<&String> = Vec::new();
     let (mut check, mut lang) = (false, "en");

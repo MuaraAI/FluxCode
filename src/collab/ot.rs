@@ -1,12 +1,4 @@
-//! Operational transformation for plain text: the same algorithm as ot.js
-//! (Google Wave / Etherpad's model). An operation walks the whole document:
-//! keep `n` characters, insert a string, or delete `n` characters. Lengths count
-//! Unicode scalar values (`char`s), so no edit can split a UTF-8 sequence, and
-//! every participant measures them the same way.
-//!
-//! The host holds the one true copy and orders every edit; each guest runs the
-//! small client state machine below (`Client`), so edits typed at the same moment
-//! on different PCs always end in the same text everywhere.
+//! Operational transformation for plain text: the same algorithm as ot.js (Google Wave / Etherpad's model).
 
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +12,7 @@ pub enum Comp {
     Delete(usize),
 }
 
-/// A text operation. `base` is the length of the text it applies to, `target` the
-/// length after.
+/// A text operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Op {
     pub comps: Vec<Comp>,
@@ -93,10 +84,7 @@ impl Op {
         }).sum()
     }
 
-    /// Bytes this operation inserts or deletes. A paste of a megabyte and a single
-    /// keystroke are not the same amount of work: the host clones the text, applies
-    /// the edit, and rebroadcasts it to every peer. Bytes rather than characters,
-    /// because the frame is byte-bounded and JSON escaping is not free either.
+    /// Bytes this operation inserts or deletes.
     pub fn changed_bytes(&self) -> usize {
         self.comps
             .iter()
@@ -135,8 +123,7 @@ impl Op {
         Ok(out)
     }
 
-    /// The single operation that turns `old` into `new`: the common start and end
-    /// are kept, the middle replaced. One pass over each string.
+    /// The single operation that turns `old` into `new`: the common start and end are kept, the middle replaced.
     pub fn diff(old: &str, new: &str) -> Op {
         let a: Vec<char> = old.chars().collect();
         let b: Vec<char> = new.chars().collect();
@@ -205,9 +192,7 @@ impl Op {
         Ok(out)
     }
 
-    /// For two operations made on the same text, `(a', b')` such that
-    /// `b'` after `a` equals `a'` after `b`. When both insert at one place,
-    /// `a`'s insert goes first (the host's ordering decides which side is `a`).
+    /// For two operations made on the same text, `(a', b')` such that `b'` after `a` equals `a'` after `b`.
     pub fn transform(a: &Op, b: &Op) -> Result<(Op, Op), String> {
         if a.base_len() != b.base_len() {
             return Err("transform: the edits were made on different texts".into());
@@ -280,8 +265,7 @@ impl Op {
         out
     }
 
-    /// The edits as (char start, chars removed, text inserted) on the original text,
-    /// for applying to an editor one span at a time.
+    /// The edits as (char start, chars removed, text inserted) on the original text, for applying to an editor one span at a time.
     pub fn spans(&self) -> Vec<(usize, usize, String)> {
         let mut out: Vec<(usize, usize, String)> = Vec::new();
         let mut pos = 0;
@@ -305,8 +289,7 @@ impl Op {
     }
 }
 
-/// A guest's side of one shared file: at most one edit in flight to the host,
-/// later local edits gathered into one buffer behind it.
+/// A guest's side of one shared file: at most one edit in flight to the host, later local edits gathered into one buffer behind it.
 #[derive(Clone, Debug, Default)]
 pub enum Client {
     #[default]
@@ -316,7 +299,7 @@ pub enum Client {
 }
 
 impl Client {
-    /// A local edit. Returns the edit to send now, if nothing is in flight.
+    /// A local edit.
     pub fn local(&mut self, op: Op) -> Result<Option<Op>, String> {
         match std::mem::take(self) {
             Client::Synced => {
@@ -334,7 +317,7 @@ impl Client {
         }
     }
 
-    /// An edit from the host (someone else's). Returns the form to apply locally.
+    /// An edit from the host (someone else's).
     pub fn remote(&mut self, op: Op) -> Result<Op, String> {
         match std::mem::take(self) {
             Client::Synced => Ok(op),
@@ -352,7 +335,7 @@ impl Client {
         }
     }
 
-    /// The host took our in-flight edit. Returns the buffered edit to send next.
+    /// The host took our in-flight edit.
     pub fn ack(&mut self) -> Option<Op> {
         match std::mem::take(self) {
             Client::Synced => None,
@@ -365,8 +348,7 @@ impl Client {
     }
 }
 
-/// The host's copy of one shared file: its text, its revision, and the recent
-/// edits a late guest edit is transformed past.
+/// The host's copy of one shared file: its text, its revision, and the recent edits a late guest edit is transformed past.
 #[derive(Clone, Debug, Default)]
 pub struct Server {
     pub text: String,
@@ -382,8 +364,7 @@ impl Server {
         Self { text, rev: 0, history: Default::default() }
     }
 
-    /// A guest's edit made at revision `base`: transformed past what came since,
-    /// applied, recorded. Returns the edit as applied (to send to everyone else).
+    /// A guest's edit made at revision `base`: transformed past what came since, applied, recorded.
     pub fn receive(&mut self, base: u64, op: Op) -> Result<Op, String> {
         let oldest = self.rev - self.history.len() as u64;
         if base < oldest || base > self.rev {

@@ -1,5 +1,4 @@
-//! A real helper, over a real pipe: the client's framing against the server's
-//! answers, without a distro. `FLUXCODE_HELPER_BIN` names the binary to run.
+//! A real helper, over a real pipe: the client's framing against the server's answers, without a distro.
 
 use std::io::BufReader;
 use std::path::Path;

@@ -1,34 +1,4 @@
 //! GitHub Copilot completions through the official Copilot language server.
-//!
-//! FluxCode stays a thin client: the server runs as its own process
-//! (`@github/copilot-language-server`, Node.js 20.8 or later) and does the
-//! model work, while FluxCode only sends the open document and shows what
-//! comes back as ghost text. Nothing about the model lives in this binary,
-//! and no code is sent anywhere except to the Copilot server itself, over
-//! the user's own Copilot sign-in.
-//!
-//! Protocol: LSP over stdio with `Content-Length` framing, as documented in
-//! the server's README (`@github/copilot-language-server`, version 1.570).
-//! The calls used here are `initialize`, `initialized`,
-//! `workspace/didChangeConfiguration`, `textDocument/didOpen`,
-//! `textDocument/didChange`, `textDocument/didClose`,
-//! `textDocument/inlineCompletion`, `signIn` and `signOut`. After the user
-//! accepts a suggestion, Copilot also wants the item's command run through
-//! `workspace/executeCommand` and a `textDocument/didShowCompletion`
-//! notification; the editor's ghost-text path has no hook for either, so
-//! acceptance telemetry is not sent. Suggestions still work; only Copilot's
-//! own accept counting misses them.
-//!
-//! Sign-in is the server's device flow: `signIn` returns a user code, the
-//! server opens the browser, and a `didChangeStatus` notification reports
-//! the new state a few seconds later. The sign-in code is shown in
-//! Settings so the user can also open github.com/login/device by hand.
-//!
-//! The server is found on PATH first (`copilot-language-server`, installed
-//! once with `npm install -g @github/copilot-language-server`), else as the
-//! JavaScript distribution under the global npm root when Node.js is
-//! present. `FLUXCODE_COPILOT_SERVER` overrides the discovery with a path
-//! to a server binary or to a `language-server.js` file.
 
 use lsp_types::InlineCompletionItem;
 use serde_json::Value;
@@ -48,8 +18,7 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(20);
 const SIGNIN_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// What the user sees in Settings. The raw server status (`didChangeStatus`)
-/// is kept inside; this is the reading of it.
+/// What the user sees in Settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Switched off in Settings.
@@ -97,22 +66,18 @@ struct State {
     start_error: Option<String>,
     last_attempt: Option<Instant>,
     user: Option<String>,
-    /// Which server process is current: a reader thread of an older one that
-    /// exits late must not clear the newer one's state.
+    /// Which server process is current: a reader thread of an older one that exits late must not clear the newer one's state.
     gen: u64,
 }
 
 struct Shared {
     state: Mutex<State>,
-    /// Serializes stdin writes, so a document sync always lands before the
-    /// completion request that needs it, and a server request never waits
-    /// behind a response that needs the same lock to arrive.
+    /// Serializes stdin writes, so a document sync always lands before the completion request that needs it, and a server request never waits behind a response that needs the same lock to arrive.
     io: Mutex<()>,
     /// Serializes starting the server, so two editors never spawn two.
     start_lock: Mutex<()>,
     enabled: AtomicBool,
-    /// Who wants to hear that the status changed (Settings, the status bar): each
-    /// gets a ping, so the window redraws without polling.
+    /// Who wants to hear that the status changed (Settings, the status bar): each gets a ping, so the window redraws without polling.
     watchers: Mutex<Vec<futures::channel::mpsc::UnboundedSender<()>>>,
 }
 
@@ -123,9 +88,7 @@ impl Shared {
     }
 }
 
-/// A handle to the Copilot server. Cheap to clone; all state lives behind
-/// the shared lock, so the editor, Settings and the reader thread can all
-/// hold one.
+/// A handle to the Copilot server.
 #[derive(Clone)]
 pub struct Copilot {
     shared: Arc<Shared>,
@@ -168,16 +131,14 @@ impl Copilot {
         self.shared.enabled.load(Ordering::SeqCst)
     }
 
-    /// A stream that gets one message each time the status, sign-in code or notice
-    /// changes. The window listens to it and redraws.
+    /// A stream that gets one message each time the status, sign-in code or notice changes.
     pub fn watch(&self) -> futures::channel::mpsc::UnboundedReceiver<()> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         self.shared.watchers.lock().unwrap().push(tx);
         rx
     }
 
-    /// True before the first start attempt (nothing is known yet), so the caller
-    /// starts the server in the background instead of showing "Starting" forever.
+    /// True before the first start attempt (nothing is known yet), so the caller starts the server in the background instead of showing "Starting" forever.
     pub fn untried(&self) -> bool {
         let st = self.shared.state.lock().unwrap();
         self.enabled() && !st.started && !st.starting && st.start_error.is_none() && !st.not_installed
@@ -188,8 +149,7 @@ impl Copilot {
         self.shared.state.lock().unwrap().user.clone()
     }
 
-    /// Turn Copilot on or off. Off stops the server, so its memory is freed;
-    /// on starts it again lazily, on the next suggestion request.
+    /// Turn Copilot on or off.
     pub fn set_enabled(&self, enabled: bool) {
         self.shared.enabled.store(enabled, Ordering::SeqCst);
         if !enabled {
@@ -230,9 +190,7 @@ impl Copilot {
         self.shared.state.lock().unwrap().notice.clone()
     }
 
-    /// Forget a failed start, so the next suggestion request tries again
-    /// at once instead of waiting out the one-minute throttle. Called
-    /// after the server has just been installed.
+    /// Forget a failed start, so the next suggestion request tries again at once instead of waiting out the one-minute throttle.
     pub fn retry(&self) {
         let mut st = self.shared.state.lock().unwrap();
         st.not_installed = false;
@@ -240,9 +198,7 @@ impl Copilot {
         st.last_attempt = None;
     }
 
-    /// Start the server now instead of on the next suggestion request, so
-    /// Settings can show the sign-in step right after an install. Blocks up
-    /// to the initialize timeout; call it off the UI thread.
+    /// Start the server now instead of on the next suggestion request, so Settings can show the sign-in step right after an install.
     pub fn start(&self) -> Result<(), String> {
         self.ensure_started(None)
     }
@@ -252,13 +208,12 @@ impl Copilot {
         self.ensure_started(folder)
     }
 
-    /// Stop the server, if it is running. Safe to call when it is not.
+    /// Stop the server, if it is running.
     pub fn stop(&self) {
         self.stop_inner(false);
     }
 
-    /// `stop`, waiting until the server is gone: for quitting, when a thread
-    /// left running would be cut off before it ends the server.
+    /// `stop`, waiting until the server is gone: for quitting, when a thread left running would be cut off before it ends the server.
     pub fn stop_and_wait(&self) {
         self.stop_inner(true);
     }
@@ -280,9 +235,6 @@ impl Copilot {
         self.shared.ping();
         if let Some(mut child) = child {
             // Off the calling thread (the UI thread when Copilot is switched off).
-            // On Windows the server may run under cmd.exe (an npm .cmd shim): end
-            // the whole tree, or Node keeps running after cmd.exe is gone. The
-            // reader thread also exits when the server's stdout closes.
             let mut end = move || {
                 #[cfg(windows)]
                 let _ = crate::proc::command("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).status();
@@ -297,10 +249,7 @@ impl Copilot {
         }
     }
 
-    /// Start the server if it is not running, for the folder `folder`
-    /// (the parent of the file being edited). Idempotent: a second call
-    /// only adds a new folder. A failed start is retried at most once a
-    /// minute, so a missing server does not spawn a process per keystroke.
+    /// Start the server if it is not running, for the folder `folder` (the parent of the file being edited).
     fn ensure_started(&self, folder: Option<PathBuf>) -> Result<(), String> {
         if !self.enabled() {
             return Err("Copilot is off".to_string());
@@ -353,17 +302,14 @@ impl Copilot {
             }
         };
         if result.is_ok() {
-            // The server reports its sign-in state with didChangeStatus some time
-            // after initialize; ask at once, so Settings never sits on "Starting".
+            // The server reports its sign-in state with didChangeStatus some time after initialize; ask at once, so Settings never sits on "Starting".
             self.check_status();
         }
         self.shared.ping();
         result
     }
 
-    /// `checkStatus`: the server's sign-in state now (OK, NotSignedIn,
-    /// NotAuthorized when the account has no Copilot plan, ...). Kept unless a
-    /// didChangeStatus already said something newer.
+    /// `checkStatus`: the server's sign-in state now (OK, NotSignedIn, NotAuthorized when the account has no Copilot plan, ...).
     fn check_status(&self) {
         let Ok(v) = self.request("checkStatus", Some(serde_json::json!({})), Duration::from_secs(15)) else {
             return;
@@ -390,7 +336,7 @@ impl Copilot {
         self.shared.ping();
     }
 
-    /// Spawn the process and run `initialize`. Runs under `start_lock`.
+    /// Spawn the process and run `initialize`.
     fn start_inner(&self, folder: Option<PathBuf>) -> Result<(), String> {
         let mut cmd = find_server()?;
         cmd.stdin(Stdio::piped())
@@ -465,9 +411,7 @@ impl Copilot {
             while let Some(msg) = read_message(&mut reader) {
                 handle_server_message(&shared, msg);
             }
-            // The server exited: fail what is still waiting, and reap it. A server
-            // that was stopped on purpose (stop() took its child already), or that a
-            // newer start has replaced, leaves the current state alone.
+            // The server exited: fail what is still waiting, and reap it.
             let child;
             {
                 let mut st = shared.state.lock().unwrap();
@@ -494,12 +438,7 @@ impl Copilot {
         });
     }
 
-    /// Send a request and wait for its result. The write is serialized;
-    /// the wait is not, so the reader thread can deliver the answer.
-    /// The id is allocated and the message is written in separate short
-    /// locks: holding the stdin borrow while touching the rest of the
-    /// state does not compile, and the io lock already keeps other
-    /// writers out between the two steps.
+    /// Send a request and wait for its result.
     fn request(
         &self,
         method: &str,
@@ -548,9 +487,7 @@ impl Copilot {
     }
 
     /// Send a notification (no answer expected).
-    // This stays synchronous on purpose: `inline` sends didOpen/didChange
-    // and the completion request under one lock, in order. Only didClose
-    // moves off-thread; it has no ordering promise.
+    // This stays synchronous on purpose: `inline` sends didOpen/didChange and the completion request under one lock, in order.
     fn notify(&self, method: &str, params: Value) {
         let _io = self.shared.io.lock().unwrap();
         let mut st = self.shared.state.lock().unwrap();
@@ -560,9 +497,7 @@ impl Copilot {
         }
     }
 
-    /// The write goes out on its own thread: a pipe write blocks while the
-    /// server is not draining it, so sending it from `close()` stalled the
-    /// UI thread mid-Ctrl+W. A didClose has no ordering promise, so this is safe.
+    /// The write goes out on its own thread: a pipe write blocks while the server is not draining it, so sending it from `close()` stalled the UI thread mid-Ctrl+W.
     pub fn did_close(&self, path: &Path) {
         let uri = uri_for_path(path);
         let was_open = self
@@ -586,15 +521,7 @@ impl Copilot {
         }
     }
 
-    /// Start the device-flow sign-in. Returns the user code; the server
-    /// opens the browser for the rest. Settings shows the code as well, so
-    /// the user can open github.com/login/device by hand if no browser opens.
-    ///
-    /// The server requires a params object (`{}`): without one it answers
-    /// "Schema validation failed: Expected object". A GitHub CLI token can't be used
-    /// instead: Copilot only accepts tokens from its own OAuth app (403 otherwise),
-    /// so the device flow is the way in. Returns an empty code when the server says
-    /// the account is signed in already.
+    /// Start the device-flow sign-in.
     pub fn sign_in(&self) -> Result<String, String> {
         self.ensure_started(None)?;
         let result = self.request("signIn", Some(serde_json::json!({})), SIGNIN_TIMEOUT)?;
@@ -623,8 +550,7 @@ impl Copilot {
                 .cloned()
                 .unwrap_or(Value::Array(Vec::new()));
             if !command.is_empty() {
-                // Opens the browser; the server reports the new state with
-                // didChangeStatus a few seconds after the user finishes.
+                // Opens the browser; the server reports the new state with didChangeStatus a few seconds after the user finishes.
                 let _ = self.request(
                     "workspace/executeCommand",
                     Some(serde_json::json!({"command": command, "arguments": args})),
@@ -656,7 +582,6 @@ fn folder_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-// ------------------------------------------------------------------ server discovery
 
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -669,15 +594,12 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Whether npm is on PATH, which the one-click install needs. npm ships with
-/// Node.js, so its presence also covers the server runtime prerequisite.
+/// Whether npm is on PATH, which the one-click install needs. npm ships with Node.js, so its presence also covers the server runtime prerequisite.
 pub(crate) fn npm_present() -> bool {
     find_on_path(if cfg!(windows) { "npm.cmd" } else { "npm" }).is_some()
 }
 
-/// One status-bar line for a failed `npm install`: npm's first stderr line
-/// (its full output runs to a dozen lines and the status bar truncates),
-/// plus a hint when the global folder is not writable.
+/// One status-bar line for a failed `npm install`: npm's first stderr line (its full output runs to a dozen lines and the status bar truncates), plus a hint when the global folder is not writable.
 pub(crate) fn npm_install_error(stderr: &str, exit: &str) -> String {
     let first = stderr.lines().map(str::trim).find(|l| !l.is_empty());
     let msg = first.map_or_else(|| format!("npm exited with {exit}"), str::to_string);
@@ -691,8 +613,7 @@ pub(crate) fn npm_install_error(stderr: &str, exit: &str) -> String {
     msg
 }
 
-/// The command that runs the server, or an error whose text starts with
-/// "not installed" when nothing was found.
+/// The command that runs the server, or an error whose text starts with "not installed" when nothing was found.
 fn find_server() -> Result<Command, String> {
     if let Ok(p) = std::env::var("FLUXCODE_COPILOT_SERVER") {
         let p = PathBuf::from(p);
@@ -761,10 +682,8 @@ fn open_url_native(uri: &str) -> bool {
     r.is_ok()
 }
 
-// ------------------------------------------------------------------ framing
 
-/// One LSP base-protocol message: `Content-Length` headers, a blank line,
-/// then the JSON body.
+/// One LSP base-protocol message: `Content-Length` headers, a blank line, then the JSON body.
 fn write_message(stdin: &mut ChildStdin, msg: &Value) -> Result<(), String> {
     let body = serde_json::to_string(msg).map_err(|e| e.to_string())?;
     let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
@@ -774,8 +693,7 @@ fn write_message(stdin: &mut ChildStdin, msg: &Value) -> Result<(), String> {
     stdin.flush().map_err(|e| e.to_string())
 }
 
-/// Read one framed message. None means the server closed stdout or sent
-/// something unparsable.
+/// Read one framed message.
 fn read_message<R: BufRead>(reader: &mut R) -> Option<Value> {
     let mut content_length: Option<usize> = None;
     loop {
@@ -800,8 +718,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> Option<Value> {
     serde_json::from_slice(&buf).ok()
 }
 
-/// Route one message from the server: a response to our request, a
-/// notification, or a request of its own (answered here).
+/// Route one message from the server: a response to our request, a notification, or a request of its own (answered here).
 fn handle_server_message(shared: &Arc<Shared>, msg: Value) {
     let id = msg.get("id").and_then(|v| v.as_u64());
     let method = msg
@@ -810,8 +727,7 @@ fn handle_server_message(shared: &Arc<Shared>, msg: Value) {
         .map(str::to_string);
     match (id, method) {
         (Some(id), Some(method)) => {
-            // A request from the server: answer it, without holding the
-            // state lock while writing (the write order is io, then state).
+            // A request from the server: answer it, without holding the state lock while writing (the write order is io, then state).
             let result = match method.as_str() {
                 "workspace/configuration" => {
                     let n = msg
@@ -910,14 +826,9 @@ fn send_raw(shared: &Arc<Shared>, msg: &Value) {
     }
 }
 
-// ------------------------------------------------------------------ inline completion
 
 impl Copilot {
-    /// Ask the server for the ghost text at `offset` in `text`, the full
-    /// text of the file at `path`. Syncs the document first (didOpen once,
-    /// then one incremental didChange per edit), so the server always sees
-    /// what the editor sees. Returns the text to insert at the cursor.
-    /// Blocking: call it from a background thread, never the UI thread.
+    /// Ask the server for the ghost text at `offset` in `text`, the full text of the file at `path`.
     pub fn inline(
         &self,
         path: &Path,
@@ -935,12 +846,7 @@ impl Copilot {
             return None;
         }
         let uri = uri_for_path(path);
-        // Sync and send under one io lock, so the server never answers a
-        // request for a document state it has not seen yet. The sync
-        // messages are built in one short state lock, then written in
-        // another: holding the stdin borrow while touching the rest of
-        // the state does not compile, and the io lock already keeps other
-        // writers out between the two steps.
+        // Sync and send under one io lock, so the server never answers a request for a document state it has not seen yet.
         let req_id: u64;
         let rx = {
             let _io = self.shared.io.lock().unwrap();
@@ -1043,9 +949,7 @@ impl Copilot {
 /// A Copilot item's replace range: ((start line, start character), (end line, end character)).
 type InlineRange = ((u32, u32), (u32, u32));
 
-/// The first item of an inlineCompletion result: its insert text and the
-/// range it replaces, if any. The result is an object with an `items`
-/// array, or a bare array.
+/// The first item of an inlineCompletion result: its insert text and the range it replaces, if any.
 fn parse_inline_item(result: &Value) -> Option<(String, Option<InlineRange>)> {
     let items = if let Some(a) = result.as_array() {
         a
@@ -1066,10 +970,7 @@ fn parse_inline_item(result: &Value) -> Option<(String, Option<InlineRange>)> {
     Some((insert, range))
 }
 
-/// Turn a server item into ghost text: the part of `insert_text` that is
-/// not already typed. The editor renders `insert_text` right after the
-/// cursor and Tab inserts it there, so anything already in the document
-/// must be stripped first, or accepting would duplicate it.
+/// Turn a server item into ghost text: the part of `insert_text` that is not already typed.
 fn to_ghost_text(
     insert: &str,
     range: Option<InlineRange>,
@@ -1101,10 +1002,8 @@ fn to_ghost_text(
     Some(ghost.to_string())
 }
 
-// ------------------------------------------------------------------ positions and text
 
-/// LSP position of byte `offset`: line, and characters in UTF-16 code
-/// units (what the protocol counts). A `\r` before `\n` does not count.
+/// LSP position of byte `offset`: line, and characters in UTF-16 code units (what the protocol counts).
 fn lsp_position(text: &str, offset: usize) -> (u32, u32) {
     let before = &text[..offset.min(text.len())];
     let line = before.matches('\n').count() as u32;
@@ -1142,8 +1041,7 @@ fn utf16_len(s: &str) -> u32 {
     s.chars().map(|c| c.len_utf16() as u32).sum()
 }
 
-/// The one changed span between `old` and `new`: (start byte, end byte in
-/// `old`, replacement text). Prefix/suffix, both kept on char boundaries.
+/// The one changed span between `old` and `new`: (start byte, end byte in `old`, replacement text).
 fn diff_change(old: &str, new: &str) -> (usize, usize, String) {
     let ob = old.as_bytes();
     let nb = new.as_bytes();
@@ -1172,13 +1070,11 @@ fn diff_change(old: &str, new: &str) -> (usize, usize, String) {
 }
 
 /// `file://` URI for a path, with spaces and non-ASCII percent-encoded.
-/// UNC and `\\?\` paths are handled by [`crate::docs::file_uri`].
 pub(crate) fn uri_for_path(path: &Path) -> String {
     crate::docs::file_uri(path)
 }
 
-/// The LSP language id for FluxCode's language token. Unknown tokens pass
-/// through unchanged; the server ignores what it does not know.
+/// The LSP language id for FluxCode's language token.
 pub(crate) fn language_id(lang: &str) -> String {
     match lang {
         "tsx" => "typescriptreact".to_string(),
@@ -1320,8 +1216,7 @@ mod tests {
 
     #[test]
     fn uris_and_language_ids() {
-        // A root-relative path isn't absolute on Windows, so it would pick up
-        // the current drive; use a real absolute path per platform instead.
+        // A root-relative path isn't absolute on Windows, so it would pick up the current drive; use a real absolute path per platform instead.
         #[cfg(windows)]
         let (spaced, plus, base) = (r"C:\home\u\my file.rs", r"C:\home\u\a+b.rs", "file:///C:");
         #[cfg(not(windows))]
@@ -1351,12 +1246,7 @@ mod tests {
         assert_eq!(parse_inline_item(&serde_json::json!({"items": []})), None);
     }
 
-    /// Live check against the real server, if one is installed: initialize
-    /// answers, and an unauthenticated completion request fails or comes
-    /// back empty. It never signs in and never sends real code anywhere
-    /// except to the local server process. Ignored by default: it needs the
-    /// server on PATH (or FLUXCODE_COPILOT_SERVER) and a network route to
-    /// GitHub for the server's own status check.
+    /// Live check against the real server, if one is installed: initialize answers, and an unauthenticated completion request fails or comes back empty.
     #[test]
     #[ignore]
     fn live_server_answers_initialize() {
@@ -1366,9 +1256,7 @@ mod tests {
         let path = folder.join("hello.js");
         std::fs::write(&path, "console.").unwrap();
         let item = copilot.inline(&path, "javascript", "console.", 8, 4, 2);
-        // Without a Copilot sign-in there is no suggestion; the point is
-        // that the spawn, framing and initialize round-trip worked. A
-        // signed-in run may return Some here instead.
+        // Without a Copilot sign-in there is no suggestion; the point is that the spawn, framing and initialize round-trip worked.
         match copilot.status() {
             Status::NotSignedIn(_) | Status::Warning(_) => assert!(
                 item.is_none(),

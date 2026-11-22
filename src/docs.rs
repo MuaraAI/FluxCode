@@ -1,12 +1,4 @@
 //! Files attached to an agent message: what kind each is and how it is sent.
-//!
-//! - Images go as ACP image blocks (base64) when the agent accepts images.
-//! - Text files (code, txt, md, csv, json, ...) go inline as text resources.
-//! - Word, Excel and PowerPoint files are ZIP archives of XML: their text is
-//!   read here (a small ZIP reader + `miniz_oxide`, both already in the build)
-//!   and sent as text, plus a link to the original.
-//! - Anything else (PDF, archives, media) goes as a link the agent opens with
-//!   its own tools.
 
 use std::path::Path;
 
@@ -55,11 +47,6 @@ pub fn mime(path: &Path) -> &'static str {
 }
 
 /// `file://` URI for a path, with spaces and non-ASCII percent-encoded.
-///
-/// Drive paths become `file:///C:/...`. UNC paths (`\\server\share\...` or
-/// `\\wsl.localhost\...`) become `file://server/share/...`, the form LSP
-/// and most tools expect. The `\\?\` / `\\?\UNC\` prefixes that
-/// `canonicalize()` adds on Windows are stripped first.
 pub fn file_uri(path: &Path) -> String {
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -70,7 +57,6 @@ pub fn file_uri(path: &Path) -> String {
 }
 
 /// Build a `file://` URI from the text of an already-absolute path.
-/// Accepts both `\` and `/`, so the same cases can be tested on every OS.
 fn file_uri_from_abs_text(raw: &str) -> String {
     let mut text = raw.replace('\\', "/");
     if let Some(rest) = strip_prefix_ignore_ascii_case(&text, "//?/unc/") {
@@ -107,7 +93,6 @@ pub(crate) fn strip_prefix_ignore_ascii_case<'a>(s: &'a str, prefix: &str) -> Op
     }
 }
 
-// ------------------------------------------------------------ ZIP (read only)
 
 fn u16le(b: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(at..at + 2)?.try_into().ok()?))
@@ -145,7 +130,7 @@ pub(crate) fn zip_entries(b: &[u8]) -> Option<Vec<(String, usize, usize, u16, us
     Some(out)
 }
 
-/// One file from a ZIP archive, decompressed (stored or deflate). Capped at 20 MB.
+/// One file from a ZIP archive, decompressed (stored or deflate).
 fn zip_read(b: &[u8], entries: &[(String, usize, usize, u16, usize)], name: &str) -> Option<Vec<u8>> {
     let (_, off, csize, method, size) = entries.iter().find(|e| e.0 == name)?;
     if *size > 20 * 1024 * 1024 {
@@ -159,7 +144,6 @@ fn zip_read(b: &[u8], entries: &[(String, usize, usize, u16, usize)], name: &str
     }
 }
 
-// ------------------------------------------------------------ XML text
 
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")

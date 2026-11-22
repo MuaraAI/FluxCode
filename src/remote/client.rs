@@ -1,10 +1,4 @@
-//! The editor's side of the helper inside a distro: installing it, starting it,
-//! and one request at a time over its stdin/stdout.
-//!
-//! The helper is the same program as the editor, built for Linux. It comes from
-//! the release of the build that is running, so the two are always the same
-//! version; a development build can point at a local binary instead with
-//! `FLUXCODE_HELPER`.
+//! The editor's side of the helper inside a distro: installing it, starting it, and one request at a time over its stdin/stdout.
 
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
@@ -74,11 +68,6 @@ impl RemoteClient {
     }
 
     /// A request whose answer is a JSON header followed by the bytes.
-    ///
-    /// Only for reads: the helper answers a `Read` with `Answer::Bytes`, so a
-    /// header and a bytes frame follow. A `Write` is answered with a JSON frame
-    /// alone (see `server::handle` and `remote/e2e.rs`); sending one here waits
-    /// for bytes that never arrive, so it is refused before that wait starts.
     pub fn bytes(&mut self, req: Request, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
         read_path_accepts(&req)?;
         let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
@@ -99,7 +88,6 @@ impl RemoteClient {
         read_json_from(&mut self.stdout)
     }
 
-    // ---- the calls the editor makes -------------------------------------
 
     pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
         self.json(Request::List { path: path.to_string() })
@@ -125,8 +113,7 @@ impl RemoteClient {
         self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
     }
 
-    /// Every file under `root`, read inside the distro. This is the list behind
-    /// Ctrl+P, so the 9p share is not walked for it.
+    /// Every file under `root`, read inside the distro.
     pub fn scan(&mut self, root: &str, max: usize) -> Result<Vec<String>, String> {
         self.json(Request::Scan { root: root.to_string(), max })
     }
@@ -148,9 +135,7 @@ impl Drop for RemoteClient {
     }
 }
 
-/// The read path (`bytes`) only makes sense for answers that carry bytes; a
-/// write is answered with one JSON frame, so accepting it here would wait for a
-/// frame that never comes.
+/// The read path (`bytes`) only makes sense for answers that carry bytes.
 fn read_path_accepts(req: &Request) -> Result<(), String> {
     if matches!(req, Request::Write { .. }) {
         return Err("a write is answered with one JSON frame; use write()".into());
@@ -177,12 +162,6 @@ fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
 }
 
 /// Send a request that carries a body frame and wait for its answer.
-///
-/// The helper answers a `Write` with one JSON frame (`Answer::Json` in
-/// `server::handle`); no bytes frame follows. Reading one here waits for
-/// bytes that never come, which blocks the caller — and `save_doc` calls
-/// `write` on the UI thread, so the editor hangs instead of reaching the UNC
-/// fallback.
 fn write_path_accepts(req: &Request) -> Result<(), String> {
     if !matches!(req, Request::Write { .. }) {
         return Err("only a write sends a body frame; use write()".into());
@@ -234,8 +213,7 @@ fn runs(distro: &str, path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A local Linux binary when one is supplied (a development build), else the
-/// Linux tarball of this build's release.
+/// A local Linux binary when one is supplied (a development build), else the Linux tarball of this build's release.
 fn fetch(distro: &str) -> Result<PathBuf, String> {
     let tmp = std::env::temp_dir().join(format!("fluxcode-helper-{}.tar.gz", crate::update::BUILD));
     if let Ok(local) = std::env::var("FLUXCODE_HELPER") {
@@ -259,8 +237,7 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
     if !out.status.success() || !tmp.is_file() {
         return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
     }
-    // The release records a SHA-256 for every asset. Refuse to run a tarball
-    // that does not match it: a truncated or swapped download must not execute.
+    // The release records a SHA-256 for every asset.
     let want = release_digest(&asset)?;
     let got = sha256_of(&tmp)?;
     if got != want {
@@ -307,8 +284,7 @@ fn sha256_of(path: &std::path::Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// Wrap one binary in a tar.gz laid out like the release archive (one folder,
-/// `fluxcode` inside it), so `push` treats the two the same way.
+/// Wrap one binary in a tar.gz laid out like the release archive (one folder, `fluxcode` inside it), so `push` treats the two the same way.
 fn pack_single(out: &std::path::Path, binary: &[u8]) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("fluxcode-helper-src-{}", std::process::id()));
     let inner = dir.join(crate::update::BUILD);
@@ -330,8 +306,7 @@ fn pack_single(out: &std::path::Path, binary: &[u8]) -> Result<(), String> {
     }
 }
 
-/// Send the tarball into the distro and unpack it, with no `/mnt` copy: the
-/// share is slow and permissions are unreliable there.
+/// Send the tarball into the distro and unpack it, with no `/mnt` copy: the share is slow and permissions are unreliable there.
 fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String> {
     let mut child = super::program_command(
         &WslTarget::new(distro, "/"),
@@ -362,10 +337,8 @@ fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String
     Ok(())
 }
 
-// ---- one connection per distro, shared by every caller -------------------
 
-/// Whether the helper may be used at all. Off by default: it installs and runs
-/// a program inside the distro, so the user turns it on in Settings.
+/// Whether the helper may be used at all.
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_helper_enabled(on: bool) {
@@ -383,8 +356,6 @@ fn slot() -> &'static Mutex<Option<RemoteClient>> {
 }
 
 /// Run `f` against the helper for `distro`, connecting it on first use.
-/// `None` means the helper is not available and the caller should use the UNC
-/// path instead; the editor works either way.
 pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
     if !helper_enabled() {
         return None;
@@ -430,9 +401,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A write is answered with one JSON frame. A client that also waits for a
-    /// bytes frame blocks until the helper goes away, which is the WSL save
-    /// hang: `save_doc` calls `write` on the UI thread.
+    /// A write is answered with one JSON frame.
     #[test]
     fn a_write_returns_after_the_single_json_answer() {
         let (mut server_in, mut client_out) = std::io::pipe().unwrap();
@@ -455,8 +424,7 @@ mod tests {
                 &serde_json::to_vec(&answer).unwrap(),
             )
             .unwrap();
-            // Keep the connection open so a client waiting for a second frame
-            // would stall here instead of seeing EOF.
+            // Keep the connection open so a client waiting for a second frame would stall here instead of seeing EOF.
             let _ = hold_rx.recv_timeout(std::time::Duration::from_secs(5));
         });
 
@@ -475,8 +443,7 @@ mod tests {
         server.join().unwrap();
 
         assert!(result.is_ok(), "{result:?}");
-        // Looser than a local 1s bound so a loaded CI runner is less likely to
-        // flake, but still well under the mock's 5s hold, so a hang still fails.
+        // Looser than a local 1s bound so a loaded CI runner is less likely to flake, but still well under the mock's 5s hold, so a hang still fails.
         assert!(
             waited < std::time::Duration::from_secs(3),
             "write waited {waited:?} for a bytes frame"
@@ -512,8 +479,7 @@ mod tests {
         assert_eq!(result.unwrap_err(), "no such folder");
     }
 
-    /// The read path refuses a write instead of waiting for a bytes frame the
-    /// helper never sends — a regression here must fail loudly, not hang.
+    /// The read path refuses a write instead of waiting for a bytes frame the helper never sends: a regression here must fail loudly, not hang.
     #[test]
     fn the_read_path_refuses_a_write() {
         let err = read_path_accepts(&Request::Write {
@@ -531,8 +497,7 @@ mod tests {
         .is_ok());
     }
 
-    /// The write path refuses a read instead of sending a body frame the
-    /// helper would not expect for that request.
+    /// The write path refuses a read instead of sending a body frame the helper would not expect for that request.
     #[test]
     fn the_write_path_refuses_a_read() {
         let err = write_path_accepts(&Request::Read {

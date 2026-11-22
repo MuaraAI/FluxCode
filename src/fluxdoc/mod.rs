@@ -1,17 +1,4 @@
-//! Flux documents (`.flux`): Markdown's text, plus blocks for what Markdown leaves to
-//! HTML or doesn't have — tables with column alignment, images and GIFs with a size,
-//! videos, flowcharts, callouts, collapsible sections, columns, a table of contents,
-//! sections per interface language and per-document styling. The full syntax is in
-//! `docs/flux.flux` (and the README made from it).
-//!
-//! Built to stay light at any size:
-//! - one pass over the text, line by line; nothing is copied: each block holds byte
-//!   offsets into the source (about 24 bytes a block), and inline marks (bold, links,
-//!   keys) are only worked out for the blocks on screen;
-//! - every table row and list item is its own block, so FluxCode draws only the rows
-//!   in view (`view.rs`), however long the document or the table;
-//! - `md.rs` turns a document into GitHub Markdown, so a README written in Flux shows
-//!   on GitHub (flowcharts become Mermaid, callouts GitHub alerts).
+//! Flux documents (`.flux`): Markdown's text, plus blocks for what Markdown leaves to HTML or doesn't have: tables with column alignment, images and GIFs with a size, videos, flowcharts, callouts, collapsible sections, columns, a table of contents, sections per interface language and per-document styling.
 
 pub mod flow;
 pub mod gfm;
@@ -44,12 +31,10 @@ pub enum Block {
     Item { num: u32, depth: u8, check: u8, text: Span },
     /// One or more `>` lines.
     Quote(Span),
-    /// A code block, by index in `Doc::codes` (its language and lines: rare enough to
-    /// keep out of every other block's size).
+    /// A code block, by index in `Doc::codes` (its language and lines: rare enough to keep out of every other block's size).
     Code(u32),
     Rule,
-    /// A table row: which table, and its line. Its place among the rows is its distance
-    /// from `Table::first`.
+    /// A table row: which table, and its line.
     Row { table: u32, line: Span },
     /// `@image`: its arguments (path, alt, width, caption), read when drawn.
     Image(Span),
@@ -218,7 +203,6 @@ fn list_marker(line: &str) -> Option<(u8, u32, usize, u8)> {
 }
 
 /// `key=value` arguments of a directive, with the first bare word as `""`.
-/// Values may be "quoted". Returns (key, value span).
 pub fn args(src: &str, s: Span) -> Vec<(String, Span)> {
     let line = text(src, s);
     let base = s.0 as usize;
@@ -277,8 +261,7 @@ pub fn arg<'a>(src: &'a str, a: &[(String, Span)], key: &str) -> Option<&'a str>
     a.iter().find(|(k, _)| k == key).map(|(_, s)| text(src, *s))
 }
 
-/// An image's caption in a language (`want`: 1 English, 2 Indonesian): `caption-id=`
-/// for Indonesian when there is one, else `caption=`.
+/// An image's caption in a language (`want`: 1 English, 2 Indonesian): `caption-id=` for Indonesian when there is one, else `caption=`.
 pub fn caption<'a>(src: &'a str, a: &[(String, Span)], want: u8) -> Option<&'a str> {
     if want == 2 {
         if let Some(c) = arg(src, a, "caption-id") {
@@ -351,8 +334,7 @@ pub fn parse(src: &str) -> Doc {
     doc
 }
 
-/// Parse blocks into `out` until the end, `@end`, or (at the top level) a language or
-/// release marker.
+/// Parse blocks into `out` until the end, `@end`, or (at the top level) a language or release marker.
 fn parse_into(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<Block>, top: bool) -> Stop {
     while let Some((s, e)) = lines.next() {
         let line = &src[s..e];
@@ -642,7 +624,6 @@ fn parse_pipe_table(src: &str, lines: &mut Lines, doc: &mut Doc, out: &mut Vec<B
     doc.tables.push(t);
 }
 
-// ---------------------------------------------------------------- inline
 
 /// How a piece of inline text looks.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -665,9 +646,7 @@ pub struct Inline {
     pub links: Vec<(std::ops::Range<usize>, String)>,
 }
 
-/// Bold `**x**`, italic `*x*` / `_x_`, code `` `x` ``, strike `~~x~~`, highlight `==x==`,
-/// links `[x](url)` and bare `https://...`, keys `{kbd Ctrl+S}`, badges `{badge New}`
-/// and color `{color=#d0a070 x}`. A backslash keeps the next character as it is.
+/// Bold `**x**`, italic `*x*` / `_x_`, code `` `x` ``, strike `~~x~~`, highlight `==x==`, links `[x](url)` and bare `https://...`, keys `{kbd Ctrl+S}`, badges `{badge New}` and color `{color=#d0a070 x}`.
 pub fn inline(s: &str) -> Inline {
     let mut out = Inline::default();
     let mut m = Marks::default();

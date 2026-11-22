@@ -135,9 +135,7 @@ fn changelog_flux_still_reads() {
     assert_eq!(d.lang, [0, 1, 2, 1, 2]);
 }
 
-/// README.md, README.id.md and docs/flux*.md are made from their .flux files: they
-/// must agree (run `fluxcode --flux-to-md README.flux README.md --lang en`, and the
-/// same with `--lang id`). English is the default every reader lands on.
+/// README.md, README.id.md and docs/flux*.md are made from their .flux files: they must agree (run `fluxcode --flux-to-md README.flux README.md --lang en`, and the same with `--lang id`).
 #[test]
 fn markdown_made_from_flux_is_up_to_date() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -154,8 +152,7 @@ fn markdown_made_from_flux_is_up_to_date() {
     }
 }
 
-/// The English file is the default one, and both languages must be complete enough
-/// to differ: a section that exists only in English is a reader hitting a wall.
+/// The English file is the default one, and both languages must be complete enough to differ: a section that exists only in English is a reader hitting a wall.
 #[test]
 fn both_languages_cover_the_same_sections() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -180,8 +177,7 @@ fn both_languages_cover_the_same_sections() {
     }
 }
 
-/// What a file draws: Markdown draws through the shim (Source first), Flux draws
-/// itself (Preview first), everything else stays in the plain editor.
+/// What a file draws: Markdown draws through the shim (Source first), Flux draws itself (Preview first), everything else stays in the plain editor.
 #[test]
 fn drawable_kinds() {
     use std::path::Path;
@@ -190,8 +186,7 @@ fn drawable_kinds() {
     }
 }
 
-/// The tab bar's export button writes `.md` next to a Flux document; a Markdown
-/// file already is one, so the button only belongs to Flux.
+/// The tab bar's export button writes `.md` next to a Flux document; a Markdown file already is one, so the button only belongs to Flux.
 #[test]
 fn the_export_button_belongs_to_flux_only() {
     use std::path::Path;
@@ -201,7 +196,6 @@ fn the_export_button_belongs_to_flux_only() {
 }
 
 /// A million lines (text, lists and a 200,000-row table), parsed in one pass.
-/// `cargo test --release --bin fluxcode million_lines -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn million_lines() {

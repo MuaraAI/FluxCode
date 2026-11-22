@@ -1,5 +1,4 @@
-//! UI-independent backend logic, ported from `src-tauri/src/lib.rs`
-//! (file reading/writing, find in files, file creation).
+//! UI-independent backend logic, ported from `src-tauri/src/lib.rs` (file reading/writing, find in files, file creation).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,11 +46,7 @@ pub fn decode_text(bytes: &[u8]) -> FileText {
 /// A line this long is past what anyone reads by scrolling sideways.
 pub const LONG_LINE: usize = 300;
 
-/// True when most of the text sits in very long lines: a minified bundle, a
-/// one-line JSON export, a data URI. Such a file opens wrapped. (VS Code's own
-/// test, `isDominatedByLongLines`, weighs the characters in lines of 10,000+
-/// against the rest; this one uses a lower bar so a 1,300-character manifest
-/// line wraps too.)
+/// True when most of the text sits in very long lines: a minified bundle, a one-line JSON export, a data URI.
 pub fn dominated_by_long_lines(text: &str) -> bool {
     let (mut long, mut short) = (0usize, 0usize);
     for line in text.lines() {
@@ -64,8 +59,7 @@ pub fn dominated_by_long_lines(text: &str) -> bool {
     long > 0 && long > short
 }
 
-/// Atomic save: write a sibling temp file, then rename over the original,
-/// so a crash mid-save never leaves a half-written file.
+/// Atomic save: write a sibling temp file, then rename over the original, so a crash mid-save never leaves a half-written file.
 pub fn write_text(path: &Path, text: &str, crlf: bool) -> Result<(), String> {
     let data = if crlf { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
     let tmp = path.with_file_name(format!(
@@ -94,8 +88,7 @@ pub fn rename_path(from: &Path, to: &Path) -> Result<(), String> {
     fs::rename(from, to).map_err(|e| e.to_string())
 }
 
-/// Move a file or folder to the Recycle Bin (Windows), so a delete from the
-/// explorer can be undone. Elsewhere it is removed after the UI confirmed.
+/// Move a file or folder to the Recycle Bin (Windows), so a delete from the explorer can be undone.
 pub fn delete_path(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -142,7 +135,6 @@ pub fn delete_path(path: &Path) -> Result<(), String> {
     }
 }
 
-// --------------------------------------------------------- find in files
 
 /// Matches returned by one search, in total.
 const MAX_SEARCH_HITS: usize = 5_000;
@@ -207,12 +199,7 @@ fn preview(line: &str, match_char: usize) -> String {
     s
 }
 
-/// Find in files, giving up as soon as `stop` says so: live search starts a new search
-/// on every pause in typing, and the old one must not keep the disk busy.
-///
-/// In a git repository the files come from `git ls-files`, so whatever .gitignore
-/// leaves out (build output, worktrees, dependencies) is never read. Files are read on
-/// several threads, and a file is only split into lines when it contains the query.
+/// Find in files, giving up as soon as `stop` says so: live search starts a new search on every pause in typing, and the old one must not keep the disk busy.
 pub fn search_until(root: &Path, query: &str, match_case: bool, whole_word: bool, stop: &dyn Fn() -> bool) -> SearchResult {
     let needle = if match_case { query.to_string() } else { query.to_lowercase() };
     let mut result = SearchResult::default();
@@ -327,8 +314,7 @@ fn search_file(path: &Path, needle: &str, match_case: bool, whole_word: bool) ->
         return None;
     }
     let text = String::from_utf8_lossy(&bytes);
-    // ASCII folding keeps every byte where it was, so lines of the folded text line
-    // up with the original; other queries fold line by line as before.
+    // ASCII folding keeps every byte where it was, so lines of the folded text line up with the original.
     let ascii = match_case || needle.is_ascii();
     let folded: std::borrow::Cow<str> = if match_case { std::borrow::Cow::Borrowed(&text) } else if ascii { text.to_ascii_lowercase().into() } else { text.to_lowercase().into() };
     if !folded.contains(needle) {

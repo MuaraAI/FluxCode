@@ -24,9 +24,7 @@ impl Workbench {
             cx.notify();
             return;
         }
-        // The preview runs a WebView, not the native UI: say so first, and
-        // only start the preview after the user continues. Closing a preview
-        // above never shows the notice: it creates no WebView.
+        // The preview runs a WebView, not the native UI: say so first, and only start the preview after the user continues.
         #[cfg(feature = "embedded-preview")]
         if self.preview_ask {
             return;
@@ -42,7 +40,6 @@ impl Workbench {
     }
 
     /// The notice's answer: Continue starts the preview, Cancel opens nothing.
-    /// "Do not show again" keeps the notice off from now on, either way.
     #[cfg(feature = "embedded-preview")]
     fn answer_preview_ask(&mut self, go: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !self.preview_ask {
@@ -61,8 +58,7 @@ impl Workbench {
         }
     }
 
-    /// The part of the toggle that starts the preview: the local server, then
-    /// the WebView in the embedded build, the system browser otherwise.
+    /// The part of the toggle that starts the preview: the local server, then the WebView in the embedded build, the system browser otherwise.
     fn open_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let file = self.active.map(|a| self.docs[a].path.clone());
         let Some(root) = self.root.clone().or_else(|| file.as_ref().and_then(|f| f.parent().map(|p| p.to_path_buf()))) else {
@@ -94,8 +90,7 @@ impl Workbench {
                 Err(e) => self.status = crate::trf!("WebView2 is not available: {e}"; e => e).into(),
             }
         }
-        // Default build: no WebView in the process at all. The page opens in the
-        // system browser and still reloads itself after every save.
+        // Default build: no WebView in the process at all.
         #[cfg(not(feature = "embedded-preview"))]
         {
             let _ = window;
@@ -112,9 +107,7 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The WebView notice, before the preview runs: a blocking dialog, same
-    /// shape as the folder-drop question (scrim, card, Escape to cancel).
-    /// No notice in the default build: it has no WebView at all.
+    /// The WebView notice, before the preview runs: a blocking dialog, same shape as the folder-drop question (scrim, card, Escape to cancel).
     #[cfg(feature = "embedded-preview")]
     pub(crate) fn render_preview_ask(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.preview_ask {

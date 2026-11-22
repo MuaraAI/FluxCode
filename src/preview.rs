@@ -1,8 +1,4 @@
-//! Live Preview for HTML/CSS/JS, ported from `src-tauri/src/preview.rs`: a
-//! tiny static file server bound to 127.0.0.1 on a random port, serving only
-//! the workspace folder. HTML pages get a small script that long-polls
-//! `/__flux/wait` and reloads after a save. The page is shown in a WebView2
-//! (via gpui-webview) that exists only while the preview is open.
+//! Live Preview for HTML/CSS/JS, ported from `src-tauri/src/preview.rs`: a tiny static file server bound to 127.0.0.1 on a random port, serving only the workspace folder.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -115,8 +111,7 @@ fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> st
 
 fn handle(mut stream: TcpStream, root: &Mutex<PathBuf>, version: &(Mutex<u64>, Condvar)) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    // Read the whole request head: it can arrive in several pieces, and closing the
-    // socket with unread bytes makes Linux reset the connection instead of closing it.
+    // Read the whole request head: it can arrive in several pieces, and closing the socket with unread bytes makes Linux reset the connection instead of closing it.
     let mut buf = [0u8; 8192];
     let mut n = 0;
     while n < buf.len() {

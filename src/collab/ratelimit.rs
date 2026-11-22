@@ -1,10 +1,4 @@
 //! Token buckets that keep one guest from flooding the host.
-//!
-//! Each guest gets its own buckets, so one noisy client can only wear out its
-//! own welcome — the host and everyone else keep working normally. `Open` is
-//! refused with a message because the guest is waiting for an answer; `Edit`
-//! and `Cursor` are dropped silently because they are high-frequency and the
-//! next legitimate one will arrive a moment later.
 
 use std::time::Instant;
 
@@ -21,10 +15,6 @@ impl Bucket {
     }
 
     /// Refill what time has added, then spend `weight` tokens if they are there.
-    ///
-    /// A message is not a unit of work: one `Edit` can carry a megabyte of text
-    /// the host has to run through the merge machinery for every peer. Charging
-    /// by size stops that without a separate size limit.
     pub fn take_weight(&mut self, weight: f64) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last).as_secs_f64();
@@ -39,8 +29,7 @@ impl Bucket {
         }
     }
 
-    /// Spend one token, or none if the bucket is empty. Tests only; every real
-    /// call site passes a weight.
+    /// Spend one token, or none if the bucket is empty.
     #[cfg(test)]
     pub fn take(&mut self) -> bool {
         self.take_weight(1.0)

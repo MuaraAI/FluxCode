@@ -1,24 +1,4 @@
 //! `@flow`: flowcharts written as text, laid out on their own.
-//!
-//! ```text
-//! @flow down
-//! start([Start]) -> check{Tests pass?}
-//! check -yes-> ship[Ship it]
-//! check -no-> fix[Fix] -> check
-//! style ship fill=#2f6f4f text=#ffffff
-//! @end
-//! ```
-//!
-//! Nodes: `id[Box]`, `id(Rounded)`, `id([Pill])`, `id{Decision}`, `id((Circle))`; a
-//! node is declared the first time it appears with a label, and referred to by id
-//! after. Edges: `a -> b`, labelled `a -yes-> b`, dashed `a ..> b`; chains
-//! `a -> b -> c`. `style id fill=#hex text=#hex border=#hex` colors one node.
-//! `@flow right` lays it out left to right.
-//!
-//! Layout (layered, like Graphviz's dot, kept small): edges that close a cycle are found
-//! by depth-first search and treated as going back; every node goes one layer below the
-//! deepest node pointing at it; within a layer nodes are ordered by the average position
-//! of their parents (two passes), then placed and centred.
 
 use super::{text, Span};
 
@@ -63,8 +43,7 @@ pub struct Flow {
     pub size: (f32, f32),
 }
 
-/// Width of a label in px at the flowchart's 13 px text (an estimate: the renderer
-/// draws boxes this wide and lets the text centre inside).
+/// Width of a label in px at the flowchart's 13 px text (an estimate: the renderer draws boxes this wide and lets the text centre inside).
 fn label_w(s: &str) -> f32 {
     s.chars().map(|c| if c.is_ascii_uppercase() || c.is_ascii_digit() { 8.2 } else if c.is_ascii() { 7.0 } else { 12.0 }).sum()
 }

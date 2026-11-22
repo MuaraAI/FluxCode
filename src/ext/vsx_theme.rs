@@ -1,18 +1,4 @@
 //! VS Code color themes as FluxCode palettes.
-//!
-//! A theme file (`contributes.themes[].path`) is JSON with comments: `colors` maps
-//! VS Code's workbench keys (`editor.background`, `sideBar.background`, ...) to hex
-//! colors, `tokenColors` lists TextMate scope rules for code, and `include` names a
-//! base theme whose colors and rules come first. FluxCode has fewer surfaces than
-//! VS Code, so each palette token takes the closest key (with fallbacks), colors
-//! with alpha are blended onto the surface they sit on, and text colors are nudged
-//! until they reach the same 4.5:1 contrast the built-in palettes keep.
-//!
-//! Code colors: syntect names what it matched with TextMate scopes and gpui-kit maps
-//! those onto ~30 highlight names (`keyword`, `string`, ...). For each name a few
-//! representative scopes are resolved against the theme's rules the way VS Code
-//! does (the most specific selector wins, later rules break ties), which gives the
-//! color that name shows in VS Code for the common case.
 
 use gpui_kit::component::highlighter::HighlightThemeStyle;
 use serde_json::{json, Map, Value};
@@ -58,7 +44,6 @@ pub struct Colors {
     pub selection: u32,
 }
 
-// ------------------------------------------------------------------ reading
 
 /// JSON with `//` and `/* */` comments and trailing commas, as VS Code reads it.
 pub fn parse_jsonc(text: &str) -> Option<Value> {
@@ -114,8 +99,7 @@ fn read_text(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
-/// Read a theme file and the files it includes (base first, so this file's own
-/// colors and rules win). `root` is the extension folder; nothing outside it is read.
+/// Read a theme file and the files it includes (base first, so this file's own colors and rules win).
 pub fn read_theme(root: &Path, path: &Path) -> Result<ThemeFile, String> {
     let mut out = ThemeFile::default();
     read_into(root, path, &mut out, 0)?;
@@ -142,8 +126,7 @@ fn read_into(root: &Path, path: &Path, out: &mut ThemeFile, depth: u8) -> Result
     }
     match v.get("tokenColors") {
         Some(Value::Array(a)) => out.rules.extend(a.iter().cloned()),
-        // A path to another file with the rules (a JSON theme or a bare array);
-        // `.tmTheme` (XML plist) files are not read.
+        // A path to another file with the rules (a JSON theme or a bare array); `.tmTheme` (XML plist) files are not read.
         Some(Value::String(rel)) if !rel.to_ascii_lowercase().ends_with(".tmtheme") => {
             if let Some(p) = inside(root, dir, rel) {
                 if let Some(v) = read_text(&p).ok().and_then(|t| parse_jsonc(&t)) {
@@ -166,8 +149,7 @@ fn read_into(root: &Path, path: &Path, out: &mut ThemeFile, depth: u8) -> Result
     Ok(())
 }
 
-/// Dark or light, from the manifest's `uiTheme` (`vs`, `vs-dark`, `hc-black`,
-/// `hc-light`), else the file's `type`, else the editor background's lightness.
+/// Dark or light, from the manifest's `uiTheme` (`vs`, `vs-dark`, `hc-black`, `hc-light`), else the file's `type`, else the editor background's lightness.
 pub fn is_dark(ui_theme: &str, file: &ThemeFile) -> bool {
     match ui_theme {
         "vs" | "hc-light" => return false,
@@ -186,7 +168,6 @@ pub fn is_dark(ui_theme: &str, file: &ThemeFile) -> bool {
     }
 }
 
-// ------------------------------------------------------------------ colors
 
 /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` → (rgb, alpha 0..=1).
 pub fn parse_color(s: &str) -> Option<(u32, f32)> {
@@ -249,8 +230,7 @@ pub fn contrast(a: u32, b: u32) -> f64 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// `fg` moved toward white (dark themes) or black until it reaches `min` on every
-/// surface; its hue stays as long as possible.
+/// `fg` moved toward white (dark themes) or black until it reaches `min` on every surface; its hue stays as long as possible.
 fn readable(fg: u32, surfaces: &[u32], min: f64, dark: bool) -> u32 {
     let target = if dark { 0xffffff } else { 0x000000 };
     let ok = |c: u32| surfaces.iter().all(|s| contrast(c, *s) >= min);
@@ -274,8 +254,7 @@ impl Keys<'_> {
     }
 }
 
-/// The palette for a theme. `default_fg`/`default_bg` are the colors of a rule
-/// without a scope (old themes give the editor's colors that way).
+/// The palette for a theme.
 pub fn colors(file: &ThemeFile, dark: bool) -> Colors {
     let k = Keys(&file.colors);
     let (global_fg, global_bg) = global_colors(&file.rules);
@@ -319,8 +298,7 @@ pub fn colors(file: &ThemeFile, dark: bool) -> Colors {
         )
         .filter(|s| contrast(*s, side) > 1.04)
         .unwrap_or_else(|| mix(side, fg, 0.12));
-    // FluxCode draws its panels apart with hairlines; a theme that hides its
-    // borders (border = background) still gets a faint one.
+    // FluxCode draws its panels apart with hairlines; a theme that hides its borders (border = background) still gets a faint one.
     let border = k
         .get(
             &[
@@ -344,9 +322,7 @@ pub fn colors(file: &ThemeFile, dark: bool) -> Colors {
     let dim = k
         .get(&["editorLineNumber.foreground"], editor)
         .unwrap_or_else(|| mix(fg, editor, 0.35));
-    // FluxCode's one accent (active tab line, primary button, focus ring) is the
-    // theme's signature color: many themes keep their buttons grey and show it on
-    // the activity bar badge, so the first colorful candidate wins.
+    // FluxCode's one accent (active tab line, primary button, focus ring) is the theme's signature color: many themes keep their buttons grey and show it on the activity bar badge, so the first colorful candidate wins.
     let candidates: [(&str, &str); 6] = [
         ("activityBarBadge.background", "activityBarBadge.foreground"),
         ("button.background", "button.foreground"),
@@ -365,8 +341,7 @@ pub fn colors(file: &ThemeFile, dark: bool) -> Colors {
             Some((a, k.get(&[on], a)))
         })
         .collect();
-    // A theme without color (One Dark Pro Flat) gets its first accent that shows
-    // on the side bar at all.
+    // A theme without color (One Dark Pro Flat) gets its first accent that shows on the side bar at all.
     let (accent, accent_on) = found
         .iter()
         .find(|(a, _)| saturation(*a) >= 0.3 && contrast(*a, side) >= 1.5)
@@ -443,9 +418,7 @@ pub fn colors(file: &ThemeFile, dark: bool) -> Colors {
     }
 }
 
-/// An accent fill and the text on it at 5.1:1 or more: the theme's own button text
-/// when it is clear enough, else black or white; a mid-tone accent that neither
-/// reaches is darkened or lightened until one does.
+/// An accent fill and the text on it at 5.1:1 or more: the theme's own button text when it is clear enough, else black or white.
 fn accent_pair(accent: u32, on: Option<u32>) -> (u32, u32) {
     if let Some(on) = on.filter(|on| contrast(*on, accent) >= 5.1) {
         return (accent, on);
@@ -483,10 +456,8 @@ fn global_colors(rules: &[Value]) -> (Option<u32>, Option<u32>) {
     out
 }
 
-// ------------------------------------------------------------------ code colors
 
-/// gpui-kit's highlight names and the TextMate scopes syntect gives them most
-/// often (see its `semantic_name`), the first one that the theme colors wins.
+/// gpui-kit's highlight names and the TextMate scopes syntect gives them most often (see its `semantic_name`), the first one that the theme colors wins.
 const SCOPES: &[(&str, &[&str])] = &[
     (
         "comment",
@@ -576,8 +547,6 @@ const SCOPES: &[(&str, &[&str])] = &[
 ];
 
 /// One scope selector of a rule: a plain dotted scope (`keyword.control`).
-/// Selectors with a parent (`source.python string`) or an exclusion need the
-/// scope stack, which a single representative scope doesn't have; they are skipped.
 fn selectors(rule: &Value) -> Vec<String> {
     let raw: Vec<&str> = match rule.get("scope") {
         Some(Value::String(s)) => s.split(',').collect(),
@@ -595,8 +564,7 @@ fn selectors(rule: &Value) -> Vec<String> {
         .collect()
 }
 
-/// How specific `selector` is for `scope` (its dot count + 1), or 0 if it does not
-/// match: `keyword` and `keyword.control` both match `keyword.control.rust`.
+/// How specific `selector` is for `scope` (its dot count + 1), or 0 if it does not match: `keyword` and `keyword.control` both match `keyword.control.rust`.
 fn score(selector: &str, scope: &str) -> usize {
     let hit = scope == selector
         || scope
@@ -609,8 +577,7 @@ fn score(selector: &str, scope: &str) -> usize {
     }
 }
 
-/// A scope's foreground and font style under the rules, each decided on its own
-/// like VS Code does: the most specific selector, the later rule on a tie.
+/// A scope's foreground and font style under the rules, each decided on its own like VS Code does: the most specific selector, the later rule on a tie.
 pub fn resolve(rules: &[Value], scope: &str) -> (Option<(u32, f32)>, Option<String>) {
     let mut fg: (usize, Option<(u32, f32)>) = (0, None);
     let mut style: (usize, Option<String>) = (0, None);
@@ -648,8 +615,7 @@ fn hex(c: u32) -> String {
     format!("#{c:06x}")
 }
 
-/// gpui-kit's style for the code editor: a color (and italic/bold) per highlight
-/// name, plus the diagnostic and version-control colors.
+/// gpui-kit's style for the code editor: a color (and italic/bold) per highlight name, plus the diagnostic and version-control colors.
 pub fn syntax(file: &ThemeFile, editor: u32, fg: u32) -> Option<HighlightThemeStyle> {
     let mut syntax = Map::new();
     for (name, scopes) in SCOPES {
@@ -805,8 +771,7 @@ mod tests {
         assert_eq!(c.selection, 0x44475a);
         // Link color as the accent text, as in VS Code.
         assert_eq!(c.accent_text, 0x8be9fd);
-        // The pink badge, not the grey button, is the accent; ivory on pink is too
-        // faint, so the text on it turns black.
+        // The pink badge, not the grey button, is the accent; ivory on pink is too faint, so the text on it turns black.
         assert_eq!((c.accent, c.on_accent), (0xff79c6, 0x000000));
     }
 

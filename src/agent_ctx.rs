@@ -1,5 +1,4 @@
-//! Small, testable pieces of the agent panel: `@file` mentions, the words that
-//! mean "look at my error", and reading another harness's saved sessions.
+//! Small, testable pieces of the agent panel: `@file` mentions, the words that mean "look at my error", and reading another harness's saved sessions.
 
 use std::path::Path;
 

@@ -1,16 +1,4 @@
-//! The wire: the host's PC listens on TCP (IPv4 and IPv6); each guest connects to it
-//! directly, or through the public relay when the host opened one (`reach`). No server
-//! of ours is involved.
-//!
-//! Every frame is encrypted and authenticated with ChaCha20-Poly1305. The key is the
-//! 32-byte secret inside the invite code, so only someone holding the code can join
-//! or read the traffic. Each connection derives its own key from that secret and a
-//! random salt from both sides, and each direction counts its own nonces, so no
-//! nonce is ever used twice under one key. The host's first frame proves it holds the
-//! same secret, so a guest knows it reached the right session before it says hello.
-//!
-//! Frames are `u32` length + ciphertext of one JSON message. Reading and writing run
-//! on two threads per connection; the UI thread only sees whole messages.
+//! The wire: the host's PC listens on TCP (IPv4 and IPv6).
 
 use super::proto::Msg;
 use base64::Engine;
@@ -35,8 +23,7 @@ pub const MAX_FRAME: usize = 24 << 20;
 /// What the invite code carries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Invite {
-    /// Addresses to try (all at once, earlier ones a moment sooner): the host's LAN
-    /// address first, then the ways in from the internet.
+    /// Addresses to try (all at once, earlier ones a moment sooner): the host's LAN address first, then the ways in from the internet.
     pub a: Vec<String>,
     /// The session secret (base64url, 32 bytes).
     pub k: String,
@@ -78,8 +65,7 @@ pub fn new_secret() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random::<32>())
 }
 
-/// This PC's address on its network (the route to the internet), without sending
-/// anything: connecting a UDP socket only picks the interface.
+/// This PC's address on its network (the route to the internet), without sending anything: connecting a UDP socket only picks the interface.
 pub fn lan_ip() -> Option<String> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("8.8.8.8:80").ok()?;
@@ -190,8 +176,7 @@ fn run_conn(conn: u64, stream: TcpStream, cipher: Cipher, events: UnboundedSende
     let _ = events.unbounded_send(NetEvent::Closed { conn, why });
 }
 
-/// A listening host. Dropping it stops taking new guests (existing ones stay until
-/// they are sent `Bye`).
+/// A listening host.
 pub struct Host {
     pub port: u16,
     /// Also listening on IPv6.
@@ -210,8 +195,7 @@ impl Drop for Host {
     }
 }
 
-/// Listen on the default port (or any free one) for guests holding `secret`, on IPv4
-/// and, when the PC has it, IPv6 on the same port.
+/// Listen on the default port (or any free one) for guests holding `secret`, on IPv4 and, when the PC has it, IPv6 on the same port.
 pub fn host(secret: [u8; 32]) -> Result<(Host, UnboundedReceiver<NetEvent>), String> {
     let listener = TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).or_else(|_| TcpListener::bind(("0.0.0.0", 0))).map_err(|e| format!("Could not open a port for the session: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -227,8 +211,7 @@ pub fn host(secret: [u8; 32]) -> Result<(Host, UnboundedReceiver<NetEvent>), Str
     Ok((Host { port, ipv6, stop }, rx))
 }
 
-/// An IPv6 listener that leaves IPv4 to the other one (on Linux an IPv6 socket would
-/// otherwise claim the IPv4 port too, and fail to bind next to it).
+/// An IPv6 listener that leaves IPv4 to the other one (on Linux an IPv6 socket would otherwise claim the IPv4 port too, and fail to bind next to it).
 fn bind_v6_only(port: u16) -> Option<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
     let s = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)).ok()?;
@@ -315,9 +298,7 @@ fn try_one(addr: &str, secret: &[u8; 32]) -> Result<(TcpStream, Cipher), String>
     Err(last)
 }
 
-/// Connect to a host from an invite. Every address is tried at once, each a moment
-/// after the one before (the same network beats the internet), and the first that
-/// proves it is this session's host is used.
+/// Connect to a host from an invite.
 pub fn join(inv: &Invite) -> Result<(Sender<Msg>, UnboundedReceiver<NetEvent>, String), String> {
     let secret = inv.secret().ok_or("The invite code is damaged.")?;
     let (rtx, rrx) = channel();

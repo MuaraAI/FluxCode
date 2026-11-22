@@ -1,10 +1,4 @@
-//! Facts about a model for the model menu: how many tokens it reads at once (its
-//! context window), how many it can write in one answer, and whether it is free.
-//!
-//! They come from the catalog OpenCode keeps on this PC (models.dev's list, cached at
-//! `~/.cache/opencode/models.json`). Nothing is fetched: without the file the menu shows
-//! the names alone. The file is several MB, so it is read in the background, once per
-//! start, and only the models an agent offers are kept.
+//! Facts about a model for the model menu: how many tokens it reads at once (its context window), how many it can write in one answer, and whether it is free.
 
 use serde_json::Value;
 use std::collections::HashMap;

@@ -1,19 +1,4 @@
 //! Live share: code together in real time, with the host's PC as the server.
-//!
-//! - The host shares the open folder and gets an invite code. Whoever has the code
-//!   joins straight to the host's PC (`net`): no server of ours, encrypted. From
-//!   outside the host's network they come in over public IPv6, a port the router
-//!   opened (UPnP), or a free public relay that only sees ciphertext (`reach`).
-//! - Guests join into their own clone of the same repository (the open folder) or
-//!   into a new folder; files come from the host as they are opened.
-//! - Every open shared file is synced keystroke by keystroke with operational
-//!   transformation (`ot`): the host orders edits, so everyone ends with the same text.
-//! - Everyone sees who is in the session, which file and line each is on, and an
-//!   activity list of edits. An edit made by an AI agent says so, with the agent,
-//!   model, effort and mode, and every entry opens as a diff.
-//!
-//! Only files someone has open travel, so a huge project costs no more than the
-//! files being worked on.
 
 pub mod net;
 pub mod ot;
@@ -39,14 +24,11 @@ use std::time::Instant;
 const MAX_SHARED_FILE: usize = 16 << 20;
 /// File names sent to guests for their file list.
 const MAX_LISTED: usize = 20_000;
-/// Guests one host serves at once. Each guest holds a socket and a token bucket,
-/// and its messages are rebroadcast to everyone else.
+/// Guests one host serves at once.
 const MAX_GUESTS: usize = 16;
-/// A `Cursor` path is shifted around and rebroadcast whole; nobody has a file
-/// name this long, and a multi-megabyte one would be a cheap way to burn the host.
+/// A `Cursor` path is shifted around and rebroadcast whole.
 const MAX_CURSOR_PATH: usize = 1024;
-/// A guest's display name is rebroadcast with every peer update, so it is bounded
-/// for the same reason as the cursor path, and tighter: nobody needs more.
+/// A guest's display name is rebroadcast with every peer update, so it is bounded for the same reason as the cursor path, and tighter: nobody needs more.
 const MAX_PEER_NAME: usize = 64;
 
 pub enum Role {
@@ -120,8 +102,7 @@ pub struct Collab {
     /// Host: the probes opening those ways in, and where they stand.
     pub probes: Option<reach::Probes>,
     pub reach: Option<reach::Reach>,
-    /// When the invite code was last copied (the button says so for a moment), and
-    /// what was copied (the ways in can change it afterwards).
+    /// When the invite code was last copied (the button says so for a moment), and what was copied (the ways in can change it afterwards).
     pub copied: Option<Instant>,
     pub copied_code: Option<String>,
     /// Host: the ways in show their addresses and reasons in full.
@@ -129,8 +110,7 @@ pub struct Collab {
     /// The Live share page is showing in the editor area.
     pub page: bool,
     last_cursor: (String, u32),
-    /// Every guest's `Open` and `Hello` also draws from this one, so a client that
-    /// reconnects for a fresh per-guest bucket still shares a host-wide budget.
+    /// Every guest's `Open` and `Hello` also draws from this one, so a client that reconnects for a fresh per-guest bucket still shares a host-wide budget.
     host_opens: ratelimit::Bucket,
     /// Re-render as the invite code or the file filter is typed.
     _subs: Vec<Subscription>,
@@ -171,8 +151,7 @@ impl Collab {
             ways_open: false,
             page: false,
             last_cursor: (String::new(), 0),
-            // Host-wide ceiling for open requests: 40 a second, burst 120. Per-guest
-            // buckets are separate and far tighter; this only stops the aggregate.
+            // Host-wide ceiling for open requests: 40 a second, burst 120.
             host_opens: ratelimit::Bucket::new(120, 40),
             _subs,
         }
@@ -195,10 +174,6 @@ impl Collab {
     }
 
     /// The path of `rel` on this PC; `None` for paths that would leave the folder.
-    ///
-    /// The rules live in [`share::safe_components`] because the guest side needs
-    /// the same ones: a host that sends `Snapshot { path }` must not be able to
-    /// make a guest write outside its own folder either.
     fn abs_of(&self, rel: &str) -> Option<PathBuf> {
         let parts = share::safe_components(rel)?;
         Some(parts.iter().fold(self.root.clone()?, |p, s| p.join(s)))
@@ -224,8 +199,7 @@ impl Collab {
         self.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| tr("Someone").into())
     }
 
-    /// Add an edit to the activity list: one entry per person, file and kind
-    /// (AI or typed) while they keep going, a new one after a pause.
+    /// Add an edit to the activity list: one entry per person, file and kind (AI or typed) while they keep going, a new one after a pause.
     fn note_edit(&mut self, who: String, rel: &str, ai: Option<AiInfo>, before: &str, after: &str) {
         let lines = |b: &str, a: &str| if b.len() + a.len() < 600_000 { crate::diff::counts(b, a) } else { (0, 0) };
         if let Some(last) = self.feed.first_mut() {
@@ -253,8 +227,7 @@ fn char_at(s: &str, bi: usize) -> usize {
     s[..bi.min(s.len())].chars().count()
 }
 
-/// Apply a remote edit to an editor span by span, keeping the local caret where
-/// its text went.
+/// Apply a remote edit to an editor span by span, keeping the local caret where its text went.
 fn apply_to_editor(editor: &Entity<EditorState>, op: &Op, window: &mut Window, cx: &mut App) {
     editor.update(cx, |s, cx| {
         let text = s.value().to_string();
@@ -288,7 +261,6 @@ fn my_name() -> (String, bool) {
 }
 
 impl Workbench {
-    // ---------------------------------------------------------------- starting
 
     pub(crate) fn collab_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
@@ -468,7 +440,6 @@ impl Workbench {
         .detach();
     }
 
-    // ---------------------------------------------------------------- events
 
     fn collab_on_event(&mut self, ev: NetEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.collab.is_host() {
@@ -484,9 +455,7 @@ impl Workbench {
             NetEvent::Connected { conn, tx } => {
                 let full = if let Some(Role::Host { guests, .. }) = &self.collab.role { guests.len() >= MAX_GUESTS } else { false };
                 if full {
-                    // Refused alone leaves the socket open: the guest reads it as a
-                    // status line and waits, while the host keeps a thread blocked on
-                    // the same stream. Bye closes it from the writer side.
+                    // Refused alone leaves the socket open: the guest reads it as a status line and waits, while the host keeps a thread blocked on the same stream.
                     let _ = tx.send(Msg::Refused { why: tr("This session is full.").to_string() });
                     let _ = tx.send(Msg::Bye { why: tr("This session is full.").to_string() });
                     return;
@@ -508,12 +477,7 @@ impl Workbench {
         }
     }
 
-    /// Spend `weight` of `conn`'s tokens for this kind of message. A guest we
-    /// don't know is allowed through: the connection is about to be dropped.
-    ///
-    /// `Open` and `Hello` also spend one from the host-wide bucket, because the
-    /// per-guest ones are recreated with the connection: reconnecting would
-    /// otherwise hand a client an unlimited supply.
+    /// Spend `weight` of `conn`'s tokens for this kind of message.
     fn guest_take(&mut self, conn: u64, limb: Limb, weight: f64) -> bool {
         if matches!(limb, Limb::Open) && !self.collab.host_opens.take_weight(1.0) {
             return false;
@@ -538,16 +502,12 @@ impl Workbench {
         };
         match msg {
             Msg::Hello { name, github, .. } => {
-                // A guest can say Hello as often as it likes; each one rebuilds the
-                // 20 000-path list and rebroadcasts the peer table to everyone, so
-                // it draws from the same bucket as Open. Replacing the peer (instead
-                // of pushing) keeps a repeated Hello from growing the table.
+                // A guest can say Hello as often as it likes.
                 if !self.guest_take(conn, Limb::Open, 1.0) {
                     reply(self, Msg::Refused { why: tr("Too many requests, slow down.").to_string() });
                     return;
                 }
-                // The name travels with every peer update, so an oversized one
-                // would be rebroadcast forever at cursor rate.
+                // The name travels with every peer update, so an oversized one would be rebroadcast forever at cursor rate.
                 let name: String = name.trim().chars().take(MAX_PEER_NAME).collect();
                 let peer = Peer { id: conn, name: name.clone(), github, host: false, file: String::new(), line: 0 };
                 if let Some(Role::Host { guests, .. }) = &mut self.collab.role {
@@ -577,10 +537,7 @@ impl Workbench {
                 }
             }
             Msg::Edit { path, rev, op, ai } => {
-                // The host pays for two things: cloning and applying the text, and
-                // transforming the edit past every revision it missed (up to HISTORY
-                // of them). Charging only bytes misses the second: a 1-byte edit
-                // sent at the oldest allowed revision buys thousands of transforms.
+                // The host pays for two things: cloning and applying the text, and transforming the edit past every revision it missed (up to HISTORY of them).
                 let behind = self.collab.docs.get(&path).and_then(|d| d.server.as_ref()).map(|s| s.rev.saturating_sub(rev) as f64).unwrap_or(0.0);
                 let weight = 1.0 + op.changed_bytes() as f64 / 1024.0 + behind / 64.0;
                 if !self.guest_take(conn, Limb::Edit, weight) {
@@ -625,16 +582,13 @@ impl Workbench {
         }
     }
 
-    /// A guest opens `rel`: the host opens it too (in a tab, without moving away from
-    /// what they are on) and serves its text.
+    /// A guest opens `rel`: the host opens it too (in a tab, without moving away from what they are on) and serves its text.
     fn collab_host_open(&mut self, rel: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<(u64, String), String> {
         share::ensure_shareable(rel)?;
         let abs = self.collab.abs_of(rel).ok_or_else(|| tr("That file is outside the shared folder.").to_string())?;
-        // A symlink inside the folder can still point outside it, and `is_file`
-        // follows links. Resolve first, then require the result to stay inside.
+        // A symlink inside the folder can still point outside it, and `is_file` follows links.
         let resolved = std::fs::canonicalize(&abs).map_err(|_| tr("That file is not there any more.").to_string())?;
-        // Fail closed: with no resolved root there is nothing to compare against,
-        // and skipping the check is the whole vulnerability.
+        // Fail closed: with no resolved root there is nothing to compare against, and skipping the check is the whole vulnerability.
         let root = self.collab.root.as_ref().and_then(|r| std::fs::canonicalize(r).ok()).ok_or_else(|| tr("That file is outside the shared folder.").to_string())?;
         if !resolved.starts_with(&root) {
             return Err(tr("That file is outside the shared folder.").to_string());
@@ -765,7 +719,6 @@ impl Workbench {
         }
     }
 
-    // ---------------------------------------------------------------- local edits
 
     /// Called on every change of an editor: a shared file's edit goes out.
     pub(crate) fn collab_on_change(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {

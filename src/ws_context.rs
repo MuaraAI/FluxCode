@@ -1,9 +1,4 @@
-//! What the agent is told about the workspace before the first message (and
-//! again when it changes): its folders, what kind of project each is (from the
-//! manifests in it), the languages and layout, the git state and the open tabs.
-//! Built from the explorer's file list and a few small files, in well under a
-//! millisecond, so the agent starts with the picture a person gets at a glance
-//! instead of spending tool calls on `ls` and `cat package.json`.
+//! What the agent is told about the workspace before the first message (and again when it changes): its folders, what kind of project each is (from the manifests in it), the languages and layout, the git state and the open tabs.
 
 use crate::scm::RepoStatus;
 use std::collections::BTreeMap;
@@ -12,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Cap on the overview, so it never crowds out the question.
 const MAX_CHARS: usize = 14000;
-/// Of that, the file map (about 2,000 tokens): every file of a small project, the
-/// first ones of each folder in a large one.
+/// Of that, the file map (about 2,000 tokens): every file of a small project, the first ones of each folder in a large one.
 const MAP_CHARS: usize = 7000;
 /// Folders whose files are never worth listing.
 const SKIP_DIRS: &[&str] = &["node_modules", "target", ".git", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".cache", "vendor", ".idea", ".vscode", "out", "coverage"];
@@ -269,9 +263,6 @@ fn layout(root: &Path, files: &[String]) -> String {
 }
 
 /// Every file under `root`, one line per folder: `src/agent/: activity.rs, menu.rs`.
-/// With it the agent opens the right file at once instead of spending its first turns
-/// listing folders. Over the budget, each folder keeps its first files and says how
-/// many more it has.
 fn file_map(root: &Path, files: &[String], budget: usize) -> String {
     let rs = root.to_string_lossy().to_string();
     let mut by_dir: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -387,8 +378,7 @@ pub fn overview(i: &Inputs) -> String {
     s
 }
 
-/// Changes when the workspace does: folders, file count, branch, number of changes
-/// (not the tabs: the open file goes with each message anyway).
+/// Changes when the workspace does: folders, file count, branch, number of changes (not the tabs: the open file goes with each message anyway).
 pub fn signature(i: &Inputs) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();

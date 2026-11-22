@@ -1,13 +1,4 @@
 //! Files opened from Explorer go to the FluxCode window that is already open.
-//!
-//! Without this, every double-click on a file started another FluxCode with only
-//! that file in it, and closing it saved that one-file session over the real one.
-//!
-//! The running window listens on a loopback port and writes the port and a
-//! random token to `instance.json` in the config folder (readable only by this
-//! Windows account). `fluxcode file...` reads it, sends the token and the paths,
-//! and exits once the window answers "ok". When nothing answers (no FluxCode
-//! open, or the file is stale) the new process opens its own window.
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
@@ -28,7 +19,7 @@ struct Info {
     pid: u32,
 }
 
-/// Hand `files` to the open FluxCode window. True when it took them.
+/// Hand `files` to the open FluxCode window.
 pub(crate) fn forward(files: &[PathBuf]) -> bool {
     let info: Info = crate::settings::load_json(FILE);
     if info.port == 0 || info.token.is_empty() || info.pid == std::process::id() || !alive(info.pid) {
@@ -40,8 +31,7 @@ pub(crate) fn forward(files: &[PathBuf]) -> bool {
     };
     let _ = conn.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = conn.set_write_timeout(Some(Duration::from_secs(3)));
-    // Explorer gave this process the right to take the foreground; pass it on,
-    // so the window comes to the front instead of only flashing on the taskbar.
+    // Explorer gave this process the right to take the foreground.
     allow_foreground(info.pid);
     if conn.write_all(message(&info.token, files).as_bytes()).is_err() {
         return false;
@@ -78,8 +68,7 @@ fn parse(input: impl Read, token: &str) -> Option<Vec<PathBuf>> {
     None
 }
 
-/// Start taking files from other `fluxcode` launches. Each message arrives as
-/// one list of paths.
+/// Start taking files from other `fluxcode` launches.
 pub(crate) fn listen() -> Option<UnboundedReceiver<Vec<PathBuf>>> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
     let port = listener.local_addr().ok()?.port();
@@ -125,9 +114,7 @@ fn allow_foreground(pid: u32) {
 #[cfg(not(windows))]
 fn allow_foreground(_pid: u32) {}
 
-/// Whether the process that wrote `instance.json` still runs. On Windows a
-/// connect to a closed loopback port takes seconds to fail, so a file left by
-/// a FluxCode that has since closed must not get that far.
+/// Whether the process that wrote `instance.json` still runs.
 #[cfg(windows)]
 fn alive(pid: u32) -> bool {
     #[link(name = "kernel32")]

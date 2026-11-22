@@ -1,7 +1,4 @@
-//! "What's new": the page that opens the first time a new build starts, from
-//! `changelog.flux` (compiled in, so it works offline). It shows every release dated
-//! after the build that ran before, in the interface language, and closes with the
-//! button or Escape. Help > What's New opens it with every release.
+//! "What's new": the page that opens the first time a new build starts, from `changelog.flux` (compiled in, so it works offline).
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -78,12 +75,6 @@ pub fn build_date(build: &str) -> Option<&str> {
 }
 
 /// Indices of the releases to show after updating from `last` (a build name).
-/// A release shows when the build that carries it is newer than `last`, worked
-/// out from git by build.rs; a release with no known build falls back to the
-/// date rule, showing when it is dated after `last`. Nothing is shown when
-/// nothing is newer: an update with no new entry says so on the page instead
-/// of repeating the newest one. No previous build, or a previous build that is
-/// not a build name, shows everything, as before.
 pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
     let Some(last) = last else { return (0..releases.len()).collect() };
     let Some(after) = build_date(last) else { return (0..releases.len()).collect() };
@@ -91,8 +82,7 @@ pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, r)| match build_of(&r.title_en) {
-            // Build names are fixed-width dates and times, so a plain string
-            // comparison is a time comparison.
+            // Build names are fixed-width dates and times, so a plain string comparison is a time comparison.
             Some(b) => b > last,
             None => r.date.as_str() > after,
         })
@@ -104,16 +94,14 @@ pub fn since(releases: &[Release], last: Option<&str>) -> Vec<usize> {
 pub struct Page {
     pub releases: Vec<Release>,
     pub from: Option<String>,
-    /// A newer build on offer (the update card's "What's new"): its tag, release page,
-    /// and every build between this one and it.
+    /// A newer build on offer (the update card's "What's new"): its tag, release page, and every build between this one and it.
     pub update: Option<crate::update::Release>,
     /// Fetching the new build's changelog.flux.
     pub loading: bool,
     pub error: Option<String>,
 }
 
-/// The new build's notes, from its changelog.flux at its tag on GitHub (one small text
-/// file, fetched when asked). Blocking.
+/// The new build's notes, from its changelog.flux at its tag on GitHub (one small text file, fetched when asked).
 pub fn fetch(tag: &str) -> Result<String, String> {
     let url = format!("https://raw.githubusercontent.com/MuaraAI/FluxCode/{tag}/changelog.flux");
     let out = crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
@@ -181,8 +169,7 @@ impl Workbench {
             Some(_) => tr("What the new build changes"),
             None => tr("What's new in FluxCode"),
         };
-        // Label and build name, one pair per line; the names in a fixed-width font so
-        // the dates and times line up and read at a glance.
+        // Label and build name, one pair per line; the names in a fixed-width font so the dates and times line up and read at a glance.
         let pair = |label: SharedString, build: String, strong: bool| {
             h_flex()
                 .flex_wrap()
@@ -256,8 +243,7 @@ impl Workbench {
                                 .items_center()
                                 .text_xs()
                                 .child({
-                                    // No tooltip: the chip already shows the full build name,
-                                    // and the tooltip rendered below it, over the title line.
+                                    // No tooltip: the chip already shows the full build name, and the tooltip rendered below it, over the title line.
                                     div()
                                         .id(("wn-build", i))
                                         .flex_shrink(1.)
@@ -419,7 +405,6 @@ mod tests {
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-09-10-00-00")), vec![0, 1]);
         // Same day as the newest release: nothing is newer, so nothing shows.
-        // The old blind fallback showed the newest entry again here.
         assert_eq!(since(&all, Some("BuildDev-2026-11-12-23-00-00")), Vec::<usize>::new());
         assert_eq!(since(&all, None), vec![0, 1, 2]);
         assert_eq!(build_date("BuildDev-2026-11-10-08-00-00"), Some("2026-11-10"));
@@ -428,9 +413,7 @@ mod tests {
 
     #[test]
     fn an_entry_the_previous_build_already_has_is_not_shown() {
-        // The WSL2 helper entry came in BuildDev-2026-11-14-03-51-07: updating
-        // from that build, or a later one, shows nothing for it. This is the
-        // stale-entry bug: the old fallback showed this entry again.
+        // The WSL2 helper entry came in BuildDev-2026-11-14-03-51-07: updating from that build, or a later one, shows nothing for it.
         let src = "@release 2026-11-13\n@title en: WSL2 workspaces read through a helper in the distro\n@en\nx\n@release 2026-11-13\n@title en: WSL2 workspaces\n@en\ny\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-14-03-51-07")), Vec::<usize>::new());
@@ -439,11 +422,7 @@ mod tests {
 
     #[test]
     fn an_entry_from_a_newer_build_is_shown() {
-        // The same WSL2 helper entry, seen from a build made before it: its
-        // build is newer than the last one, so it shows. The last build is
-        // dated the day before the entry, so the date rule alone would show
-        // it too; the build rule is what decides here when git knows the
-        // build, and both agree.
+        // The same WSL2 helper entry, seen from a build made before it: its build is newer than the last one, so it shows.
         let src = "@release 2026-11-13\n@title en: WSL2 workspaces read through a helper in the distro\n@en\nx\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-12-10-00-00")), vec![0]);
@@ -451,9 +430,7 @@ mod tests {
 
     #[test]
     fn an_entry_with_no_known_build_uses_the_date_rule() {
-        // A title git cannot place in a build (it is made up here) falls back
-        // to the date rule: shown when dated after the last build, hidden when
-        // dated on its day or before.
+        // A title git cannot place in a build (it is made up here) falls back to the date rule: shown when dated after the last build, hidden when dated on its day or before.
         let src = "@release 2026-11-12\n@title en: A made-up entry\n@en\nx\n";
         let all = parse(src);
         assert_eq!(since(&all, Some("BuildDev-2026-11-09-10-00-00")), vec![0]);

@@ -1,7 +1,4 @@
 //! The helper that runs inside the distro: `fluxcode --remote-server`.
-//!
-//! It is the same binary as the editor, so a Linux build works in the distro
-//! without a second artefact. One request is in flight at a time; see `proto.rs`.
 
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -84,8 +81,7 @@ fn handle(req: Request, body: Option<Vec<u8>>) -> Result<Answer, String> {
         }
         Request::Write { path, crlf } => {
             let Some(mut bytes) = body else { return Err("no bytes followed the write".into()) };
-            // The editor sends the text with `\n`; the file's own line endings
-            // are put back here, as `core::write_text` does on Windows.
+            // The editor sends the text with `\n`; the file's own line endings are put back here, as `core::write_text` does on Windows.
             if crlf {
                 let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\n', "\r\n");
                 bytes = text.into_bytes();
@@ -116,8 +112,7 @@ fn list(path: &str) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-/// Every file under `root`, for the Ctrl+P list. Same folder skips as search,
-/// and `max` stops it so a huge tree cannot run away.
+/// Every file under `root`, for the Ctrl+P list.
 fn scan(root: &str, max: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::from(root)];
@@ -273,8 +268,7 @@ fn find_match(hay: &str, needle: &str, whole_word: bool) -> Option<usize> {
     None
 }
 
-/// Short single-line preview around the match, indentation stripped, exactly as
-/// `core::preview` does it so a remote search reads like a local one.
+/// Short single-line preview around the match, indentation stripped, exactly as `core::preview` does it so a remote search reads like a local one.
 fn preview(line: &str, match_char: usize) -> String {
     let indent = line.chars().take_while(|c| c.is_whitespace()).count();
     let text: Vec<char> = line.chars().skip(indent).collect();
@@ -335,8 +329,7 @@ mod tests {
     fn a_long_line_is_cut_around_the_match() {
         let line = format!("{}{}NEEDLE{}", "a".repeat(300), "  ", "b".repeat(300));
         let p = preview(&line, 300);
-        // `core::preview` strips the indentation, cuts a 160-wide window that
-        // starts before the match, and marks only the cut on the left.
+        // `core::preview` strips the indentation, cuts a 160-wide window that starts before the match, and marks only the cut on the left.
         assert!(p.starts_with('…'), "{p}");
         assert!(p.contains("NEEDLE"), "{p}");
         assert_eq!(p.chars().count(), 161);

@@ -1,14 +1,4 @@
-//! Questions from the agent (ACP `elicitation/create`): the agent asks, the user picks
-//! A, B, C... or types an answer of their own, and the answer goes back as the form's
-//! content. This is how Claude Agent's "ask the user" and OpenCode's question tool
-//! reach an ACP client. FluxCode advertises the capability in `initialize`.
-//!
-//! A form is a flat JSON Schema: each property is one question.
-//! - string with `enum` / `oneOf`: one choice, lettered, plus "Type my own answer"
-//! - array of such strings: several choices (checkboxes)
-//! - boolean: Yes / No
-//! - number, integer, plain string: a text box
-//! A URL request ("open this page to sign in") shows the address and an Open button.
+//! Questions from the agent (ACP `elicitation/create`): the agent asks, the user picks A, B, C... or types an answer of their own, and the answer goes back as the form's content.
 
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -119,7 +109,7 @@ pub fn parse_schema(schema: &Value) -> Vec<Field> {
         .collect()
 }
 
-/// A letter for option `i`: A..Z, then AA.. (forms rarely go past D).
+/// A letter for option `i`: A..Z, then AA..
 pub fn letter(i: usize) -> String {
     if i < 26 { ((b'A' + i as u8) as char).to_string() } else { format!("{}{}", letter(i / 26 - 1), letter(i % 26)) }
 }

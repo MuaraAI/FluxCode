@@ -1,19 +1,4 @@
 //! "Open with FluxCode" in Windows Explorer (issue #87).
-//!
-//! Everything goes under `HKCU\Software\Classes`, so no administrator rights are
-//! needed and only this Windows account sees it:
-//!
-//! - the `FluxCode.File` file type, which opens a file in FluxCode;
-//! - FluxCode in "Open with" for the code and text types in `EXTENSIONS`, and as
-//!   their default where Windows has none (`.ts`, `.rs`, `.toml`, ...). A type
-//!   that already opens with another app keeps it: since Windows 8 an app can't
-//!   take that over, the user picks "Always" in the "Open with" dialog;
-//! - "Open with FluxCode" in the right-click menu of every file, of folders and
-//!   of a folder's background (under "Show more options" on Windows 11).
-//!
-//! The installer runs `FluxCode.exe --register-shell` (an option on its
-//! components page) and the uninstaller `--unregister-shell`; Settings > Windows
-//! turns it on and off.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -33,9 +18,7 @@ pub(crate) const PROG_ID: &str = "FluxCode.File";
 const MENU_KEY: &str = "FluxCode";
 const MENU_LABEL: &str = "Open with FluxCode";
 
-/// The registry keys and values this module writes, as (key, value name, data)
-/// under `HKCU\Software\Classes`. `None` as the value name is the key's default
-/// value. Kept apart from the registry calls so a test can check it.
+/// The registry keys and values this module writes, as (key, value name, data) under `HKCU\Software\Classes`.
 fn entries(exe: &str) -> Vec<(String, Option<&'static str>, String)> {
     let open_file = format!("\"{exe}\" \"%1\"");
     let open_dir = format!("\"{exe}\" \"%V\"");
@@ -118,8 +101,7 @@ pub(crate) mod reg {
         }
     }
 
-    /// Set a string value (or, with `data` None, an empty REG_NONE marker) on
-    /// `root\sub`, creating the key.
+    /// Set a string value (or, with `data` None, an empty REG_NONE marker) on `root\sub`, creating the key.
     pub fn set(root: Hkey, sub: &str, name: Option<&str>, data: Option<&str>) -> Result<(), String> {
         let sub_w = wide(sub);
         let mut key: Hkey = 0;
@@ -168,8 +150,7 @@ pub(crate) mod reg {
         check(rc, sub)
     }
 
-    /// Delete `root\sub` when it holds no values and no keys (one `register` made
-    /// for a type Windows didn't know).
+    /// Delete `root\sub` when it holds no values and no keys (one `register` made for a type Windows didn't know).
     pub fn delete_if_empty(root: Hkey, sub: &str) {
         let sub_w = wide(sub);
         let mut key: Hkey = 0;
@@ -230,9 +211,7 @@ pub(crate) fn register() -> Result<(), String> {
         let key = format!("{CLASSES}\\.{ext}");
         set(HKCU, &format!("{key}\\OpenWithProgids"), Some(PROG_ID), None)?;
         set(HKCU, &format!("{CLASSES}\\Applications\\FluxCode.exe\\SupportedTypes"), Some(&format!(".{ext}")), Some(""))?;
-        // The default only where nothing opens this type yet: an app the user
-        // or Windows chose stays, and a script type never opens in the editor on
-        // a double-click unless the user asks for it.
+        // The default only where nothing opens this type yet: an app the user or Windows chose stays, and a script type never opens in the editor on a double-click unless the user asks for it.
         if !SCRIPTS.contains(ext) && get(HKCR, &format!(".{ext}"), None).filter(|v| !v.is_empty()).is_none() {
             set(HKCU, &key, None, Some(PROG_ID))?;
         }
@@ -241,8 +220,7 @@ pub(crate) fn register() -> Result<(), String> {
     Ok(())
 }
 
-/// Remove what `register` added. A type whose default another app took over
-/// meanwhile keeps that app.
+/// Remove what `register` added.
 #[cfg(windows)]
 pub(crate) fn unregister() -> Result<(), String> {
     use reg::{delete_tree, delete_value, get, HKCU};
@@ -287,7 +265,6 @@ pub(crate) fn unregister() -> Result<(), String> {
 }
 
 /// `fluxcode --register-shell` / `--unregister-shell`, run by the installer.
-/// Returns the process exit code.
 pub(crate) fn cli(register_it: bool) -> i32 {
     let r = if register_it { register() } else { unregister() };
     match r {

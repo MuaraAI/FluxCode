@@ -1,16 +1,8 @@
 //! The framed protocol between the editor and its helper inside a distro.
-//!
-//! One request is in flight at a time, so the wire is simple: a frame is
-//! `kind: u8`, `len: u32` (little endian), then `len` bytes. Kind 0 is JSON,
-//! kind 1 is raw bytes. File contents travel as raw bytes rather than base64:
-//! a 10 MB file would otherwise become 13 MB of JSON, and the whole point of
-//! the helper is not moving that much data through the 9p share.
 
 use serde::{Deserialize, Serialize};
 
-/// Bumped when a request or a response changes shape. The editor replaces a
-/// helper whose version differs, so the two never have to understand each
-/// other across versions.
+/// Bumped when a request or a response changes shape.
 pub const PROTOCOL_VERSION: u32 = 3;
 
 pub const FRAME_JSON: u8 = 0;
@@ -24,10 +16,9 @@ pub enum Request {
     Hello,
     /// One level of a folder.
     List { path: String },
-    /// Every file under `root`, skipping the folders search skips. The answer
-    /// is the file list behind Ctrl+P, so it never walks the 9p share.
+    /// Every file under `root`, skipping the folders search skips.
     Scan { root: String, max: usize },
-    /// A file's bytes, up to `limit`. The answer is a byte frame.
+    /// A file's bytes, up to `limit`.
     Read { path: String, limit: u64 },
     /// A file's bytes, sent as a byte frame after this request.
     Write { path: String, crlf: bool },
@@ -35,9 +26,7 @@ pub enum Request {
     Stat { path: String },
     /// The folder's entries, matching `core::search`'s rules.
     Search { root: String, query: String, match_case: bool, whole_word: bool },
-    /// `git` in the distro, so it sees Linux paths and line endings. `input`
-    /// is written to git's stdin, for the commands that read it (a commit
-    /// message through `--file -`); omitted when there is none.
+    /// `git` in the distro, so it sees Linux paths and line endings.
     Git {
         cwd: String,
         args: Vec<String>,
@@ -69,8 +58,7 @@ impl Response {
         }
     }
 
-    /// A byte answer (a file's contents). `ok` lives in the JSON frame that
-    /// follows, so a failed read still says why.
+    /// A byte answer (a file's contents).
     pub fn bytes() -> Self {
         Self { ok: true, error: None, json: None }
     }
@@ -133,7 +121,7 @@ pub fn write_frame(out: &mut impl std::io::Write, kind: u8, payload: &[u8]) -> s
     out.flush()
 }
 
-/// Read one frame. `None` means the other end closed cleanly.
+/// Read one frame.
 pub fn read_frame(input: &mut impl std::io::Read) -> std::io::Result<Option<(u8, Vec<u8>)>> {
     let mut head = [0u8; 5];
     match input.read_exact(&mut head) {
@@ -143,8 +131,7 @@ pub fn read_frame(input: &mut impl std::io::Read) -> std::io::Result<Option<(u8,
     }
     let kind = head[0];
     let len = u32::from_le_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    // A frame longer than this is not something this protocol sends; refuse it
-    // rather than allocate whatever a broken length field asks for.
+    // A frame longer than this is not something this protocol sends; refuse it rather than allocate whatever a broken length field asks for.
     if len > 512 * 1024 * 1024 {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "frame too long"));
     }

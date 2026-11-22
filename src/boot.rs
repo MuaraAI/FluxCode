@@ -1,7 +1,4 @@
-//! Start-up timing and memory. With `FLUXCODE_STARTUP_LOG=<file>` set, FluxCode writes
-//! how many milliseconds after `main` each start-up step finished, with the process's
-//! working set and private memory at that moment, once the first frame is drawn (and
-//! again 5 s later, idle). Without it, `mark` only checks one atomic flag.
+//! Start-up timing and memory.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};

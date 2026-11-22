@@ -1,15 +1,4 @@
-//! A browser for the agents: the one already on this PC (Chrome first, then Brave,
-//! Edge or Chromium), driven through the Chrome DevTools Protocol by Google's
-//! `chrome-devtools-mcp`. Every agent FluxCode starts gets it as an MCP server, so it can
-//! open pages, click, type, read the console and network, take screenshots and
-//! accessibility snapshots, and record performance traces.
-//!
-//! Kept light: no browser is downloaded (the installed one is used), the MCP server is
-//! 15 MB of JavaScript installed once into `~/.fluxcode/tools/browser` and run with the
-//! Node.js already used for npm agents, and it starts only with an agent. The browser
-//! gets a profile of its own (`~/.fluxcode/browser-profile`): Chrome ignores remote
-//! debugging on the default profile since version 136, and the agent never sees the
-//! user's own cookies or passwords. Usage statistics to Google are turned off.
+//! A browser for the agents: the one already on this PC (Chrome first, then Brave, Edge or Chromium), driven through the Chrome DevTools Protocol by Google's `chrome-devtools-mcp`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -176,7 +165,6 @@ pub fn state(setting: &str) -> State {
 }
 
 /// The MCP server to give an agent's session (ACP `mcpServers` entry), when it is ready.
-/// `workspace` is where it may read and write files (screenshots, traces).
 pub fn mcp_server(setting: &str, headless: bool, workspace: Option<&Path>) -> Option<serde_json::Value> {
     let State::Ready(b, _) = state(setting) else { return None };
     let node = node().ok()?;
