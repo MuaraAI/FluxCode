@@ -1,4 +1,4 @@
-<!-- Made from C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux by FluxCode (fluxcode --flux-to-md C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.md). Edit C:/Users/Administrator/Documents/MyGwehProject/FluxCode/README.flux, not this file. -->
+<!-- Made from README.flux by FluxCode (fluxcode --flux-to-md README.flux README.md). Edit README.flux, not this file. -->
 
 # FluxCode
 

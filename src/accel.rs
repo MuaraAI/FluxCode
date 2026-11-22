@@ -305,9 +305,7 @@ mod tests {
 
     #[test]
     fn zig_and_fallback_match_on_zero_and_stats() {
-        if std::env::var_os("FLUXCODE_NO_ZIG").as_deref() != Some(std::ffi::OsStr::new("1")) {
-            assert!(zig_enabled(), "expected Zig SIMD library to link in test build");
-        }
+        assert_eq!(zig_enabled(), cfg!(flux_zig));
         for len in 0..=130 {
             let mut buf = vec![b'a'; len];
             assert_eq!(has_zero(&buf), fallback::has_zero(&buf));
