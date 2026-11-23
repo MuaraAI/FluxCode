@@ -9,30 +9,34 @@ use futures::StreamExt;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Editor, EditorState, InputEvent, InputState, TabSize},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem, PopupMenu},
+    input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     resizable::{h_resizable, resizable_panel, v_resizable},
-    tree::{TreeEvent, TreeState},
     v_flex, Icon, IconName, Sizable, TitleBar,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 const LARGE_FILE_BYTES: usize = 2 * 1024 * 1024;
-
-const READ_OFF_THREAD_BYTES: u64 = 256 * 1024;
-
+const READ_OFF_THREAD_BYTES: u64 = 64 * 1024;
 const SAVE_OFF_THREAD_BYTES: u64 = 64 * 1024;
+const MAX_AUTO_WRAP_BYTES: usize = 512 * 1024;
+const MAX_COMPLEX_LINE_BYTES: usize = 8 * 1024;
+const MAX_WARM_EDITORS: usize = 8;
+const PANE_ANIM_MS: u64 = 185;
 
 actions!(
     fluxcode,
     [
-        Save, SaveAll, CloseTab, OpenFolder, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
-        ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput,
+        Save, SaveAll, CloseTab, OpenFolder, AddFolderToWorkspace, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
+        ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput, ShowProblems,
         RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
-        ExplorerDelete, ExplorerRefresh, CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
+        ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
+        CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
@@ -81,12 +85,19 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
+        KeyBinding::new("ctrl-shift-m", ShowProblems, None),
+        KeyBinding::new("f8", GoToProblem, None),
         KeyBinding::new("f5", RunFile, None),
         KeyBinding::new("ctrl-f5", RunFile, None),
         KeyBinding::new("shift-f5", StopRun, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
         KeyBinding::new("ctrl-k ctrl-t", NextTheme, None),
         KeyBinding::new("ctrl-k v", TogglePreview, None),
+        KeyBinding::new("up", ExplorerUp, Some("Explorer")),
+        KeyBinding::new("down", ExplorerDown, Some("Explorer")),
+        KeyBinding::new("left", ExplorerLeft, Some("Explorer")),
+        KeyBinding::new("right", ExplorerRight, Some("Explorer")),
+        KeyBinding::new("enter", ExplorerOpen, Some("Explorer")),
         KeyBinding::new("f2", ExplorerRename, Some("Explorer")),
         KeyBinding::new("delete", ExplorerDelete, Some("Explorer")),
         KeyBinding::new("escape", CancelPending, Some("Explorer > Input")),
@@ -136,6 +147,7 @@ pub(crate) enum SideView {
 pub(crate) enum PanelTab {
     Terminal,
     Output,
+    Problems,
 }
 
 pub(crate) use crate::term::LineKind;
@@ -165,28 +177,82 @@ pub(crate) struct Doc {
     pub read_only: bool,
     pub banner: Option<SharedString>,
     pub crlf: bool,
-    pub editor: Entity<EditorState>,
+    pub editor: Option<Entity<EditorState>>,
     pub dirty: bool,
     pub gen: u64,
-    pub _sub: Subscription,
+    pub _sub: Option<Subscription>,
     pub image: Option<ImageDoc>,
     pub flux: Option<crate::fluxdoc::view::FluxView>,
     pub flux_source: bool,
     pub flux_lazy: bool,
     pub diff: Option<crate::diff_view::DiffDoc>,
     pub long_lines: bool,
+    pub complex: bool,
     pub wrap_override: Option<bool>,
+    pub saved_cursor: Position,
+    pub saved_scroll: Point<Pixels>,
+    pub last_used: u64,
+    pub loading: bool,
+    pub diagnostics: Vec<crate::diagnostics::CodeDiag>,
+    pub error_count: usize,
+    pub warn_count: usize,
 }
 
 impl Doc {
+    pub fn dormant(path: PathBuf) -> Self {
+        let name: SharedString = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into();
+        let icon = files::icon_for(&name);
+        let is_img = files::is_image(&path);
+        let (lang, label) = if is_img { ("image", "Image") } else { files::language_for(&path, "") };
+        Self {
+            path,
+            name,
+            icon,
+            lang,
+            label,
+            read_only: is_img,
+            banner: None,
+            crlf: false,
+            editor: None,
+            dirty: false,
+            gen: 0,
+            _sub: None,
+            image: None,
+            flux: None,
+            flux_source: false,
+            flux_lazy: false,
+            diff: None,
+            long_lines: false,
+            complex: false,
+            wrap_override: None,
+            saved_cursor: Position::default(),
+            saved_scroll: Point::default(),
+            last_used: 0,
+            loading: false,
+            diagnostics: Vec::new(),
+            error_count: 0,
+            warn_count: 0,
+        }
+    }
+
     pub fn wraps(&self, setting: bool) -> bool {
         self.wrap_override.unwrap_or(setting || self.long_lines)
     }
+
     pub fn text(&self, cx: &App) -> String {
-        match (&self.flux, self.flux_lazy) {
-            (Some(v), true) => v.source(),
-            _ => self.editor.read(cx).value().to_string(),
+        match (&self.flux, self.flux_lazy, &self.editor) {
+            (Some(v), true, _) => v.source(),
+            (_, _, Some(ed)) => ed.read(cx).value().to_string(),
+            (_, _, None) => core::read_text(&self.path).map(|f| f.text).unwrap_or_default(),
         }
+    }
+
+    pub fn cursor_position(&self, cx: &App) -> Position {
+        self.editor.as_ref().map(|e| e.read(cx).cursor_position()).unwrap_or(self.saved_cursor)
     }
 }
 
@@ -217,12 +283,13 @@ pub struct Workbench {
     pub(crate) smooth: Option<SmoothScroll>,
     welcome_w: std::rc::Rc<std::cell::Cell<f32>>,
     pub(crate) status_seen: SharedString,
-    pub(crate) tree: Entity<TreeState>,
+    pub(crate) explorer: crate::explorer::ExplorerState,
     pub(crate) tree_nodes: Vec<crate::files::Node>,
     pub(crate) expanded: std::collections::HashSet<String>,
     pub(crate) dirs: Rc<std::collections::HashSet<String>>,
     pub(crate) docs: Vec<Doc>,
     pub(crate) active: Option<usize>,
+    doc_use_clock: u64,
     last_switch: Option<std::time::Instant>,
     switch_fast: bool,
     session_save_pending: bool,
@@ -241,13 +308,15 @@ pub struct Workbench {
     pub(crate) settings_open: bool,
     pub(crate) settings_section: crate::settings::SettingsSection,
     pub(crate) settings_scroll: ScrollHandle,
+    pub(crate) settings_search: Entity<InputState>,
+    pub(crate) settings_focus: FocusHandle,
+    pub(crate) settings_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) settings_sec_anim: std::cell::Cell<(crate::settings::SettingsSection, u64)>,
     pub(crate) whats_new: Option<crate::whatsnew::Page>,
     pub(crate) closed_tabs: Vec<PathBuf>,
     pub(crate) collab: crate::collab::Collab,
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
-    pub(crate) revealed: RefCell<Option<String>>,
-    pub(crate) reveal_tried: RefCell<Option<String>>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
     pub(crate) pending_icon: Option<(crate::fluxicon::FluxIcon, Option<u32>)>,
@@ -281,8 +350,19 @@ pub struct Workbench {
     pub(crate) panel_sel: Option<crate::panel::PanelSel>,
     pub(crate) image_box: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) tabs_scroll: ScrollHandle,
+    pub(crate) tabs_width: Rc<std::cell::Cell<f32>>,
+    pub(crate) tabs_scroll_x: Rc<std::cell::Cell<f32>>,
+    pub(crate) opened_tab: Option<(PathBuf, u64)>,
+    pub(crate) problems_scroll: UniformListScrollHandle,
     pub(crate) side_anim: std::cell::Cell<(bool, u64)>,
     pub(crate) full_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) panel_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) right_anim: std::cell::Cell<(bool, u64)>,
+    pub(crate) panel_tab_anim: std::cell::Cell<(PanelTab, u64)>,
+    pub(crate) side_closing: Option<u64>,
+    pub(crate) right_closing: Option<u64>,
+    pub(crate) panel_closing: Option<u64>,
+    pub(crate) anim_seq: u64,
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
     pub(crate) term_hist_ix: Option<usize>,
@@ -294,8 +374,8 @@ pub struct Workbench {
     pub(crate) theme_menu: bool,
     pub(crate) motion_check: Option<crate::motion_check::Check>,
     pub(crate) quick: crate::quick::QuickOpen,
-    pub(crate) all_files: Rc<Vec<String>>,
-    pub(crate) all_lower: Rc<Vec<String>>,
+    pub(crate) all_files: Arc<Vec<String>>,
+    pub(crate) all_lower: Arc<Vec<String>>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -317,13 +397,15 @@ pub struct Workbench {
 impl Workbench {
     pub fn new(root: Option<PathBuf>, open: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::boot::mark("workbench new");
-        let tree = cx.new(|cx| TreeState::new(cx));
+        let explorer = crate::explorer::ExplorerState::new(cx);
         let focus = cx.focus_handle();
         focus.focus(window, cx);
 
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
         let term_input = cx.new(|cx| InputState::new(window, cx));
+        let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search settings…")));
+        let settings_focus = cx.focus_handle();
         let github_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
@@ -331,16 +413,6 @@ impl Workbench {
         });
         crate::boot::mark("  inputs");
         let mut subs = vec![
-            cx.subscribe_in(
-                &tree,
-                window,
-                |this, _, ev: &TreeEvent, _window, cx| match ev {
-                    TreeEvent::Expanded(id) => this.tree_expanded(id.to_string(), cx),
-                    TreeEvent::Collapsed(id) => {
-                        this.expanded.remove(id.as_ref());
-                    }
-                },
-            ),
             cx.subscribe_in(
                 &name_input,
                 window,
@@ -375,6 +447,12 @@ impl Workbench {
                         }
                     }
                     _ => {}
+                }
+            }),
+            cx.subscribe_in(&settings_search, window, |this, _, ev: &InputEvent, _, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                    cx.notify();
                 }
             }),
         ];
@@ -436,10 +514,11 @@ impl Workbench {
             smooth: None,
             welcome_w: std::rc::Rc::new(std::cell::Cell::new(f32::MAX)),
             status_seen: SharedString::default(),
-            tree,
+            explorer,
             dirs: Rc::default(),
             docs: Vec::new(),
             active: None,
+            doc_use_clock: 0,
             view: SideView::Explorer,
             sidebar_open: true,
             agent_open: false,
@@ -455,6 +534,10 @@ impl Workbench {
             settings_open: false,
             settings_section: crate::settings::SettingsSection::Appearance,
             settings_scroll: ScrollHandle::new(),
+            settings_search,
+            settings_focus,
+            settings_anim: std::cell::Cell::new((false, 0)),
+            settings_sec_anim: std::cell::Cell::new((crate::settings::SettingsSection::Appearance, 0)),
             whats_new: None,
             closed_tabs: Vec::new(),
             last_switch: None,
@@ -463,8 +546,6 @@ impl Workbench {
             collab: crate::collab::Collab::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
-            revealed: RefCell::new(None),
-            reveal_tried: RefCell::new(None),
             pending: None,
             pending_icon: None,
             name_input,
@@ -498,8 +579,19 @@ impl Workbench {
             panel_sel: None,
             image_box: Rc::default(),
             tabs_scroll: ScrollHandle::new(),
-            side_anim: std::cell::Cell::new((false, 0)),
+            tabs_width: Rc::new(std::cell::Cell::new(960.)),
+            tabs_scroll_x: Rc::new(std::cell::Cell::new(0.)),
+            opened_tab: None,
+            problems_scroll: UniformListScrollHandle::new(),
+            side_anim: std::cell::Cell::new((true, 0)),
             full_anim: std::cell::Cell::new((false, 0)),
+            panel_anim: std::cell::Cell::new((false, 0)),
+            right_anim: std::cell::Cell::new((false, 0)),
+            panel_tab_anim: std::cell::Cell::new((PanelTab::Terminal, 0)),
+            side_closing: None,
+            right_closing: None,
+            panel_closing: None,
+            anim_seq: 0,
             wash: std::cell::Cell::new((false, 0)),
             out_run: None,
             term_hist_ix: None,
@@ -513,8 +605,8 @@ impl Workbench {
             quick,
             tree_nodes: Vec::new(),
             expanded: std::collections::HashSet::new(),
-            all_files: Rc::default(),
-            all_lower: Rc::default(),
+            all_files: Arc::default(),
+            all_lower: Arc::default(),
             preview_server: None,
             github: crate::github::load(),
             github_input,
@@ -598,6 +690,15 @@ impl Workbench {
         if !self.term_proc.is_some_and(|id| self.procs.is_running(id)) {
             self.term_cwd = root.clone();
         }
+        self.explorer.gen = self.explorer.gen.wrapping_add(1);
+        self.tree_nodes.clear();
+        self.expanded.clear();
+        self.explorer.loading.clear();
+        self.explorer.rows.clear();
+        self.explorer.revealed_tab = None;
+        self.selected = None;
+        self.explorer.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.explorer.bump_workspace_anim(Vec::new());
         self.refresh_tree(cx);
         self.save_session(cx);
         self.detect_python(cx);
@@ -623,107 +724,82 @@ impl Workbench {
         let roots = self.roots();
         let multi = roots.len() > 1;
         let wsl = self.wsl.clone();
+        self.explorer.gen = self.explorer.gen.wrapping_add(1);
+        let gen = self.explorer.gen;
+        let expanded_snap: std::collections::HashSet<String> = self
+            .expanded
+            .iter()
+            .filter(|e| {
+                let p = Path::new(e.as_str());
+                roots.iter().any(|r| p.starts_with(r))
+            })
+            .cloned()
+            .collect();
         let (root2, roots2) = (root.clone(), roots.clone());
         cx.spawn(async move |this, cx| {
             let listing = cx
                 .background_spawn(async move {
-                    if let Some(t) = &wsl {
-                        if let Some(nodes) = remote_listing(t, &root2, multi) {
-                            return nodes;
-                        }
-                    }
-                    if multi { files::scan_roots_shallow(&roots2) } else { files::scan_shallow(&root2) }
+                    let mut nodes = if let Some(t) = &wsl {
+                        remote_listing(t, &root2, multi)
+                            .unwrap_or_else(|| if multi { files::scan_roots_shallow(&roots2) } else { files::scan_shallow(&root2) })
+                    } else if multi {
+                        files::scan_roots_shallow(&roots2)
+                    } else {
+                        files::scan_shallow(&root2)
+                    };
+                    files::hydrate_expanded(&mut nodes, &expanded_snap, &|p| {
+                        wsl.as_ref()
+                            .and_then(|t| remote_dir(t, p))
+                            .unwrap_or_else(|| files::scan_dir(p))
+                    });
+                    nodes
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.tree_nodes = merge(this.tree_nodes.clone(), listing);
-                this.set_tree_items(cx);
+                if this.explorer.gen != gen {
+                    return;
+                }
+                let old = std::mem::take(&mut this.tree_nodes);
+                this.tree_nodes = files::merge_nodes(old, listing);
+                this.explorer.loading.clear();
+                this.rebuild_explorer_rows(cx);
             });
         })
         .detach();
         let wsl_scan = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let all = cx
+            let (all, lower) = cx
                 .background_spawn(async move {
-                    if let Some(t) = &wsl_scan {
-                        if let Some(paths) = remote_scan(t, &root, files::MAX_ENTRIES) {
-                            return paths;
+                    let all = if let Some(paths) = wsl_scan.as_ref().and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES)) {
+                        paths
+                    } else if multi {
+                        let mut paths = Vec::new();
+                        for r in &roots {
+                            let rem = files::MAX_ENTRIES.saturating_sub(paths.len());
+                            if rem == 0 {
+                                break;
+                            }
+                            paths.extend(files::scan_paths(r, rem));
                         }
-                    }
-                    let nodes = if multi { files::scan_roots(&roots) } else { files::scan(&root) };
-                    let mut flat = Vec::new();
-                    files::flatten(&nodes, &mut flat);
-                    flat
+                        paths
+                    } else {
+                        files::scan_paths(&root, files::MAX_ENTRIES)
+                    };
+                    let lower: Vec<String> = all
+                        .iter()
+                        .map(|p| crate::workspace::rel_display_for(p, &roots, multi).to_lowercase())
+                        .collect();
+                    (all, lower)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.all_lower = Rc::new(all.iter().map(|p| this.rel_display(p).to_lowercase()).collect());
-                this.all_files = Rc::new(all);
+                if this.explorer.gen != gen {
+                    return;
+                }
+                this.all_lower = Arc::new(lower);
+                this.all_files = Arc::new(all);
                 this.ext_scan(cx);
                 cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(crate) fn set_tree_items(&mut self, cx: &mut Context<Self>) {
-        let mut dirs = std::collections::HashSet::new();
-        let mut items = files::to_items(self.tree_nodes.clone(), &mut dirs, &self.expanded);
-        crate::explorer::insert_pending_row(
-            &mut items,
-            self.pending.as_ref(),
-            self.root.as_deref(),
-        );
-        self.dirs = Rc::new(dirs);
-        let selected = if self.pending.is_none() {
-            self.tree.read(cx).selected_item().map(|i| i.id.clone())
-        } else {
-            None
-        };
-        let tree = self.tree.clone();
-        tree.update(cx, |state, cx| {
-            state.set_items(items, cx);
-            if let Some(id) = selected {
-                if let Some(ix) = state.index_of(&id) {
-                    state.set_selected_index(Some(ix), cx);
-                }
-            }
-        });
-        if let Some(p) = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned()) {
-            let shown = self.tree.read(cx).index_of(&SharedString::from(p)).is_some();
-            crate::explorer::update_reveal_state(
-                shown,
-                &mut self.revealed.borrow_mut(),
-                &mut self.reveal_tried.borrow_mut(),
-            );
-        }
-    }
-
-    pub(crate) fn tree_expanded(&mut self, id: String, cx: &mut Context<Self>) {
-        self.expanded.insert(id.clone());
-        let Some(node) = find_node(&mut self.tree_nodes, &id) else { return };
-        if node.loaded {
-            return;
-        }
-        let wsl = self.wsl.clone();
-        let path = PathBuf::from(&id);
-        cx.spawn(async move |this, cx| {
-            let children = cx
-                .background_spawn(async move {
-                    if let Some(t) = &wsl {
-                        if let Some(nodes) = remote_dir(t, &path) {
-                            return nodes;
-                        }
-                    }
-                    files::scan_dir(&path)
-                })
-                .await;
-            _ = this.update(cx, |this, cx| {
-                if let Some(node) = find_node(&mut this.tree_nodes, &id) {
-                    node.children = Some(children);
-                    node.loaded = true;
-                }
-                this.set_tree_items(cx);
             });
         })
         .detach();
@@ -733,38 +809,38 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        if read_off_thread(&path) {
+        if read_off_thread(&path) || self.wsl.is_some() {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
-                let bytes = cx
+                let res = cx
                     .background_spawn(async move {
-                        if let Some(t) = &wsl {
-                            if let Some(bytes) = remote_read(t, &p, core::MAX_FILE_BYTES) {
-                                return Ok(bytes);
-                            }
-                        }
-                        read_head(&p)
+                        let bytes = match &wsl {
+                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&p)),
+                            None => read_head(&p),
+                        }?;
+                        Ok(prepare_file(&p, bytes))
                     })
                     .await;
-                this.update_in(cx, |this, window, cx| this.finish_open_file(path, bytes, window, cx)).ok()
+                this.update_in(cx, |this, window, cx| this.finish_open_prepared(path, res, window, cx)).ok()
             })
             .detach();
             return;
         }
-        let bytes = read_head(&path);
-        self.finish_open_file(path, bytes, window, cx);
+        let res = read_head(&path).map(|bytes| prepare_file(&path, bytes));
+        self.finish_open_prepared(path, res, window, cx);
     }
 
     pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        let bytes = match &self.wsl {
+        let res = match &self.wsl {
             Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
             None => read_head(&path),
-        };
-        self.finish_open_file(path, bytes, window, cx);
+        }
+        .map(|bytes| prepare_file(&path, bytes));
+        self.finish_open_prepared(path, res, window, cx);
     }
 
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -783,86 +859,56 @@ impl Workbench {
         false
     }
 
-    fn finish_open_file(&mut self, path: PathBuf, bytes: Result<Vec<u8>, String>, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
-            self.activate(ix, window, cx);
-            return;
-        }
-        let bytes = match bytes {
-            Ok(b) => b,
-            Err(e) => {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = if e.contains("os error 32") || e.contains("os error 33") {
-                    crate::trf!("{name} is in use by another program (a running server, for example), so it can't be opened now"; name => name)
-                } else {
-                    crate::trf!("Couldn't open {name}: {e}"; name => name, e => e)
-                }
-                .into();
-                cx.notify();
-                return;
-            }
-        };
-        let view = crate::viewer::view(&path, &bytes);
-        let read_only = view.is_some();
-        let (text, crlf, mut lang, mut label, banner) = match view {
-            Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
-            None => {
-                let file = core::decode_text(&bytes);
-                let first = file.text.lines().next().unwrap_or("");
-                let (lang, label) = files::language_for(&path, first);
-                (file.text, file.crlf, lang, label, None)
-            }
-        };
-        let large = text.len() > LARGE_FILE_BYTES;
-        if large && !read_only {
-            lang = "text";
-            label = "Plain Text";
-            self.status = crate::i18n::tr("Large file: syntax colors are off").into();
-        }
-        let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(&path) };
-        let is_markdown = drawable == Some(true);
-        let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
-        let (mut file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
-            (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
-            (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
-            (true, false) => (text.clone(), text),
-            _ => (String::new(), text),
-        };
-        let diff = (crate::diff_view::is_diff(lang) && !large).then(|| crate::diff_view::parse(&text));
-        let long_lines = !read_only && core::dominated_by_long_lines(&text);
-        let file = core::FileText { text, crlf };
+    fn build_doc_editor(
+        &self,
+        path: &PathBuf,
+        prep: &mut PreparedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<EditorState>, Subscription, Option<crate::diff_view::DiffDoc>, Option<crate::fluxdoc::view::FluxView>) {
         let s = &self.settings;
-        let (tab, wrap, dots) = (s.tab_size, s.word_wrap || long_lines, s.show_whitespace);
+        let too_big_for_wrap = prep.text.len() > MAX_AUTO_WRAP_BYTES;
+        let (tab, wrap, dots) = (s.tab_size, !too_big_for_wrap && (s.word_wrap || prep.long_lines), s.show_whitespace);
         let opts = crate::settings::EditorOpts::of(s);
+        let lang = prep.lang;
+        let read_only = prep.read_only;
+        let complex = prep.complex;
+        let text = std::mem::take(&mut prep.text);
+        let diff = prep.is_diff.then(|| crate::diff_view::parse(&text));
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
                 .line_number(opts.line_numbers)
-                .indent_guides(!read_only)
+                .indent_guides(!read_only && !complex)
                 .show_whitespaces(dots && !read_only)
                 .tab_size(TabSize { tab_size: tab, hard_tabs: false })
                 .soft_wrap(wrap)
-                .default_value(file.text)
+                .default_value(text)
         });
-        editor.update(cx, |e, cx| opts.apply(e, window, cx));
+        editor.update(cx, |e, cx| {
+            opts.apply(e, window, cx);
+            if complex || read_only {
+                e.set_folding(false, window, cx);
+            }
+        });
         if read_only {
             editor.update(cx, |e, cx| e.set_readonly(true, cx));
         } else {
-            crate::complete::attach(&editor, lang, &path, tab, self.copilot.clone(), cx);
+            crate::complete::attach(&editor, lang, path, tab, self.copilot.clone(), cx);
         }
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
                 this.collab_on_change(&editor, cx);
-                if let Some(d) = this.docs.iter_mut().find(|d| d.editor == editor && !d.read_only) {
+                if let Some(d) = this.docs.iter_mut().find(|d| d.editor.as_ref() == Some(&editor) && !d.read_only) {
                     d.dirty = true;
                     d.gen += 1;
                     let gen = d.gen;
                     let checked = editor.clone();
                     cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+                        cx.background_executor().timer(Duration::from_millis(300)).await;
                         _ = this.update(cx, |this, cx| {
-                            if let Some(ix) = this.docs.iter().position(|d| d.editor == checked && d.gen == gen) {
+                            if let Some(ix) = this.docs.iter().position(|d| d.editor.as_ref() == Some(&checked) && d.gen == gen) {
                                 this.apply_problems_to(ix, cx);
                             }
                         });
@@ -870,9 +916,9 @@ impl Workbench {
                     .detach();
                     if auto {
                         cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(std::time::Duration::from_millis(1000)).await;
+                            cx.background_executor().timer(Duration::from_millis(1000)).await;
                             _ = this.update(cx, |this, cx| {
-                                if let Some(ix) = this.docs.iter().position(|d| d.editor == editor && d.gen == gen && d.dirty) {
+                                if let Some(ix) = this.docs.iter().position(|d| d.editor.as_ref() == Some(&editor) && d.gen == gen && d.dirty) {
                                     this.save_doc(ix, cx);
                                     cx.notify();
                                 }
@@ -884,26 +930,20 @@ impl Workbench {
                 cx.notify();
             }
         });
-        let name: SharedString = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-            .into();
-        let banner = banner.map(SharedString::from);
         let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
         let lang_ui = crate::fluxdoc::view::ui_lang();
         let mut rest: Option<String> = None;
-        let flux = drawable.is_some().then(|| {
-            if file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
-                let v = crate::fluxdoc::view::FluxView::first_part(&file_text_for_flux, base.clone(), lang_ui);
-                rest = Some(std::mem::take(&mut file_text_for_flux));
+        let flux = prep.drawable.is_some().then(|| {
+            if prep.file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
+                let v = crate::fluxdoc::view::FluxView::first_part(&prep.file_text_for_flux, base.clone(), lang_ui);
+                rest = Some(std::mem::take(&mut prep.file_text_for_flux));
                 v
             } else {
-                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut file_text_for_flux), base.clone(), lang_ui)
+                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut prep.file_text_for_flux), base.clone(), lang_ui)
             }
         });
         if let Some(full) = rest {
-            let at = path.clone();
+            let at = path.to_path_buf();
             let task = cx.background_spawn(async move { crate::fluxdoc::view::prepare(full) });
             cx.spawn(async move |this, cx| {
                 let p = task.await;
@@ -916,44 +956,227 @@ impl Workbench {
             })
             .detach();
         }
+        (editor, sub, diff, flux)
+    }
+
+    fn report_open_error(&mut self, path: &Path, e: String, cx: &mut Context<Self>) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.status = if e.contains("os error 32") || e.contains("os error 33") {
+            crate::trf!("{name} is in use by another program (a running server, for example), so it can't be opened now"; name => name)
+        } else {
+            crate::trf!("Couldn't open {name}: {e}"; name => name, e => e)
+        }
+        .into();
+        cx.notify();
+    }
+
+    fn finish_open_prepared(&mut self, path: PathBuf, prep: Result<PreparedFile, String>, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
+            self.activate(ix, window, cx);
+            return;
+        }
+        let mut prep = match prep {
+            Ok(p) => p,
+            Err(e) => return self.report_open_error(&path, e, cx),
+        };
+        if prep.large && !prep.read_only {
+            self.status = crate::i18n::tr("Large file: syntax colors are off").into();
+        } else if prep.complex && !prep.read_only {
+            self.status = crate::i18n::tr("Long lines detected: syntax colors and folding are off").into();
+        }
+        let is_markdown = prep.drawable == Some(true);
+        let (editor, sub, diff, flux) = self.build_doc_editor(&path, &mut prep, window, cx);
+        let name: SharedString = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into();
+        let banner = prep.banner.map(SharedString::from);
         let icon = files::icon_for(&name);
+        self.anim_seq = self.anim_seq.wrapping_add(1);
+        self.opened_tab = Some((path.clone(), self.anim_seq));
         self.docs.push(Doc {
             path,
             name,
             icon,
-            lang,
-            label,
-            read_only,
+            lang: prep.lang,
+            label: prep.label,
+            read_only: prep.read_only,
             banner,
-            crlf: file.crlf,
-            editor,
+            crlf: prep.crlf,
+            editor: Some(editor),
             dirty: false,
             gen: 0,
-            _sub: sub,
+            _sub: Some(sub),
             image: None,
             flux,
             flux_source: is_markdown,
-            flux_lazy,
+            flux_lazy: prep.flux_lazy,
             diff,
-            long_lines,
+            long_lines: prep.long_lines,
+            complex: prep.complex,
             wrap_override: None,
+            saved_cursor: Position::default(),
+            saved_scroll: Point::default(),
+            last_used: 0,
+            loading: false,
+            diagnostics: Vec::new(),
+            error_count: 0,
+            warn_count: 0,
         });
-        self.apply_problems_to(self.docs.len() - 1, cx);
-        self.activate(self.docs.len() - 1, window, cx);
+        let ix = self.docs.len() - 1;
+        self.apply_problems_to(ix, cx);
+        self.activate(ix, window, cx);
         self.save_session(cx);
+    }
+
+    fn hydrate_doc(&mut self, ix: usize, sync: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get(ix) else { return };
+        if doc.editor.is_some() || doc.image.is_some() {
+            return;
+        }
+        let path = doc.path.clone();
+        if files::is_image(&path) {
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let size = image::image_dimensions(&path).ok();
+            let d = &mut self.docs[ix];
+            d.image = Some(ImageDoc { size, bytes, zoom: None });
+            d.read_only = true;
+            d.loading = false;
+            cx.notify();
+            return;
+        }
+        if doc.loading && !sync {
+            return;
+        }
+        if !sync && (read_off_thread(&path) || self.wsl.is_some()) {
+            self.docs[ix].loading = true;
+            cx.notify();
+            let wsl = self.wsl.clone();
+            cx.spawn_in(window, async move |this, cx| {
+                let p = path.clone();
+                let res = cx
+                    .background_spawn(async move {
+                        let bytes = match &wsl {
+                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&p)),
+                            None => read_head(&p),
+                        }?;
+                        Ok(prepare_file(&p, bytes))
+                    })
+                    .await;
+                this.update_in(cx, |this, window, cx| this.install_hydrated(path, res, window, cx)).ok()
+            })
+            .detach();
+            return;
+        }
+        let res = match &self.wsl {
+            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
+            None => read_head(&path),
+        }
+        .map(|bytes| prepare_file(&path, bytes));
+        self.install_hydrated(path, res, window, cx);
+    }
+
+    fn install_hydrated(&mut self, path: PathBuf, prep: Result<PreparedFile, String>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.docs.iter().position(|d| d.path == path) else { return };
+        self.docs[ix].loading = false;
+        let mut prep = match prep {
+            Ok(p) => p,
+            Err(e) => return self.report_open_error(&path, e, cx),
+        };
+        if self.docs[ix].editor.is_some() {
+            return;
+        }
+        let is_markdown = prep.drawable == Some(true);
+        let (editor, sub, diff, flux) = self.build_doc_editor(&path, &mut prep, window, cx);
+        let (saved_cursor, saved_scroll) = (self.docs[ix].saved_cursor, self.docs[ix].saved_scroll);
+        if saved_cursor != Position::default() || saved_scroll != Point::default() {
+            editor.update(cx, |e, cx| {
+                if saved_cursor != Position::default() {
+                    e.set_cursor_position(saved_cursor, window, cx);
+                }
+                if saved_scroll != Point::default() {
+                    e.set_scroll_offset(saved_scroll, cx);
+                }
+            });
+        }
+        let d = &mut self.docs[ix];
+        d.lang = prep.lang;
+        d.label = prep.label;
+        d.read_only = prep.read_only;
+        d.banner = prep.banner.map(SharedString::from);
+        d.crlf = prep.crlf;
+        d.editor = Some(editor.clone());
+        d._sub = Some(sub);
+        d.flux = flux;
+        d.flux_source = is_markdown;
+        d.flux_lazy = prep.flux_lazy;
+        d.diff = diff;
+        d.long_lines = prep.long_lines;
+        d.complex = prep.complex;
+        self.apply_problems_to(ix, cx);
+        if self.active == Some(ix) {
+            let d = &self.docs[ix];
+            let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) {
+                self.focus.clone()
+            } else {
+                editor.focus_handle(cx)
+            };
+            handle.focus(window, cx);
+        }
+        self.evict_cold_tabs(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn ensure_doc_editor(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<EditorState>> {
+        if ix >= self.docs.len() || self.docs[ix].image.is_some() {
+            return None;
+        }
+        if self.docs[ix].editor.is_none() {
+            self.hydrate_doc(ix, true, window, cx);
+        }
+        self.docs.get(ix).and_then(|d| d.editor.clone())
+    }
+
+    fn evict_cold_tabs(&mut self, cx: &App) {
+        let entries: Vec<(usize, bool, u64)> = self
+            .docs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.editor.is_some())
+            .map(|(i, d)| {
+                let pinned = Some(i) == self.active
+                    || d.dirty
+                    || d.image.is_some()
+                    || d.loading
+                    || d.flux.as_ref().is_some_and(|f| f.pending)
+                    || self.collab.docs.values().any(|c| c.path == d.path);
+                (i, pinned, d.last_used)
+            })
+            .collect();
+        for ix in select_eviction_indices(&entries, MAX_WARM_EDITORS) {
+            if let Some(ed) = self.docs[ix].editor.take() {
+                let state = ed.read(cx);
+                self.docs[ix].saved_cursor = state.cursor_position();
+                self.docs[ix].saved_scroll = state.scroll_offset();
+            }
+            self.docs[ix]._sub = None;
+            self.docs[ix].diff = None;
+            self.docs[ix].flux = None;
+        }
     }
 
     fn open_image(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let size = image::image_dimensions(&path).ok();
-        let editor = cx.new(|cx| EditorState::new(window, cx));
-        let sub = cx.subscribe(&editor, |_, _, _: &InputEvent, _| {});
         let name: SharedString = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
             .into();
         let icon = files::icon_for(&name);
+        self.anim_seq = self.anim_seq.wrapping_add(1);
+        self.opened_tab = Some((path.clone(), self.anim_seq));
         self.docs.push(Doc {
             path,
             name,
@@ -963,17 +1186,25 @@ impl Workbench {
             read_only: true,
             banner: None,
             crlf: false,
-            editor,
+            editor: None,
             dirty: false,
             gen: 0,
-            _sub: sub,
+            _sub: None,
             image: Some(ImageDoc { size, bytes, zoom: None }),
             flux: None,
             flux_source: false,
             flux_lazy: false,
             diff: None,
             long_lines: false,
+            complex: false,
             wrap_override: None,
+            saved_cursor: Position::default(),
+            saved_scroll: Point::default(),
+            last_used: 0,
+            loading: false,
+            diagnostics: Vec::new(),
+            error_count: 0,
+            warn_count: 0,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -1139,17 +1370,76 @@ impl Workbench {
             .into_any_element()
     }
 
+    fn scroll_tab_into_view(&self, ix: usize) {
+        if ix >= self.docs.len() {
+            return;
+        }
+        let scale = f32::from(theme::u(1.));
+        let mut left = 0.;
+        let mut tab_w = 0.;
+        for (i, d) in self.docs.iter().enumerate() {
+            let w = tab_width(&d.name, d.error_count > 0 || d.warn_count > 0, scale);
+            if i < ix {
+                left += w;
+            } else {
+                tab_w = w;
+                break;
+            }
+        }
+        let right = left + tab_w;
+        let cur = (-f32::from(self.tabs_scroll.offset().x)).max(0.);
+        let vw = self.tabs_width.get().max(240.);
+        let next = if left < cur {
+            left
+        } else if right > cur + vw {
+            (right - vw).max(0.)
+        } else {
+            cur
+        };
+        if (next - cur).abs() > 0.5 {
+            self.tabs_scroll.set_offset(point(px(-next), px(0.)));
+            self.tabs_scroll_x.set(next);
+        }
+    }
+
     pub(crate) fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.tabs_scroll.scroll_to_item(ix);
+        if ix >= self.docs.len() {
+            return;
+        }
+        if let Some(prev) = self.active.filter(|&p| p < self.docs.len() && p != ix) {
+            if let Some(ed) = &self.docs[prev].editor {
+                let state = ed.read(cx);
+                self.docs[prev].saved_cursor = state.cursor_position();
+                self.docs[prev].saved_scroll = state.scroll_offset();
+            }
+        }
+        self.doc_use_clock = self.doc_use_clock.wrapping_add(1);
+        self.docs[ix].last_used = self.doc_use_clock;
+        self.scroll_tab_into_view(ix);
         let now = std::time::Instant::now();
         self.switch_fast = self
             .last_switch
-            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(300));
+            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(300));
         self.last_switch = Some(now);
         self.active = Some(ix);
+        if self.docs[ix].editor.is_none() && self.docs[ix].image.is_none() {
+            self.hydrate_doc(ix, false, window, cx);
+        }
         let d = &self.docs[ix];
-        let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) { self.focus.clone() } else { d.editor.focus_handle(cx) };
+        let handle = if d.image.is_some()
+            || d.diff.as_ref().is_some_and(|x| !x.source)
+            || (d.flux.is_some() && !d.flux_source)
+        {
+            self.focus.clone()
+        } else {
+            d.editor
+                .as_ref()
+                .map(|e| e.focus_handle(cx))
+                .unwrap_or_else(|| self.focus.clone())
+        };
         handle.focus(window, cx);
+        self.reveal_active_in_explorer(cx);
+        self.evict_cold_tabs(cx);
         cx.notify();
     }
 
@@ -1186,10 +1476,13 @@ impl Workbench {
         if self.docs[ix].image.is_some() || self.docs[ix].read_only || self.docs[ix].flux_lazy {
             return true;
         }
+        let Some(ed) = self.docs[ix].editor.as_ref() else {
+            return true;
+        };
         let (text, path, crlf, gen, name) = {
             let doc = &self.docs[ix];
             (
-                doc.editor.read(cx).value(),
+                ed.read(cx).value(),
                 doc.path.clone(),
                 doc.crlf,
                 doc.gen,
@@ -1309,47 +1602,42 @@ impl Workbench {
             self.open_folder(root, cx);
         }
         let wsl = self.wsl.clone();
-        let files: Vec<PathBuf> = s
-            .files
-            .into_iter()
-            .filter(|f| match &wsl {
-                Some(t) => remote_is_file(t, f).unwrap_or_else(|| f.is_file()),
-                None => f.is_file(),
-            })
-            .collect();
+        let raw_files = s.files;
         let active = s.active;
-        if files.is_empty() {
+        if raw_files.is_empty() {
             for p in then {
                 self.open_file(p, window, cx);
             }
             return;
         }
+        // Only check existence off-thread; background tabs stay dormant until clicked.
         cx.spawn_in(window, async move |this, cx| {
-            let reads = files.clone();
-            let all = cx
+            let existing: Vec<PathBuf> = cx
                 .background_spawn(async move {
-                    reads.iter().map(|p| if files::is_image(p) { Ok(Vec::new()) } else { read_head(p) }).collect::<Vec<_>>()
+                    raw_files
+                        .into_iter()
+                        .filter(|f| match &wsl {
+                            Some(t) => remote_is_file(t, f).unwrap_or_else(|| f.is_file()),
+                            None => f.is_file(),
+                        })
+                        .collect()
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                for (p, b) in files.into_iter().zip(all) {
-                    if this.docs.iter().any(|d| d.path == p) {
-                        continue;
-                    }
-                    if files::is_image(&p) {
-                        this.open_image(p, window, cx);
-                    } else {
-                        this.finish_open_file(p, b, window, cx);
+                for p in existing {
+                    if !this.docs.iter().any(|d| d.path == p) {
+                        this.docs.push(Doc::dormant(p));
                     }
                 }
                 if then.is_empty() {
-                    if let Some(a) = active.filter(|a| *a < this.docs.len()) {
+                    if let Some(a) = active.filter(|a| *a < this.docs.len()).or((!this.docs.is_empty()).then_some(0)) {
                         this.activate(a, window, cx);
                     }
                 }
                 for p in then {
                     this.open_file(p, window, cx);
                 }
+                cx.notify();
             })
             .ok()
         })
@@ -1440,9 +1728,89 @@ impl Workbench {
         cx.quit();
     }
 
-    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar_open = !self.sidebar_open;
+    pub(crate) fn set_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if open {
+            self.sidebar_open = true;
+            self.side_closing = None;
+        } else if self.sidebar_open {
+            self.sidebar_open = false;
+            if cx.reduce_motion() {
+                self.side_closing = None;
+            } else {
+                self.anim_seq = self.anim_seq.wrapping_add(1);
+                let seq = self.anim_seq;
+                self.side_closing = Some(seq);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    _ = this.update(cx, |this, cx| {
+                        if this.side_closing == Some(seq) {
+                            this.side_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
         cx.notify();
+    }
+
+    pub(crate) fn set_right_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if open {
+            self.agent_open = true;
+            self.right_closing = None;
+        } else if self.agent_open {
+            self.agent_open = false;
+            if cx.reduce_motion() {
+                self.right_closing = None;
+            } else {
+                self.anim_seq = self.anim_seq.wrapping_add(1);
+                let seq = self.anim_seq;
+                self.right_closing = Some(seq);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    _ = this.update(cx, |this, cx| {
+                        if this.right_closing == Some(seq) {
+                            this.right_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_panel_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if open {
+            self.panel_open = true;
+            self.panel_closing = None;
+        } else if self.panel_open {
+            self.panel_open = false;
+            if cx.reduce_motion() {
+                self.panel_closing = None;
+            } else {
+                self.anim_seq = self.anim_seq.wrapping_add(1);
+                let seq = self.anim_seq;
+                self.panel_closing = Some(seq);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    _ = this.update(cx, |this, cx| {
+                        if this.panel_closing == Some(seq) {
+                            this.panel_closing = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        cx.notify();
+    }
+
+    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_sidebar_open(!self.sidebar_open, cx);
     }
 
     fn show_view(&mut self, view: SideView, cx: &mut Context<Self>) {
@@ -1471,12 +1839,11 @@ impl Workbench {
 
     fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_right {
-            self.agent_open = true;
             self.right_view = SideView::Agent;
             self.settings_open = false;
+            self.set_right_open(true, cx);
             let h = self.agent_input_focus(cx);
             h.focus(window, cx);
-            cx.notify();
         } else {
             self.show_view(SideView::Agent, cx);
         }
@@ -1492,16 +1859,22 @@ impl Workbench {
             return self.on_show_agent(&ShowAgent, window, cx);
         }
         if self.settings.agent_right {
-            self.agent_open = false;
+            self.set_right_open(false, cx);
         } else {
             self.view = SideView::Explorer;
+            cx.notify();
         }
         self.focus.focus(window, cx);
-        cx.notify();
     }
 
-    fn on_show_settings(&mut self, _: &ShowSettings, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_show_settings(&mut self, _: &ShowSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.settings_scroll.set_offset(point(px(0.), px(0.)));
+            self.settings_focus.focus(window, cx);
+        } else {
+            self.focus.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -1514,7 +1887,7 @@ impl Workbench {
 
     fn on_tab_accept(&mut self, _: &TabAccept, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::input::{Enter, IndentInline};
-        let editor = self.active.and_then(|ix| self.docs.get(ix)).map(|d| d.editor.clone());
+        let editor = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.clone());
         let accepted = editor.is_some_and(|editor| {
             editor.update(cx, |state, cx| {
                 state.completion_menu_state().open
@@ -1664,6 +2037,7 @@ impl Workbench {
                 m.menu(tr("Go to File..."), Box::new(QuickOpenFile))
                     .menu(tr("Open File..."), Box::new(OpenFile))
                     .menu(tr("Open Folder..."), Box::new(OpenFolder))
+                    .menu(tr("Add Folder to Workspace..."), Box::new(AddFolderToWorkspace))
                     .menu(tr("Open Folder in WSL..."), Box::new(OpenFolderInWsl))
                     .separator()
                     .menu(tr("New File..."), Box::new(ExplorerNewFile))
@@ -1697,6 +2071,7 @@ impl Workbench {
                     .separator()
                     .menu(tr("Toggle Sidebar"), Box::new(ToggleSidebar))
                     .menu(tr("Toggle Panel"), Box::new(TogglePanel))
+                    .menu(tr("Problems"), Box::new(ShowProblems))
                     .menu(tr("Output"), Box::new(ShowOutput))
             }))
             .child(Self::render_menu("m-run", tr("Run"), |m| {
@@ -1962,21 +2337,42 @@ impl Workbench {
             (SideView::Explorer, Some(name)) => name.to_string_lossy().to_uppercase().into(),
             _ => title.into(),
         };
+        let title_el: AnyElement = {
+            let label = div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(c(theme::FG_MUTED))
+                .child(title);
+            let ws_anim = self.explorer.workspace_anim;
+            if view == SideView::Explorer && ws_anim > 0 && !cx.reduce_motion() {
+                label
+                    .with_animation(
+                        SharedString::from(format!("ws-title-{ws_anim}")),
+                        Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.25 + 0.75 * t).ml(px((1. - t) * 6.)),
+                    )
+                    .into_any_element()
+            } else {
+                label.into_any_element()
+            }
+        };
         let header = h_flex()
             .h(theme::u(35.))
             .pl_5()
             .pr_2()
             .gap_2()
             .flex_none()
-            .when(view != SideView::Agent, |h| {
-                h.child(div().flex_1().min_w_0().truncate().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(title))
-            })
+            .when(view != SideView::Agent, |h| h.child(title_el))
             .when(view == SideView::Agent, |h| h.child(self.render_agent_picker(cx)).child(self.render_agent_switch(cx)).child(div().flex_1()))
             .when(view == SideView::Scm && self.scm.repo.is_some(), |h| h.child(self.render_scm_header(cx)))
             .when(view == SideView::Agent, |h| h.child(self.render_agent_tools(cx)))
             .when(view == SideView::Explorer && self.root.is_some(), |h| {
                 h.child(tool_button("x-newfile", IconName::Plus, tr("New File"), cx, |this, w, cx| this.on_explorer_new_file(&ExplorerNewFile, w, cx)))
                     .child(tool_button("x-newdir", IconName::FolderClosed, tr("New Folder"), cx, |this, w, cx| this.on_explorer_new_folder(&ExplorerNewFolder, w, cx)))
+                    .child(tool_button("x-addws", IconName::FolderOpen, tr("Add Folder to Workspace"), cx, |this, w, cx| this.on_add_folder_to_workspace(&AddFolderToWorkspace, w, cx)))
                     .child(tool_button("x-refresh", IconName::RefreshCw, tr("Refresh"), cx, |this, w, cx| this.on_explorer_refresh(&ExplorerRefresh, w, cx)))
             })
             .when(right, |h| h.children(self.render_right_tabs(cx)).child(self.right_close_button(cx)));
@@ -2077,26 +2473,67 @@ impl Workbench {
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .id("tabs")
-            .h(theme::u(35.))
-            .w_full()
-            .flex_none()
-            .bg(c(theme::BG_SIDE))
-            .border_b_1()
-            .border_color(c(theme::BORDER))
-            .overflow_x_scroll()
-            .track_scroll(&self.tabs_scroll)
-            .children(self.docs.iter().enumerate().map(|(ix, d)| {
+        let scale = f32::from(theme::u(1.));
+        let widths: Vec<f32> = self
+            .docs
+            .iter()
+            .map(|d| tab_width(&d.name, d.error_count > 0 || d.warn_count > 0, scale))
+            .collect();
+        let total_w: f32 = widths.iter().sum();
+        let scroll_x = (-f32::from(self.tabs_scroll.offset().x)).max(0.);
+        self.tabs_scroll_x.set(scroll_x);
+        let viewport_w = self.tabs_width.get().max(240.);
+        let (range, left_w, right_w) = visible_tab_window(&widths, scroll_x, viewport_w);
+        let motion = !cx.reduce_motion();
+        let opened_tab = self.opened_tab.clone();
+
+        let probe = {
+            let w_cell = self.tabs_width.clone();
+            let sx_cell = self.tabs_scroll_x.clone();
+            let scroll = self.tabs_scroll.clone();
+            let id = cx.entity_id();
+            canvas(
+                move |b, _, cx| {
+                    let w = f32::from(b.size.width);
+                    let sx = (-f32::from(scroll.offset().x)).max(0.);
+                    let mut dirty = false;
+                    if (w_cell.get() - w).abs() > 1.0 && w > 10. {
+                        w_cell.set(w);
+                        dirty = true;
+                    }
+                    if (sx_cell.get() - sx).abs() > 1.0 {
+                        sx_cell.set(sx);
+                        dirty = true;
+                    }
+                    if dirty {
+                        cx.defer(move |cx| cx.notify(id));
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        };
+
+        let visible_tabs: Vec<AnyElement> = range
+            .map(|ix| {
+                let d = &self.docs[ix];
+                let w = widths[ix];
                 let active = self.active == Some(ix);
                 let (icon, tint) = d.icon;
-                h_flex()
-                    .id(("tab", ix))
+                let errs = d.error_count;
+                let warns = d.warn_count;
+                let tab_id = SharedString::from(format!("tab-{}", d.path.display()));
+                let close_id = SharedString::from(format!("tab-x-{}", d.path.display()));
+                let tab = h_flex()
+                    .id(tab_id)
+                    .w(px(w))
                     .h_full()
-                    .min_w(theme::u(96.))
-                    .pl(theme::u(14.))
+                    .pl(theme::u(12.))
                     .pr(theme::u(6.))
-                    .gap(theme::u(8.))
+                    .gap(theme::u(6.))
                     .flex_none()
                     .text_sm()
                     .border_r_1()
@@ -2104,21 +2541,43 @@ impl Workbench {
                     .relative()
                     .cursor_pointer()
                     .when(active, |s| {
-                        s.bg(c(theme::BG_EDITOR)).child(
-                            div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT)).with_animation(
+                        let line = div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT));
+                        let el = if !motion {
+                            line.into_any_element()
+                        } else {
+                            line.with_animation(
                                 SharedString::from(format!("tab-line-{}", d.path.display())),
-                                Animation::new(std::time::Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
+                                Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
                                 |el, t| el.left(relative(0.5 * (1. - t))).right(relative(0.5 * (1. - t))),
-                            ),
-                        )
+                            )
+                            .into_any_element()
+                        };
+                        s.bg(c(theme::BG_EDITOR)).child(el)
                     })
                     .when(!active, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                    .child(Icon::new(icon).flex_none().size(theme::u(16.)).text_color(theme::tint(tint)))
-                    .child(div().flex_1().whitespace_nowrap().child(d.name.clone()))
+                    .child(Icon::new(icon).flex_none().size(theme::u(15.)).text_color(theme::tint(tint)))
+                    .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(d.name.clone()))
+                    .when(errs > 0 || warns > 0, |s| {
+                        let (badge_icon, col, count) = if errs > 0 {
+                            (IconName::CircleX, theme::DANGER, errs)
+                        } else {
+                            (IconName::TriangleAlert, theme::WARN, warns)
+                        };
+                        s.child(
+                            h_flex()
+                                .flex_none()
+                                .gap(px(2.))
+                                .text_xs()
+                                .text_color(c(col))
+                                .child(Icon::new(badge_icon).size(theme::u(11.)))
+                                .child(if count > 99 { "99+".to_string() } else { count.to_string() }),
+                        )
+                    })
                     .child(
                         div()
-                            .id(("tab-close", ix))
+                            .id(close_id)
+                            .flex_none()
                             .size(theme::u(20.))
                             .flex()
                             .items_center()
@@ -2161,8 +2620,60 @@ impl Workbench {
                                 .item(item("Reveal in File Explorer", Box::new(move |_, _, cx| cx.reveal_path(&reveal))))
                                 .item(item("Go to File...", Box::new(|_, w, cx| w.dispatch_action(Box::new(QuickOpenFile), cx))))
                         }
-                    })
-            }))
+                    });
+                if motion {
+                    if let Some((ref op, seq)) = opened_tab {
+                        if *op == d.path {
+                            return tab
+                                .with_animation(
+                                    SharedString::from(format!("tab-open-{seq}")),
+                                    Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+                                    move |el, t| el.opacity(0.2 + 0.8 * t).w(px((w * (0.72 + 0.28 * t)).max(1.))),
+                                )
+                                .into_any_element();
+                        }
+                    }
+                }
+                tab.into_any_element()
+            })
+            .collect();
+
+        div()
+            .relative()
+            .w_full()
+            .h(theme::u(35.))
+            .flex_none()
+            .bg(c(theme::BG_SIDE))
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .child(probe)
+            .child(
+                h_flex()
+                    .id("tabs")
+                    .size_full()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.tabs_scroll)
+                    .on_scroll(cx.listener(move |this, ev: &ScrollEvent, _, cx| {
+                        let d = ev.delta.pixel_delta(px(36.));
+                        let delta = if d.x.abs() > px(0.5) { f32::from(d.x) } else { f32::from(d.y) };
+                        if delta.abs() < 0.5 {
+                            return;
+                        }
+                        let vw = this.tabs_width.get().max(240.);
+                        let max_x = (total_w - vw).max(0.);
+                        let cur = (-f32::from(this.tabs_scroll.offset().x)).max(0.);
+                        let next = (cur - delta).clamp(0., max_x);
+                        if (next - cur).abs() > 0.5 {
+                            cx.stop_propagation();
+                            this.tabs_scroll.set_offset(point(px(-next), px(0.)));
+                            this.tabs_scroll_x.set(next);
+                            cx.notify();
+                        }
+                    }))
+                    .when(left_w > 0.5, |h| h.child(div().flex_none().w(px(left_w)).h_full()))
+                    .children(visible_tabs)
+                    .when(right_w > 0.5, |h| h.child(div().flex_none().w(px(right_w)).h_full())),
+            )
     }
 
     pub(crate) fn close_tabs_where(&mut self, window: &mut Window, cx: &mut Context<Self>, close: impl Fn(usize, &Doc) -> bool) {
@@ -2258,6 +2769,7 @@ impl Workbench {
         if let Some(page) = &self.whats_new {
             return self.render_whats_new(page, cx);
         }
+        let motion = !cx.reduce_motion();
         let backdrop = theme::has_backdrop() || crate::scene::active();
         let (had, mut gen) = self.wash.get();
         if had != self.active.is_some() {
@@ -2266,7 +2778,7 @@ impl Workbench {
         }
         let wash_layer = |fade_in: bool| {
             let layer = div().absolute().top_0().left_0().size_full().bg(theme::editor_wash());
-            if gen == 0 {
+            if gen == 0 || !motion {
                 return layer.when(!fade_in, |d| d.opacity(0.)).into_any_element();
             }
             layer
@@ -2322,23 +2834,34 @@ impl Workbench {
                         && !self.docs[ix].diff.as_ref().is_some_and(|d| !d.source)
                         && (self.docs[ix].flux.is_none() || self.docs[ix].flux_source),
                     |v| {
+                        let Some(ed) = self.docs[ix].editor.as_ref() else {
+                            let msg = if self.docs[ix].loading { tr("Loading file…") } else { tr("Opening file…") };
+                            return v.child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_sm()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(msg),
+                            );
+                        };
                         let el = div()
                             .flex_1()
                             .min_h_0()
                             .relative()
                             .child(
-                                Editor::new(&self.docs[ix].editor)
+                                Editor::new(ed)
                                     .bordered(false)
                                     .p_0()
                                     .h_full()
                                     .font_family(self.settings.font_family.clone())
                                     .text_size(px(self.settings.font_size)),
                             )
-                            .child(self.smooth_scroll_layer(
-                                ScrollTarget::Editor(self.docs[ix].editor.clone()),
-                                cx,
-                            ));
-                        if self.switch_fast {
+                            .child(self.smooth_scroll_layer(ScrollTarget::Editor(ed.clone()), cx));
+                        if self.switch_fast || !motion {
                             v.child(el)
                         } else {
                             v.child(
@@ -2347,7 +2870,7 @@ impl Workbench {
                                         "doc-in-{}",
                                         self.docs[ix].path.display()
                                     )),
-                                    Animation::new(std::time::Duration::from_millis(160))
+                                    Animation::new(Duration::from_millis(160))
                                         .with_easing(gpui_kit::ease_out_quint()),
                                     |el, t| el.opacity(0.55 + 0.45 * t),
                                 ),
@@ -2451,7 +2974,7 @@ impl Workbench {
             }
             Some(ix) => {
                 let d = &self.docs[ix];
-                let p = d.editor.read(cx).cursor_position();
+                let p = d.cursor_position(cx);
                 (crate::trf!("Ln {0}, Col {1}"; 0 => p.line + 1, 1 => p.character + 1), d.label)
             }
             None => (String::new(), ""),
@@ -2459,6 +2982,9 @@ impl Workbench {
         let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
         let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
         let running = self.out_proc.is_some() || self.term_proc.is_some();
+        let code_errs: usize = self.docs.iter().map(|d| d.error_count).sum();
+        let code_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
+        let total_errs = self.problems.len() + code_errs;
         let seg = |s: SharedString| div().h_full().px_2().flex().items_center().child(s);
         let folder = self.root.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
         h_flex()
@@ -2529,19 +3055,35 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
                 )
             })
-            .when(!self.problems.is_empty(), |h| {
+            .when(total_errs > 0 || code_warns > 0, |h| {
                 h.child(
                     h_flex()
                         .id("sb-problems")
                         .h_full()
                         .px_2()
-                        .gap_1()
+                        .gap_1p5()
                         .cursor_pointer()
-                        .text_color(c(theme::DANGER))
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .child(Icon::new(IconName::CircleX).size(theme::u(13.)))
-                        .child(self.problems.len().to_string())
-                        .on_click(cx.listener(|this, _, w, cx| this.on_go_to_problem(&GoToProblem, w, cx))),
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Show Problems (Ctrl+Shift+M)")).build(w, cx))
+                        .when(total_errs > 0, |r| {
+                            r.child(
+                                h_flex()
+                                    .gap_1()
+                                    .text_color(c(theme::DANGER))
+                                    .child(Icon::new(IconName::CircleX).size(theme::u(13.)))
+                                    .child(total_errs.to_string()),
+                            )
+                        })
+                        .when(code_warns > 0, |r| {
+                            r.child(
+                                h_flex()
+                                    .gap_1()
+                                    .text_color(c(theme::WARN))
+                                    .child(Icon::new(IconName::TriangleAlert).size(theme::u(13.)))
+                                    .child(code_warns.to_string()),
+                            )
+                        })
+                        .on_click(cx.listener(|this, _, w, cx| this.on_show_problems(&ShowProblems, w, cx))),
                 )
             })
             .child(div().px_2().flex_1().truncate().text_color(c(theme::FG)).child(self.status.clone()))
@@ -2734,15 +3276,63 @@ impl Render for Workbench {
             None => self.render_editor_area(window, cx),
         };
         let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
+        if self.sidebar_open {
+            self.side_closing = None;
+        }
+        if self.right_dock_on() {
+            self.right_closing = None;
+        }
+        if self.panel_open {
+            self.panel_closing = None;
+        }
+        let side_visible = self.sidebar_open || self.side_closing.is_some();
+        let right_visible = self.right_dock_on() || self.right_closing.is_some();
         let (side_w, agent_w) = fit_columns(
             f32::from(window.viewport_size().width),
-            self.sidebar_open.then_some(self.sidebar_width),
-            (self.right_dock_on() && !self.agent_full).then_some(self.agent_width),
+            side_visible.then_some(self.sidebar_width),
+            (right_visible && !self.agent_full).then_some(self.agent_width),
         );
+        let motion = !cx.reduce_motion();
+        let (was_panel, mut panel_gen) = self.panel_anim.get();
+        if was_panel != self.panel_open {
+            if self.panel_open {
+                panel_gen += 1;
+            }
+            self.panel_anim.set((self.panel_open, panel_gen));
+        }
         let editor_and_panel: AnyElement = if self.panel_open {
+            let panel_body: AnyElement = if panel_gen > 0 && motion {
+                div()
+                    .size_full()
+                    .child(self.render_panel(window, cx))
+                    .with_animation(
+                        SharedString::from(format!("panel-in-{panel_gen}")),
+                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.3 + 0.7 * t).mt(px((1. - t) * 10.)),
+                    )
+                    .into_any_element()
+            } else {
+                self.render_panel(window, cx).into_any_element()
+            };
             v_resizable("editor-panel-split")
                 .child(resizable_panel().child(clip(editor_view)))
-                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(self.render_panel(window, cx).into_any_element())))
+                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(panel_body)))
+                .into_any_element()
+        } else if let Some(seq) = self.panel_closing.filter(|_| motion) {
+            let closing_panel = div()
+                .flex_none()
+                .w_full()
+                .overflow_hidden()
+                .child(self.render_panel(window, cx))
+                .with_animation(
+                    SharedString::from(format!("panel-out-{seq}")),
+                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                    |d, t| d.h(px((220. * (1. - t)).max(0.))).opacity(1. - t),
+                );
+            v_flex()
+                .size_full()
+                .child(div().flex_1().min_h_0().child(clip(editor_view)))
+                .child(closing_panel)
                 .into_any_element()
         } else {
             editor_view
@@ -2771,12 +3361,21 @@ impl Render for Workbench {
         }
         let side_column = |this: &Self, window: &mut Window, cx: &mut Context<Self>| -> AnyElement {
             let col = div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(this.render_side_bar(window, cx));
-            if side_gen <= 1 {
+            if let Some(seq) = this.side_closing.filter(|_| !this.sidebar_open && motion) {
+                return col
+                    .with_animation(
+                        SharedString::from(format!("side-out-{seq}")),
+                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                        move |d, t| d.w(px((side_w * (1. - t)).max(0.))).opacity(1. - t),
+                    )
+                    .into_any_element();
+            }
+            if side_gen == 0 || !motion {
                 return col.into_any_element();
             }
             col.with_animation(
                 SharedString::from(format!("side-in-{side_gen}")),
-                Animation::new(std::time::Duration::from_millis(220)).with_easing(gpui_kit::ease_out_quint()),
+                Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
                 move |d, t| d.w(px((side_w * t).max(1.))).opacity(0.3 + 0.7 * t),
             )
             .into_any_element()
@@ -2787,51 +3386,113 @@ impl Render for Workbench {
             full_gen += 1;
             self.full_anim.set((full, full_gen));
         }
+        let (was_settings, mut settings_gen) = self.settings_anim.get();
+        if was_settings != self.settings_open {
+            settings_gen += 1;
+            self.settings_anim.set((self.settings_open, settings_gen));
+        }
+        let settings_open = self.settings_open;
         let fade = move |el: Div, key: &'static str| -> AnyElement {
-            if full_gen == 0 {
+            if !motion {
                 return el.into_any_element();
             }
-            el.with_animation(
-                SharedString::from(format!("{key}-{full_gen}")),
-                Animation::new(std::time::Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
-                |d, t| d.opacity(0.35 + 0.65 * t),
-            )
-            .into_any_element()
+            if full_gen > 0 {
+                return el
+                    .with_animation(
+                        SharedString::from(format!("{key}-{full_gen}")),
+                        Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.35 + 0.65 * t),
+                    )
+                    .into_any_element();
+            }
+            if settings_gen > 0 && !settings_open {
+                return el
+                    .with_animation(
+                        SharedString::from(format!("settings-ret-{settings_gen}")),
+                        Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.35 + 0.65 * t),
+                    )
+                    .into_any_element();
+            }
+            el.into_any_element()
         };
         let center: AnyElement = if self.settings_open {
-            div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx)).into_any_element()
+            let box_el = div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx));
+            if settings_gen > 0 && motion {
+                box_el
+                    .with_animation(
+                        SharedString::from(format!("settings-open-{settings_gen}")),
+                        Animation::new(Duration::from_millis(170)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(0.2 + 0.8 * t).mt(px((1. - t) * 8.)),
+                    )
+                    .into_any_element()
+            } else {
+                box_el.into_any_element()
+            }
         } else if full {
             let agent = fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_full(window, cx)), "full-in");
-            if self.sidebar_open {
-                h_flex().flex_1().min_w_0().h_full().child(side_column(self, window, cx)).child(handle("sidebar-resize", 1, self, cx)).child(agent).into_any_element()
+            if side_visible {
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(side_column(self, window, cx))
+                    .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
+                    .child(agent)
+                    .into_any_element()
             } else {
                 agent
             }
-        } else if self.sidebar_open {
+        } else if side_visible {
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(side_column(self, window, cx))
-                .child(handle("sidebar-resize", 1, self, cx))
+                .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
                 .child(fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in"))
                 .into_any_element()
         } else {
             fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in")
         };
-        let center: AnyElement = if full || self.settings_open {
+        let right_on = self.right_dock_on() && !full && !self.settings_open;
+        let right_close = (!right_on && !full && !self.settings_open && motion).then_some(self.right_closing).flatten();
+        let (was_right, mut right_gen) = self.right_anim.get();
+        if was_right != right_on {
+            if right_on {
+                right_gen += 1;
+            }
+            self.right_anim.set((right_on, right_gen));
+        }
+        let center: AnyElement = if !right_on && right_close.is_none() {
             center
-        } else if self.right_dock_on() {
+        } else {
+            let dock = div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx));
+            let dock: AnyElement = if let Some(seq) = right_close {
+                dock.with_animation(
+                    SharedString::from(format!("right-out-{seq}")),
+                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| d.w(px((agent_w * (1. - t)).max(0.))).opacity(1. - t),
+                )
+                .into_any_element()
+            } else if right_gen > 0 && motion {
+                dock.with_animation(
+                    SharedString::from(format!("right-in-{right_gen}")),
+                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| d.w(px((agent_w * t).max(1.))).opacity(0.35 + 0.65 * t),
+                )
+                .into_any_element()
+            } else {
+                dock.into_any_element()
+            };
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
-                .child(handle("agent-resize", 2, self, cx))
-                .child(div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx)))
+                .when(right_on, |h| h.child(handle("agent-resize", 2, self, cx)))
+                .child(dock)
                 .into_any_element()
-        } else {
-            center
         };
         let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(center);
         let backdrop = self.settings.background().map(|p| {
@@ -2922,6 +3583,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_save_all))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_open_folder))
+            .on_action(cx.listener(Self::on_add_folder_to_workspace))
             .on_action(cx.listener(Self::on_open_folder_in_wsl))
             .on_action(cx.listener(Self::on_open_file))
             .on_action(cx.listener(Self::on_quit))
@@ -2938,6 +3600,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_toggle_panel))
             .on_action(cx.listener(Self::on_toggle_terminal))
             .on_action(cx.listener(Self::on_show_output))
+            .on_action(cx.listener(Self::on_show_problems))
             .on_action(cx.listener(Self::on_run_file))
             .on_action(cx.listener(Self::on_stop_run))
             .on_action(cx.listener(Self::on_explorer_new_file))
@@ -3004,8 +3667,76 @@ fn selection_guard() -> impl IntoElement {
     .size(px(0.))
 }
 
+struct PreparedFile {
+    text: String,
+    crlf: bool,
+    lang: &'static str,
+    label: &'static str,
+    banner: Option<String>,
+    read_only: bool,
+    large: bool,
+    complex: bool,
+    long_lines: bool,
+    file_text_for_flux: String,
+    drawable: Option<bool>,
+    flux_lazy: bool,
+    is_diff: bool,
+}
+
+fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
+    let view = crate::viewer::view(path, &bytes);
+    let read_only = view.is_some();
+    let (text, crlf, mut lang, mut label, banner) = match view {
+        Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
+        None => {
+            let file = core::decode_text(&bytes);
+            let first = file.text.lines().next().unwrap_or("");
+            let (lang, label) = files::language_for(path, first);
+            (file.text, file.crlf, lang, label, None)
+        }
+    };
+    let stats = crate::accel::scan_file_stats(text.as_bytes(), 300);
+    let large = text.len() > LARGE_FILE_BYTES;
+    let very_complex = !read_only && stats.max_line > MAX_COMPLEX_LINE_BYTES;
+    let complex = !read_only && (large || very_complex);
+    if complex {
+        lang = "text";
+        label = "Plain Text";
+    }
+    let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(path) };
+    let is_markdown = drawable == Some(true);
+    let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
+    let (file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
+        (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
+        (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
+        (true, false) => (text.clone(), text),
+        _ => (String::new(), text),
+    };
+    let is_diff = crate::diff_view::is_diff(lang) && !complex;
+    let long_lines = !read_only && text.len() <= MAX_AUTO_WRAP_BYTES && stats.dominated_by_long_lines();
+    PreparedFile {
+        text,
+        crlf,
+        lang,
+        label,
+        banner,
+        read_only,
+        large,
+        complex,
+        long_lines,
+        file_text_for_flux,
+        drawable,
+        flux_lazy,
+        is_diff,
+    }
+}
+
 fn read_off_thread(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
+}
+
+pub(crate) fn remote_dir_pub(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
+    remote_dir(target, path)
 }
 
 fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
@@ -3054,34 +3785,60 @@ fn remote_is_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> O
     crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_dir)
 }
 
-fn find_node<'a>(nodes: &'a mut [crate::files::Node], id: &str) -> Option<&'a mut crate::files::Node> {
-    for n in nodes {
-        if n.id == id {
-            return Some(n);
-        }
-        if let Some(ch) = &mut n.children {
-            if let Some(found) = find_node(ch, id) {
-                return Some(found);
-            }
-        }
-    }
-    None
+pub(crate) fn tab_width(name: &str, has_diag: bool, scale: f32) -> f32 {
+    let chars = name.chars().count().clamp(4, 28) as f32;
+    let badge = if has_diag { 28. } else { 0. };
+    ((64. + chars * 7.6 + badge) * scale).clamp(96. * scale, 240. * scale).round()
 }
 
-fn merge(old: Vec<crate::files::Node>, new: Vec<crate::files::Node>) -> Vec<crate::files::Node> {
-    new.into_iter()
-        .map(|mut n| {
-            if n.children.is_some() && !n.loaded {
-                if let Some(o) = old.iter().find(|o| o.id == n.id) {
-                    if o.loaded {
-                        n.children = o.children.clone();
-                        n.loaded = true;
-                    }
-                }
-            }
-            n
-        })
-        .collect()
+pub(crate) fn visible_tab_window(widths: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
+    if widths.is_empty() {
+        return (0..0, 0., 0.);
+    }
+    const OVERSCAN_PX: f32 = 160.;
+    let vis_start = (scroll_x - OVERSCAN_PX).max(0.);
+    let vis_end = scroll_x + viewport_w.max(1.) + OVERSCAN_PX;
+
+    let mut x = 0.;
+    let mut start = widths.len();
+    let mut left_w = 0.;
+    let mut end = widths.len();
+    let mut end_x = 0.;
+    for (i, &w) in widths.iter().enumerate() {
+        let next_x = x + w;
+        if start == widths.len() && next_x > vis_start {
+            start = i;
+            left_w = x;
+        }
+        if start != widths.len() && x >= vis_end {
+            end = i;
+            end_x = x;
+            break;
+        }
+        x = next_x;
+    }
+    if start == widths.len() {
+        let last = widths.len() - 1;
+        let pre: f32 = widths[..last].iter().sum();
+        return (last..widths.len(), pre, 0.);
+    }
+    let total: f32 = widths.iter().sum();
+    let right_w = if end < widths.len() { (total - end_x).max(0.) } else { 0. };
+    (start..end, left_w, right_w)
+}
+
+pub(crate) fn select_eviction_indices(entries: &[(usize, bool, u64)], max_warm: usize) -> Vec<usize> {
+    if entries.len() <= max_warm {
+        return Vec::new();
+    }
+    let excess = entries.len() - max_warm;
+    let mut candidates: Vec<(usize, u64)> = entries
+        .iter()
+        .filter(|(_, pinned, _)| !*pinned)
+        .map(|&(ix, _, used)| (ix, used))
+        .collect();
+    candidates.sort_by_key(|&(_, used)| used);
+    candidates.into_iter().take(excess).map(|(ix, _)| ix).collect()
 }
 
 fn read_head(path: &Path) -> Result<Vec<u8>, String> {
@@ -3102,6 +3859,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>, String> {
 impl Workbench {
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
+        self.settings_search.update(cx, |s, cx| s.set_placeholder(tr("Search settings…"), window, cx));
         self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
         self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
         self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
@@ -3198,6 +3956,12 @@ impl Workbench {
             None => target.offset(cx),
         };
         let to = target.clamp(point(base.x + d.x, base.y + d.y));
+        if cx.reduce_motion() {
+            self.smooth = None;
+            target.set(to, cx);
+            cx.notify();
+            return;
+        }
         let bottom = match &target {
             ScrollTarget::Handle(_, h) => d.y < px(0.) && to.y <= -h.max_offset().y + px(1.),
             ScrollTarget::Editor(_) => false,
@@ -3293,7 +4057,7 @@ impl Workbench {
                     .text_color(c(theme::FG_DIM))
                     .child("Ctrl+L"),
             );
-        if !teach {
+        if !teach || cx.reduce_motion() {
             return chip.into_any_element();
         }
         let accent = c(theme::ACCENT);
@@ -3339,7 +4103,7 @@ impl Workbench {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::fit_columns;
+    use super::{fit_columns, select_eviction_indices, tab_width, visible_tab_window};
 
     #[test]
     fn columns_always_fit() {
@@ -3352,6 +4116,32 @@ mod fit_tests {
             assert!(48. + s + a <= w, "{w}: {s} {a}");
         }
         assert_eq!(fit_columns(1200., None, None), (0., 0.));
+    }
+
+    #[test]
+    fn virtual_tabs_render_only_visible_window_for_500_tabs() {
+        let widths: Vec<f32> = (0..500).map(|i| tab_width(&format!("file_{i}.json"), false, 1.0)).collect();
+        let total: f32 = widths.iter().sum();
+        let (range, left, right) = visible_tab_window(&widths, 12_000., 800.);
+        assert!(range.len() < 16, "expected <16 rendered tabs out of 500, got {}", range.len());
+        assert!(left > 11_000. && right > 10_000.);
+        let rendered_w: f32 = widths[range].iter().sum();
+        assert!((left + rendered_w + right - total).abs() < 0.5);
+    }
+
+    #[test]
+    fn cold_tab_eviction_keeps_active_dirty_and_most_recent() {
+        // (index, pinned, last_used)
+        let entries = vec![
+            (0, false, 1),
+            (1, true, 2),  // dirty or active -> never evicted
+            (2, false, 3),
+            (3, false, 9),
+            (4, false, 4),
+            (5, false, 10),
+        ];
+        let evicted = select_eviction_indices(&entries, 4);
+        assert_eq!(evicted, vec![0, 2]);
     }
 }
 

@@ -1,5 +1,5 @@
 
-const MAX_CELLS: usize = 4_000_000;
+const MAX_D: usize = 4096;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Op {
@@ -12,35 +12,84 @@ fn ops(a: &[&str], b: &[&str]) -> Option<Vec<(Op, usize, usize)>> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
     let (am, bm) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
-    if am.len().saturating_mul(bm.len()) > MAX_CELLS {
-        return None;
-    }
     let (n, m) = (am.len(), bm.len());
-    let mut lcs = vec![0u32; (n + 1) * (m + 1)];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i * (m + 1) + j] = if am[i] == bm[j] {
-                lcs[(i + 1) * (m + 1) + j + 1] + 1
-            } else {
-                lcs[(i + 1) * (m + 1) + j].max(lcs[i * (m + 1) + j + 1])
-            };
-        }
-    }
     let mut out: Vec<(Op, usize, usize)> = (0..pre).map(|k| (Op::Same, k, k)).collect();
-    let (mut i, mut j) = (0, 0);
-    while i < n || j < m {
-        if i < n && j < m && am[i] == bm[j] {
-            out.push((Op::Same, pre + i, pre + j));
-            i += 1;
-            j += 1;
-        } else if j < m && (i == n || lcs[i * (m + 1) + j + 1] > lcs[(i + 1) * (m + 1) + j]) {
-            out.push((Op::Add, pre + i, pre + j));
-            j += 1;
-        } else {
-            out.push((Op::Del, pre + i, pre + j));
-            i += 1;
+    if n == 0 || m == 0 {
+        for i in 0..n {
+            out.push((Op::Del, pre + i, pre));
+        }
+        for j in 0..m {
+            out.push((Op::Add, pre + n, pre + j));
+        }
+        for k in 0..suf {
+            out.push((Op::Same, a.len() - suf + k, b.len() - suf + k));
+        }
+        return Some(out);
+    }
+
+    let max_d = (n + m).min(MAX_D);
+    let offset = max_d as isize;
+    let mut v = vec![0isize; 2 * max_d + 1];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+    let mut found_d = None;
+
+    'outer: for d in 0..=max_d {
+        let di = d as isize;
+        trace.push(v[(max_d - d)..=(max_d + d)].to_vec());
+        for k in (-di..=di).step_by(2) {
+            let mut x = if k == -di || (k != di && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize]) {
+                v[(k + 1 + offset) as usize]
+            } else {
+                v[(k - 1 + offset) as usize] + 1
+            };
+            let mut y = x - k;
+            while (x as usize) < n && (y as usize) < m && am[x as usize] == bm[y as usize] {
+                x += 1;
+                y += 1;
+            }
+            v[(k + offset) as usize] = x;
+            if x as usize >= n && y as usize >= m {
+                found_d = Some(d);
+                break 'outer;
+            }
         }
     }
+
+    let final_d = found_d?;
+    let mut x = n as isize;
+    let mut y = m as isize;
+    let mut rev: Vec<(Op, usize, usize)> = Vec::new();
+    for d in (1..=final_d).rev() {
+        let snap = &trace[d];
+        let di = d as isize;
+        let k = x - y;
+        let prev_k = if k == -di || (k != di && snap[(k - 1 + di) as usize] < snap[(k + 1 + di) as usize]) {
+            k + 1
+        } else {
+            k - 1
+        };
+        let prev_x = snap[(prev_k + di) as usize];
+        let prev_y = prev_x - prev_k;
+        while x > prev_x && y > prev_y {
+            x -= 1;
+            y -= 1;
+            rev.push((Op::Same, pre + x as usize, pre + y as usize));
+        }
+        if x == prev_x {
+            y -= 1;
+            rev.push((Op::Add, pre + x as usize, pre + y as usize));
+        } else {
+            x -= 1;
+            rev.push((Op::Del, pre + x as usize, pre + y as usize));
+        }
+    }
+    while x > 0 && y > 0 {
+        x -= 1;
+        y -= 1;
+        rev.push((Op::Same, pre + x as usize, pre + y as usize));
+    }
+    rev.reverse();
+    out.extend(rev);
     for k in 0..suf {
         out.push((Op::Same, a.len() - suf + k, b.len() - suf + k));
     }
@@ -164,5 +213,19 @@ mod tests {
         assert!(u.starts_with("--- a/f.txt\n+++ b/f.txt\n@@ -1,"), "{u}");
         assert!(u.contains("-c\n+C\n"), "{u}");
         assert!(u.contains("+i\n"), "{u}");
+    }
+
+    #[test]
+    fn large_file_diff_stays_fast_and_exact() {
+        let old_lines: Vec<String> = (0..5_000).map(|i| format!("line {i}")).collect();
+        let mut new_lines = old_lines.clone();
+        for ix in (200..4_800).step_by(500) {
+            new_lines[ix] = format!("changed {ix}");
+        }
+        let old = old_lines.join("\n") + "\n";
+        let new = new_lines.join("\n") + "\n";
+        assert_eq!(counts(&old, &new), (10, 10));
+        let u = unified("big.txt", &old, &new);
+        assert!(u.contains("-line 200\n+changed 200\n"), "{u}");
     }
 }

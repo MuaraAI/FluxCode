@@ -77,22 +77,21 @@ impl Workbench {
         self.settings_open = false;
         if self.on_right(view) {
             self.right_view = view;
-            self.agent_open = true;
+            self.set_right_open(true, cx);
         } else {
             self.view = view;
-            self.sidebar_open = true;
+            self.set_sidebar_open(true, cx);
         }
-        cx.notify();
     }
 
     pub(crate) fn toggle_view(&mut self, view: SideView, cx: &mut Context<Self>) {
         if self.view_shown(view) {
             if self.on_right(view) {
-                self.agent_open = false;
+                self.set_right_open(false, cx);
             } else {
-                self.sidebar_open = false;
+                self.set_sidebar_open(false, cx);
             }
-            return cx.notify();
+            return;
         }
         self.reveal_view(view, cx);
     }
@@ -110,13 +109,13 @@ impl Workbench {
         if right && self.view == view {
             match SideView::ALL.into_iter().find(|v| !self.on_right(*v)) {
                 Some(v) => self.view = v,
-                None => self.sidebar_open = false,
+                None => self.set_sidebar_open(false, cx),
             }
         }
         if !right && self.right_view == view {
             self.right_view = SideView::ALL.into_iter().find(|v| self.on_right(*v)).unwrap_or(SideView::Agent);
             if !self.on_right(self.right_view) {
-                self.agent_open = false;
+                self.set_right_open(false, cx);
             }
         }
         self.agent_full &= self.right_view == SideView::Agent;
@@ -172,8 +171,7 @@ impl Workbench {
 
     pub(crate) fn right_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         crate::workbench::tool_button("rd-close", gpui_kit::component::IconName::Close, tr("Hide"), cx, |this, _, cx| {
-            this.agent_open = false;
-            cx.notify();
+            this.set_right_open(false, cx);
         })
     }
 }

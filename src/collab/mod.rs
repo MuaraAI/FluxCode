@@ -511,9 +511,10 @@ impl Workbench {
                         let (new_rev, text) = (server.rev, server.text.clone());
                         doc.shadow = text.clone();
                         let path_abs = doc.path.clone();
-                        if let Some(d) = self.docs.iter().find(|d| d.path == path_abs) {
-                            let ed = d.editor.clone();
-                            apply_to_editor(&ed, &applied, window, cx);
+                        if let Some(ix) = self.docs.iter().position(|d| d.path == path_abs) {
+                            if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+                                apply_to_editor(&ed, &applied, window, cx);
+                            }
                         }
                         reply(self, Msg::Ack { path: path.clone(), rev: new_rev });
                         self.collab.send_all(&Msg::Applied { path: path.clone(), rev: new_rev, op: applied, author: conn, ai: ai.clone() }, Some(conn));
@@ -570,13 +571,14 @@ impl Workbench {
             }
         }
         if let Some(ix) = self.docs.iter().position(|d| d.path == abs) {
+            self.ensure_doc_editor(ix, window, cx);
             self.flux_load_source(ix, window, cx);
         }
         let d = self.docs.iter().find(|d| d.path == abs).ok_or_else(|| tr("That file can't be opened as text.").to_string())?;
         if d.read_only {
             return Err(tr("That file can't be shared as text.").into());
         }
-        let text = d.editor.read(cx).value().to_string();
+        let text = d.text(cx);
         if text.len() > MAX_SHARED_FILE {
             return Err(tr("That file is too large to share live (over 16 MB).").into());
         }
@@ -613,9 +615,10 @@ impl Workbench {
                 }
                 match self.docs.iter().position(|d| d.path == abs) {
                     Some(ix) => {
-                        let ed = self.docs[ix].editor.clone();
-                        let t = text.clone();
-                        ed.update(cx, |s, cx| s.set_value(t, window, cx));
+                        if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+                            let t = text.clone();
+                            ed.update(cx, |s, cx| s.set_value(t, window, cx));
+                        }
                         self.activate(ix, window, cx);
                     }
                     None => {
@@ -644,9 +647,10 @@ impl Workbench {
                 doc.shadow = after.clone();
                 doc.rev = rev;
                 let abs = doc.path.clone();
-                if let Some(d) = self.docs.iter().find(|d| d.path == abs) {
-                    let ed = d.editor.clone();
-                    apply_to_editor(&ed, &mine, window, cx);
+                if let Some(ix) = self.docs.iter().position(|d| d.path == abs) {
+                    if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+                        apply_to_editor(&ed, &mine, window, cx);
+                    }
                 }
                 self.collab.note_edit(who, &path, ai, &before, &after);
             }
@@ -676,7 +680,7 @@ impl Workbench {
         if !self.collab.active() {
             return;
         }
-        let Some(d) = self.docs.iter().find(|d| &d.editor == editor) else { return };
+        let Some(d) = self.docs.iter().find(|d| d.editor.as_ref() == Some(editor)) else { return };
         let Some(rel) = self.collab.rel_of(&d.path) else { return };
         self.collab_flush_local(&rel, cx);
     }
@@ -693,7 +697,8 @@ impl Workbench {
         let host = self.collab.is_host();
         let Some(doc) = self.collab.docs.get_mut(rel) else { return };
         let Some(d) = self.docs.iter().find(|d| d.path == doc.path) else { return };
-        let now = d.editor.read(cx).value().to_string();
+        let Some(ed) = d.editor.as_ref() else { return };
+        let now = ed.read(cx).value().to_string();
         if now == doc.shadow {
             return;
         }
@@ -739,7 +744,7 @@ impl Workbench {
         let Some(ix) = self.active else { return };
         let Some(d) = self.docs.get(ix) else { return };
         let Some(rel) = self.collab.rel_of(&d.path) else { return };
-        let line = d.editor.read(cx).cursor_position().line + 1;
+        let line = d.cursor_position(cx).line + 1;
         if self.collab.last_cursor == (rel.clone(), line) {
             return;
         }

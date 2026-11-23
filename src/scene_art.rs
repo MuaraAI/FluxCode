@@ -142,17 +142,13 @@ fn ridge_image(key: RidgeKey, top: impl Fn(f32) -> f32) -> Option<std::sync::Arc
     let (w, h) = (key.iw as usize, key.ih as usize);
     let (cr, cg, cb) = (((key.c >> 16) & 0xff) as u8, ((key.c >> 8) & 0xff) as u8, (key.c & 0xff) as u8);
     let mut px = vec![0u8; w * h * 4];
+    let mut tops3 = Vec::with_capacity(w * 3);
     for x in 0..w {
-        let tops: [f32; 3] = [0.17, 0.5, 0.83].map(|o| top((x as f32 + o) / w as f32) * h as f32);
-        for y in 0..h {
-            let cov = tops.iter().map(|t| ((y + 1) as f32 - t).clamp(0., 1.)).sum::<f32>() / 3.;
-            if cov <= 0. {
-                continue;
-            }
-            let i = (y * w + x) * 4;
-            px[i..i + 4].copy_from_slice(&[cb, cg, cr, (cov * 255.).round() as u8]);
+        for o in [0.17f32, 0.5, 0.83] {
+            tops3.push(top((x as f32 + o) / w as f32) * h as f32);
         }
     }
+    crate::accel::raster_ridge(&tops3, w, h, [cr, cg, cb], &mut px);
     let buf = image::RgbaImage::from_raw(w as u32, h as u32, px)?;
     let img = std::sync::Arc::new(RenderImage::new(vec![image::Frame::new(buf)]));
     RIDGES.with(|r| r.borrow_mut().push((key, img.clone(), frame)));

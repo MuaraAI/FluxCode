@@ -11,6 +11,8 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::PathBuf;
 
 const MAX_HITS: usize = 60;
+const OFF_THREAD_QUICK: usize = 8_000;
+static QUICK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(test)]
 pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
@@ -19,38 +21,21 @@ pub fn fuzzy(query: &str, path: &str) -> Option<i32> {
 }
 
 pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
-    if q.is_empty() {
-        return Some(0);
+    crate::accel::fuzzy_score(q, p)
+}
+
+fn score_top_k(qb: &[u8], lower: &[String], k: usize) -> Vec<usize> {
+    let mut scored: Vec<(i32, usize)> = lower
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| fuzzy_lower(qb, p.as_bytes()).map(|s| (s, i)))
+        .collect();
+    if scored.len() > k {
+        scored.select_nth_unstable_by(k, |a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        scored.truncate(k);
     }
-    let name_start = p.iter().rposition(|c| *c == b'\\' || *c == b'/').map_or(0, |i| i + 1);
-    let mut score = 0;
-    let mut at = 0usize;
-    let mut prev: Option<usize> = None;
-    for &qc in q {
-        let pos = at + p[at..].iter().position(|&b| b == qc)?;
-        score += 1;
-        if prev.is_some_and(|pv| pv + 1 == pos) {
-            score += 5;
-        }
-        if pos >= name_start {
-            score += 3;
-        }
-        if pos == 0 || matches!(p[pos - 1], b'\\' | b'/' | b'_' | b'-' | b'.' | b' ') {
-            score += 4;
-        }
-        prev = Some(pos);
-        at = pos + 1;
-    }
-    let name = &p[name_start..];
-    let contains = |hay: &[u8]| hay.windows(q.len()).any(|w| w == q);
-    if name.starts_with(q) {
-        score += 100;
-    } else if contains(name) {
-        score += 60;
-    } else if contains(p) {
-        score += 25;
-    }
-    Some(score * 10 - p.len() as i32)
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, i)| i).collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -206,15 +191,52 @@ impl Workbench {
         }
         let files = self.all_files.clone();
         let lower = self.all_lower.clone();
-        let qb: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-        let mut scored: Vec<(i32, usize)> = lower.iter().enumerate().filter_map(|(i, p)| fuzzy_lower(&qb, p.as_bytes()).map(|s| (s, i))).collect();
+        let gen = QUICK_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if q.trim().is_empty() {
             let open: Vec<String> = self.docs.iter().map(|d| d.path.to_string_lossy().into_owned()).collect();
-            scored.sort_by_key(|(_, i)| if open.contains(&files[*i]) { 0 } else { 1 });
-        } else {
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            let mut hits = Vec::with_capacity(MAX_HITS.min(files.len()));
+            for (i, f) in files.iter().enumerate() {
+                if open.contains(f) {
+                    hits.push(i);
+                    if hits.len() >= MAX_HITS {
+                        break;
+                    }
+                }
+            }
+            if hits.len() < MAX_HITS {
+                for (i, f) in files.iter().enumerate() {
+                    if !open.contains(f) {
+                        hits.push(i);
+                        if hits.len() >= MAX_HITS {
+                            break;
+                        }
+                    }
+                }
+            }
+            self.quick.hits = hits;
+            self.quick.sel = 0;
+            cx.notify();
+            return;
         }
-        self.quick.hits = scored.into_iter().take(MAX_HITS).map(|(_, i)| i).collect();
+        let qb: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+        if lower.len() > OFF_THREAD_QUICK {
+            cx.spawn(async move |this, cx| {
+                let hits = cx.background_spawn(async move { score_top_k(&qb, &lower, MAX_HITS) }).await;
+                if QUICK_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen {
+                    return;
+                }
+                _ = this.update(cx, |this, cx| {
+                    if this.quick.open && this.quick.mode == Mode::Files {
+                        this.quick.hits = hits;
+                        this.quick.sel = 0;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+        self.quick.hits = score_top_k(&qb, &lower, MAX_HITS);
         self.quick.sel = 0;
         cx.notify();
     }
@@ -280,9 +302,11 @@ impl Workbench {
 
     pub(crate) fn quick_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = false;
-        if let Some(ix) = self.active {
-            let h = self.docs[ix].editor.focus_handle(cx);
+        if let Some(ed) = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.as_ref()) {
+            let h = ed.focus_handle(cx);
             h.focus(window, cx);
+        } else {
+            self.focus.focus(window, cx);
         }
         cx.notify();
     }
@@ -446,8 +470,10 @@ impl Workbench {
                 let qv = q.input.read(cx).value().to_string();
                 let (cur, total) = self
                     .active
-                    .map(|ix| {
-                        let e = self.docs[ix].editor.read(cx);
+                    .and_then(|ix| self.docs.get(ix))
+                    .and_then(|d| d.editor.as_ref())
+                    .map(|ed| {
+                        let e = ed.read(cx);
                         (e.cursor_position().line + 1, e.value().lines().count().max(1))
                     })
                     .unwrap_or((1, 1));
@@ -558,41 +584,46 @@ impl Workbench {
 
     fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {
         let q = &self.quick;
+        let motion = !cx.reduce_motion();
         let fade = || Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint());
+        let scrim = div()
+            .id("quick-scrim")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(gpui_kit::black().opacity(0.38))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| this.quick_close(w, cx)));
+        let scrim_el = if motion {
+            scrim.with_animation("quick-scrim-in", fade(), |d, t| d.opacity(t)).into_any_element()
+        } else {
+            scrim.into_any_element()
+        };
+        let panel = v_flex()
+            .id("quick-open")
+            .occlude()
+            .w(theme::u(600.))
+            .max_w(relative(0.92))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c(theme::BORDER_STRONG))
+            .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
+            .shadow_lg()
+            .overflow_hidden()
+            .child(div().p_2().key_context("QuickOpen").child(Input::new(&q.input).small()))
+            .child(list);
+        let panel_el = if motion {
+            panel.with_animation("quick-open-in", fade(), |d, t| d.opacity(t).mt(px((1. - t) * 4.))).into_any_element()
+        } else {
+            panel.into_any_element()
+        };
         div()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .child(
-                div()
-                    .id("quick-scrim")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .bg(gpui_kit::black().opacity(0.38))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| this.quick_close(w, cx)))
-                    .with_animation("quick-scrim-in", fade(), |d, t| d.opacity(t)),
-            )
-            .child(
-                div().absolute().top(theme::u(38.)).left_0().right_0().flex().justify_center().child(
-                    v_flex()
-                        .id("quick-open")
-                        .occlude()
-                        .w(theme::u(600.))
-                        .max_w(relative(0.92))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(c(theme::BORDER_STRONG))
-                        .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
-                        .shadow_lg()
-                        .overflow_hidden()
-                        .child(div().p_2().key_context("QuickOpen").child(Input::new(&q.input).small()))
-                        .child(list)
-                        .with_animation("quick-open-in", fade(), |d, t| d.opacity(t)),
-                ),
-            )
+            .child(scrim_el)
+            .child(div().absolute().top(theme::u(38.)).left_0().right_0().flex().justify_center().child(panel_el))
     }
 }
 
@@ -655,5 +686,14 @@ mod tests {
         assert!(fuzzy("req", "requirements.txt").unwrap() > fuzzy("req", "src\\query\\r.txt").unwrap_or(i32::MIN));
         assert!(fuzzy("rea", "readme.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
         assert!(fuzzy("rea", "docs\\area.md").unwrap() > fuzzy("rea", "promo-video\\out\\fix1\\a.png").unwrap());
+    }
+
+    #[test]
+    fn score_top_k_returns_best_matches_in_order() {
+        let paths: Vec<String> = (0..100).map(|i| format!("src/other/file_{i}.rs")).chain(["src/main.rs".to_string(), "docs/main_guide.md".to_string()]).collect();
+        let hits = super::score_top_k(b"main", &paths, 2);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(paths[hits[0]], "src/main.rs");
+        assert_eq!(paths[hits[1]], "docs/main_guide.md");
     }
 }

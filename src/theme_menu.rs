@@ -93,53 +93,61 @@ impl Workbench {
                     })),
             );
         }
-        Some(
-            v_flex()
-                .id("theme-menu")
-                .key_context("ThemeMenu")
-                .absolute()
-                .right(px(8.))
-                .bottom(theme::u(30.))
-                .w(theme::u(272.))
-                .max_w(relative(0.92))
-                .glass_pop()
-                .occlude()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.pop_closed_outside("theme");
+        let menu = v_flex()
+            .id("theme-menu")
+            .key_context("ThemeMenu")
+            .absolute()
+            .right(px(8.))
+            .bottom(theme::u(30.))
+            .w(theme::u(272.))
+            .max_w(relative(0.92))
+            .glass_pop()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.pop_closed_outside("theme");
+                this.theme_menu = false;
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
                     this.theme_menu = false;
                     cx.notify();
-                }))
-                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                    if e.keystroke.key == "escape" {
+                }
+            }))
+            .child(div().px_3().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("Color theme")))
+            .child(list)
+            .child(
+                h_flex()
+                    .id("theme-more")
+                    .mx_1()
+                    .mb_1()
+                    .px_2()
+                    .py_1p5()
+                    .gap_2()
+                    .rounded(px(5.))
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .child(Icon::new(IconName::Settings).size(theme::u(13.)))
+                    .child(div().flex_1().child(tr("Background image and more in Settings")))
+                    .on_click(cx.listener(|this, _, w, cx| {
                         this.theme_menu = false;
-                        cx.notify();
-                    }
-                }))
-                .child(div().px_3().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("Color theme")))
-                .child(list)
-                .child(
-                    h_flex()
-                        .id("theme-more")
-                        .mx_1()
-                        .mb_1()
-                        .px_2()
-                        .py_1p5()
-                        .gap_2()
-                        .rounded(px(5.))
-                        .border_t_1()
-                        .border_color(c(theme::BORDER))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(c(theme::FG_MUTED))
-                        .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                        .child(Icon::new(IconName::Settings).size(theme::u(13.)))
-                        .child(div().flex_1().child(tr("Background image and more in Settings")))
-                        .on_click(cx.listener(|this, _, w, cx| {
-                            this.theme_menu = false;
-                            w.dispatch_action(Box::new(ShowSettings), cx);
-                        })),
-                )
-                .into_any_element(),
-        )
+                        w.dispatch_action(Box::new(ShowSettings), cx);
+                    })),
+            );
+        let el = if cx.reduce_motion() {
+            menu.into_any_element()
+        } else {
+            menu.with_animation(
+                "theme-menu-in",
+                Animation::new(std::time::Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                |el, t| el.opacity(t).bottom(theme::u(30.) - px((1. - t) * 6.)),
+            )
+            .into_any_element()
+        };
+        Some(el)
     }
 }

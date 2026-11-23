@@ -5,7 +5,7 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::f32::consts::{PI, TAU};
 use std::time::{Duration, Instant};
 
-const FRAME: Duration = Duration::from_millis(33);
+const FRAME: Duration = Duration::from_millis(16);
 
 pub struct InstallAnim {
     tracker: Tracker,

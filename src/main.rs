@@ -4,6 +4,7 @@
 #[macro_use]
 mod i18n;
 mod i18n_id;
+mod accel;
 mod acp;
 mod boot;
 mod browser;
@@ -14,9 +15,9 @@ mod editor_cmds;
 mod agent;
 mod agent_ask;
 mod agent_ctx;
-mod brackets;
 mod complete;
 mod core;
+mod diagnostics;
 mod diff;
 mod diff_view;
 mod docs;

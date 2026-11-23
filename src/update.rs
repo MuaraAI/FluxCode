@@ -718,12 +718,15 @@ impl Workbench {
             .children(sub.map(|s| div().pl(theme::u(21.)).pr_1().text_xs().text_color(c(theme::FG_DIM)).child(s)));
 
         let key: SharedString = format!("update-in-{tag}").into();
-        Some(
+        let el = if cx.reduce_motion() {
+            card.bottom(theme::u(34.)).into_any_element()
+        } else {
             card.with_animation(key, Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()), |el, t| {
                 el.bottom(theme::u(34.) + px((1. - t) * 10.)).opacity(t)
             })
-            .into_any_element(),
-        )
+            .into_any_element()
+        };
+        Some(el)
     }
 }
 

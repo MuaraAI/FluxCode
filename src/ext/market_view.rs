@@ -1106,7 +1106,7 @@ impl Workbench {
             )
             .child(div().h(px(1.)).bg(c(theme::BORDER)))
             .child(v_flex().gap_2().child(section("README")).child(readme));
-        v_flex()
+        let page_el = v_flex()
             .id("vsx-page")
             .key_context("ExtPage")
             .size_full()
@@ -1122,7 +1122,17 @@ impl Workbench {
                     cx.notify();
                 }
             }))
-            .child(body)
-            .into_any_element()
+            .child(body);
+        if cx.reduce_motion() {
+            page_el.into_any_element()
+        } else {
+            page_el
+                .with_animation(
+                    "vsx-page-in",
+                    Animation::new(std::time::Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                    |el, t| el.opacity(t),
+                )
+                .into_any_element()
+        }
     }
 }

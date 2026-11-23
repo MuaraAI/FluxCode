@@ -181,6 +181,12 @@ impl Workbench {
             .child(header)
             .child(if compact { v_flex().flex_1().min_h_0().child(nav).child(content).into_any_element() } else { h_flex().flex_1().min_h_0().items_stretch().child(nav).child(content).into_any_element() });
 
+        let modal_card: AnyElement = if cx.reduce_motion() {
+            card.into_any_element()
+        } else {
+            card.with_animation("ag-settings-in", Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).mt(px((1. - t) * 6.))).into_any_element()
+        };
+
         Some(
             div()
                 .absolute()
@@ -189,7 +195,7 @@ impl Workbench {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(card.with_animation("ag-settings-in", Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).mt(px((1. - t) * 6.))))
+                .child(modal_card)
                 .into_any_element(),
         )
     }

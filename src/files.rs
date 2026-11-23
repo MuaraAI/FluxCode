@@ -1,16 +1,31 @@
 
 use crate::fluxicon::{self, FluxIcon};
-use gpui_kit::component::tree::TreeItem;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv",
     ".cache", ".local", ".cargo", ".rustup", ".npm", ".nvm", ".bun", ".pnpm-store", ".yarn",
     ".deno", ".volta", ".asdf", ".android", ".gradle", ".m2", ".vscode-server", ".ollama",
     ".oh-my-zsh", ".dotnet", ".nuget", ".conda", ".pyenv", ".sdkman", ".gem", ".pub-cache",
-    ".stack", ".ghcup", ".cabal", ".terraform.d",
+    ".stack", ".ghcup", ".cabal", ".terraform.d", ".svelte-kit", ".nuxt", ".output", ".turbo",
+    ".parcel-cache", ".vite", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "coverage",
+    "__snapshots__", "Pods", "DerivedData", ".zig-cache", "zig-out",
 ];
-pub(crate) const MAX_ENTRIES: usize = 20_000;
+pub(crate) const MAX_ENTRIES: usize = 150_000;
+
+fn cmp_name(a: &str, b: &str) -> std::cmp::Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        for (x, y) in a.bytes().zip(b.bytes()) {
+            let ord = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        return a.len().cmp(&b.len());
+    }
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
 
 #[derive(Clone)]
 pub struct Node {
@@ -27,23 +42,42 @@ pub fn is_image(path: &Path) -> bool {
     )
 }
 
-pub fn flatten(nodes: &[Node], out: &mut Vec<String>) {
-    for n in nodes {
-        match &n.children {
-            Some(ch) => flatten(ch, out),
-            None => out.push(n.id.clone()),
+pub fn scan_paths(root: &Path, max: usize) -> Vec<String> {
+    if let Some(mut git) = crate::core::git_files(root) {
+        git.truncate(max);
+        return git.into_iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    }
+    let mut out = Vec::new();
+    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
+    while let Some(dir) = queue.pop_front() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                let name = e.file_name();
+                if let Some(s) = name.to_str() {
+                    if SKIP_DIRS.iter().any(|skip| s.eq_ignore_ascii_case(skip)) {
+                        continue;
+                    }
+                }
+                queue.push_back(e.path());
+            } else if ft.is_file() {
+                out.push(e.path().to_string_lossy().into_owned());
+            }
         }
     }
-}
-
-pub fn scan(root: &Path) -> Vec<Node> {
-    let mut budget = MAX_ENTRIES;
-    walk(root, &mut budget)
+    out
 }
 
 pub fn nodes_from_remote(dir: &Path, entries: Vec<(String, bool)>) -> Vec<Node> {
     let mut entries = entries;
-    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| cmp_name(&a.0, &b.0)));
     entries
         .into_iter()
         .map(|(name, is_dir)| {
@@ -88,7 +122,7 @@ fn list(dir: &Path) -> Vec<Node> {
             (is_dir, e.file_name().to_string_lossy().into_owned(), p)
         })
         .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| cmp_name(&a.1, &b.1)));
     entries
         .into_iter()
         .map(|(is_dir, name, path)| {
@@ -102,41 +136,92 @@ fn list(dir: &Path) -> Vec<Node> {
         .collect()
 }
 
-pub fn scan_roots(roots: &[std::path::PathBuf]) -> Vec<Node> {
-    let mut budget = MAX_ENTRIES;
-    roots
-        .iter()
-        .map(|r| Node {
-            id: r.to_string_lossy().into_owned(),
-            name: r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| r.display().to_string()),
-            children: Some(walk(r, &mut budget)),
-            loaded: true,
-        })
-        .collect()
-}
-
-pub fn to_items(nodes: Vec<Node>, dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
-    nodes
-        .into_iter()
-        .map(|n| match n.children {
-            Some(ch) => {
-                dirs.insert(n.id.clone());
-                let mut item = TreeItem::new(n.id.clone(), n.name);
-                item = if n.loaded {
-                    item.children(to_items(ch, dirs, expanded))
-                } else {
-                    item.child(TreeItem::new(format!("{}\u{1}", n.id), "…"))
-                };
-                if expanded.contains(&n.id) {
-                    item = item.expanded(true);
+pub fn merge_nodes(old: Vec<Node>, new: Vec<Node>) -> Vec<Node> {
+    let mut old_map: std::collections::HashMap<String, Node> = old.into_iter().map(|n| (n.id.clone(), n)).collect();
+    new.into_iter()
+        .map(|mut n| {
+            if let Some(o) = old_map.remove(&n.id) {
+                if n.children.is_some() {
+                    if !n.loaded && o.loaded {
+                        n.children = o.children;
+                        n.loaded = true;
+                    } else if n.loaded && o.loaded {
+                        if let (Some(old_ch), Some(new_ch)) = (o.children, n.children.take()) {
+                            n.children = Some(merge_nodes(old_ch, new_ch));
+                        }
+                    }
                 }
-                item
             }
-            None => TreeItem::new(n.id, n.name),
+            n
         })
         .collect()
 }
 
+pub fn hydrate_expanded(nodes: &mut [Node], expanded: &HashSet<String>, list_dir: &dyn Fn(&Path) -> Vec<Node>) {
+    for n in nodes.iter_mut() {
+        if n.children.is_some() && expanded.contains(&n.id) {
+            let children = list_dir(Path::new(&n.id));
+            n.children = Some(children);
+            n.loaded = true;
+            if let Some(ch) = n.children.as_mut() {
+                hydrate_expanded(ch, expanded, list_dir);
+            }
+        } else if n.loaded {
+            if let Some(ch) = n.children.as_mut() {
+                hydrate_expanded(ch, expanded, list_dir);
+            }
+        }
+    }
+}
+
+pub fn find_node<'a>(nodes: &'a mut [Node], id: &str) -> Option<&'a mut Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(ch) = &mut n.children {
+            if let Some(found) = find_node(ch, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+pub fn contains_node(nodes: &[Node], id: &str) -> bool {
+    for n in nodes {
+        if n.id == id {
+            return true;
+        }
+        if let Some(ch) = &n.children {
+            if contains_node(ch, id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn ancestor_dirs(path: &Path, roots: &[PathBuf]) -> Vec<String> {
+    let Some(root) = roots.iter().find(|r| path.starts_with(r)) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    if roots.len() > 1 {
+        dirs.push(root.to_string_lossy().into_owned());
+    }
+    let mut cur = root.clone();
+    if let Ok(rel) = path.strip_prefix(root) {
+        let comps: Vec<_> = rel.components().collect();
+        for comp in comps.iter().take(comps.len().saturating_sub(1)) {
+            cur.push(comp);
+            dirs.push(cur.to_string_lossy().into_owned());
+        }
+    }
+    dirs
+}
+
+#[cfg(test)]
 fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
@@ -147,7 +232,7 @@ fn walk(dir: &Path, budget: &mut usize) -> Vec<Node> {
             (is_dir, e.file_name().to_string_lossy().into_owned(), p)
         })
         .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| cmp_name(&a.1, &b.1)));
 
     let mut out = Vec::with_capacity(entries.len());
     let mut dirs: Vec<(usize, String, std::path::PathBuf)> = Vec::new();
@@ -547,5 +632,65 @@ mod tests {
         assert_eq!(l("deploy", "#!/bin/bash -e"), "Shell");
         assert_eq!(l("LOCK", ""), "Plain Text");
         assert_eq!(l("notes.txt", ""), "Plain Text");
+    }
+
+    #[test]
+    fn cmp_name_and_scan_paths_skip_build_dirs() {
+        assert_eq!(super::cmp_name("Alpha.rs", "beta.rs"), std::cmp::Ordering::Less);
+        assert_eq!(super::cmp_name("file", "file.rs"), std::cmp::Ordering::Less);
+        let root = std::env::temp_dir().join(format!("fluxcode-scanpaths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::write(root.join("src/main.rs"), b"fn main() {}").unwrap();
+        std::fs::write(root.join("node_modules/pkg/index.js"), b"x").unwrap();
+        let got = super::scan_paths(&root, 100);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].ends_with("main.rs"), "{got:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn merge_nodes_preserves_nested_loaded_children_in_multi_root() {
+        use super::{merge_nodes, Node};
+        let old = vec![Node {
+            id: "/ws".into(),
+            name: "ws".into(),
+            loaded: true,
+            children: Some(vec![Node {
+                id: "/ws/a".into(),
+                name: "a".into(),
+                loaded: true,
+                children: Some(vec![Node { id: "/ws/a/f.js".into(), name: "f.js".into(), loaded: true, children: None }]),
+            }]),
+        }];
+        let fresh = vec![Node {
+            id: "/ws".into(),
+            name: "ws".into(),
+            loaded: true,
+            children: Some(vec![
+                Node { id: "/ws/a".into(), name: "a".into(), loaded: false, children: Some(Vec::new()) },
+                Node { id: "/ws/b".into(), name: "b".into(), loaded: false, children: Some(Vec::new()) },
+            ]),
+        }];
+        let merged = merge_nodes(old, fresh);
+        let a = &merged[0].children.as_ref().unwrap()[0];
+        assert!(a.loaded);
+        assert_eq!(a.children.as_ref().unwrap().len(), 1);
+        assert_eq!(a.children.as_ref().unwrap()[0].name, "f.js");
+    }
+
+    #[test]
+    fn ancestor_dirs_lists_only_parents_within_root() {
+        let roots = vec![std::path::PathBuf::from("C:/proj")];
+        let dirs = super::ancestor_dirs(Path::new("C:/proj/a/b/c.js"), &roots);
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs[0].ends_with("a"));
+        assert!(dirs[1].ends_with("b"));
+        let multi = vec![std::path::PathBuf::from("C:/p1"), std::path::PathBuf::from("C:/p2")];
+        let dirs2 = super::ancestor_dirs(Path::new("C:/p2/sub/x.json"), &multi);
+        assert_eq!(dirs2.len(), 2);
+        assert!(dirs2[0].ends_with("p2"));
+        assert!(dirs2[1].ends_with("sub"));
     }
 }
