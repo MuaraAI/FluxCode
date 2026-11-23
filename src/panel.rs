@@ -7,7 +7,10 @@ use crate::workbench::*;
 use gpui_kit::component::{
     h_flex,
     highlighter::{Diagnostic, DiagnosticSeverity},
-    input::{EditorState, Input, Position, Rope},
+    input::{
+        EditorState, Input, OverviewRulerDecoration, OverviewRulerDecorationCollection, OverviewRulerLane, Position,
+        RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Rope,
+    },
     v_flex, Icon, IconName, RopeExt, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -44,6 +47,63 @@ fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
                 .with_source("python")
         })
         .collect()
+}
+
+fn sync_diagnostic_decorations(
+    ed: &Entity<EditorState>,
+    ranges_col: Option<&RangeDecorationCollection>,
+    ruler_col: Option<&OverviewRulerDecorationCollection>,
+    mine: &[Problem],
+    code_diags: &[crate::diagnostics::CodeDiag],
+    cx: &mut App,
+) {
+    if ranges_col.is_none() && ruler_col.is_none() {
+        return;
+    }
+    let mut rows: std::collections::BTreeMap<usize, bool> = std::collections::BTreeMap::new();
+    for p in mine {
+        rows.insert(p.line.saturating_sub(1) as usize, true);
+    }
+    for d in code_diags {
+        let is_err = d.severity == crate::diagnostics::Severity::Error;
+        rows.entry(d.row as usize)
+            .and_modify(|e| *e |= is_err)
+            .or_insert(is_err);
+    }
+    let rope = ed.read(cx).text().clone();
+    let total_lines = rope.lines_len();
+    let err_fill = c(theme::DANGER).opacity(0.14);
+    let warn_fill = c(theme::WARN).opacity(0.09);
+    let err_mark = c(theme::DANGER);
+    let warn_mark = c(theme::WARN);
+    let mut range_decos = Vec::with_capacity(rows.len());
+    let mut ruler_decos = Vec::with_capacity(rows.len());
+    for (row, is_err) in rows {
+        if row >= total_lines {
+            continue;
+        }
+        let start = rope.line_start_offset(row);
+        let end = rope.line_end_offset(row);
+        let span = if end > start { start..end } else { start..start.saturating_add(1).min(rope.len()) };
+        if !span.is_empty() {
+            range_decos.push(
+                RangeDecoration::new(span.clone())
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(if is_err { err_fill } else { warn_fill }),
+            );
+            ruler_decos.push(
+                OverviewRulerDecoration::new(span)
+                    .with_lane(OverviewRulerLane::Right)
+                    .with_color(if is_err { err_mark } else { warn_mark }),
+            );
+        }
+    }
+    if let Some(col) = ranges_col {
+        col.set(range_decos, cx);
+    }
+    if let Some(col) = ruler_col {
+        col.set(ruler_decos, cx);
+    }
 }
 
 fn write_diagnostics(
@@ -579,6 +639,8 @@ impl Workbench {
 
         let Some(d) = self.docs.get(ix) else { return };
         let Some(editor) = d.editor.clone() else { return };
+        let diag_ranges = d.diag_ranges.clone();
+        let diag_ruler = d.diag_ruler.clone();
         let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
         let lang = (!d.read_only).then_some(d.lang);
         let doc_path = d.path.clone();
@@ -595,6 +657,7 @@ impl Workbench {
                 let mine_diags = build_mine_diagnostics(&mine, ed.text());
                 write_diagnostics(ed, mine_diags, &code_diags, cx);
             });
+            sync_diagnostic_decorations(&editor, diag_ranges.as_ref(), diag_ruler.as_ref(), &mine, &code_diags, cx);
             if let Some(d) = self.docs.get_mut(ix) {
                 d.diagnostics = code_diags;
                 d.error_count = err_n;
@@ -611,6 +674,7 @@ impl Workbench {
             }
             write_diagnostics(ed, mine_diags, &[], cx);
         });
+        sync_diagnostic_decorations(&editor, diag_ranges.as_ref(), diag_ruler.as_ref(), &mine, &[], cx);
         if async_rope.is_none() {
             if let Some(d) = self.docs.get_mut(ix) {
                 d.diagnostics.clear();
@@ -633,6 +697,8 @@ impl Workbench {
                         return;
                     };
                     let Some(ed_ent) = this.docs[ix].editor.clone() else { return };
+                    let ranges = this.docs[ix].diag_ranges.clone();
+                    let ruler = this.docs[ix].diag_ruler.clone();
                     let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
                     let warn_n = code_diags.len() - err_n;
                     let mine: Vec<Problem> = this.problems.iter().filter(|p| same_path(&p.path, &doc_path)).cloned().collect();
@@ -640,6 +706,7 @@ impl Workbench {
                         let mine_diags = build_mine_diagnostics(&mine, ed.text());
                         write_diagnostics(ed, mine_diags, &code_diags, cx);
                     });
+                    sync_diagnostic_decorations(&ed_ent, ranges.as_ref(), ruler.as_ref(), &mine, &code_diags, cx);
                     this.docs[ix].diagnostics = code_diags;
                     this.docs[ix].error_count = err_n;
                     this.docs[ix].warn_count = warn_n;
@@ -1371,9 +1438,10 @@ impl Workbench {
         let count = shown_lines.len();
         let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
         let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
+        let mono_font = theme::resolve_mono_font(&self.settings.font_family, cx);
         let m = {
             let ts = window.text_system();
-            let id = ts.resolve_font(&font(self.settings.font_family.clone()));
+            let id = ts.resolve_font(&font(mono_font.clone()));
             let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
             Metrics { row: px((f32::from(font_size) * 1.6).round()), em }
         };
@@ -1428,7 +1496,7 @@ impl Workbench {
                 l.h_full()
             }
         })
-        .font_family(self.settings.font_family.clone())
+        .font_family(mono_font.clone())
         .font_weight(FontWeight::NORMAL)
         .text_size(font_size);
         let probe = {
@@ -1464,7 +1532,7 @@ impl Workbench {
             .pt(px(gap))
             .child(probe)
             .child(list)
-            .when(terminal, |d| d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(font_size, narrow, m)));
+            .when(terminal, |d| d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(mono_font, font_size, narrow, m)));
 
         let empty = count == 0;
         let hint = |line: &'static str| div().min_w_0().child(line);
@@ -1508,7 +1576,7 @@ impl Workbench {
             .child(wrap_tab(content))
     }
 
-    fn render_prompt(&self, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
+    fn render_prompt(&self, mono_font: SharedString, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
         let busy = self.term_running();
         let short = term::short_cwd(&self.term_cwd, self.root.as_deref());
         let place: SharedString = prompt_place(&short, self.panel_size.get().0).into();
@@ -1527,7 +1595,7 @@ impl Workbench {
             .px_3()
             .gap_2()
             .whitespace_nowrap()
-            .font_family(self.settings.font_family.clone())
+            .font_family(mono_font)
             .text_size(font_size)
             .when(!busy, |h| {
                 h.child(

@@ -196,6 +196,8 @@ pub(crate) struct Doc {
     pub diagnostics: Vec<crate::diagnostics::CodeDiag>,
     pub error_count: usize,
     pub warn_count: usize,
+    pub diag_ranges: Option<gpui_kit::component::input::RangeDecorationCollection>,
+    pub diag_ruler: Option<gpui_kit::component::input::OverviewRulerDecorationCollection>,
 }
 
 impl Doc {
@@ -236,6 +238,8 @@ impl Doc {
             diagnostics: Vec::new(),
             error_count: 0,
             warn_count: 0,
+            diag_ranges: None,
+            diag_ruler: None,
         }
     }
 
@@ -353,6 +357,14 @@ pub struct Workbench {
     pub(crate) tabs_width: Rc<std::cell::Cell<f32>>,
     pub(crate) tabs_scroll_x: Rc<std::cell::Cell<f32>>,
     pub(crate) opened_tab: Option<(PathBuf, u64)>,
+    pub(crate) tab_switch_seq: u64,
+    pub(crate) tab_hover_ix: Option<usize>,
+    pub(crate) tab_hover_from: (f32, f32),
+    pub(crate) tab_hover_to: (f32, f32),
+    pub(crate) tab_hover_seq: u64,
+    pub(crate) tab_hover_fade_in: bool,
+    pub(crate) tab_hover_leave: Option<((f32, f32), u64)>,
+    pub(crate) tab_hover_last_at: Option<std::time::Instant>,
     pub(crate) problems_scroll: UniformListScrollHandle,
     pub(crate) side_anim: std::cell::Cell<(bool, u64)>,
     pub(crate) full_anim: std::cell::Cell<(bool, u64)>,
@@ -582,6 +594,14 @@ impl Workbench {
             tabs_width: Rc::new(std::cell::Cell::new(960.)),
             tabs_scroll_x: Rc::new(std::cell::Cell::new(0.)),
             opened_tab: None,
+            tab_switch_seq: 0,
+            tab_hover_ix: None,
+            tab_hover_from: (0., 0.),
+            tab_hover_to: (0., 0.),
+            tab_hover_seq: 0,
+            tab_hover_fade_in: false,
+            tab_hover_leave: None,
+            tab_hover_last_at: None,
             problems_scroll: UniformListScrollHandle::new(),
             side_anim: std::cell::Cell::new((true, 0)),
             full_anim: std::cell::Cell::new((false, 0)),
@@ -696,6 +716,8 @@ impl Workbench {
         self.explorer.loading.clear();
         self.explorer.rows.clear();
         self.explorer.revealed_tab = None;
+        self.explorer.hovered_ix = None;
+        self.explorer.hover_leave = None;
         self.selected = None;
         self.explorer.scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.explorer.bump_workspace_anim(Vec::new());
@@ -865,7 +887,7 @@ impl Workbench {
         prep: &mut PreparedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> (Entity<EditorState>, Subscription, Option<crate::diff_view::DiffDoc>, Option<crate::fluxdoc::view::FluxView>) {
+    ) -> BuiltDocEditor {
         let s = &self.settings;
         let too_big_for_wrap = prep.text.len() > MAX_AUTO_WRAP_BYTES;
         let (tab, wrap, dots) = (s.tab_size, !too_big_for_wrap && (s.word_wrap || prep.long_lines), s.show_whitespace);
@@ -885,11 +907,15 @@ impl Workbench {
                 .soft_wrap(wrap)
                 .default_value(text)
         });
-        editor.update(cx, |e, cx| {
+        let (diag_ranges, diag_ruler) = editor.update(cx, |e, cx| {
             opts.apply(e, window, cx);
             if complex || read_only {
                 e.set_folding(false, window, cx);
             }
+            (
+                e.create_range_decorations_collection(Vec::new(), cx),
+                e.create_overview_ruler_decorations_collection(Vec::new(), cx),
+            )
         });
         if read_only {
             editor.update(cx, |e, cx| e.set_readonly(true, cx));
@@ -956,7 +982,14 @@ impl Workbench {
             })
             .detach();
         }
-        (editor, sub, diff, flux)
+        BuiltDocEditor {
+            editor,
+            sub,
+            diff,
+            flux,
+            diag_ranges,
+            diag_ruler,
+        }
     }
 
     fn report_open_error(&mut self, path: &Path, e: String, cx: &mut Context<Self>) {
@@ -985,7 +1018,7 @@ impl Workbench {
             self.status = crate::i18n::tr("Long lines detected: syntax colors and folding are off").into();
         }
         let is_markdown = prep.drawable == Some(true);
-        let (editor, sub, diff, flux) = self.build_doc_editor(&path, &mut prep, window, cx);
+        let built = self.build_doc_editor(&path, &mut prep, window, cx);
         let name: SharedString = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -1004,15 +1037,15 @@ impl Workbench {
             read_only: prep.read_only,
             banner,
             crlf: prep.crlf,
-            editor: Some(editor),
+            editor: Some(built.editor),
             dirty: false,
             gen: 0,
-            _sub: Some(sub),
+            _sub: Some(built.sub),
             image: None,
-            flux,
+            flux: built.flux,
             flux_source: is_markdown,
             flux_lazy: prep.flux_lazy,
-            diff,
+            diff: built.diff,
             long_lines: prep.long_lines,
             complex: prep.complex,
             wrap_override: None,
@@ -1023,6 +1056,8 @@ impl Workbench {
             diagnostics: Vec::new(),
             error_count: 0,
             warn_count: 0,
+            diag_ranges: Some(built.diag_ranges),
+            diag_ruler: Some(built.diag_ruler),
         });
         let ix = self.docs.len() - 1;
         self.apply_problems_to(ix, cx);
@@ -1088,10 +1123,10 @@ impl Workbench {
             return;
         }
         let is_markdown = prep.drawable == Some(true);
-        let (editor, sub, diff, flux) = self.build_doc_editor(&path, &mut prep, window, cx);
+        let built = self.build_doc_editor(&path, &mut prep, window, cx);
         let (saved_cursor, saved_scroll) = (self.docs[ix].saved_cursor, self.docs[ix].saved_scroll);
         if saved_cursor != Position::default() || saved_scroll != Point::default() {
-            editor.update(cx, |e, cx| {
+            built.editor.update(cx, |e, cx| {
                 if saved_cursor != Position::default() {
                     e.set_cursor_position(saved_cursor, window, cx);
                 }
@@ -1100,20 +1135,23 @@ impl Workbench {
                 }
             });
         }
+        let editor = built.editor.clone();
         let d = &mut self.docs[ix];
         d.lang = prep.lang;
         d.label = prep.label;
         d.read_only = prep.read_only;
         d.banner = prep.banner.map(SharedString::from);
         d.crlf = prep.crlf;
-        d.editor = Some(editor.clone());
-        d._sub = Some(sub);
-        d.flux = flux;
+        d.editor = Some(built.editor);
+        d._sub = Some(built.sub);
+        d.flux = built.flux;
         d.flux_source = is_markdown;
         d.flux_lazy = prep.flux_lazy;
-        d.diff = diff;
+        d.diff = built.diff;
         d.long_lines = prep.long_lines;
         d.complex = prep.complex;
+        d.diag_ranges = Some(built.diag_ranges);
+        d.diag_ruler = Some(built.diag_ruler);
         self.apply_problems_to(ix, cx);
         if self.active == Some(ix) {
             let d = &self.docs[ix];
@@ -1163,6 +1201,8 @@ impl Workbench {
             self.docs[ix]._sub = None;
             self.docs[ix].diff = None;
             self.docs[ix].flux = None;
+            self.docs[ix].diag_ranges = None;
+            self.docs[ix].diag_ruler = None;
         }
     }
 
@@ -1205,6 +1245,8 @@ impl Workbench {
             diagnostics: Vec::new(),
             error_count: 0,
             warn_count: 0,
+            diag_ranges: None,
+            diag_ruler: None,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -1419,8 +1461,11 @@ impl Workbench {
         let now = std::time::Instant::now();
         self.switch_fast = self
             .last_switch
-            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(300));
+            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(90));
         self.last_switch = Some(now);
+        if self.active != Some(ix) {
+            self.tab_switch_seq = self.tab_switch_seq.wrapping_add(1);
+        }
         self.active = Some(ix);
         if self.docs[ix].editor.is_none() && self.docs[ix].image.is_none() {
             self.hydrate_doc(ix, false, window, cx);
@@ -2472,6 +2517,48 @@ impl Workbench {
         v.into_any_element()
     }
 
+    fn tab_hover_enter(&mut self, ix: usize, left_px: f32, width_px: f32, cx: &mut Context<Self>) {
+        if self.tab_hover_ix == Some(ix) && (self.tab_hover_to.0 - left_px).abs() < 0.5 && (self.tab_hover_to.1 - width_px).abs() < 0.5 {
+            return;
+        }
+        let gliding = self.tab_hover_ix.is_some()
+            || self.tab_hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
+        self.tab_hover_from = if gliding { self.tab_hover_to } else { (left_px, width_px) };
+        self.tab_hover_to = (left_px, width_px);
+        self.tab_hover_ix = Some(ix);
+        self.tab_hover_fade_in = !gliding;
+        self.tab_hover_leave = None;
+        self.tab_hover_last_at = Some(std::time::Instant::now());
+        self.tab_hover_seq = self.tab_hover_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    fn tab_hover_clear(&mut self, cx: &mut Context<Self>) {
+        if self.tab_hover_ix.take().is_none() {
+            return;
+        }
+        self.tab_hover_last_at = Some(std::time::Instant::now());
+        if cx.reduce_motion() {
+            self.tab_hover_leave = None;
+            cx.notify();
+            return;
+        }
+        self.tab_hover_seq = self.tab_hover_seq.wrapping_add(1);
+        let seq = self.tab_hover_seq;
+        self.tab_hover_leave = Some((self.tab_hover_to, seq));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(130)).await;
+            _ = this.update(cx, |this, cx| {
+                if this.tab_hover_leave.is_some_and(|(_, s)| s == seq) {
+                    this.tab_hover_leave = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = f32::from(theme::u(1.));
         let widths: Vec<f32> = self
@@ -2486,6 +2573,70 @@ impl Workbench {
         let (range, left_w, right_w) = visible_tab_window(&widths, scroll_x, viewport_w);
         let motion = !cx.reduce_motion();
         let opened_tab = self.opened_tab.clone();
+        let switch_seq = self.tab_switch_seq;
+
+        let mut tab_lefts: Vec<f32> = Vec::with_capacity(widths.len());
+        let mut acc = 0.;
+        for &w in &widths {
+            tab_lefts.push(acc);
+            acc += w;
+        }
+
+        let hover_pill: Option<AnyElement> = if !motion {
+            None
+        } else if let Some(hix) = self.tab_hover_ix.filter(|&i| i < widths.len()) {
+            let live_x = tab_lefts[hix] - scroll_x;
+            let live_w = widths[hix];
+            let (fx, fw) = self.tab_hover_from;
+            let (tx, tw) = self.tab_hover_to;
+            let seq = self.tab_hover_seq;
+            let fade_in = self.tab_hover_fade_in;
+            let scrolled = (live_x - tx).abs() > 1.0;
+            let pill = div()
+                .absolute()
+                .top(px(3.))
+                .bottom(px(3.))
+                .rounded(px(5.))
+                .bg(c(theme::BG_HOVER).opacity(0.72))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG).opacity(0.85));
+            Some(if scrolled {
+                pill.left(px(live_x + 2.)).w(px((live_w - 4.).max(4.))).into_any_element()
+            } else {
+                pill.with_animation(
+                    SharedString::from(format!("tab-hov-{seq}")),
+                    Animation::new(Duration::from_millis(if fade_in { 120 } else { 150 })).with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| {
+                        let x = fx + (tx - fx) * t;
+                        let w = fw + (tw - fw) * t;
+                        let op = if fade_in { t } else { 1. };
+                        d.left(px(x + 2.)).w(px((w - 4.).max(4.))).opacity(op)
+                    },
+                )
+                .into_any_element()
+            })
+        } else if let Some(((lx, lw), seq)) = self.tab_hover_leave {
+            Some(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .bottom(px(3.))
+                    .left(px(lx + 2.))
+                    .w(px((lw - 4.).max(4.)))
+                    .rounded(px(5.))
+                    .bg(c(theme::BG_HOVER).opacity(0.72))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG).opacity(0.85))
+                    .with_animation(
+                        SharedString::from(format!("tab-hov-out-{seq}")),
+                        Animation::new(Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(1. - t),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
 
         let probe = {
             let w_cell = self.tabs_width.clone();
@@ -2521,6 +2672,7 @@ impl Workbench {
             .map(|ix| {
                 let d = &self.docs[ix];
                 let w = widths[ix];
+                let left_in_view = tab_lefts[ix] - scroll_x;
                 let active = self.active == Some(ix);
                 let (icon, tint) = d.icon;
                 let errs = d.error_count;
@@ -2546,15 +2698,21 @@ impl Workbench {
                             line.into_any_element()
                         } else {
                             line.with_animation(
-                                SharedString::from(format!("tab-line-{}", d.path.display())),
-                                Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
+                                SharedString::from(format!("tab-line-{switch_seq}")),
+                                Animation::new(Duration::from_millis(190)).with_easing(gpui_kit::ease_out_quint()),
                                 |el, t| el.left(relative(0.5 * (1. - t))).right(relative(0.5 * (1. - t))),
                             )
                             .into_any_element()
                         };
                         s.bg(c(theme::BG_EDITOR)).child(el)
                     })
-                    .when(!active, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                    .when(!active && !motion, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                    .when(!active && motion, |s| s.hover(|s| s.text_color(c(theme::FG))))
+                    .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
+                        if *entered {
+                            this.tab_hover_enter(ix, left_in_view, w, cx);
+                        }
+                    }))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
                     .child(Icon::new(icon).flex_none().size(theme::u(15.)).text_color(theme::tint(tint)))
                     .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(d.name.clone()))
@@ -2639,14 +2797,22 @@ impl Workbench {
             .collect();
 
         div()
+            .id("tabs-wrap")
             .relative()
             .w_full()
             .h(theme::u(35.))
             .flex_none()
+            .overflow_hidden()
             .bg(c(theme::BG_SIDE))
             .border_b_1()
             .border_color(c(theme::BORDER))
+            .on_hover(cx.listener(|this, entered: &bool, _, cx| {
+                if !*entered {
+                    this.tab_hover_clear(cx);
+                }
+            }))
             .child(probe)
+            .children(hover_pill)
             .child(
                 h_flex()
                     .id("tabs")
@@ -2848,6 +3014,7 @@ impl Workbench {
                                     .child(msg),
                             );
                         };
+                        let mono_font = theme::resolve_mono_font(&self.settings.font_family, cx);
                         let el = div()
                             .flex_1()
                             .min_h_0()
@@ -2857,22 +3024,20 @@ impl Workbench {
                                     .bordered(false)
                                     .p_0()
                                     .h_full()
-                                    .font_family(self.settings.font_family.clone())
+                                    .font_family(mono_font)
                                     .text_size(px(self.settings.font_size)),
                             )
                             .child(self.smooth_scroll_layer(ScrollTarget::Editor(ed.clone()), cx));
                         if self.switch_fast || !motion {
                             v.child(el)
                         } else {
+                            let seq = self.tab_switch_seq;
                             v.child(
                                 el.with_animation(
-                                    SharedString::from(format!(
-                                        "doc-in-{}",
-                                        self.docs[ix].path.display()
-                                    )),
-                                    Animation::new(Duration::from_millis(160))
+                                    SharedString::from(format!("doc-in-{seq}")),
+                                    Animation::new(Duration::from_millis(190))
                                         .with_easing(gpui_kit::ease_out_quint()),
-                                    |el, t| el.opacity(0.55 + 0.45 * t),
+                                    |el, t| el.opacity(0.32 + 0.68 * t).mt(px((1. - t) * 5.)),
                                 ),
                             )
                         }
@@ -3665,6 +3830,15 @@ fn selection_guard() -> impl IntoElement {
     )
     .absolute()
     .size(px(0.))
+}
+
+struct BuiltDocEditor {
+    editor: Entity<EditorState>,
+    sub: Subscription,
+    diff: Option<crate::diff_view::DiffDoc>,
+    flux: Option<crate::fluxdoc::view::FluxView>,
+    diag_ranges: gpui_kit::component::input::RangeDecorationCollection,
+    diag_ruler: gpui_kit::component::input::OverviewRulerDecorationCollection,
 }
 
 struct PreparedFile {

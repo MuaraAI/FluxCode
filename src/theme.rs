@@ -578,16 +578,49 @@ pub fn editor_wash() -> Background {
     }
 }
 
+const MONO_FALLBACKS: &[&str] = &[
+    "Cascadia Code",
+    "Cascadia Mono",
+    "Consolas",
+    "JetBrains Mono",
+    "Fira Code",
+    "SF Mono",
+    "Menlo",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+];
+
+fn pick_mono_font(preferred: &str, available: &[String]) -> String {
+    if let Some(exact) = available.iter().find(|n| n.eq_ignore_ascii_case(preferred)) {
+        return exact.clone();
+    }
+    for &cand in MONO_FALLBACKS {
+        if let Some(found) = available.iter().find(|n| n.eq_ignore_ascii_case(cand)) {
+            return found.clone();
+        }
+    }
+    preferred.to_string()
+}
+
+pub fn resolve_mono_font(preferred: &str, cx: &App) -> gpui_kit::SharedString {
+    use std::sync::OnceLock;
+    static FONTS: OnceLock<Vec<String>> = OnceLock::new();
+    let available = FONTS.get_or_init(|| cx.text_system().all_font_names());
+    pick_mono_font(preferred, available).into()
+}
+
 pub fn apply(cx: &mut App) {
     let p = palette();
     let dark = match fade() {
         Some((from, e)) if e < 0.5 => from.dark,
         _ => p.dark,
     };
+    let mono = resolve_mono_font("Cascadia Code", cx);
     Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, None, cx);
     Theme::update(cx, |t| {
         t.font_size = u(13.);
-        t.mono_font_family = "Cascadia Code".into();
+        t.mono_font_family = mono;
         t.mono_font_size = gpui_kit::px(14.);
         t.radius = gpui_kit::px(4.);
         t.radius_lg = gpui_kit::px(6.);
@@ -614,6 +647,8 @@ pub fn apply(cx: &mut App) {
         k.secondary_hover = c(BG_HOVER);
         k.secondary_foreground = c(FG);
         k.danger = c(DANGER);
+        k.red = c(DANGER);
+        k.yellow = c(WARN);
         k.caret = c(ACCENT_TEXT);
         k.selection = c(Tok::Selection);
         k.sidebar = c(BG_SIDE);
@@ -688,6 +723,15 @@ mod tests {
             let r = contrast(p.hex(Tok::OnAccent), p.hex(Tok::Accent));
             assert!(r >= 5.1, "{}: OnAccent on Accent is only {r:.2}:1", p.id);
         }
+    }
+
+    #[test]
+    fn pick_mono_font_falls_back_to_installed_monospace() {
+        let win10 = vec!["Segoe UI".to_string(), "Consolas".to_string(), "Courier New".to_string()];
+        assert_eq!(pick_mono_font("Cascadia Code", &win10), "Consolas");
+        assert_eq!(pick_mono_font("Courier New", &win10), "Courier New");
+        let with_cascadia = vec!["Cascadia Code".to_string(), "Consolas".to_string()];
+        assert_eq!(pick_mono_font("Cascadia Code", &with_cascadia), "Cascadia Code");
     }
 
     #[test]

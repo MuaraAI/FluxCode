@@ -1547,6 +1547,14 @@ pub const ID: &[(&str, &str)] = &[
     ("Unexpected closing tag </{tag}>", "Tag penutup </{tag}> tidak terduga"),
     ("Expected '=' in TOML key-value assignment", "Harusnya '=' pada penetapan key-value TOML"),
     ("Unterminated raw string", "Raw string belum ditutup"),
+    ("Unexpected string: missing operator or comma", "String tidak terduga: kurang operator atau koma"),
+    ("Unexpected number: missing operator or comma", "Angka tidak terduga: kurang operator atau koma"),
+    ("Unexpected identifier: missing operator or comma", "Identifier tidak terduga: kurang operator atau koma"),
+    ("Unexpected operator '{op}'", "Operator '{op}' tidak terduga"),
+    ("Unexpected '=-': did you mean '==='?", "'=-' tidak terduga: maksudmu '==='?"),
+    ("Assignment '=' in condition: did you mean '==='?", "Penugasan '=' di dalam kondisi: maksudmu '==='?"),
+    ("Unexpected character '\\'", "Karakter '\\' tidak terduga"),
+    ("Expected expression after '{op}'", "Harusnya ekspresi setelah '{op}'"),
 ];
 
 #[cfg(test)]
