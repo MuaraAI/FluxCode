@@ -1,7 +1,7 @@
 
 use crate::fluxicon::{self, FluxIcon};
-use gpui_kit::component::tree::TreeItem;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "target", "dist", "build", ".next", "__pycache__", ".venv", "venv",
@@ -136,26 +136,89 @@ fn list(dir: &Path) -> Vec<Node> {
         .collect()
 }
 
-pub fn to_items(nodes: &[Node], dirs: &mut std::collections::HashSet<String>, expanded: &std::collections::HashSet<String>) -> Vec<TreeItem> {
-    nodes
-        .iter()
-        .map(|n| match &n.children {
-            Some(ch) => {
-                dirs.insert(n.id.clone());
-                let mut item = TreeItem::new(n.id.clone(), n.name.clone());
-                item = if n.loaded {
-                    item.children(to_items(ch, dirs, expanded))
-                } else {
-                    item.child(TreeItem::new(format!("{}\u{1}", n.id), "…"))
-                };
-                if expanded.contains(&n.id) {
-                    item = item.expanded(true);
+pub fn merge_nodes(old: Vec<Node>, new: Vec<Node>) -> Vec<Node> {
+    let mut old_map: std::collections::HashMap<String, Node> = old.into_iter().map(|n| (n.id.clone(), n)).collect();
+    new.into_iter()
+        .map(|mut n| {
+            if let Some(o) = old_map.remove(&n.id) {
+                if n.children.is_some() {
+                    if !n.loaded && o.loaded {
+                        n.children = o.children;
+                        n.loaded = true;
+                    } else if n.loaded && o.loaded {
+                        if let (Some(old_ch), Some(new_ch)) = (o.children, n.children.take()) {
+                            n.children = Some(merge_nodes(old_ch, new_ch));
+                        }
+                    }
                 }
-                item
             }
-            None => TreeItem::new(n.id.clone(), n.name.clone()),
+            n
         })
         .collect()
+}
+
+pub fn hydrate_expanded(nodes: &mut [Node], expanded: &HashSet<String>, list_dir: &dyn Fn(&Path) -> Vec<Node>) {
+    for n in nodes.iter_mut() {
+        if n.children.is_some() && expanded.contains(&n.id) {
+            let children = list_dir(Path::new(&n.id));
+            n.children = Some(children);
+            n.loaded = true;
+            if let Some(ch) = n.children.as_mut() {
+                hydrate_expanded(ch, expanded, list_dir);
+            }
+        } else if n.loaded {
+            if let Some(ch) = n.children.as_mut() {
+                hydrate_expanded(ch, expanded, list_dir);
+            }
+        }
+    }
+}
+
+pub fn find_node<'a>(nodes: &'a mut [Node], id: &str) -> Option<&'a mut Node> {
+    for n in nodes {
+        if n.id == id {
+            return Some(n);
+        }
+        if let Some(ch) = &mut n.children {
+            if let Some(found) = find_node(ch, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+pub fn contains_node(nodes: &[Node], id: &str) -> bool {
+    for n in nodes {
+        if n.id == id {
+            return true;
+        }
+        if let Some(ch) = &n.children {
+            if contains_node(ch, id) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn ancestor_dirs(path: &Path, roots: &[PathBuf]) -> Vec<String> {
+    let Some(root) = roots.iter().find(|r| path.starts_with(r)) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    if roots.len() > 1 {
+        dirs.push(root.to_string_lossy().into_owned());
+    }
+    let mut cur = root.clone();
+    if let Ok(rel) = path.strip_prefix(root) {
+        let comps: Vec<_> = rel.components().collect();
+        for comp in comps.iter().take(comps.len().saturating_sub(1)) {
+            cur.push(comp);
+            dirs.push(cur.to_string_lossy().into_owned());
+        }
+    }
+    dirs
 }
 
 #[cfg(test)]
@@ -585,5 +648,49 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert!(got[0].ends_with("main.rs"), "{got:?}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn merge_nodes_preserves_nested_loaded_children_in_multi_root() {
+        use super::{merge_nodes, Node};
+        let old = vec![Node {
+            id: "/ws".into(),
+            name: "ws".into(),
+            loaded: true,
+            children: Some(vec![Node {
+                id: "/ws/a".into(),
+                name: "a".into(),
+                loaded: true,
+                children: Some(vec![Node { id: "/ws/a/f.js".into(), name: "f.js".into(), loaded: true, children: None }]),
+            }]),
+        }];
+        let fresh = vec![Node {
+            id: "/ws".into(),
+            name: "ws".into(),
+            loaded: true,
+            children: Some(vec![
+                Node { id: "/ws/a".into(), name: "a".into(), loaded: false, children: Some(Vec::new()) },
+                Node { id: "/ws/b".into(), name: "b".into(), loaded: false, children: Some(Vec::new()) },
+            ]),
+        }];
+        let merged = merge_nodes(old, fresh);
+        let a = &merged[0].children.as_ref().unwrap()[0];
+        assert!(a.loaded);
+        assert_eq!(a.children.as_ref().unwrap().len(), 1);
+        assert_eq!(a.children.as_ref().unwrap()[0].name, "f.js");
+    }
+
+    #[test]
+    fn ancestor_dirs_lists_only_parents_within_root() {
+        let roots = vec![std::path::PathBuf::from("C:/proj")];
+        let dirs = super::ancestor_dirs(Path::new("C:/proj/a/b/c.js"), &roots);
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs[0].ends_with("a"));
+        assert!(dirs[1].ends_with("b"));
+        let multi = vec![std::path::PathBuf::from("C:/p1"), std::path::PathBuf::from("C:/p2")];
+        let dirs2 = super::ancestor_dirs(Path::new("C:/p2/sub/x.json"), &multi);
+        assert_eq!(dirs2.len(), 2);
+        assert!(dirs2[0].ends_with("p2"));
+        assert!(dirs2[1].ends_with("sub"));
     }
 }

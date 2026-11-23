@@ -302,9 +302,11 @@ impl Workbench {
 
     pub(crate) fn quick_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = false;
-        if let Some(ix) = self.active {
-            let h = self.docs[ix].editor.focus_handle(cx);
+        if let Some(ed) = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.as_ref()) {
+            let h = ed.focus_handle(cx);
             h.focus(window, cx);
+        } else {
+            self.focus.focus(window, cx);
         }
         cx.notify();
     }
@@ -468,8 +470,10 @@ impl Workbench {
                 let qv = q.input.read(cx).value().to_string();
                 let (cur, total) = self
                     .active
-                    .map(|ix| {
-                        let e = self.docs[ix].editor.read(cx);
+                    .and_then(|ix| self.docs.get(ix))
+                    .and_then(|d| d.editor.as_ref())
+                    .map(|ed| {
+                        let e = ed.read(cx);
                         (e.cursor_position().line + 1, e.value().lines().count().max(1))
                     })
                     .unwrap_or((1, 1));

@@ -46,20 +46,30 @@ fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
         .collect()
 }
 
-fn write_diagnostics(ed: &mut EditorState, mine_diags: Vec<Diagnostic>, bracket: Option<(u32, u32, String)>, cx: &mut Context<EditorState>) {
+fn write_diagnostics(
+    ed: &mut EditorState,
+    mine_diags: Vec<Diagnostic>,
+    code_diags: &[crate::diagnostics::CodeDiag],
+    cx: &mut Context<EditorState>,
+) {
     let Some(set) = ed.diagnostics_mut() else { return };
-    if set.is_empty() && mine_diags.is_empty() && bracket.is_none() {
+    if set.is_empty() && mine_diags.is_empty() && code_diags.is_empty() {
         return;
     }
     set.clear();
     for diag in mine_diags {
         set.push(diag);
     }
-    if let Some((row, col, msg)) = bracket {
+    for d in code_diags {
+        let sev = match d.severity {
+            crate::diagnostics::Severity::Error => DiagnosticSeverity::Error,
+            crate::diagnostics::Severity::Warning => DiagnosticSeverity::Warning,
+        };
+        let end = d.end_col.max(d.col + 1);
         set.push(
-            Diagnostic::new(Position::new(row, col)..Position::new(row, col + 1), msg)
-                .with_severity(DiagnosticSeverity::Error)
-                .with_source("FluxCode"),
+            Diagnostic::new(Position::new(d.row, d.col)..Position::new(d.row, end), d.message.clone())
+                .with_severity(sev)
+                .with_source(d.source),
         );
     }
     cx.notify();
@@ -131,26 +141,32 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl Workbench {
     pub(crate) fn on_toggle_panel(&mut self, _: &TogglePanel, _: &mut Window, cx: &mut Context<Self>) {
-        self.panel_open = !self.panel_open;
-        cx.notify();
+        self.set_panel_open(!self.panel_open, cx);
     }
 
     pub(crate) fn on_toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel_open && self.panel_tab == PanelTab::Terminal {
-            self.panel_open = false;
+            self.set_panel_open(false, cx);
         } else {
-            self.panel_open = true;
             self.panel_tab = PanelTab::Terminal;
+            self.set_panel_open(true, cx);
             let h = self.term_input.focus_handle(cx);
             h.focus(window, cx);
         }
-        cx.notify();
     }
 
     pub(crate) fn on_show_output(&mut self, _: &ShowOutput, _: &mut Window, cx: &mut Context<Self>) {
-        self.panel_open = true;
         self.panel_tab = PanelTab::Output;
-        cx.notify();
+        self.set_panel_open(true, cx);
+    }
+
+    pub(crate) fn on_show_problems(&mut self, _: &ShowProblems, _: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_open && self.panel_tab == PanelTab::Problems {
+            self.set_panel_open(false, cx);
+        } else {
+            self.panel_tab = PanelTab::Problems;
+            self.set_panel_open(true, cx);
+        }
     }
 
     fn term_running(&self) -> bool {
@@ -395,9 +411,11 @@ impl Workbench {
         };
         if self.docs[ix].dirty {
             let doc = &mut self.docs[ix];
-            let text = doc.editor.read(cx).value();
-            if crate::core::write_text(&doc.path, &text, doc.crlf).is_ok() {
-                doc.dirty = false;
+            if let Some(ed) = doc.editor.as_ref() {
+                let text = ed.read(cx).value();
+                if crate::core::write_text(&doc.path, &text, doc.crlf).is_ok() {
+                    doc.dirty = false;
+                }
             }
         }
         let path = self.docs[ix].path.clone();
@@ -555,52 +573,77 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn apply_problems_to(&self, ix: usize, cx: &mut Context<Self>) {
-        const MAX_SYNC_BRACKET_BYTES: usize = 64 * 1024;
-        const MAX_BRACKET_BYTES: usize = 1024 * 1024;
+    pub(crate) fn apply_problems_to(&mut self, ix: usize, cx: &mut Context<Self>) {
+        const MAX_SYNC_DIAG_BYTES: usize = 128 * 1024;
+        const MAX_DIAG_BYTES: usize = 2 * 1024 * 1024;
 
         let Some(d) = self.docs.get(ix) else { return };
+        let Some(editor) = d.editor.clone() else { return };
         let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
         let lang = (!d.read_only).then_some(d.lang);
         let doc_path = d.path.clone();
         let doc_gen = d.gen;
-        let rope_len = d.editor.read(cx).text().len();
+        let rope_len = editor.read(cx).text().len();
 
-        if rope_len <= MAX_SYNC_BRACKET_BYTES {
-            d.editor.update(cx, |ed, cx| {
-                let bracket = lang.and_then(|l| crate::brackets::first_problem(&ed.value(), l));
+        if rope_len <= MAX_SYNC_DIAG_BYTES {
+            let code_diags = lang
+                .map(|l| crate::diagnostics::analyze(&editor.read(cx).value(), l))
+                .unwrap_or_default();
+            let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
+            let warn_n = code_diags.len() - err_n;
+            editor.update(cx, |ed, cx| {
                 let mine_diags = build_mine_diagnostics(&mine, ed.text());
-                write_diagnostics(ed, mine_diags, bracket, cx);
+                write_diagnostics(ed, mine_diags, &code_diags, cx);
             });
+            if let Some(d) = self.docs.get_mut(ix) {
+                d.diagnostics = code_diags;
+                d.error_count = err_n;
+                d.warn_count = warn_n;
+            }
             return;
         }
 
         let mut async_rope = None;
-        d.editor.update(cx, |ed, cx| {
+        editor.update(cx, |ed, cx| {
             let mine_diags = build_mine_diagnostics(&mine, ed.text());
-            if lang.is_some() && rope_len <= MAX_BRACKET_BYTES {
+            if lang.is_some() && rope_len <= MAX_DIAG_BYTES {
                 async_rope = Some(ed.text().clone());
             }
-            write_diagnostics(ed, mine_diags, None, cx);
+            write_diagnostics(ed, mine_diags, &[], cx);
         });
+        if async_rope.is_none() {
+            if let Some(d) = self.docs.get_mut(ix) {
+                d.diagnostics.clear();
+                d.error_count = 0;
+                d.warn_count = 0;
+            }
+            return;
+        }
 
         if let (Some(l), Some(rope)) = (lang, async_rope) {
             cx.spawn(async move |this, cx| {
-                let bracket = cx
+                let code_diags = cx
                     .background_spawn(async move {
                         let text = rope.to_string();
-                        crate::brackets::first_problem(&text, l)
+                        crate::diagnostics::analyze(&text, l)
                     })
                     .await;
                 _ = this.update(cx, |this, cx| {
-                    let Some(d) = this.docs.iter().find(|d| same_path(&d.path, &doc_path) && d.gen == doc_gen) else {
+                    let Some(ix) = this.docs.iter().position(|d| same_path(&d.path, &doc_path) && d.gen == doc_gen) else {
                         return;
                     };
-                    let mine: Vec<Problem> = this.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
-                    d.editor.update(cx, |ed, cx| {
+                    let Some(ed_ent) = this.docs[ix].editor.clone() else { return };
+                    let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
+                    let warn_n = code_diags.len() - err_n;
+                    let mine: Vec<Problem> = this.problems.iter().filter(|p| same_path(&p.path, &doc_path)).cloned().collect();
+                    ed_ent.update(cx, |ed, cx| {
                         let mine_diags = build_mine_diagnostics(&mine, ed.text());
-                        write_diagnostics(ed, mine_diags, bracket, cx);
+                        write_diagnostics(ed, mine_diags, &code_diags, cx);
                     });
+                    this.docs[ix].diagnostics = code_diags;
+                    this.docs[ix].error_count = err_n;
+                    this.docs[ix].warn_count = warn_n;
+                    cx.notify();
                 });
             })
             .detach();
@@ -615,9 +658,11 @@ impl Workbench {
         }
         self.open_file_now(path, window, cx);
         if let Some(ix) = self.active {
-            self.docs[ix].editor.update(cx, |ed, cx| {
-                ed.set_cursor_position(Position::new(line.saturating_sub(1), col), window, cx);
-            });
+            if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+                ed.update(cx, |ed, cx| {
+                    ed.set_cursor_position(Position::new(line.saturating_sub(1), col), window, cx);
+                });
+            }
         }
     }
 
@@ -625,6 +670,16 @@ impl Workbench {
         if let Some(p) = self.problems.first().cloned() {
             let col = p.caret.map_or(0, |c| c.0 as u32);
             self.open_location(p.path, p.line, col, window, cx);
+            return;
+        }
+        if let Some(ix) = self.active {
+            if let Some(d) = self.docs.get(ix).and_then(|doc| doc.diagnostics.first().map(|c| (doc.path.clone(), c.row + 1, c.col))) {
+                self.open_location(d.0, d.1, d.2, window, cx);
+                return;
+            }
+        }
+        if let Some((path, line, col)) = self.docs.iter().find_map(|doc| doc.diagnostics.first().map(|c| (doc.path.clone(), c.row + 1, c.col))) {
+            self.open_location(path, line, col, window, cx);
         }
     }
 
@@ -1066,14 +1121,134 @@ impl Workbench {
         })
     }
 
+    fn collect_problems_rows(&self) -> Vec<ProblemRow> {
+        let mut rows = Vec::new();
+        for p in &self.problems {
+            let file = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            rows.push(ProblemRow {
+                is_error: true,
+                path: p.path.clone(),
+                file: file.into(),
+                line: p.line.max(1),
+                col: p.caret.map_or(0, |c| c.0 as u32),
+                message: p.message.clone().into(),
+                source: "runtime",
+            });
+        }
+        // Show active file's diagnostics first, then other open files.
+        let mut order: Vec<usize> = Vec::with_capacity(self.docs.len());
+        if let Some(a) = self.active.filter(|&a| a < self.docs.len()) {
+            order.push(a);
+        }
+        for i in 0..self.docs.len() {
+            if Some(i) != self.active {
+                order.push(i);
+            }
+        }
+        for ix in order {
+            let d = &self.docs[ix];
+            for c in &d.diagnostics {
+                rows.push(ProblemRow {
+                    is_error: c.severity == crate::diagnostics::Severity::Error,
+                    path: d.path.clone(),
+                    file: d.name.clone(),
+                    line: c.row + 1,
+                    col: c.col,
+                    message: c.message.clone().into(),
+                    source: c.source,
+                });
+            }
+        }
+        rows
+    }
+
+    fn render_problems_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let rows = std::rc::Rc::new(self.collect_problems_rows());
+        if rows.is_empty() {
+            return v_flex()
+                .id("problems-empty")
+                .size_full()
+                .px_3()
+                .py_3()
+                .gap_1()
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("No problems detected")))
+                .child(tr("Syntax and writing errors in open files appear here as you type."))
+                .into_any_element();
+        }
+        let count = rows.len();
+        let row_h = theme::u(26.);
+        let list = uniform_list(
+            "problems-list",
+            count,
+            cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
+                range
+                    .map(|i| {
+                        let r = &rows[i];
+                        let (icon, col) = if r.is_error {
+                            (IconName::CircleX, theme::DANGER)
+                        } else {
+                            (IconName::TriangleAlert, theme::WARN)
+                        };
+                        let path = r.path.clone();
+                        let (line, col_ix) = (r.line, r.col);
+                        let loc: SharedString = format!("{}  Ln {}, Col {}", r.file, r.line, r.col + 1).into();
+                        h_flex()
+                            .id(("prob-row", i))
+                            .w_full()
+                            .h(row_h)
+                            .px_3()
+                            .gap_2()
+                            .items_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(c(col)))
+                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_STRONG)).child(r.message.clone()))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .px_1p5()
+                                    .rounded(px(3.))
+                                    .bg(c(theme::BG_ELEVATED))
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(r.source),
+                            )
+                            .child(div().flex_none().text_color(c(theme::FG_MUTED)).child(loc))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.open_location(path.clone(), line, col_ix, w, cx);
+                            }))
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .track_scroll(&self.problems_scroll)
+        .size_full();
+
+        div()
+            .id("problems-body")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .size_full()
+            .child(list)
+            .into_any_element()
+    }
+
     pub(crate) fn render_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab = |id: &'static str, label: &'static str, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
+        let prob_errs: usize = self.problems.len() + self.docs.iter().map(|d| d.error_count).sum::<usize>();
+        let prob_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
+        let prob_total = prob_errs + prob_warns;
+
+        let tab = |id: &'static str, label: &'static str, badge: Option<(usize, theme::Tok)>, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
             let on = this.panel_tab == which;
-            div()
+            h_flex()
                 .id(id)
                 .px_1()
                 .h_full()
-                .flex()
+                .gap_1p5()
                 .items_center()
                 .text_sm()
                 .cursor_pointer()
@@ -1082,22 +1257,44 @@ impl Workbench {
                 .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
                 .when(!on, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .child(label)
+                .when_some(badge.filter(|(n, _)| *n > 0), |h, (n, col)| {
+                    h.child(
+                        div()
+                            .px_1()
+                            .min_w(theme::u(16.))
+                            .h(theme::u(16.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(c(col).opacity(0.18))
+                            .text_color(c(col))
+                            .text_size(theme::u(10.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.panel_tab = which;
                     cx.notify();
                 }))
         };
+        let is_problems = self.panel_tab == PanelTab::Problems;
         let terminal = self.panel_tab == PanelTab::Terminal;
-        let running = if terminal { self.term_proc.is_some() } else { self.out_proc.is_some() };
+        let running = if terminal { self.term_proc.is_some() } else if is_problems { false } else { self.out_proc.is_some() };
         let shown_lines = if terminal { &self.term_lines } else { &self.out_lines };
-        let python = self.python_version.clone().filter(|_| Self::ran_python(shown_lines));
+        let python = (!is_problems)
+            .then(|| self.python_version.clone().filter(|_| Self::ran_python(shown_lines)))
+            .flatten();
+        let prob_badge = (prob_total > 0).then_some((prob_total, if prob_errs > 0 { theme::DANGER } else { theme::WARN }));
         let header = h_flex()
             .h(theme::u(35.))
             .px_3()
             .gap_4()
             .flex_none()
-            .child(tab("p-term", tr("Terminal"), PanelTab::Terminal, self, cx))
-            .child(tab("p-out", tr("Output"), PanelTab::Output, self, cx))
+            .child(tab("p-term", tr("Terminal"), None, PanelTab::Terminal, self, cx))
+            .child(tab("p-out", tr("Output"), None, PanelTab::Output, self, cx))
+            .child(tab("p-prob", tr("Problems"), prob_badge, PanelTab::Problems, self, cx))
             .child(div().flex_1())
             .when_some(python, |h, v| {
                 h.child(
@@ -1113,23 +1310,63 @@ impl Workbench {
             .when(running, |h| {
                 h.child(tool_button("p-stop", IconName::Square, "Stop (Shift+F5 or Ctrl+C)", cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
             })
-            .when(self.panel_sel.is_some_and(|s| s.terminal == terminal && !s.is_empty()), |h| {
+            .when(!is_problems && self.panel_sel.is_some_and(|s| s.terminal == terminal && !s.is_empty()), |h| {
                 h.child(tool_button("p-copy", IconName::Copy, "Copy the selection (Ctrl+C)", cx, |this, _, cx| {
                     this.panel_copy(cx);
                 }))
             })
-            .child(tool_button("p-clear", IconName::Delete, "Clear", cx, |this, _, cx| {
-                this.panel_sel = None;
-                match this.panel_tab {
-                    PanelTab::Terminal => this.term_lines.clear(),
-                    PanelTab::Output => this.out_lines.clear(),
-                }
-                cx.notify();
-            }))
+            .when(!is_problems || !self.problems.is_empty(), |h| {
+                h.child(tool_button("p-clear", IconName::Delete, "Clear", cx, |this, _, cx| {
+                    this.panel_sel = None;
+                    match this.panel_tab {
+                        PanelTab::Terminal => this.term_lines.clear(),
+                        PanelTab::Output => this.out_lines.clear(),
+                        PanelTab::Problems => {
+                            this.problems.clear();
+                            this.apply_problems(cx);
+                        }
+                    }
+                    cx.notify();
+                }))
+            })
             .child(tool_button("p-close", IconName::Close, "Close Panel", cx, |this, _, cx| {
-                this.panel_open = false;
-                cx.notify();
+                this.set_panel_open(false, cx);
             }));
+
+        let (prev_tab, mut tab_gen) = self.panel_tab_anim.get();
+        if prev_tab != self.panel_tab {
+            tab_gen += 1;
+            self.panel_tab_anim.set((self.panel_tab, tab_gen));
+        }
+        let reduce_motion = cx.reduce_motion();
+        let wrap_tab = move |el: AnyElement| -> AnyElement {
+            if tab_gen == 0 || reduce_motion {
+                return el;
+            }
+            div()
+                .flex_1()
+                .min_h_0()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(el)
+                .with_animation(
+                    SharedString::from(format!("panel-tab-{tab_gen}")),
+                    Animation::new(std::time::Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                    |d, t| d.opacity(0.35 + 0.65 * t),
+                )
+                .into_any_element()
+        };
+
+        if is_problems {
+            return v_flex()
+                .size_full()
+                .bg(c(theme::BG_EDITOR))
+                .border_t_1()
+                .border_color(c(theme::BORDER))
+                .child(header)
+                .child(wrap_tab(self.render_problems_body(cx)));
+        }
 
         let count = shown_lines.len();
         let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
@@ -1231,44 +1468,44 @@ impl Workbench {
 
         let empty = count == 0;
         let hint = |line: &'static str| div().min_w_0().child(line);
+        let content = v_flex()
+            .id("panel-body")
+            .flex_1()
+            .min_h_0()
+            .when(empty, |v| {
+                v.child(
+                    v_flex()
+                        .flex_shrink(1.)
+                        .min_h_0()
+                        .overflow_hidden()
+                        .px_3()
+                        .py_2()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .when(terminal, |v| {
+                            v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command after the ❯ and press Enter to run it.")))
+                                .child(hint(tr("For example:  dir  lists the files here,  cd folder  goes into a folder,  py app.py  runs a Python file.")))
+                                .when(!narrow, |v| v.child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you"))))
+                        })
+                        .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
+                )
+            })
+            .child(body)
+            .when(terminal, |v| {
+                v.cursor_text().on_click(cx.listener(|this, _, window, cx| {
+                    let h = this.term_input.focus_handle(cx);
+                    h.focus(window, cx);
+                }))
+            })
+            .into_any_element();
         v_flex()
             .size_full()
             .bg(c(theme::BG_EDITOR))
             .border_t_1()
             .border_color(c(theme::BORDER))
             .child(header)
-            .child(
-                v_flex()
-                    .id("panel-body")
-                    .flex_1()
-                    .min_h_0()
-                    .when(empty, |v| {
-                        v.child(
-                            v_flex()
-                                .flex_shrink(1.)
-                                .min_h_0()
-                                .overflow_hidden()
-                                .px_3()
-                                .py_2()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(c(theme::FG_DIM))
-                                .when(terminal, |v| {
-                                    v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command after the ❯ and press Enter to run it.")))
-                                        .child(hint(tr("For example:  dir  lists the files here,  cd folder  goes into a folder,  py app.py  runs a Python file.")))
-                                        .when(!narrow, |v| v.child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you"))))
-                                })
-                                .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
-                        )
-                    })
-                    .child(body)
-                    .when(terminal, |v| {
-                        v.cursor_text().on_click(cx.listener(|this, _, window, cx| {
-                            let h = this.term_input.focus_handle(cx);
-                            h.focus(window, cx);
-                        }))
-                    }),
-            )
+            .child(wrap_tab(content))
     }
 
     fn render_prompt(&self, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
@@ -1336,6 +1573,16 @@ impl Workbench {
                     }),
             )
     }
+}
+
+struct ProblemRow {
+    is_error: bool,
+    path: PathBuf,
+    file: SharedString,
+    line: u32,
+    col: u32,
+    message: SharedString,
+    source: &'static str,
 }
 
 #[derive(Clone, Copy)]

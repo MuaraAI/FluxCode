@@ -1270,8 +1270,8 @@ impl crate::workbench::Workbench {
             self.flux_load_source(ix, window, cx);
         }
         if !source && self.docs[ix].flux_source {
+            let mut text = self.docs[ix].text(cx);
             let d = &mut self.docs[ix];
-            let mut text = d.editor.read(cx).value().to_string();
             if crate::fluxdoc::view::drawable_kind(&d.path) == Some(true) {
                 text = crate::fluxdoc::gfm::to_flux(&text);
             }
@@ -1292,7 +1292,9 @@ impl crate::workbench::Workbench {
         }
         d.flux_lazy = false;
         let text = d.flux.as_ref().map(|v| v.source()).unwrap_or_default();
-        d.editor.update(cx, |e, cx| e.set_value(text, window, cx));
+        if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+            ed.update(cx, |e, cx| e.set_value(text, window, cx));
+        }
     }
 
     fn flux_save_markdown(&mut self, ix: usize, cx: &mut Context<Self>) {

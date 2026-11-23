@@ -21,6 +21,7 @@ pub fn commands() -> Vec<Command> {
         cmd!("File: Go to File", "Ctrl+P", QuickOpenFile),
         cmd!("File: Open File", "Ctrl+O", OpenFile),
         cmd!("File: Open Folder", "Ctrl+K Ctrl+O", OpenFolder),
+        cmd!("File: Add Folder to Workspace", "", AddFolderToWorkspace),
         cmd!("File: Open Folder in WSL...", "", OpenFolderInWsl),
         cmd!("File: Save", "Ctrl+S", Save),
         cmd!("File: Save All", "Ctrl+K S", SaveAll),
@@ -51,6 +52,7 @@ pub fn commands() -> Vec<Command> {
         cmd!("View: Toggle Panel", "Ctrl+J", TogglePanel),
         cmd!("View: Toggle Terminal", "Ctrl+`", ToggleTerminal),
         cmd!("View: Show Output", "Ctrl+Shift+U", ShowOutput),
+        cmd!("View: Show Problems", "Ctrl+Shift+M", ShowProblems),
         cmd!("Run: Run File", "F5", RunFile),
         cmd!("Run: Stop", "Shift+F5", StopRun),
         cmd!("Markdown / HTML: Open Preview to the Side", "Ctrl+K V", TogglePreview),
@@ -72,7 +74,8 @@ impl Workbench {
             return;
         }
         let name = d.name.to_string();
-        d.editor.update(cx, |s, cx| {
+        let Some(ed) = self.ensure_doc_editor(ix, window, cx) else { return };
+        ed.update(cx, |s, cx| {
             let text = s.value().to_string();
             let sel = s.selected_range();
             if let Some(e) = f(&text, sel, &name) {
@@ -117,7 +120,9 @@ impl Workbench {
         let Some(d) = self.active.and_then(|a| self.docs.get_mut(a)) else { return };
         let on = !d.wraps(setting);
         d.wrap_override = Some(on);
-        d.editor.update(cx, |s, cx| s.set_soft_wrap(on, w, cx));
+        if let Some(ed) = &d.editor {
+            ed.update(cx, |s, cx| s.set_soft_wrap(on, w, cx));
+        }
         self.status = if on { crate::i18n::tr("Word wrap on") } else { crate::i18n::tr("Word wrap off") }.into();
         cx.notify();
     }
@@ -176,7 +181,7 @@ impl Workbench {
 
     pub(crate) fn go_to_line_col(&mut self, line: u32, col: u32, w: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else { return };
-        let editor = self.docs[ix].editor.clone();
+        let Some(editor) = self.ensure_doc_editor(ix, w, cx) else { return };
         editor.update(cx, |s, cx| {
             let lines = s.value().lines().count().max(1) as u32;
             let pos = Position { line: line.clamp(1, lines) - 1, character: col.saturating_sub(1) };

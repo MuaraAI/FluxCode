@@ -1801,8 +1801,7 @@ impl Workbench {
                     .child(self.render_agent_more(cx))
                     .children(self.render_right_tabs(cx))
                     .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
-                        this.agent_open = false;
-                        cx.notify();
+                        this.set_right_open(false, cx);
                     })),
             )
             .children(self.render_worktree_strip(cx))
@@ -2208,7 +2207,9 @@ impl Workbench {
             self.collab_mark_ai(&p);
             if let (Some(d), Ok(f)) = (self.docs.iter_mut().find(|d| d.path == p), core::read_text(&p)) {
                 d.crlf = f.crlf;
-                d.editor.update(cx, |s, cx| s.set_value(f.text, window, cx));
+                if let Some(ed) = &d.editor {
+                    ed.update(cx, |s, cx| s.set_value(f.text, window, cx));
+                }
                 d.dirty = false;
             }
             self.collab_on_path(&p, cx);
@@ -2519,13 +2520,15 @@ impl Workbench {
         let mut chips = Vec::new();
         if let Some(d) = self.active.map(|ix| &self.docs[ix]).filter(|d| d.image.is_none()) {
             chips.push(("file".into(), d.name.to_string(), Icon::new(IconName::FileText), !off("file")));
-            let ed = d.editor.read(cx);
-            let range = ed.selected_range();
-            if !range.is_empty() {
-                let v = ed.value();
-                let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
-                let label = if a == b { crate::trf!("Selection · line {a}"; a => a) } else { crate::trf!("Selection · lines {a}-{b}"; a => a, b => b) };
-                chips.push(("sel".into(), label, Icon::new(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
+            if let Some(ed) = d.editor.as_ref() {
+                let ed = ed.read(cx);
+                let range = ed.selected_range();
+                if !range.is_empty() {
+                    let v = ed.value();
+                    let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
+                    let label = if a == b { crate::trf!("Selection · line {a}"; a => a) } else { crate::trf!("Selection · lines {a}-{b}"; a => a, b => b) };
+                    chips.push(("sel".into(), label, Icon::new(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
+                }
             }
         }
         if agent_ctx::wants_error(&text) {
@@ -2559,7 +2562,7 @@ impl Workbench {
     fn agent_ws_parts(&self, cx: &App) -> (Vec<PathBuf>, Vec<String>) {
         let mut tabs = Vec::new();
         if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
-            let line = d.editor.read(cx).cursor_position().line + 1;
+            let line = d.cursor_position(cx).line + 1;
             tabs.push(format!("{} (active, line {line})", self.rel_path(&d.path.to_string_lossy())));
         }
         for (i, d) in self.docs.iter().enumerate() {
@@ -2635,16 +2638,18 @@ impl Workbench {
                 }
                 "sel" => {
                     if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
-                        let ed = d.editor.read(cx);
-                        let r = ed.selected_range();
-                        let v = ed.value();
-                        let (a, b) = agent_ctx::line_span(&v, r.start, r.end);
-                        let sel = v.get(r.clone()).unwrap_or("").to_string();
-                        let rel = self.rel_path(&d.path.to_string_lossy());
-                        blocks.push(json!({ "type": "text", "text": format!(
-                            "The user selected lines {a}-{b} of {rel}; the question is most likely about this part:\n```{}\n{sel}\n```",
-                            agent_ctx::fence_lang(&d.path)
-                        ) }));
+                        if let Some(ed) = d.editor.as_ref() {
+                            let ed = ed.read(cx);
+                            let r = ed.selected_range();
+                            let v = ed.value();
+                            let (a, b) = agent_ctx::line_span(&v, r.start, r.end);
+                            let sel = v.get(r.clone()).unwrap_or("").to_string();
+                            let rel = self.rel_path(&d.path.to_string_lossy());
+                            blocks.push(json!({ "type": "text", "text": format!(
+                                "The user selected lines {a}-{b} of {rel}; the question is most likely about this part:\n```{}\n{sel}\n```",
+                                agent_ctx::fence_lang(&d.path)
+                            ) }));
+                        }
                     }
                 }
                 "err" => {
@@ -2777,9 +2782,11 @@ impl Workbench {
             Some(ix) => {
                 let name = self.docs[ix].name.clone();
                 let lines = code.lines().count();
-                self.docs[ix].editor.update(cx, |s, cx| s.replace(code, window, cx));
-                let h = self.docs[ix].editor.focus_handle(cx);
-                h.focus(window, cx);
+                if let Some(ed) = self.ensure_doc_editor(ix, window, cx) {
+                    ed.update(cx, |s, cx| s.replace(code, window, cx));
+                    let h = ed.focus_handle(cx);
+                    h.focus(window, cx);
+                }
                 self.status = if lines == 1 { crate::trf!("Inserted 1 line into {name}"; name => name) } else { crate::trf!("Inserted {lines} lines into {name}"; lines => lines, name => name) }.into();
             }
             None => {
@@ -2858,8 +2865,8 @@ impl Workbench {
     fn agent_chip_go(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         match key {
             "file" | "sel" => {
-                if let Some(ix) = self.active {
-                    let h = self.docs[ix].editor.focus_handle(cx);
+                if let Some(ed) = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.as_ref()) {
+                    let h = ed.focus_handle(cx);
                     h.focus(window, cx);
                 }
             }

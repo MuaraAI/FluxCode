@@ -42,7 +42,7 @@ impl Workbench {
         let open = self.docs.iter().position(|d| d.path == p);
         let before = match open {
             Some(ix) if self.docs[ix].dirty || self.docs[ix].image.is_some() => return,
-            Some(ix) => self.docs[ix].editor.read(cx).value().to_string(),
+            Some(ix) => self.docs[ix].text(cx),
             None => match self.agent.changes.iter().find(|ch| ch.path == p) {
                 Some(ch) => ch.before.clone().unwrap_or_default(),
                 None => return,
@@ -53,16 +53,17 @@ impl Workbench {
             Some(ix) => self.activate(ix, window, cx),
             None => self.open_file_now(p.clone(), window, cx),
         }
-        if let Some(h) = had.filter(|h| !self.docs.iter().any(|d| d.editor.focus_handle(cx) == *h)) {
+        if let Some(h) = had.filter(|h| !self.docs.iter().any(|d| d.editor.as_ref().is_some_and(|e| e.focus_handle(cx) == *h))) {
             h.focus(window, cx);
         }
         let Some(ix) = self.docs.iter().position(|d| d.path == p) else { return };
+        let Some(ed) = self.ensure_doc_editor(ix, window, cx) else { return };
         self.agent.reloads.retain(|x| *x != p);
         let steps = frames_for(f.text.len().max(before.len()));
         let frames = if steps == 0 { Vec::new() } else { crate::diff::typing_frames(&before, &f.text, steps) };
         if frames.is_empty() {
-            let line = self.docs[ix].editor.read(cx).cursor_position().line;
-            self.docs[ix].editor.update(cx, |s, cx| {
+            let line = ed.read(cx).cursor_position().line;
+            ed.update(cx, |s, cx| {
                 s.set_value(f.text.clone(), window, cx);
                 s.set_cursor_position(Position::new(line, 0), window, cx);
             });
@@ -81,8 +82,10 @@ impl Workbench {
                     if this.agent.replay_gen != gen {
                         return false;
                     }
-                    let Some(d) = this.docs.iter().find(|d| d.path == p && !d.dirty) else { return false };
-                    d.editor.update(cx, |s, cx| {
+                    let Some(ed) = this.docs.iter().find(|d| d.path == p && !d.dirty).and_then(|d| d.editor.as_ref()) else {
+                        return false;
+                    };
+                    ed.update(cx, |s, cx| {
                         s.set_value(text, window, cx);
                         s.set_cursor_position(Position::new(line, 0), window, cx);
                     });
@@ -105,10 +108,10 @@ impl Workbench {
     fn agent_finish_replay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((p, text)) = self.agent.replay.take() else { return };
         self.agent.replay_gen += 1;
-        if let Some(d) = self.docs.iter().find(|d| d.path == p && !d.dirty) {
-            if d.editor.read(cx).value().to_string() != text {
-                let line = d.editor.read(cx).cursor_position().line;
-                d.editor.update(cx, |s, cx| {
+        if let Some(ed) = self.docs.iter().find(|d| d.path == p && !d.dirty).and_then(|d| d.editor.as_ref()) {
+            if ed.read(cx).value().to_string() != text {
+                let line = ed.read(cx).cursor_position().line;
+                ed.update(cx, |s, cx| {
                     s.set_value(text, window, cx);
                     s.set_cursor_position(Position::new(line, 0), window, cx);
                 });

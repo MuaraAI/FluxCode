@@ -1,22 +1,81 @@
-
-use crate::i18n::tr;
 use crate::core;
-use crate::files;
+use crate::files::{self, Node};
+use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
-    list::ListItem,
     menu::ContextMenuExt,
-    tree::{tree, TreeItem},
+    scroll::ScrollableElement,
     v_flex, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(crate) const PENDING_ROW_ID: &str = "\u{1}pending";
+const LOADING_SUFFIX: &str = "\u{1}loading";
+const EMPTY_SUFFIX: &str = "\u{1}empty";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TreeRow {
+    pub id: String,
+    pub label: String,
+    pub depth: usize,
+    pub is_dir: bool,
+    pub expanded: bool,
+    pub loading: bool,
+    pub is_pending: bool,
+    pub is_placeholder: bool,
+    pub parent_id: Option<String>,
+}
+
+pub(crate) struct ExplorerState {
+    pub rows: Vec<TreeRow>,
+    pub scroll: UniformListScrollHandle,
+    pub focus: FocusHandle,
+    pub gen: u64,
+    pub loading: HashSet<String>,
+    pub revealed_tab: Option<PathBuf>,
+    pub folder_anim: Option<(String, bool, u64)>,
+    pub folder_anim_seq: u64,
+    pub workspace_anim: u64,
+    pub added_roots: HashSet<String>,
+}
+
+impl ExplorerState {
+    pub fn new(cx: &mut App) -> Self {
+        Self {
+            rows: Vec::new(),
+            scroll: UniformListScrollHandle::new(),
+            focus: cx.focus_handle(),
+            gen: 0,
+            loading: HashSet::new(),
+            revealed_tab: None,
+            folder_anim: None,
+            folder_anim_seq: 0,
+            workspace_anim: 0,
+            added_roots: HashSet::new(),
+        }
+    }
+
+    pub fn index_of(&self, id: &str) -> Option<usize> {
+        self.rows.iter().position(|r| !r.is_placeholder && !r.is_pending && r.id == id)
+    }
+
+    pub fn mark_folder_anim(&mut self, id: String, expanding: bool) {
+        self.folder_anim_seq = self.folder_anim_seq.wrapping_add(1);
+        self.folder_anim = Some((id, expanding, self.folder_anim_seq));
+    }
+
+    pub fn bump_workspace_anim(&mut self, added: Vec<String>) {
+        self.workspace_anim = self.workspace_anim.wrapping_add(1);
+        self.added_roots = added.into_iter().collect();
+    }
+}
 
 fn stray_press_keeps_input(pending: &Option<PendingOp>, typed: &str) -> bool {
     matches!(
@@ -25,45 +84,374 @@ fn stray_press_keeps_input(pending: &Option<PendingOp>, typed: &str) -> bool {
     ) && !typed.trim().is_empty()
 }
 
-pub(crate) fn insert_pending_row(items: &mut Vec<TreeItem>, pending: Option<&PendingOp>, root: Option<&Path>) {
-    let Some(dir) = (match pending {
-        Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => Some(d),
+pub(crate) fn flatten_nodes(
+    nodes: &[Node],
+    expanded: &HashSet<String>,
+    loading: &HashSet<String>,
+    pending: Option<&PendingOp>,
+    root: Option<&Path>,
+    dirs: &mut HashSet<String>,
+) -> Vec<TreeRow> {
+    let pending_dir = match pending {
+        Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => Some(d.to_string_lossy().into_owned()),
         _ => None,
-    }) else {
-        return;
     };
-    fn insert_into(items: &mut [TreeItem], dir: &str) -> bool {
-        for it in items.iter_mut() {
-            if it.id.as_ref() == dir {
-                it.children.insert(0, TreeItem::new(PENDING_ROW_ID, "").disabled(true));
-                return true;
+    let mut rows = Vec::with_capacity(nodes.len().saturating_mul(2));
+    let mut inserted_pending = false;
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_level(
+        nodes: &[Node],
+        depth: usize,
+        parent_id: Option<&str>,
+        expanded: &HashSet<String>,
+        loading: &HashSet<String>,
+        pending_dir: Option<&str>,
+        inserted_pending: &mut bool,
+        dirs: &mut HashSet<String>,
+        out: &mut Vec<TreeRow>,
+    ) {
+        for n in nodes {
+            let is_dir = n.children.is_some();
+            if is_dir {
+                dirs.insert(n.id.clone());
             }
-            if insert_into(&mut it.children, dir) {
-                return true;
+            let is_expanded = is_dir && expanded.contains(&n.id);
+            let is_loading = is_dir && (loading.contains(&n.id) || (is_expanded && !n.loaded));
+            out.push(TreeRow {
+                id: n.id.clone(),
+                label: n.name.clone(),
+                depth,
+                is_dir,
+                expanded: is_expanded,
+                loading: is_loading,
+                is_pending: false,
+                is_placeholder: false,
+                parent_id: parent_id.map(str::to_string),
+            });
+            if is_expanded {
+                if pending_dir == Some(n.id.as_str()) {
+                    *inserted_pending = true;
+                    out.push(TreeRow {
+                        id: PENDING_ROW_ID.to_string(),
+                        label: String::new(),
+                        depth: depth + 1,
+                        is_dir: false,
+                        expanded: false,
+                        loading: false,
+                        is_pending: true,
+                        is_placeholder: false,
+                        parent_id: Some(n.id.clone()),
+                    });
+                }
+                if !n.loaded {
+                    out.push(TreeRow {
+                        id: format!("{}{}", n.id, LOADING_SUFFIX),
+                        label: tr("Loading…").to_string(),
+                        depth: depth + 1,
+                        is_dir: false,
+                        expanded: false,
+                        loading: true,
+                        is_pending: false,
+                        is_placeholder: true,
+                        parent_id: Some(n.id.clone()),
+                    });
+                } else if let Some(ch) = &n.children {
+                    if ch.is_empty() && pending_dir != Some(n.id.as_str()) {
+                        out.push(TreeRow {
+                            id: format!("{}{}", n.id, EMPTY_SUFFIX),
+                            label: tr("Empty folder").to_string(),
+                            depth: depth + 1,
+                            is_dir: false,
+                            expanded: false,
+                            loading: false,
+                            is_pending: false,
+                            is_placeholder: true,
+                            parent_id: Some(n.id.clone()),
+                        });
+                    } else {
+                        push_level(
+                            ch,
+                            depth + 1,
+                            Some(&n.id),
+                            expanded,
+                            loading,
+                            pending_dir,
+                            inserted_pending,
+                            dirs,
+                            out,
+                        );
+                    }
+                }
             }
         }
-        false
     }
-    let dir_s = dir.to_string_lossy();
-    if !insert_into(items, &dir_s) && Some(dir.as_path()) == root {
-        items.insert(0, TreeItem::new(PENDING_ROW_ID, "").disabled(true));
+
+    push_level(
+        nodes,
+        0,
+        None,
+        expanded,
+        loading,
+        pending_dir.as_deref(),
+        &mut inserted_pending,
+        dirs,
+        &mut rows,
+    );
+
+    if !inserted_pending {
+        if let (Some(dir), Some(r)) = (pending_dir.as_deref(), root) {
+            if dir == r.to_string_lossy() {
+                rows.insert(
+                    0,
+                    TreeRow {
+                        id: PENDING_ROW_ID.to_string(),
+                        label: String::new(),
+                        depth: 0,
+                        is_dir: false,
+                        expanded: false,
+                        loading: false,
+                        is_pending: true,
+                        is_placeholder: false,
+                        parent_id: None,
+                    },
+                );
+            }
+        }
     }
+    rows
 }
 
-pub(crate) fn update_reveal_state(
-    shown: bool,
-    revealed: &mut Option<String>,
-    tried: &mut Option<String>,
-) {
-    if shown {
-        *tried = None;
-    } else {
-        *revealed = None;
+fn is_descendant_of(path: &str, ancestor: &str) -> bool {
+    if path.len() <= ancestor.len() || !path.starts_with(ancestor) {
+        return false;
     }
+    let next = path.as_bytes()[ancestor.len()];
+    next == b'\\' || next == b'/' || next == 1
 }
 
 impl Workbench {
-    pub(crate) fn render_explorer(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn rebuild_explorer_rows(&mut self, cx: &mut Context<Self>) {
+        let mut dirs = HashSet::new();
+        self.explorer.rows = flatten_nodes(
+            &self.tree_nodes,
+            &self.expanded,
+            &self.explorer.loading,
+            self.pending.as_ref(),
+            self.root.as_deref(),
+            &mut dirs,
+        );
+        self.dirs = std::rc::Rc::new(dirs);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_folder(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.expanded.contains(&id) {
+            self.expanded.remove(&id);
+            self.explorer.loading.remove(&id);
+            self.explorer.mark_folder_anim(id, false);
+            self.rebuild_explorer_rows(cx);
+        } else {
+            self.expand_folder(id, true, cx);
+        }
+    }
+
+    pub(crate) fn expand_folder(&mut self, id: String, animate: bool, cx: &mut Context<Self>) {
+        self.expanded.insert(id.clone());
+        if animate {
+            self.explorer.mark_folder_anim(id.clone(), true);
+        }
+        let needs_load = files::find_node(&mut self.tree_nodes, &id).is_some_and(|n| !n.loaded);
+        if !needs_load {
+            self.rebuild_explorer_rows(cx);
+            return;
+        }
+        if !self.explorer.loading.insert(id.clone()) {
+            self.rebuild_explorer_rows(cx);
+            return;
+        }
+        self.rebuild_explorer_rows(cx);
+        let gen = self.explorer.gen;
+        let wsl = self.wsl.clone();
+        let path = PathBuf::from(&id);
+        cx.spawn(async move |this, cx| {
+            let children = cx
+                .background_spawn(async move {
+                    if let Some(t) = &wsl {
+                        if let Some(nodes) = crate::workbench::remote_dir_pub(t, &path) {
+                            return nodes;
+                        }
+                    }
+                    files::scan_dir(&path)
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.explorer.loading.remove(&id);
+                if this.explorer.gen != gen {
+                    return;
+                }
+                if let Some(node) = files::find_node(&mut this.tree_nodes, &id) {
+                    node.children = Some(children);
+                    node.loaded = true;
+                }
+                if this.expanded.contains(&id) {
+                    this.explorer.mark_folder_anim(id, true);
+                }
+                this.rebuild_explorer_rows(cx);
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn reveal_active_in_explorer(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone()) else {
+            return;
+        };
+        if self.explorer.revealed_tab.as_ref() == Some(&path) {
+            return;
+        }
+        let roots = self.roots();
+        if !roots.iter().any(|r| path.starts_with(r)) {
+            return;
+        }
+        self.explorer.revealed_tab = Some(path.clone());
+        let id = path.to_string_lossy().into_owned();
+        if let Some(ix) = self.explorer.index_of(&id) {
+            self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+            return;
+        }
+        let ancestors = files::ancestor_dirs(&path, &roots);
+        if ancestors.is_empty() {
+            return;
+        }
+        for dir in &ancestors {
+            self.expanded.insert(dir.clone());
+        }
+        if files::contains_node(&self.tree_nodes, &id) {
+            self.rebuild_explorer_rows(cx);
+            if let Some(ix) = self.explorer.index_of(&id) {
+                self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+            }
+            return;
+        }
+        let gen = self.explorer.gen;
+        let wsl = self.wsl.clone();
+        let to_load = ancestors.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded: Vec<(String, Vec<Node>)> = cx
+                .background_spawn(async move {
+                    to_load
+                        .into_iter()
+                        .map(|d| {
+                            let p = PathBuf::from(&d);
+                            let kids = wsl
+                                .as_ref()
+                                .and_then(|t| crate::workbench::remote_dir_pub(t, &p))
+                                .unwrap_or_else(|| files::scan_dir(&p));
+                            (d, kids)
+                        })
+                        .collect()
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if this.explorer.gen != gen {
+                    return;
+                }
+                for (dir, kids) in loaded {
+                    if let Some(node) = files::find_node(&mut this.tree_nodes, &dir) {
+                        if !node.loaded {
+                            node.children = Some(kids);
+                            node.loaded = true;
+                        }
+                    }
+                }
+                this.rebuild_explorer_rows(cx);
+                if let Some(ix) = this.explorer.index_of(&id) {
+                    this.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn on_explorer_up(&mut self, _: &ExplorerUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_explorer_selection(-1, cx);
+    }
+
+    pub(crate) fn on_explorer_down(&mut self, _: &ExplorerDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_explorer_selection(1, cx);
+    }
+
+    fn move_explorer_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let rows = &self.explorer.rows;
+        if rows.is_empty() {
+            return;
+        }
+        let cur = self
+            .selected
+            .as_ref()
+            .and_then(|p| self.explorer.index_of(&p.to_string_lossy()));
+        let mut ix = match cur {
+            Some(i) => (i as isize + delta).clamp(0, rows.len() as isize - 1) as usize,
+            None => 0,
+        };
+        while rows[ix].is_placeholder || rows[ix].is_pending {
+            let next = ix as isize + delta;
+            if next < 0 || next >= rows.len() as isize {
+                return;
+            }
+            ix = next as usize;
+        }
+        self.selected = Some(PathBuf::from(&rows[ix].id));
+        self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    pub(crate) fn on_explorer_left(&mut self, _: &ExplorerLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
+        let Some(ix) = self.explorer.index_of(&sel) else { return };
+        let row = self.explorer.rows[ix].clone();
+        if row.is_dir && row.expanded {
+            self.toggle_folder(row.id, cx);
+        } else if let Some(parent) = row.parent_id {
+            self.selected = Some(PathBuf::from(&parent));
+            if let Some(pix) = self.explorer.index_of(&parent) {
+                self.explorer.scroll.scroll_to_item(pix, ScrollStrategy::Nearest);
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_explorer_right(&mut self, _: &ExplorerRight, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
+        let Some(ix) = self.explorer.index_of(&sel) else { return };
+        let row = self.explorer.rows[ix].clone();
+        if row.is_dir && !row.expanded {
+            self.expand_folder(row.id, true, cx);
+        } else if row.is_dir && ix + 1 < self.explorer.rows.len() {
+            let next = &self.explorer.rows[ix + 1];
+            if !next.is_placeholder && !next.is_pending {
+                self.selected = Some(PathBuf::from(&next.id));
+                self.explorer.scroll.scroll_to_item(ix + 1, ScrollStrategy::Nearest);
+                cx.notify();
+            }
+        }
+    }
+
+    pub(crate) fn on_explorer_open(&mut self, _: &ExplorerOpen, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
+        let Some(ix) = self.explorer.index_of(&sel) else { return };
+        let row = self.explorer.rows[ix].clone();
+        if row.is_dir {
+            self.toggle_folder(row.id, cx);
+        } else {
+            self.agent.user_nav = Some(std::time::Instant::now());
+            self.agent_full = false;
+            self.open_file(PathBuf::from(row.id), window, cx);
+        }
+    }
+
+    pub(crate) fn render_explorer(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.root.is_none() {
             return v_flex()
                 .p_4()
@@ -76,241 +464,314 @@ impl Workbench {
                 }))
                 .into_any_element();
         }
-        let view = cx.entity();
-        let active_path = self.active.map(|a| self.docs[a].path.to_string_lossy().into_owned());
-        let inside = |p: &String| self.roots().iter().any(|r| Path::new(p).starts_with(r));
-        let show = active_path.clone().filter(|p| {
-            self.revealed.borrow().as_deref() != Some(p.as_str())
-                && self.reveal_tried.borrow().as_deref() != Some(p.as_str())
-                && inside(p)
-        });
-        if let Some(p) = show {
-            let id = SharedString::from(p.clone());
-            let found = self.tree.update(cx, |t, cx| {
-                let mut ix = t.index_of(&id);
-                if ix.is_none() {
-                    t.reveal_item(&id, ScrollStrategy::Center, cx);
-                    ix = t.index_of(&id);
-                }
-                if let Some(ix) = ix {
-                    t.scroll_to_item(ix, ScrollStrategy::Nearest);
-                    t.set_selected_index(Some(ix), cx);
-                    true
-                } else {
-                    false
-                }
-            });
-            if found {
-                *self.revealed.borrow_mut() = Some(p);
-            } else {
-                *self.reveal_tried.borrow_mut() = Some(p);
-            }
-        }
+        let active_path = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.to_string_lossy().into_owned());
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
-        let target = self.ctx_target.clone();
-        let root_target = target.clone();
         let root = self.root.clone();
-        let dirs = self.dirs.clone();
-        let (marks, dirty_dirs) = (self.scm.marks.clone(), self.scm.dirty_dirs.clone());
-        let multi = !self.workspace.extra.is_empty();
-        let extra = self.workspace.extra.clone();
-        let pending = self.pending.clone();
-        let name_input = self.name_input.clone();
-        let tree_state = self.tree.clone();
-        let list = tree(&self.tree, move |ix, entry, _selected, _window, cx| {
-            let item = entry.item();
-            let id = item.id.to_string();
-            if id == PENDING_ROW_ID {
-                let icon = match &pending {
-                    Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true))
-                        .size(theme::u(13.))
-                        .text_color(c(theme::FOLDER)),
-                    _ => {
-                        let typed = name_input.read(cx).value();
-                        if typed.is_empty() {
-                            Icon::new(IconName::File)
-                                .size(theme::u(13.))
-                                .text_color(c(theme::FG_MUTED))
-                        } else {
-                            let (ic, tint) = files::icon_for(&typed);
-                            Icon::new(ic)
-                                .size(theme::u(13.))
-                                .text_color(theme::tint(tint))
+        let root_target = self.ctx_target.clone();
+        let focused = self.explorer.focus.is_focused(window);
+        let count = self.explorer.rows.len();
+        let motion = !cx.reduce_motion();
+        let collapsed_row_ix = self
+            .explorer
+            .folder_anim
+            .as_ref()
+            .filter(|(_, exp, _)| !*exp)
+            .and_then(|(fid, _, _)| self.explorer.index_of(fid));
+
+        let list = uniform_list(
+            "explorer-rows",
+            count,
+            cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                let view = cx.entity();
+                let multi = !this.workspace.extra.is_empty();
+                let extra = this.workspace.extra.clone();
+                let pending = this.pending.clone();
+                let name_input = this.name_input.clone();
+                let marks = this.scm.marks.clone();
+                let dirty_dirs = this.scm.dirty_dirs.clone();
+                let folder_anim = this.explorer.folder_anim.clone();
+                let ws_anim = this.explorer.workspace_anim;
+                let added_roots = this.explorer.added_roots.clone();
+
+                range
+                    .map(|ix| {
+                        let row = &this.explorer.rows[ix];
+                        let id = row.id.clone();
+
+                        if row.is_pending {
+                            let icon = match &pending {
+                                Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true))
+                                    .size(theme::u(13.))
+                                    .text_color(c(theme::FOLDER)),
+                                _ => {
+                                    let typed = name_input.read(cx).value();
+                                    if typed.is_empty() {
+                                        Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED))
+                                    } else {
+                                        let (ic, tint) = files::icon_for(&typed);
+                                        Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                                    }
+                                }
+                            };
+                            return name_row(PENDING_ROW_ID, row.depth, icon, &name_input).into_any_element();
                         }
-                    }
-                };
-                return name_row(ix, entry.depth(), icon, &name_input);
-            }
-            if let Some(PendingOp::Rename(p)) = &pending {
-                if p.to_string_lossy() == id {
-                    let is_dir = entry.is_folder() || dirs.contains(&id);
-                    let icon = if is_dir {
-                        Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
-                            .size(theme::u(13.))
-                            .text_color(c(theme::FOLDER))
-                    } else {
-                        let typed = name_input.read(cx).value();
-                        let name: &str = if typed.is_empty() {
-                            &item.label
-                        } else {
-                            &typed
-                        };
-                        let (ic, tint) = files::icon_for(name);
-                        Icon::new(ic)
-                            .size(theme::u(13.))
-                            .text_color(theme::tint(tint))
-                    };
-                    return name_row(ix, entry.depth(), icon, &name_input);
-                }
-            }
-            if let Some(PendingOp::Delete(p)) = &pending {
-                if p.to_string_lossy() == id {
-                    return delete_row(ix, entry.depth(), p, &view);
-                }
-            }
-            let naming = pending.is_some();
-            let is_open = active_path.as_deref() == Some(id.as_str());
-            let is_sel = !naming && selected.as_deref() == Some(id.as_str());
-            let is_dir = entry.is_folder() || dirs.contains(&id);
-            let skipped = is_dir && !entry.is_folder();
-            let chevron = div().w(theme::u(12.)).flex().justify_center().when(entry.is_folder(), |d| {
-                d.child(
-                    Icon::new(if entry.is_expanded() { IconName::ChevronDown } else { IconName::ChevronRight })
-                        .xsmall()
-                        .text_color(c(theme::FG_DIM)),
-                )
-            });
-            let icon = if is_dir {
-                Icon::new(files::folder_icon(&item.label, entry.is_expanded()))
-                    .size(theme::u(13.))
-                    .text_color(if skipped { c(theme::FG_DIM) } else { c(theme::FOLDER) })
-            } else {
-                let (icon, tint) = files::icon_for(&item.label);
-                Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint))
-            };
-            let lead: AnyElement = h_flex().gap_1().child(chevron).child(icon).into_any_element();
-            let key = id.replace('/', "\\").to_lowercase();
-            let mark = if is_dir { None } else { marks.get(&key).copied() };
-            let dir_dirty = is_dir && dirty_dirs.contains(&key);
-            let label_color = match mark {
-                _ if skipped => c(theme::FG_DIM),
-                Some(m) => c(crate::scm::code_color(m)),
-                None if dir_dirty => c(theme::WARN),
-                None => c(theme::FG),
-            };
-            ListItem::new(id.clone())
-                .w_full()
-                .h(theme::u(20.))
-                .px_1()
-                .pl(theme::u(10.) * entry.depth() + theme::u(6.))
-                .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .gap_1()
-                        .pr_2()
-                        .text_size(theme::u(11.5))
-                        .text_color(label_color)
-                        .child(lead)
-                        .child(
-                            div()
-                                .flex_1()
-                                .truncate()
-                                .when(multi && entry.depth() == 0, |d| d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)))
-                                .when(mark == Some('D'), |d| d.line_through())
-                                .child(item.label.clone()),
-                        )
-                        .when_some(mark, |h, m| h.child(div().text_xs().font_weight(FontWeight::BOLD).child(m.to_string())))
-                        .when(dir_dirty, |h| h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN)))),
-                )
-                .on_click({
-                    let view = view.clone();
-                    let item = item.clone();
-                    move |_, window, cx| {
-                        let path = PathBuf::from(item.id.as_ref());
-                        view.update(cx, |this, cx| {
-                            this.selected = Some(path.clone());
-                            if !is_dir {
-                                this.agent.user_nav = Some(std::time::Instant::now());
-                                this.agent_full = false;
-                                this.open_file(path, window, cx);
+
+                        if row.is_placeholder {
+                            let pl = theme::u(10.) * row.depth + theme::u(22.);
+                            return h_flex()
+                                .id(SharedString::from(format!("xp-{}", id)))
+                                .w_full()
+                                .h(theme::u(20.))
+                                .pl(pl)
+                                .pr_2()
+                                .gap_1()
+                                .items_center()
+                                .text_size(theme::u(11.))
+                                .text_color(c(theme::FG_DIM))
+                                .child(row.label.clone())
+                                .into_any_element();
+                        }
+
+                        if let Some(PendingOp::Rename(p)) = &pending {
+                            if p.to_string_lossy() == id {
+                                let icon = if row.is_dir {
+                                    Icon::new(files::folder_icon(&row.label, row.expanded))
+                                        .size(theme::u(13.))
+                                        .text_color(c(theme::FOLDER))
+                                } else {
+                                    let typed = name_input.read(cx).value();
+                                    let name: &str = if typed.is_empty() { &row.label } else { &typed };
+                                    let (ic, tint) = files::icon_for(name);
+                                    Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                                };
+                                return name_row(&id, row.depth, icon, &name_input).into_any_element();
                             }
-                            cx.notify();
-                        });
-                    }
-                })
-                .on_mouse_down(MouseButton::Left, {
-                    let view = view.clone();
-                    move |_, window, cx| {
-                        let keep = {
-                            let w = view.read(cx);
-                            stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
-                        };
-                        if keep {
-                            cx.stop_propagation();
-                            return;
                         }
-                        view.update(cx, |this, cx| {
-                            if this.pending.is_some() {
-                                this.cancel_pending(window, cx);
+
+                        if let Some(PendingOp::Delete(p)) = &pending {
+                            if p.to_string_lossy() == id {
+                                return delete_row(&id, row.depth, p, &view).into_any_element();
                             }
+                        }
+
+                        let naming = pending.is_some();
+                        let is_open = active_path.as_deref() == Some(id.as_str());
+                        let is_sel = !naming && selected.as_deref() == Some(id.as_str());
+                        let is_dir = row.is_dir;
+                        let expanded = row.expanded;
+                        let chevron = div().w(theme::u(12.)).flex().items_center().justify_center().when(is_dir, |d| {
+                            d.child(
+                                Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                                    .xsmall()
+                                    .text_color(c(theme::FG_DIM)),
+                            )
                         });
-                    }
-                })
-                .on_mouse_down(MouseButton::Right, {
-                    let view = view.clone();
-                    let tree_state = tree_state.clone();
-                    let item = item.clone();
-                    move |_, window, cx| {
-                        let keep = {
-                            let w = view.read(cx);
-                            stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                        let icon = if is_dir {
+                            Icon::new(files::folder_icon(&row.label, expanded))
+                                .size(theme::u(13.))
+                                .text_color(c(theme::FOLDER))
+                        } else {
+                            let (ic, tint) = files::icon_for(&row.label);
+                            Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
                         };
-                        if keep {
-                            cx.stop_propagation();
-                            return;
+                        let key = id.replace('/', "\\").to_lowercase();
+                        let mark = if is_dir { None } else { marks.get(&key).copied() };
+                        let dir_dirty = is_dir && dirty_dirs.contains(&key);
+                        let label_color = match mark {
+                            Some(m) => c(crate::scm::code_color(m)),
+                            None if dir_dirty => c(theme::WARN),
+                            None => c(theme::FG),
+                        };
+                        let base_pl = f32::from(theme::u(10.) * row.depth + theme::u(6.));
+                        let target = this.ctx_target.clone();
+                        let extra_ctx = extra.clone();
+                        let row_id_click = id.clone();
+                        let row_id_rclick = id.clone();
+                        let row_id_ctx = id.clone();
+                        let view_l = view.clone();
+                        let view_md = view.clone();
+                        let view_r = view.clone();
+                        let focus_l = this.explorer.focus.clone();
+
+                        let row_el = h_flex()
+                            .id(SharedString::from(format!("xr-{}", id)))
+                            .w_full()
+                            .h(theme::u(20.))
+                            .pl(px(base_pl))
+                            .pr_2()
+                            .gap_1()
+                            .items_center()
+                            .cursor_pointer()
+                            .text_size(theme::u(11.5))
+                            .text_color(label_color)
+                            .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
+                            .when(focused && is_sel, |s| s.border_l_2().border_color(c(theme::ACCENT)))
+                            .hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) })
+                            .active(|s| s.bg(c(theme::SELECT)))
+                            .child(chevron)
+                            .child(icon)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .when(multi && row.depth == 0, |d| {
+                                        d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG))
+                                    })
+                                    .when(mark == Some('D'), |d| d.line_through())
+                                    .child(row.label.clone()),
+                            )
+                            .when_some(mark, |h, m| h.child(div().text_xs().font_weight(FontWeight::BOLD).child(m.to_string())))
+                            .when(dir_dirty, |h| h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN))))
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                let keep = {
+                                    let w = view_md.read(cx);
+                                    stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                                };
+                                if keep {
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                view_md.update(cx, |this, cx| {
+                                    if this.pending.is_some() {
+                                        this.cancel_pending(window, cx);
+                                    }
+                                });
+                            })
+                            .on_click(move |_, window, cx| {
+                                focus_l.focus(window, cx);
+                                let path = PathBuf::from(&row_id_click);
+                                view_l.update(cx, |this, cx| {
+                                    this.selected = Some(path.clone());
+                                    if is_dir {
+                                        this.toggle_folder(row_id_click.clone(), cx);
+                                    } else {
+                                        this.agent.user_nav = Some(std::time::Instant::now());
+                                        this.agent_full = false;
+                                        this.open_file(path, window, cx);
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .on_mouse_down(MouseButton::Right, move |_, window, cx| {
+                                let keep = {
+                                    let w = view_r.read(cx);
+                                    stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                                };
+                                if keep {
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                if view_r.read(cx).pending.is_some() {
+                                    view_r.update(cx, |this, cx| this.cancel_pending(window, cx));
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                let path = PathBuf::from(&row_id_rclick);
+                                view_r.update(cx, |this, cx| {
+                                    this.selected = Some(path);
+                                    cx.notify();
+                                });
+                            })
+                            .context_menu(move |menu, _window, _cx| {
+                                let path = PathBuf::from(&row_id_ctx);
+                                let added = extra_ctx.contains(&path);
+                                *target.borrow_mut() = Some(path);
+                                let menu = if added {
+                                    menu.menu(tr("Remove Folder from Workspace"), Box::new(RemoveFolder)).separator()
+                                } else {
+                                    menu
+                                };
+                                menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
+                                    .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
+                                    .separator()
+                                    .menu(tr("Rename..."), Box::new(ExplorerRename))
+                                    .menu(tr("Delete"), Box::new(ExplorerDelete))
+                                    .separator()
+                                    .menu(tr("Copy Path"), Box::new(CopyPath))
+                                    .menu(tr("Copy Relative Path"), Box::new(CopyRelativePath))
+                                    .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
+                            });
+
+                        if !motion {
+                            return row_el.into_any_element();
                         }
-                        if view.read(cx).pending.is_some() {
-                            view.update(cx, |this, cx| this.cancel_pending(window, cx));
-                            cx.stop_propagation();
-                            return;
+
+                        if ws_anim > 0 && row.depth == 0 && added_roots.contains(&id) {
+                            let accent = c(theme::ACCENT);
+                            return row_el
+                                .with_animation(
+                                    SharedString::from(format!("xr-ws-{ws_anim}-{id}")),
+                                    Animation::new(Duration::from_millis(240)).with_easing(gpui_kit::ease_out_quint()),
+                                    move |d, t| {
+                                        d.opacity(0.15 + 0.85 * t)
+                                            .pl(px(base_pl - (1. - t) * 10.))
+                                            .bg(accent.opacity((1. - t) * 0.22))
+                                    },
+                                )
+                                .into_any_element();
                         }
-                        let path = PathBuf::from(item.id.as_ref());
-                        view.update(cx, |this, cx| {
-                            this.selected = Some(path);
-                            cx.notify();
-                        });
-                        tree_state.update(cx, |state, cx| {
-                            state.set_selected_index(Some(ix), cx);
-                        });
-                    }
-                })
-        })
-        .context_menu(move |_ix, entry, menu, _window, _cx| {
-            let path = PathBuf::from(entry.item().id.as_ref());
-            let added = extra.contains(&path);
-            *target.borrow_mut() = Some(path);
-            let menu = if added {
-                menu.menu(tr("Remove Folder from Workspace"), Box::new(crate::workbench::RemoveFolder)).separator()
-            } else {
-                menu
-            };
-            menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
-                .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
-                .separator()
-                .menu(tr("Rename..."), Box::new(ExplorerRename))
-                .menu(tr("Delete"), Box::new(ExplorerDelete))
-                .separator()
-                .menu(tr("Copy Path"), Box::new(CopyPath))
-                .menu(tr("Copy Relative Path"), Box::new(CopyRelativePath))
-                .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
-        })
-        .text_size(theme::u(11.5))
+
+                        if let Some((anim_dir, expanding, seq)) = &folder_anim {
+                            if *expanding && is_descendant_of(&id, anim_dir) {
+                                return row_el
+                                    .with_animation(
+                                        SharedString::from(format!("xr-open-{seq}-{id}")),
+                                        Animation::new(Duration::from_millis(165)).with_easing(gpui_kit::ease_out_quint()),
+                                        move |d, t| d.opacity(0.08 + 0.92 * t).pl(px(base_pl - (1. - t) * 7.)),
+                                    )
+                                    .into_any_element();
+                            }
+                            if !*expanding && id == *anim_dir {
+                                let hover = c(theme::BG_HOVER);
+                                return row_el
+                                    .with_animation(
+                                        SharedString::from(format!("xr-shut-{seq}-{id}")),
+                                        Animation::new(Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                                        move |d, t| d.bg(hover.opacity((1. - t) * 0.5)),
+                                    )
+                                    .into_any_element();
+                            }
+                            if !*expanding {
+                                if let Some(cix) = collapsed_row_ix {
+                                    if ix > cix && ix <= cix + 8 {
+                                        return row_el
+                                            .with_animation(
+                                                SharedString::from(format!("xr-pull-{seq}-{id}")),
+                                                Animation::new(Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                                                |d, t| d.mt(px((1. - t) * 4.)),
+                                            )
+                                            .into_any_element();
+                                    }
+                                }
+                            }
+                        }
+
+                        row_el.into_any_element()
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .track_scroll(&self.explorer.scroll)
         .size_full();
+
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .size_full()
+            .child(list)
+            .vertical_scrollbar(&self.explorer.scroll);
 
         v_flex()
             .size_full()
             .key_context("Explorer")
+            .track_focus(&self.explorer.focus)
+            .on_action(cx.listener(Self::on_explorer_up))
+            .on_action(cx.listener(Self::on_explorer_down))
+            .on_action(cx.listener(Self::on_explorer_left))
+            .on_action(cx.listener(Self::on_explorer_right))
+            .on_action(cx.listener(Self::on_explorer_open))
             .context_menu(move |menu, _window, _cx| {
                 if let Some(root) = &root {
                     *root_target.borrow_mut() = Some(root.clone());
@@ -318,12 +779,13 @@ impl Workbench {
                 menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
                     .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
                     .separator()
+                    .menu(tr("Add Folder to Workspace..."), Box::new(AddFolderToWorkspace))
                     .menu(tr("Refresh"), Box::new(ExplorerRefresh))
                     .separator()
                     .menu(tr("Copy Path"), Box::new(CopyPath))
                     .menu(tr("Reveal in File Explorer"), Box::new(RevealInExplorer))
             })
-            .child(div().flex_1().min_h_0().child(list))
+            .child(body)
             .into_any_element()
     }
 
@@ -337,16 +799,10 @@ impl Workbench {
     }
 
     fn target_item(&self) -> Option<PathBuf> {
-        self.ctx_target
-            .borrow_mut()
-            .take()
-            .or_else(|| self.selected.clone())
+        self.ctx_target.borrow_mut().take().or_else(|| self.selected.clone())
     }
 
-    pub(crate) fn pending_file_icon(
-        &self,
-        cx: &App,
-    ) -> Option<(crate::fluxicon::FluxIcon, Option<u32>)> {
+    pub(crate) fn pending_file_icon(&self, cx: &App) -> Option<(crate::fluxicon::FluxIcon, Option<u32>)> {
         match &self.pending {
             Some(PendingOp::NewFile(_)) => {
                 let typed = self.name_input.read(cx).value();
@@ -359,10 +815,7 @@ impl Workbench {
             Some(PendingOp::Rename(p)) => {
                 let typed = self.name_input.read(cx).value();
                 if typed.is_empty() {
-                    let name = p
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     Some(files::icon_for(&name))
                 } else {
                     Some(files::icon_for(&typed))
@@ -372,20 +825,14 @@ impl Workbench {
         }
     }
 
-    fn start_pending(
-        &mut self,
-        op: PendingOp,
-        value: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn start_pending(&mut self, op: PendingOp, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Explorer;
         self.sidebar_open = true;
         if let PendingOp::NewFile(d) | PendingOp::NewFolder(d) = &op {
-            self.tree_expanded(d.to_string_lossy().into_owned(), cx);
+            self.expand_folder(d.to_string_lossy().into_owned(), false, cx);
         }
         self.pending = Some(op);
-        self.set_tree_items(cx);
+        self.rebuild_explorer_rows(cx);
         let placeholder: &'static str = match &self.pending {
             Some(PendingOp::NewFile(_)) => tr("File name"),
             Some(PendingOp::NewFolder(_)) => tr("Folder name"),
@@ -404,7 +851,7 @@ impl Workbench {
 
     pub(crate) fn cancel_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending.take().is_some() {
-            self.set_tree_items(cx);
+            self.rebuild_explorer_rows(cx);
             self.focus.focus(window, cx);
             cx.notify();
         }
@@ -499,7 +946,7 @@ impl Workbench {
         };
         match result {
             Ok(()) => {
-                self.set_tree_items(cx);
+                self.rebuild_explorer_rows(cx);
                 self.refresh_tree(cx);
             }
             Err(e) => {
@@ -511,79 +958,66 @@ impl Workbench {
     }
 }
 
-fn name_row(ix: usize, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> ListItem {
-    ListItem::new(ix)
+fn name_row(id: &str, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> Stateful<Div> {
+    h_flex()
+        .id(SharedString::from(format!("xr-edit-{id}")))
         .w_full()
         .h(theme::u(20.))
         .py_0()
         .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
+        .gap_1()
+        .items_center()
         .bg(c(theme::SELECT))
         .on_click(|_, _, cx| cx.stop_propagation())
+        .child(div().w(theme::u(12.)).flex().justify_center())
+        .child(icon)
         .child(
-            h_flex()
-                .w_full()
+            div()
+                .flex_1()
+                .min_w_0()
                 .h_full()
-                .gap_1()
+                .flex()
                 .items_center()
-                .child(div().w(theme::u(12.)).flex().justify_center())
-                .child(icon)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .child(
-                            Input::new(name_input)
-                                .xsmall()
-                                .focus_bordered(false)
-                                .w_full(),
-                        ),
-                ),
+                .child(Input::new(name_input).xsmall().focus_bordered(false).w_full()),
         )
 }
 
-fn delete_row(ix: usize, depth: usize, path: &Path, view: &Entity<Workbench>) -> ListItem {
+fn delete_row(id: &str, depth: usize, path: &Path, view: &Entity<Workbench>) -> Stateful<Div> {
     let name = short(path);
     let del = view.clone();
     let cancel = view.clone();
-    ListItem::new(ix)
+    h_flex()
+        .id(SharedString::from(format!("xr-del-{id}")))
         .w_full()
         .h(theme::u(20.))
         .py_0()
         .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
+        .gap_1()
+        .items_center()
         .bg(c(theme::SELECT))
+        .text_size(theme::u(11.5))
         .on_click(|_, _, cx| cx.stop_propagation())
+        .child(Icon::new(IconName::Delete).size(theme::u(13.)).text_color(c(theme::DANGER)))
+        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(crate::trf!("Delete {name}?"; name => name)))
         .child(
-            h_flex()
-                .w_full()
-                .h_full()
-                .gap_1()
-                .items_center()
-                .text_size(theme::u(11.5))
-                .child(Icon::new(IconName::Delete).size(theme::u(13.)).text_color(c(theme::DANGER)))
-                .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(crate::trf!("Delete {name}?"; name => name)))
-                .child(
-                    Button::new("pending-del-ok")
-                        .label(tr("Delete"))
-                        .xsmall()
-                        .danger()
-                        .on_click(move |_, window, cx| {
-                            del.update(cx, |this, cx| this.commit_pending(window, cx));
-                        }),
-                )
-                .child(
-                    Button::new("pending-del-cancel")
-                        .label(tr("Cancel"))
-                        .xsmall()
-                        .ghost()
-                        .on_click(move |_, window, cx| {
-                            cancel.update(cx, |this, cx| this.cancel_pending(window, cx));
-                        }),
-                ),
+            Button::new("pending-del-ok")
+                .label(tr("Delete"))
+                .xsmall()
+                .danger()
+                .on_click(move |_, window, cx| {
+                    del.update(cx, |this, cx| this.commit_pending(window, cx));
+                }),
+        )
+        .child(
+            Button::new("pending-del-cancel")
+                .label(tr("Cancel"))
+                .xsmall()
+                .ghost()
+                .on_click(move |_, window, cx| {
+                    cancel.update(cx, |this, cx| this.cancel_pending(window, cx));
+                }),
         )
 }
 
@@ -595,35 +1029,90 @@ fn short(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{stray_press_keeps_input, update_reveal_state};
+    use super::{flatten_nodes, is_descendant_of, stray_press_keeps_input, PENDING_ROW_ID};
+    use crate::files::Node;
     use crate::workbench::PendingOp;
-    use std::path::PathBuf;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
 
-    #[test]
-    fn rebuild_that_keeps_the_file_keeps_the_show() {
-        let mut revealed = Some("src/lib.rs".to_string());
-        let mut tried = None;
-        update_reveal_state(true, &mut revealed, &mut tried);
-        assert_eq!(revealed, Some("src/lib.rs".to_string()));
-        assert_eq!(tried, None);
+    fn dir(id: &str, name: &str, loaded: bool, children: Vec<Node>) -> Node {
+        Node { id: id.into(), name: name.into(), children: Some(children), loaded }
+    }
+
+    fn file(id: &str, name: &str) -> Node {
+        Node { id: id.into(), name: name.into(), children: None, loaded: true }
     }
 
     #[test]
-    fn rebuild_that_brings_the_file_back_unblocks_the_show() {
-        let mut revealed = Some("src/main.rs".to_string());
-        let mut tried = Some("src/lib.rs".to_string());
-        update_reveal_state(true, &mut revealed, &mut tried);
-        assert_eq!(revealed, Some("src/main.rs".to_string()));
-        assert_eq!(tried, None);
+    fn toggling_two_large_sibling_folders_keeps_exact_path_identity() {
+        let big_a: Vec<Node> = (0..60).map(|i| file(&format!("/bp/A/a{i}.js"), &format!("a{i}.js"))).collect();
+        let big_b: Vec<Node> = (0..60).map(|i| file(&format!("/bp/B/b{i}.json"), &format!("b{i}.json"))).collect();
+        let nodes = vec![dir("/bp", "behavior_packs", true, vec![
+            dir("/bp/A", "KiwEssentialsVIP_BP", true, big_a),
+            dir("/bp/B", "KiwHitAnimation_BP", true, big_b),
+        ])];
+        let mut expanded = HashSet::from(["/bp".to_string(), "/bp/B".to_string()]);
+        let loading = HashSet::new();
+        let mut dirs = HashSet::new();
+
+        let rows = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/bp")), &mut dirs);
+        assert_eq!(rows[0].id, "/bp");
+        assert_eq!(rows[1].id, "/bp/A");
+        assert!(!rows[1].expanded);
+        assert_eq!(rows[2].id, "/bp/B");
+        assert!(rows[2].expanded);
+        assert_eq!(rows.len(), 3 + 60);
+
+        // Expand A and collapse B: rows stay strictly keyed by path.
+        expanded.insert("/bp/A".to_string());
+        expanded.remove("/bp/B");
+        let rows2 = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/bp")), &mut dirs);
+        assert_eq!(rows2[1].id, "/bp/A");
+        assert!(rows2[1].expanded);
+        assert_eq!(rows2[2].id, "/bp/A/a0.js");
+        let b_row = rows2.iter().find(|r| r.id == "/bp/B").unwrap();
+        assert!(!b_row.expanded);
+        assert!(!rows2.iter().any(|r| r.id.starts_with("/bp/B/")));
     }
 
     #[test]
-    fn rebuild_that_loses_the_file_voids_the_show() {
-        let mut revealed = Some("src/lib.rs".to_string());
-        let mut tried = None;
-        update_reveal_state(false, &mut revealed, &mut tried);
-        assert_eq!(revealed, None);
-        assert_eq!(tried, None);
+    fn unloaded_and_empty_folders_show_honest_placeholders() {
+        let nodes = vec![
+            dir("/p/unloaded", "unloaded", false, vec![]),
+            dir("/p/empty", "empty", true, vec![]),
+        ];
+        let expanded = HashSet::from(["/p/unloaded".to_string(), "/p/empty".to_string()]);
+        let loading = HashSet::new();
+        let mut dirs = HashSet::new();
+        let rows = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/p")), &mut dirs);
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].is_dir && rows[1].is_placeholder && rows[1].loading);
+        assert!(rows[2].is_dir && rows[3].is_placeholder && !rows[3].loading);
+    }
+
+    #[test]
+    fn pending_row_inserts_into_target_folder_or_root() {
+        let nodes = vec![dir("/p/src", "src", true, vec![file("/p/src/a.rs", "a.rs")])];
+        let expanded = HashSet::from(["/p/src".to_string()]);
+        let loading = HashSet::new();
+        let mut dirs = HashSet::new();
+        let op = PendingOp::NewFile(PathBuf::from("/p/src"));
+        let rows = flatten_nodes(&nodes, &expanded, &loading, Some(&op), Some(Path::new("/p")), &mut dirs);
+        assert_eq!(rows[1].id, PENDING_ROW_ID);
+        assert_eq!(rows[1].depth, 1);
+
+        let root_op = PendingOp::NewFolder(PathBuf::from("/p"));
+        let rows_root = flatten_nodes(&nodes, &expanded, &loading, Some(&root_op), Some(Path::new("/p")), &mut dirs);
+        assert_eq!(rows_root[0].id, PENDING_ROW_ID);
+        assert_eq!(rows_root[0].depth, 0);
+    }
+
+    #[test]
+    fn descendant_check_respects_path_boundaries() {
+        assert!(is_descendant_of("/bp/A/file.js", "/bp/A"));
+        assert!(is_descendant_of(r"C:\bp\A\file.js", r"C:\bp\A"));
+        assert!(!is_descendant_of("/bp/AB/file.js", "/bp/A"));
+        assert!(!is_descendant_of("/bp/A", "/bp/A"));
     }
 
     #[test]
@@ -632,14 +1121,8 @@ mod tests {
         assert!(stray_press_keeps_input(&new, "main.py"));
         assert!(!stray_press_keeps_input(&new, ""));
         assert!(!stray_press_keeps_input(&new, "   "));
-        assert!(stray_press_keeps_input(
-            &Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))),
-            "b"
-        ));
-        assert!(!stray_press_keeps_input(
-            &Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))),
-            "main.py"
-        ));
+        assert!(stray_press_keeps_input(&Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))), "b"));
+        assert!(!stray_press_keeps_input(&Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))), "main.py"));
         assert!(!stray_press_keeps_input(&None, "main.py"));
     }
 }

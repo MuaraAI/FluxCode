@@ -813,9 +813,10 @@ impl Workbench {
         let (wrap, dots) = (self.settings.word_wrap, self.settings.show_whitespace);
         let opts = EditorOpts::of(&self.settings);
         for d in &self.docs {
+            let Some(ed) = &d.editor else { continue };
             let wrap = if d.wrap_override.is_none() && d.complex { false } else { d.wraps(wrap) };
             let complex_or_ro = d.complex || d.read_only;
-            d.editor.update(cx, |s, cx| {
+            ed.update(cx, |s, cx| {
                 s.set_soft_wrap(wrap, window, cx);
                 s.set_show_whitespaces(dots && !d.read_only, window, cx);
                 opts.apply(s, window, cx);

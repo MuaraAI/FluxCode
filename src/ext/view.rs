@@ -299,9 +299,11 @@ impl Workbench {
 
     fn ext_save_under(&mut self, dir: &Path, cx: &mut Context<Self>) {
         for d in self.docs.iter_mut().filter(|d| d.dirty && d.path.starts_with(dir)) {
-            let text = d.editor.read(cx).value();
-            if crate::core::write_text(&d.path, &text, d.crlf).is_ok() {
-                d.dirty = false;
+            if let Some(ed) = &d.editor {
+                let text = ed.read(cx).value();
+                if crate::core::write_text(&d.path, &text, d.crlf).is_ok() {
+                    d.dirty = false;
+                }
             }
         }
     }
