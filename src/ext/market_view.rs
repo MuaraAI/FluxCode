@@ -437,19 +437,20 @@ impl Workbench {
         let id = it.id();
         let selected =
             self.ext.page.as_deref().and_then(|p| p.strip_prefix(PAGE)) == Some(id.as_str());
-        let stats = h_flex()
-            .flex_shrink(1.)
-            .min_w_0()
-            .overflow_hidden()
-            .gap_2()
-            .when(it.installs > 0, |h| {
-                h.child(
-                    h_flex()
-                        .gap_0p5()
-                        .child(Icon::new(Ico::Download).size(theme::u(11.)))
-                        .child(market::format_count(it.installs)),
-                )
-            });
+        let panel_w = if self.on_right(SideView::Extensions) {
+            self.agent_width
+        } else {
+            self.sidebar_width
+        };
+        let show_stats = it.installs > 0 && panel_w >= f32::from(theme::u(220.));
+        let stats = show_stats.then(|| {
+            h_flex()
+                .flex_none()
+                .whitespace_nowrap()
+                .gap_0p5()
+                .child(Icon::new(Ico::Download).flex_none().size(theme::u(11.)))
+                .child(market::format_count(it.installs))
+        });
         let open = it.clone();
         h_flex()
             .id((keys.0, ix))
@@ -488,13 +489,14 @@ impl Workbench {
                     .child(
                         h_flex()
                             .w_full()
-                            .gap_2()
+                            .min_w_0()
+                            .gap_1p5()
                             .text_xs()
                             .text_color(c(theme::FG_DIM))
                             .child(
                                 h_flex()
                                     .flex_1()
-                                    .min_w(theme::u(48.))
+                                    .min_w_0()
                                     .gap_1()
                                     .when(it.verified, |h| {
                                         h.child(
@@ -506,12 +508,13 @@ impl Workbench {
                                     })
                                     .child(
                                         div()
+                                            .flex_1()
                                             .min_w_0()
                                             .truncate()
                                             .child(it.publisher_display.clone()),
                                     ),
                             )
-                            .child(stats)
+                            .children(stats)
                             .child(div().flex_none().child(self.market_button(
                                 (keys.1, ix),
                                 it,
@@ -624,9 +627,8 @@ impl Workbench {
             }))
         };
         let tabs = h_flex()
-            .px_2()
+            .flex_none()
             .gap_0p5()
-            .min_w_0()
             .child(tab(
                 "ext-f-market",
                 tr("Marketplace").into(),
@@ -788,13 +790,20 @@ impl Workbench {
                     ),
             )
             .child(
+                // Wrap tabs and sort filter onto separate lines when the sidebar narrows.
                 h_flex()
                     .w_full()
-                    .pr_2()
-                    .gap_1()
+                    .min_w_0()
+                    .px_2()
+                    .gap_x_1p5()
+                    .gap_y_1()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
                     .child(tabs)
-                    .child(div().flex_1())
-                    .when(on_market, |h| h.child(self.market_filters(cx))),
+                    .when(on_market, |h| {
+                        h.child(div().min_w_0().max_w_full().child(self.market_filters(cx)))
+                    }),
             )
             .child(status_line)
             .when_some(self.ext.note.clone(), |v, n| {
@@ -905,7 +914,7 @@ impl Workbench {
             .child(
                 div()
                     .flex_1()
-                    .min_w(theme::u(160.))
+                    .min_w(theme::u(120.))
                     .truncate()
                     .text_xl()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -968,6 +977,7 @@ impl Workbench {
             .or_else(|| m.icons.get(&id).cloned());
         let head = h_flex()
             .w_full()
+            .flex_wrap()
             .gap_4()
             .items_start()
             .child(vsx_icon(icon.as_ref(), 64.))

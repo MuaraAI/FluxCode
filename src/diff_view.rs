@@ -96,7 +96,7 @@ impl Workbench {
         let digits = lines.iter().filter_map(|l| l.new.max(l.old)).max().unwrap_or(1).to_string().len().max(2) as f32;
         let num_w = px(fs * 0.62 * digits + 10.);
         let (green, red) = (c(theme::GREEN), c(theme::DANGER));
-        let font = self.settings.font_family.clone();
+        let font = theme::resolve_mono_font(&self.settings.font_family, cx);
         let rows = list(d.list.clone(), move |i, _, _| {
             let Some(l) = lines.get(i) else { return div().into_any_element() };
             if l.kind == Kind::Hunk {

@@ -316,31 +316,77 @@ pub static PALETTES: [Palette; 7] = [
 ];
 
 pub const FADE: std::time::Duration = std::time::Duration::from_millis(340);
-static FROM: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
-static FADE_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub const HOVER_FADE: std::time::Duration = std::time::Duration::from_millis(260);
+
+#[derive(Clone, Copy)]
+struct FadeState {
+    from: Palette,
+    started_ms: u64,
+    duration_ms: u64,
+    ease_out: bool,
+}
+
+static FADE_STATE: RwLock<Option<FadeState>> = RwLock::new(None);
 static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static LAST_CUSTOM_SYNTAX: AtomicBool = AtomicBool::new(false);
 
 fn now_ms() -> u64 {
     CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
 }
 
-pub fn fade_from(old: &'static Palette) {
-    FADE_AT.store(now_ms(), Ordering::Relaxed);
-    FROM.store(old as *const Palette as *mut Palette, Ordering::Relaxed);
+pub fn fade_from_snapshot(from: Palette, duration: std::time::Duration, ease_out: bool) {
+    let duration_ms = (duration.as_millis() as u64).max(1);
+    *FADE_STATE.write().unwrap_or_else(|e| e.into_inner()) = Some(FadeState {
+        from,
+        started_ms: now_ms(),
+        duration_ms,
+        ease_out,
+    });
 }
 
-fn fade() -> Option<(&'static Palette, f32)> {
-    let p = FROM.load(Ordering::Relaxed);
-    if p.is_null() {
-        return None;
-    }
-    let t = (now_ms().saturating_sub(FADE_AT.load(Ordering::Relaxed))) as f32 / FADE.as_millis() as f32;
+/// Captures the current on-screen interpolated colors so mid-fade theme changes glide without snapping.
+pub fn snapshot_live() -> Palette {
+    let mut p = *palette();
+    p.dark = live_dark();
+    p.title = live(Tok::BgTitle);
+    p.side = live(Tok::BgSide);
+    p.editor = live(Tok::BgEditor);
+    p.elevated = live(Tok::BgElevated);
+    p.hover = live(Tok::BgHover);
+    p.border = live(Tok::Border);
+    p.border_strong = live(Tok::BorderStrong);
+    p.fg = live(Tok::Fg);
+    p.strong = live(Tok::FgStrong);
+    p.muted = live(Tok::FgMuted);
+    p.dim = live(Tok::FgDim);
+    p.accent = live(Tok::Accent);
+    p.on_accent = live(Tok::OnAccent);
+    p.accent_text = live(Tok::AccentText);
+    p.blue = live(Tok::Blue);
+    p.green = live(Tok::Green);
+    p.warn = live(Tok::Warn);
+    p.danger = live(Tok::Danger);
+    p.folder = live(Tok::Folder);
+    p.select = live(Tok::Select);
+    p.selection = live(Tok::Selection);
+    p
+}
+
+fn fade() -> Option<(Palette, f32)> {
+    let state = (*FADE_STATE.read().unwrap_or_else(|e| e.into_inner()))?;
+    let t = (now_ms().saturating_sub(state.started_ms)) as f32 / state.duration_ms as f32;
     if t >= 1. {
-        FROM.store(std::ptr::null_mut(), Ordering::Relaxed);
+        *FADE_STATE.write().unwrap_or_else(|e| e.into_inner()) = None;
         return None;
     }
-    let e = if t < 0.5 { 4. * t * t * t } else { 1. - (-2. * t + 2.).powi(3) / 2. };
-    Some((unsafe { &*p }, e))
+    let e = if state.ease_out {
+        1. - (1. - t).powi(3)
+    } else if t < 0.5 {
+        4. * t * t * t
+    } else {
+        1. - (-2. * t + 2.).powi(3) / 2.
+    };
+    Some((state.from, e))
 }
 
 pub fn fading() -> bool {
@@ -560,9 +606,13 @@ pub fn tint(hex: Option<u32>) -> Hsla {
 }
 
 pub fn welcome_tint() -> Background {
-    let base: Hsla = rgb(palette().editor).into();
-    let a = if palette().dark { 0.6 } else { 0.62 };
-    linear_gradient(180., linear_color_stop(base.opacity(a * 0.8), 0.), linear_color_stop(base.opacity(a), 1.))
+    let base: Hsla = now(Tok::BgEditor);
+    let a = if live_dark() { 0.6 } else { 0.62 };
+    linear_gradient(
+        180.,
+        linear_color_stop(base.opacity(a * 0.8), 0.),
+        linear_color_stop(base.opacity(a), 1.),
+    )
 }
 
 pub fn editor_wash() -> Background {
@@ -578,16 +628,58 @@ pub fn editor_wash() -> Background {
     }
 }
 
+const MONO_FALLBACKS: &[&str] = &[
+    "Cascadia Code",
+    "Cascadia Mono",
+    "Consolas",
+    "JetBrains Mono",
+    "Fira Code",
+    "SF Mono",
+    "Menlo",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+];
+
+fn pick_mono_font(preferred: &str, available: &[String]) -> String {
+    if let Some(exact) = available.iter().find(|n| n.eq_ignore_ascii_case(preferred)) {
+        return exact.clone();
+    }
+    for &cand in MONO_FALLBACKS {
+        if let Some(found) = available.iter().find(|n| n.eq_ignore_ascii_case(cand)) {
+            return found.clone();
+        }
+    }
+    preferred.to_string()
+}
+
+pub fn resolve_mono_font(preferred: &str, cx: &App) -> gpui_kit::SharedString {
+    use std::sync::OnceLock;
+    static FONTS: OnceLock<Vec<String>> = OnceLock::new();
+    let available = FONTS.get_or_init(|| cx.text_system().all_font_names());
+    pick_mono_font(preferred, available).into()
+}
+
 pub fn apply(cx: &mut App) {
     let p = palette();
     let dark = match fade() {
         Some((from, e)) if e < 0.5 => from.dark,
         _ => p.dark,
     };
-    Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, None, cx);
+    let mono = resolve_mono_font("Cascadia Code", cx);
+    let want_mode = if dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    let had_custom_syntax = LAST_CUSTOM_SYNTAX.swap(p.syntax.is_some(), Ordering::Relaxed);
+    let mode_changed = cx.try_global::<Theme>().is_none_or(|t| t.mode != want_mode);
+    if mode_changed || (had_custom_syntax && p.syntax.is_none()) {
+        Theme::change(want_mode, None, cx);
+    }
     Theme::update(cx, |t| {
         t.font_size = u(13.);
-        t.mono_font_family = "Cascadia Code".into();
+        t.mono_font_family = mono;
         t.mono_font_size = gpui_kit::px(14.);
         t.radius = gpui_kit::px(4.);
         t.radius_lg = gpui_kit::px(6.);
@@ -614,6 +706,8 @@ pub fn apply(cx: &mut App) {
         k.secondary_hover = c(BG_HOVER);
         k.secondary_foreground = c(FG);
         k.danger = c(DANGER);
+        k.red = c(DANGER);
+        k.yellow = c(WARN);
         k.caret = c(ACCENT_TEXT);
         k.selection = c(Tok::Selection);
         k.sidebar = c(BG_SIDE);
@@ -691,6 +785,15 @@ mod tests {
     }
 
     #[test]
+    fn pick_mono_font_falls_back_to_installed_monospace() {
+        let win10 = vec!["Segoe UI".to_string(), "Consolas".to_string(), "Courier New".to_string()];
+        assert_eq!(pick_mono_font("Cascadia Code", &win10), "Consolas");
+        assert_eq!(pick_mono_font("Courier New", &win10), "Courier New");
+        let with_cascadia = vec!["Cascadia Code".to_string(), "Consolas".to_string()];
+        assert_eq!(pick_mono_font("Cascadia Code", &with_cascadia), "Cascadia Code");
+    }
+
+    #[test]
     fn extension_palettes_join_the_list_and_can_be_selected() {
         let mut p = Palette { ..PALETTES[1] };
         p.id = "vsx:test.theme/one";
@@ -712,6 +815,15 @@ mod tests {
         assert_eq!(mix(0x000000, 0xffffff, 1.), 0xffffff);
         assert_eq!(mix(0x102030, 0x304050, 0.5), 0x203040);
         assert!(find("flux-sky").is_some_and(|p| p.dark));
+        set("flux-dark", None);
+        let snap = snapshot_live();
+        set("flux-cream", None);
+        fade_from_snapshot(snap, std::time::Duration::from_millis(260), true);
+        assert!(fading());
+        let mid = snapshot_live();
+        assert_ne!(mid.editor, PALETTES[1].editor);
+        *FADE_STATE.write().unwrap_or_else(|e| e.into_inner()) = None;
+        assert!(!fading());
     }
 
     #[test]
@@ -731,14 +843,21 @@ pub fn glass_pop_fill() -> Background {
     if !glass() {
         return base.into();
     }
-    let dark = palette().dark;
-    let top = Hsla { l: (base.l + if dark { 0.05 } else { 0.03 }).clamp(0., 1.), ..base };
+    let dark = live_dark();
+    let top = Hsla {
+        l: (base.l + if dark { 0.05 } else { 0.03 }).clamp(0., 1.),
+        ..base
+    };
     let (a_top, a_bottom) = (0.97, 0.95);
     linear_gradient(180., linear_color_stop(top.opacity(a_top), 0.), linear_color_stop(base.opacity(a_bottom), 1.))
 }
 
 pub fn glass_pop_edge() -> Hsla {
-    if palette().dark { gpui_kit::hsla(0., 0., 1., 0.14) } else { gpui_kit::hsla(0., 0., 0., 0.09) }
+    if live_dark() {
+        gpui_kit::hsla(0., 0., 1., 0.14)
+    } else {
+        gpui_kit::hsla(0., 0., 0., 0.09)
+    }
 }
 
 fn glass_with(top_a: f32, bottom_a: f32) -> Background {
@@ -746,13 +865,24 @@ fn glass_with(top_a: f32, bottom_a: f32) -> Background {
     if !glass() && image().is_none() {
         return base.into();
     }
-    let lift = if palette().dark { 0.06 } else { -0.03 };
-    let top = Hsla { l: (base.l + lift).clamp(0., 1.), ..base };
-    linear_gradient(180., linear_color_stop(top.opacity(top_a), 0.), linear_color_stop(base.opacity(bottom_a), 1.))
+    let lift = if live_dark() { 0.06 } else { -0.03 };
+    let top = Hsla {
+        l: (base.l + lift).clamp(0., 1.),
+        ..base
+    };
+    linear_gradient(
+        180.,
+        linear_color_stop(top.opacity(top_a), 0.),
+        linear_color_stop(base.opacity(bottom_a), 1.),
+    )
 }
 
 pub fn glass_edge() -> Hsla {
-    if palette().dark { gpui_kit::hsla(0., 0., 1., 0.10) } else { gpui_kit::hsla(0., 0., 0., 0.10) }
+    if live_dark() {
+        gpui_kit::hsla(0., 0., 1., 0.10)
+    } else {
+        gpui_kit::hsla(0., 0., 0., 0.10)
+    }
 }
 
 pub trait GlassExt: gpui_kit::Styled + Sized {

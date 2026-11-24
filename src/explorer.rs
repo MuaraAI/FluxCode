@@ -44,6 +44,13 @@ pub(crate) struct ExplorerState {
     pub folder_anim_seq: u64,
     pub workspace_anim: u64,
     pub added_roots: HashSet<String>,
+    pub hovered_ix: Option<usize>,
+    pub hover_from_y: f32,
+    pub hover_to_y: f32,
+    pub hover_seq: u64,
+    pub hover_fade_in: bool,
+    pub hover_leave: Option<(f32, u64)>,
+    pub hover_last_at: Option<std::time::Instant>,
 }
 
 impl ExplorerState {
@@ -59,6 +66,13 @@ impl ExplorerState {
             folder_anim_seq: 0,
             workspace_anim: 0,
             added_roots: HashSet::new(),
+            hovered_ix: None,
+            hover_from_y: 0.,
+            hover_to_y: 0.,
+            hover_seq: 0,
+            hover_fade_in: false,
+            hover_leave: None,
+            hover_last_at: None,
         }
     }
 
@@ -231,6 +245,56 @@ fn is_descendant_of(path: &str, ancestor: &str) -> bool {
 }
 
 impl Workbench {
+    fn explorer_row_y(&self, ix: usize) -> f32 {
+        let row_h = f32::from(theme::u(20.));
+        let scroll_y = f32::from(self.explorer.scroll.0.borrow().base_handle.offset().y);
+        ix as f32 * row_h + scroll_y
+    }
+
+    fn explorer_hover_row(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let target_y = self.explorer_row_y(ix);
+        if self.explorer.hovered_ix == Some(ix) && (self.explorer.hover_to_y - target_y).abs() < 0.5 {
+            return;
+        }
+        let gliding = self.explorer.hovered_ix.is_some()
+            || self.explorer.hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
+        self.explorer.hover_from_y = if gliding { self.explorer.hover_to_y } else { target_y };
+        self.explorer.hover_to_y = target_y;
+        self.explorer.hovered_ix = Some(ix);
+        self.explorer.hover_fade_in = !gliding;
+        self.explorer.hover_leave = None;
+        self.explorer.hover_last_at = Some(std::time::Instant::now());
+        self.explorer.hover_seq = self.explorer.hover_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    fn explorer_hover_clear(&mut self, cx: &mut Context<Self>) {
+        if self.explorer.hovered_ix.take().is_none() {
+            return;
+        }
+        self.explorer.hover_last_at = Some(std::time::Instant::now());
+        if cx.reduce_motion() {
+            self.explorer.hover_leave = None;
+            cx.notify();
+            return;
+        }
+        self.explorer.hover_seq = self.explorer.hover_seq.wrapping_add(1);
+        let seq = self.explorer.hover_seq;
+        let last_y = self.explorer.hover_to_y;
+        self.explorer.hover_leave = Some((last_y, seq));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(130)).await;
+            _ = this.update(cx, |this, cx| {
+                if this.explorer.hover_leave.is_some_and(|(_, s)| s == seq) {
+                    this.explorer.hover_leave = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn rebuild_explorer_rows(&mut self, cx: &mut Context<Self>) {
         let mut dirs = HashSet::new();
         self.explorer.rows = flatten_nodes(
@@ -241,6 +305,11 @@ impl Workbench {
             self.root.as_deref(),
             &mut dirs,
         );
+        if let Some(h) = self.explorer.hovered_ix {
+            if h >= self.explorer.rows.len() {
+                self.explorer.hovered_ix = None;
+            }
+        }
         self.dirs = std::rc::Rc::new(dirs);
         cx.notify();
     }
@@ -490,6 +559,10 @@ impl Workbench {
                 let marks = this.scm.marks.clone();
                 let dirty_dirs = this.scm.dirty_dirs.clone();
                 let folder_anim = this.explorer.folder_anim.clone();
+                let jump_anim = this
+                    .file_jump_anim
+                    .as_ref()
+                    .map(|(p, s)| (p.to_string_lossy().into_owned(), *s));
                 let ws_anim = this.explorer.workspace_anim;
                 let added_roots = this.explorer.added_roots.clone();
 
@@ -591,6 +664,7 @@ impl Workbench {
                         let view_l = view.clone();
                         let view_md = view.clone();
                         let view_r = view.clone();
+                        let view_hov = view.clone();
                         let focus_l = this.explorer.focus.clone();
 
                         let row_el = h_flex()
@@ -606,7 +680,12 @@ impl Workbench {
                             .text_color(label_color)
                             .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
                             .when(focused && is_sel, |s| s.border_l_2().border_color(c(theme::ACCENT)))
-                            .hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) })
+                            .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }))
+                            .on_hover(move |entered: &bool, _, cx| {
+                                if *entered {
+                                    view_hov.update(cx, |this, cx| this.explorer_hover_row(ix, cx));
+                                }
+                            })
                             .active(|s| s.bg(c(theme::SELECT)))
                             .child(chevron)
                             .child(icon)
@@ -697,6 +776,20 @@ impl Workbench {
                             return row_el.into_any_element();
                         }
 
+                        if let Some((jump_id, seq)) = &jump_anim {
+                            if *jump_id == id {
+                                let accent = c(theme::ACCENT);
+                                return row_el
+                                    .with_animation(
+                                        SharedString::from(format!("xr-jump-{seq}-{id}")),
+                                        Animation::new(Duration::from_millis(420))
+                                            .with_easing(gpui_kit::ease_out_quint()),
+                                        move |d, t| d.bg(accent.opacity((1. - t) * 0.28)),
+                                    )
+                                    .into_any_element();
+                            }
+                        }
+
                         if ws_anim > 0 && row.depth == 0 && added_roots.contains(&id) {
                             let accent = c(theme::ACCENT);
                             return row_el
@@ -755,11 +848,75 @@ impl Workbench {
         .track_scroll(&self.explorer.scroll)
         .size_full();
 
+        let row_h = f32::from(theme::u(20.));
+        let hover_outline: Option<AnyElement> = if !motion {
+            None
+        } else if let Some(hix) = self.explorer.hovered_ix.filter(|&i| i < self.explorer.rows.len()) {
+            let live_y = self.explorer_row_y(hix);
+            let from_y = self.explorer.hover_from_y;
+            let to_y = self.explorer.hover_to_y;
+            let seq = self.explorer.hover_seq;
+            let fade_in = self.explorer.hover_fade_in;
+            let scrolled = (live_y - to_y).abs() > 1.0;
+            let pill = div()
+                .absolute()
+                .left(px(4.))
+                .right(px(6.))
+                .h(px(row_h))
+                .rounded(px(5.))
+                .bg(c(theme::BG_HOVER).opacity(0.65))
+                .border_1()
+                .border_color(c(theme::BORDER_STRONG).opacity(0.85));
+            Some(if scrolled {
+                pill.top(px(live_y)).into_any_element()
+            } else {
+                pill.with_animation(
+                    SharedString::from(format!("xr-hov-{seq}")),
+                    Animation::new(Duration::from_millis(if fade_in { 120 } else { 145 })).with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| {
+                        let y = from_y + (to_y - from_y) * t;
+                        let op = if fade_in { t } else { 1. };
+                        d.top(px(y)).opacity(op)
+                    },
+                )
+                .into_any_element()
+            })
+        } else if let Some((ly, seq)) = self.explorer.hover_leave {
+            Some(
+                div()
+                    .absolute()
+                    .left(px(4.))
+                    .right(px(6.))
+                    .top(px(ly))
+                    .h(px(row_h))
+                    .rounded(px(5.))
+                    .bg(c(theme::BG_HOVER).opacity(0.65))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG).opacity(0.85))
+                    .with_animation(
+                        SharedString::from(format!("xr-hov-out-{seq}")),
+                        Animation::new(Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.opacity(1. - t),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
         let body = div()
+            .id("explorer-body")
             .relative()
             .flex_1()
             .min_h_0()
             .size_full()
+            .overflow_hidden()
+            .on_hover(cx.listener(|this, entered: &bool, _, cx| {
+                if !*entered {
+                    this.explorer_hover_clear(cx);
+                }
+            }))
+            .children(hover_outline)
             .child(list)
             .vertical_scrollbar(&self.explorer.scroll);
 

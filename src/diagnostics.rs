@@ -604,14 +604,112 @@ fn js_regex_allowed_after(last_word: &str, last_punct: u8) -> bool {
     )
 }
 
-fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsTok {
+    None,
+    Ident,
+    String,
+    Number,
+    CloseExpr,
+    Op,
+    BinOp,
+}
+
+fn js_allows_adjacent_value_after(word: &str) -> bool {
+    matches!(
+        word,
+        "return"
+            | "throw"
+            | "case"
+            | "typeof"
+            | "void"
+            | "delete"
+            | "await"
+            | "yield"
+            | "new"
+            | "in"
+            | "instanceof"
+            | "of"
+            | "from"
+            | "import"
+            | "export"
+            | "default"
+            | "as"
+            | "extends"
+            | "implements"
+            | "else"
+            | "do"
+            | "assert"
+            | "with"
+            | "type"
+            | "interface"
+            | "enum"
+            | "declare"
+            | "namespace"
+            | "module"
+            | "satisfies"
+            | "is"
+            | "keyof"
+            | "readonly"
+            | "abstract"
+            | "async"
+            | "static"
+            | "get"
+            | "set"
+            | "public"
+            | "private"
+            | "protected"
+            | "override"
+            | "const"
+            | "let"
+            | "var"
+            | "function"
+            | "class"
+            | "using"
+            | "accessor"
+            | "break"
+            | "continue"
+            | "for"
+            | "asserts"
+            | "infer"
+            | "unique"
+            | "out"
+            | "global"
+    )
+}
+
+fn js_allows_ident_after_value(word: &str) -> bool {
+    matches!(
+        word,
+        "in" | "of"
+            | "instanceof"
+            | "as"
+            | "is"
+            | "from"
+            | "satisfies"
+            | "extends"
+            | "implements"
+            | "else"
+            | "catch"
+            | "finally"
+            | "while"
+            | "assert"
+            | "with"
+    )
+}
+
+fn check_js_ts(text: &str, tsx: bool) -> Vec<CodeDiag> {
     let mut sc = Scanner::new(text);
     let mut diags = Vec::new();
     let mut open: Vec<(u8, u32, u32)> = Vec::new();
+    let mut cond_parens: Vec<usize> = Vec::new();
     let mut tpl_braces: Vec<usize> = Vec::new();
     let mut line_start = true;
     let mut last_word = String::new();
     let mut last_punct: u8 = 0;
+    let mut prev_tok = JsTok::None;
+    let mut prev_row: u32 = u32::MAX;
+    let mut prev_op: &'static str = "";
 
     while let Some(c) = sc.peek() {
         if diags.len() >= MAX_DIAGS {
@@ -640,8 +738,15 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
             }
             continue;
         }
+        let same_line = prev_row == sc.row;
         if c == b'"' || c == b'\'' {
             let (r0, c0) = (sc.row, sc.col);
+            let bad_adj = same_line
+                && match prev_tok {
+                    JsTok::String | JsTok::Number | JsTok::CloseExpr => true,
+                    JsTok::Ident => !js_allows_adjacent_value_after(&last_word),
+                    _ => false,
+                };
             sc.step();
             let mut closed = false;
             while let Some(ch) = sc.peek() {
@@ -662,19 +767,34 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
                     break;
                 }
             }
+            let end_col = if sc.row == r0 { sc.col.max(c0 + 1) } else { c0 + 1 };
             if !closed {
-                diags.push(CodeDiag::error(r0, c0, sc.col.max(c0 + 1), crate::i18n::tr("Unterminated string").to_string(), "JS"));
+                diags.push(CodeDiag::error(r0, c0, end_col, crate::i18n::tr("Unterminated string").to_string(), "JS"));
+            } else if bad_adj {
+                diags.push(CodeDiag::error(
+                    r0,
+                    c0,
+                    end_col,
+                    crate::i18n::tr("Unexpected string: missing operator or comma").to_string(),
+                    "JS",
+                ));
             }
             line_start = false;
             last_word.clear();
             last_punct = b'"';
+            prev_tok = JsTok::String;
+            prev_row = sc.row;
+            prev_op = "";
             continue;
         }
         if c == b'`' {
-            scan_js_template(&mut sc, &mut open, &mut tpl_braces, &mut diags);
+            let entered_expr = scan_js_template(&mut sc, &mut open, &mut tpl_braces, &mut diags);
             line_start = false;
             last_word.clear();
-            last_punct = b'`';
+            last_punct = if entered_expr { b'{' } else { b'`' };
+            prev_tok = if entered_expr { JsTok::None } else { JsTok::String };
+            prev_row = sc.row;
+            prev_op = "";
             continue;
         }
         if c == b'/' && js_regex_allowed_after(&last_word, last_punct) && sc.peek_at(1).is_some_and(|n| n != b'/' && n != b'*' && n != b'=') {
@@ -707,10 +827,102 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
                 line_start = false;
                 last_word.clear();
                 last_punct = b'r';
+                prev_tok = JsTok::String;
+                prev_row = sc.row;
+                prev_op = "";
                 continue;
             } else {
                 (sc.i, sc.row, sc.col) = save;
             }
+        }
+        if c.is_ascii_digit() {
+            let (r0, c0) = (sc.row, sc.col);
+            let bad_adj = same_line
+                && match prev_tok {
+                    JsTok::String | JsTok::Number | JsTok::CloseExpr => true,
+                    JsTok::Ident => !js_allows_adjacent_value_after(&last_word),
+                    _ => false,
+                };
+            let mut bad_num = false;
+            if c == b'0' && matches!(sc.peek_at(1), Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O')) {
+                let radix = sc.peek_at(1).unwrap().to_ascii_lowercase();
+                sc.step();
+                sc.step();
+                let mut digits = 0;
+                while let Some(ch) = sc.peek() {
+                    let ok = match radix {
+                        b'x' => ch.is_ascii_hexdigit() || ch == b'_',
+                        b'b' => matches!(ch, b'0' | b'1' | b'_'),
+                        _ => matches!(ch, b'0'..=b'7' | b'_'),
+                    };
+                    if ok {
+                        if ch != b'_' {
+                            digits += 1;
+                        }
+                        sc.step();
+                    } else {
+                        break;
+                    }
+                }
+                if digits == 0 {
+                    bad_num = true;
+                }
+                if sc.peek() == Some(b'n') {
+                    sc.step();
+                }
+            } else {
+                while sc.peek().is_some_and(|ch| ch.is_ascii_digit() || ch == b'_') {
+                    sc.step();
+                }
+                if sc.peek() == Some(b'.') && sc.peek_at(1) != Some(b'.') {
+                    sc.step();
+                    while sc.peek().is_some_and(|ch| ch.is_ascii_digit() || ch == b'_') {
+                        sc.step();
+                    }
+                }
+                if matches!(sc.peek(), Some(b'e' | b'E')) {
+                    sc.step();
+                    if matches!(sc.peek(), Some(b'+' | b'-')) {
+                        sc.step();
+                    }
+                    let mut exp_digits = 0;
+                    while sc.peek().is_some_and(|ch| ch.is_ascii_digit() || ch == b'_') {
+                        if sc.peek() != Some(b'_') {
+                            exp_digits += 1;
+                        }
+                        sc.step();
+                    }
+                    if exp_digits == 0 {
+                        bad_num = true;
+                    }
+                } else if sc.peek() == Some(b'n') {
+                    sc.step();
+                }
+            }
+            if sc.peek().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == b'_' || ch == b'$') {
+                bad_num = true;
+                while sc.peek().is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'$') {
+                    sc.step();
+                }
+            }
+            if bad_num {
+                diags.push(CodeDiag::error(r0, c0, sc.col.max(c0 + 1), crate::i18n::tr("Invalid number").to_string(), "JS"));
+            } else if bad_adj {
+                diags.push(CodeDiag::error(
+                    r0,
+                    c0,
+                    sc.col.max(c0 + 1),
+                    crate::i18n::tr("Unexpected number: missing operator or comma").to_string(),
+                    "JS",
+                ));
+            }
+            line_start = false;
+            last_word.clear();
+            last_punct = b'0';
+            prev_tok = JsTok::Number;
+            prev_row = sc.row;
+            prev_op = "";
+            continue;
         }
         if c == b'=' {
             let (r0, c0) = (sc.row, sc.col);
@@ -719,20 +931,120 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
                 sc.step();
                 count += 1;
             }
+            let is_arrow = count == 1 && sc.peek() == Some(b'>');
+            if is_arrow {
+                sc.step();
+                line_start = false;
+                last_word.clear();
+                last_punct = b'>';
+                prev_tok = JsTok::Op;
+                prev_row = sc.row;
+                prev_op = "=>";
+                continue;
+            }
             if count >= 4 {
                 diags.push(CodeDiag::error(r0, c0, sc.col, crate::i18n::tr("Invalid operator '===='").to_string(), "JS"));
             } else if count == 1 {
+                let in_cond = !open.is_empty() && cond_parens.last() == Some(&(open.len() - 1));
+                let compound = matches!(last_punct, b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'?');
+                if !compound && prev_tok == JsTok::BinOp && matches!(prev_op, "==" | "===" | "!=" | "!==" | "&&" | "||" | "??") {
+                    diags.push(CodeDiag::error(r0, c0, sc.col, crate::trf!("Unexpected operator '{op}'"; op => "="), "JS"));
+                } else if !compound && in_cond {
+                    if sc.peek() == Some(b'-')
+                        && sc.peek_at(1).is_some_and(|n| n.is_ascii_alphabetic() || n == b'_' || n == b'$' || n == b'"' || n == b'\'')
+                    {
+                        diags.push(CodeDiag::error(
+                            r0,
+                            c0,
+                            c0 + 2,
+                            crate::i18n::tr("Unexpected '=-': did you mean '==='?").to_string(),
+                            "JS",
+                        ));
+                    } else {
+                        diags.push(CodeDiag::warn(
+                            r0,
+                            c0,
+                            sc.col,
+                            crate::i18n::tr("Assignment '=' in condition: did you mean '==='?").to_string(),
+                            "JS",
+                        ));
+                    }
+                }
                 let mut look = sc.i;
                 while look < sc.b.len() && matches!(sc.b[look], b' ' | b'\t') {
                     look += 1;
                 }
-                if sc.b.get(look) == Some(&b';') {
+                if !compound && matches!(sc.b.get(look), Some(b';' | b')' | b']' | b',')) {
                     diags.push(CodeDiag::error(r0, c0, sc.col, crate::i18n::tr("Expected expression after '='").to_string(), "JS"));
                 }
             }
             line_start = false;
             last_word.clear();
             last_punct = b'=';
+            prev_tok = JsTok::BinOp;
+            prev_row = sc.row;
+            prev_op = match count {
+                1 => "=",
+                2 => "==",
+                _ => "===",
+            };
+            continue;
+        }
+        if (c == b'&' && sc.peek_at(1) == Some(b'&'))
+            || (c == b'|' && sc.peek_at(1) == Some(b'|'))
+            || (c == b'?' && sc.peek_at(1) == Some(b'?'))
+        {
+            let (r0, c0) = (sc.row, sc.col);
+            let op = match c {
+                b'&' => "&&",
+                b'|' => "||",
+                _ => "??",
+            };
+            sc.step();
+            sc.step();
+            if sc.peek() == Some(b'=') {
+                sc.step();
+            }
+            if same_line && prev_tok == JsTok::BinOp {
+                diags.push(CodeDiag::error(r0, c0, sc.col, crate::trf!("Unexpected operator '{op}'"; op => op), "JS"));
+            }
+            line_start = false;
+            last_word.clear();
+            last_punct = c;
+            prev_tok = JsTok::BinOp;
+            prev_row = sc.row;
+            prev_op = op;
+            continue;
+        }
+        if matches!(c, b'*' | b'/' | b'%') && sc.peek_at(1) != Some(b'=') {
+            let (r0, c0) = (sc.row, sc.col);
+            let is_pow = c == b'*' && sc.peek_at(1) == Some(b'*');
+            let is_export_star = c == b'*' && matches!(last_word.as_str(), "export" | "import" | "function" | "yield");
+            if is_pow {
+                sc.step();
+            }
+            sc.step();
+            let op = match (c, is_pow) {
+                (b'*', true) => "**",
+                (b'*', false) => "*",
+                (b'/', _) => "/",
+                _ => "%",
+            };
+            if same_line && !is_export_star && prev_tok == JsTok::BinOp {
+                diags.push(CodeDiag::error(r0, c0, sc.col, crate::trf!("Unexpected operator '{op}'"; op => op), "JS"));
+            }
+            line_start = false;
+            last_word.clear();
+            last_punct = c;
+            prev_tok = if is_export_star { JsTok::Op } else { JsTok::BinOp };
+            prev_row = sc.row;
+            prev_op = op;
+            continue;
+        }
+        if c == b'\\' {
+            let (r0, c0) = (sc.row, sc.col);
+            sc.step();
+            diags.push(CodeDiag::error(r0, c0, c0 + 1, crate::i18n::tr("Unexpected character '\\'").to_string(), "JS"));
             continue;
         }
         if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
@@ -743,6 +1055,31 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
                 sc.step();
             }
             let word = std::str::from_utf8(&sc.b[start..sc.i]).unwrap_or("");
+            if same_line && matches!(prev_tok, JsTok::String | JsTok::Number) && !js_allows_ident_after_value(word) {
+                let jsx_attr = tsx && sc.peek() == Some(b'=');
+                if !jsx_attr {
+                    diags.push(CodeDiag::error(
+                        r0,
+                        c0,
+                        sc.col,
+                        crate::i18n::tr("Unexpected identifier: missing operator or comma").to_string(),
+                        "JS",
+                    ));
+                }
+            } else if !tsx
+                && same_line
+                && prev_tok == JsTok::Ident
+                && !js_allows_adjacent_value_after(&last_word)
+                && !js_allows_ident_after_value(word)
+            {
+                diags.push(CodeDiag::error(
+                    r0,
+                    c0,
+                    sc.col,
+                    crate::i18n::tr("Unexpected identifier: missing operator or comma").to_string(),
+                    "JS",
+                ));
+            }
             if at_stmt_start {
                 if let Some(&(_, fix)) = JS_TYPOS.iter().find(|&&(bad, _)| bad == word) {
                     let mut look = sc.i;
@@ -786,14 +1123,23 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
             last_word.clear();
             last_word.push_str(word);
             last_punct = b'a';
+            prev_tok = JsTok::Ident;
+            prev_row = sc.row;
+            prev_op = "";
             continue;
         }
         if matches!(c, b'(' | b'[' | b'{') {
+            if c == b'(' && matches!(last_word.as_str(), "if" | "while") {
+                cond_parens.push(open.len());
+            }
             open.push((c, sc.row, sc.col));
             sc.step();
             line_start = c == b'{';
             last_word.clear();
             last_punct = c;
+            prev_tok = JsTok::None;
+            prev_row = sc.row;
+            prev_op = "";
             continue;
         }
         if matches!(c, b')' | b']' | b'}') {
@@ -802,34 +1148,68 @@ fn check_js_ts(text: &str, _tsx: bool) -> Vec<CodeDiag> {
                 tpl_braces.pop();
                 sc.step();
                 let pos = (sc.row, sc.col);
-                scan_js_template_body(&mut sc, &mut open, &mut tpl_braces, &mut diags, pos);
+                let entered_expr = scan_js_template_body(&mut sc, &mut open, &mut tpl_braces, &mut diags, pos);
                 line_start = false;
                 last_word.clear();
-                last_punct = b'`';
+                last_punct = if entered_expr { b'{' } else { b'`' };
+                prev_tok = if entered_expr { JsTok::None } else { JsTok::String };
+                prev_row = sc.row;
+                prev_op = "";
                 continue;
             }
             let (r, col) = (sc.row, sc.col);
+            if same_line && prev_tok == JsTok::BinOp && matches!(c, b')' | b']') {
+                diags.push(CodeDiag::error(
+                    r,
+                    col,
+                    col + 1,
+                    crate::trf!("Expected expression after '{op}'"; op => prev_op),
+                    "JS",
+                ));
+            }
+            let closed_cond = c == b')' && !open.is_empty() && cond_parens.last() == Some(&(open.len() - 1));
+            if closed_cond {
+                cond_parens.pop();
+            }
             sc.step();
             push_bracket_close(&mut open, c, r, col, "JS", &mut diags);
             line_start = c == b'}';
             last_word.clear();
             last_punct = c;
+            prev_tok = if matches!(c, b')' | b']') && !closed_cond { JsTok::CloseExpr } else { JsTok::None };
+            prev_row = sc.row;
+            prev_op = "";
             continue;
+        }
+        if same_line && prev_tok == JsTok::BinOp && matches!(c, b';' | b',') {
+            diags.push(CodeDiag::error(
+                sc.row,
+                sc.col,
+                sc.col + 1,
+                crate::trf!("Expected expression after '{op}'"; op => prev_op),
+                "JS",
+            ));
         }
         sc.step();
         line_start = c == b';';
         last_word.clear();
         last_punct = c;
+        prev_tok = match c {
+            b';' | b',' | b':' | b'?' | b'.' => JsTok::None,
+            _ => JsTok::Op,
+        };
+        prev_row = sc.row;
+        prev_op = "";
     }
 
     finish_open_brackets(open, "JS", &mut diags);
     diags
 }
 
-fn scan_js_template(sc: &mut Scanner<'_>, open: &mut Vec<(u8, u32, u32)>, tpl_braces: &mut Vec<usize>, diags: &mut Vec<CodeDiag>) {
+fn scan_js_template(sc: &mut Scanner<'_>, open: &mut Vec<(u8, u32, u32)>, tpl_braces: &mut Vec<usize>, diags: &mut Vec<CodeDiag>) -> bool {
     let start = (sc.row, sc.col);
     sc.step();
-    scan_js_template_body(sc, open, tpl_braces, diags, start);
+    scan_js_template_body(sc, open, tpl_braces, diags, start)
 }
 
 fn scan_js_template_body(
@@ -838,7 +1218,7 @@ fn scan_js_template_body(
     tpl_braces: &mut Vec<usize>,
     diags: &mut Vec<CodeDiag>,
     start: (u32, u32),
-) {
+) -> bool {
     while let Some(c) = sc.peek() {
         if c == b'\\' {
             sc.step();
@@ -847,7 +1227,7 @@ fn scan_js_template_body(
         }
         if c == b'`' {
             sc.step();
-            return;
+            return false;
         }
         if c == b'$' && sc.peek_at(1) == Some(b'{') {
             sc.step();
@@ -855,11 +1235,12 @@ fn scan_js_template_body(
             tpl_braces.push(open.len());
             open.push((b'{', r, col));
             sc.step();
-            return;
+            return true;
         }
         sc.step();
     }
     diags.push(CodeDiag::error(start.0, start.1, start.1 + 1, crate::i18n::tr("Unterminated template literal").to_string(), "JS"));
+    false
 }
 
 const PY_TYPOS: &[(&str, &str)] = &[
@@ -1594,6 +1975,34 @@ mod tests {
         assert!(d.iter().any(|x| x.message.contains("Unterminated string")), "{d:?}");
         assert!(d.iter().any(|x| x.message.contains("====")), "{d:?}");
         assert!(d.iter().any(|x| x.message.contains("Unclosed {")), "{d:?}");
+
+        let bedrock_bad = r#"
+system.afterEvents.scriptEventReceive.subscribe(({ id, sourceEntity }) => {
+  if (id =-S "kiwha:calib" && sourceEntity instanceof Player) giveCalib(sourceEntity);
+  if (id === "kiwha:menu" && sourceEntity instanceof Player) openMenu(sourceEntity);
+});
+"#;
+        let bd = analyze(bedrock_bad, "javascript");
+        assert!(bd.iter().any(|x| x.row == 2 && x.message.contains("=-")), "{bd:?}");
+        assert!(bd.iter().any(|x| x.row == 2 && x.message.contains("Unexpected string")), "{bd:?}");
+
+        let bedrock_ok = r#"
+import { system, Player } from "@minecraft/server";
+system.afterEvents.scriptEventReceive.subscribe(({ id, sourceEntity }) => {
+  if (id === "kiwha:calib" && sourceEntity instanceof Player) giveCalib(sourceEntity);
+  if (id === "kiwha:menu" && sourceEntity instanceof Player) openMenu(sourceEntity);
+  if ((id = nextId())) return "ok";
+  for (let i = 0; i < 10; i++) { const n = 1_000n; }
+});
+"#;
+        let ok_d = analyze(bedrock_ok, "javascript");
+        assert!(ok_d.is_empty(), "expected zero false positives: {ok_d:?}");
+
+        let expr_bad = "const a = 123abc;\nif (x && ) {}\nconst y = foo bar;\n";
+        let ed = analyze(expr_bad, "javascript");
+        assert!(ed.iter().any(|x| x.row == 0 && x.message.contains("Invalid number")), "{ed:?}");
+        assert!(ed.iter().any(|x| x.row == 1 && x.message.contains("Expected expression")), "{ed:?}");
+        assert!(ed.iter().any(|x| x.row == 2 && x.message.contains("Unexpected identifier")), "{ed:?}");
     }
 
     #[test]

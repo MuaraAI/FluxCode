@@ -53,6 +53,7 @@ mod update;
 mod viewer;
 mod whatsnew;
 mod wintitle;
+mod wiztree;
 mod workbench;
 mod workspace;
 mod ws_context;

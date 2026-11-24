@@ -136,6 +136,10 @@ impl Workbench {
                     .child(Input::new(&self.search_input).small())
                     .child(
                         h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .flex_wrap()
+                            .items_center()
                             .gap_1()
                             .child(toggle("s-case", "Aa", self.match_case, tr("Match Case")).on_click(cx.listener(|this, _, _, cx| {
                                 this.match_case = !this.match_case;
@@ -146,7 +150,14 @@ impl Workbench {
                                 this.run_search(cx);
                             })))
                             .child(div().flex_1())
-                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(summary)),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(summary),
+                            ),
                     ),
             )
             .child(
@@ -158,7 +169,16 @@ impl Workbench {
                             .map(|i| {
                                 let (f, h) = this.search_rows[i];
                                 let fh = &this.search.files[f];
-                                let row = h_flex().id(("sr", i)).w_full().h(theme::u(20.)).px_2().gap_2().text_size(theme::u(11.5)).hover(|s| s.bg(c(theme::BG_HOVER)));
+                                let row = h_flex()
+                                    .id(("sr", i))
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .h(theme::u(20.))
+                                    .px_2()
+                                    .gap_1p5()
+                                    .text_size(theme::u(11.5))
+                                    .hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -175,20 +195,56 @@ impl Workbench {
                                             }))
                                             .child({
                                                 use gpui_kit::component::IconName as I;
-                                                gpui_kit::component::Icon::new(if closed { I::ChevronRight } else { I::ChevronDown }).size(theme::u(12.)).text_color(c(theme::FG_DIM))
+                                                gpui_kit::component::Icon::new(if closed {
+                                                    I::ChevronRight
+                                                } else {
+                                                    I::ChevronDown
+                                                })
+                                                .flex_none()
+                                                .size(theme::u(12.))
+                                                .text_color(c(theme::FG_DIM))
                                             })
-                                            .child(gpui_kit::component::Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
-                                            .child(div().text_color(c(theme::FG_STRONG)).child(name))
-                                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(rel))
-                                            .child(div().flex_1())
-                                            .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(fh.hits.len().to_string()))
+                                            .child(
+                                                gpui_kit::component::Icon::new(icon)
+                                                    .flex_none()
+                                                    .size(theme::u(14.))
+                                                    .text_color(theme::tint(tint)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink(1.)
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_color(c(theme::FG_STRONG))
+                                                    .child(name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_xs()
+                                                    .text_color(c(theme::FG_DIM))
+                                                    .child(rel),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_xs()
+                                                    .text_color(c(theme::FG_MUTED))
+                                                    .child(fh.hits.len().to_string()),
+                                            )
                                     }
                                     Some(MORE) => {
                                         let more = fh.hits.len().saturating_sub(FOLD);
                                         row.pl(px(28.))
                                             .cursor_pointer()
                                             .text_color(c(theme::ACCENT_TEXT))
-                                            .child(crate::trf!("{0} more matches"; 0 => more))
+                                            .child(
+                                                div().flex_1().min_w_0().truncate().child(
+                                                    crate::trf!("{0} more matches"; 0 => more),
+                                                ),
+                                            )
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.search_unfolded.insert(f);
                                                 this.rebuild_search_rows();
@@ -204,8 +260,21 @@ impl Workbench {
                                             .map(|r| (r, HighlightStyle { background_color: Some(c(theme::ACCENT).opacity(0.28)), color: Some(c(theme::FG_STRONG)), ..Default::default() }));
                                         let text = StyledText::new(SharedString::from(hit.text.clone())).with_highlights(marks);
                                         row.pl(px(28.))
-                                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(hit.line.to_string()))
-                                            .child(div().text_color(c(theme::FG)).truncate().child(text))
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_xs()
+                                                    .text_color(c(theme::FG_DIM))
+                                                    .child(hit.line.to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .text_color(c(theme::FG))
+                                                    .truncate()
+                                                    .child(text),
+                                            )
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.open_location(path.clone(), line, 0, window, cx);
                                             }))

@@ -6,6 +6,7 @@ use std::f32::consts::{PI, TAU};
 use std::time::{Duration, Instant};
 
 const FRAME: Duration = Duration::from_millis(16);
+const FAIL_SETTLE_SECS: f32 = 0.42;
 
 pub struct InstallAnim {
     tracker: Tracker,
@@ -44,9 +45,12 @@ impl InstallAnim {
         if snap.phase != self.phase {
             self.phase = snap.phase;
             self.phase_at = now;
+            if matches!(snap.phase, Phase::RuntimeDownload | Phase::Download) {
+                self.fill = 0.;
+            }
         }
         let (target, known) = target(&snap);
-        let k = 1. - (-dt * 5.).exp();
+        let k = 1. - (-dt * 7.).exp();
         if let Some(f) = target {
             self.fill += (f - self.fill).max(0.) * k;
             if f >= 1. && self.fill > 0.995 {
@@ -55,18 +59,18 @@ impl InstallAnim {
         }
         self.known += ((if known { 1. } else { 0. }) - self.known) * k;
         let alive = (now - self.born).as_secs_f32();
-        if self.phase == Phase::Failed && self.frozen.is_none() {
+        let since = (now - self.phase_at).as_secs_f32();
+        if self.phase == Phase::Failed && self.frozen.is_none() && (reduce_motion || since >= FAIL_SETTLE_SECS) {
             self.frozen = Some(alive);
         }
         let t = if reduce_motion { 0. } else { self.frozen.unwrap_or(alive) };
-        let since = (now - self.phase_at).as_secs_f32();
         let frame = Frame {
             t,
             fill: self.fill,
             known: self.known,
             phase: self.phase,
-            since,
-            unpacked: if snap.phase == Phase::Unpack { snap.fraction() } else { None },
+            since: if reduce_motion { FAIL_SETTLE_SECS } else { since },
+            unpacked: if matches!(snap.phase, Phase::Unpack | Phase::RuntimeUnpack) { snap.fraction() } else { None },
             fg: c(theme::FG_STRONG),
             accent: c(theme::ACCENT),
             danger: c(theme::DANGER),
@@ -78,29 +82,34 @@ impl InstallAnim {
 
 fn target(s: &Snapshot) -> (Option<f32>, bool) {
     match s.phase {
-        Phase::Download => (s.fraction(), s.fraction().is_some()),
-        Phase::Verify | Phase::Unpack | Phase::Done => (Some(1.), true),
-        Phase::Registry | Phase::Npm | Phase::Failed => (None, false),
+        Phase::Download | Phase::RuntimeDownload => (s.fraction(), s.fraction().is_some()),
+        Phase::Verify | Phase::RuntimeVerify | Phase::Unpack | Phase::RuntimeUnpack | Phase::Done => (Some(1.), true),
+        Phase::Registry | Phase::EnvCheck | Phase::Npm | Phase::Failed => (None, false),
     }
 }
 
 pub fn detail(s: &Snapshot) -> String {
-    let label = crate::i18n::tr(s.phase.label());
+    let label: String = match (s.phase, s.runtime) {
+        (Phase::RuntimeDownload, Some(rt)) => crate::trf!("Installing {name}"; name => rt.short()),
+        (Phase::RuntimeVerify, Some(rt)) => crate::trf!("Verifying {name} (SHA-256)"; name => rt.short()),
+        (Phase::RuntimeUnpack, Some(rt)) => crate::trf!("Setting up {name}"; name => rt.short()),
+        _ => crate::i18n::tr(s.phase.label()).to_string(),
+    };
     let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.);
     match (s.phase, s.total) {
-        (Phase::Download, 0) if s.done > 0 => format!("{label} · {} MB", mb(s.done)),
-        (Phase::Download, total) if total > 0 => {
+        (Phase::Download | Phase::RuntimeDownload, 0) if s.done > 0 => format!("{label} · {} MB", mb(s.done)),
+        (Phase::Download | Phase::RuntimeDownload, total) if total > 0 => {
             let pct = (s.done as f64 / total as f64 * 100.).floor().min(100.);
             format!("{label} · {} · {pct:.0}%", crate::trf!("{done} of {total} MB"; done => mb(s.done), total => mb(total)))
         }
-        (Phase::Unpack, total) if s.done > 0 => {
+        (Phase::Unpack | Phase::RuntimeUnpack, total) if s.done > 0 => {
             if total > s.done {
                 format!("{label} · {}", crate::trf!("{done} of {total} files"; done => s.done, total => total))
             } else {
                 format!("{label} · {}", crate::trf!("{done} files"; done => s.done))
             }
         }
-        (Phase::Done, _) => label.to_string(),
+        (Phase::Done, _) => label,
         _ => format!("{label}…"),
     }
 }
@@ -110,6 +119,15 @@ impl Render for InstallAnim {
         let (snap, frame) = self.step(cx.reduce_motion());
         let size = theme::u(132.);
         let failed = snap.phase == Phase::Failed;
+        let runtime_notice = snap.runtime.map(|rt| {
+            crate::trf!("{name} isn't installed on this PC. Installing it safely..."; name => rt.name())
+        });
+        let progress = match snap.phase {
+            Phase::Download | Phase::RuntimeDownload => snap.fraction().map(|_| frame.fill.clamp(0., 1.)),
+            Phase::Unpack | Phase::RuntimeUnpack => snap.fraction(),
+            Phase::Verify | Phase::RuntimeVerify | Phase::Done => Some(1.),
+            _ => None,
+        };
         div()
             .flex()
             .flex_col()
@@ -118,7 +136,35 @@ impl Render for InstallAnim {
             .child(canvas(|_, _, _| {}, move |bounds, _, window, _| frame.paint(bounds, window)).size(size))
             .when(!failed, |d| {
                 d.child(div().pt_1().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(self.title.clone()))
-                    .child(div().h(theme::u(18.)).text_xs().text_color(c(theme::FG_DIM)).child(detail(&snap)))
+                    .when_some(runtime_notice, |d, msg| {
+                        d.child(
+                            div()
+                                .max_w(theme::u(300.))
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(6.))
+                                .bg(c(theme::BG_ELEVATED))
+                                .border_1()
+                                .border_color(c(theme::BORDER))
+                                .text_xs()
+                                .text_center()
+                                .text_color(c(theme::ACCENT_TEXT))
+                                .child(msg),
+                        )
+                    })
+                    .child(div().min_h(theme::u(18.)).text_xs().text_center().text_color(c(theme::FG_DIM)).child(detail(&snap)))
+                    .when_some(progress, |d, frac| {
+                        d.child(
+                            div()
+                                .mt_1()
+                                .w(theme::u(180.))
+                                .h(px(3.))
+                                .rounded(px(99.))
+                                .bg(c(theme::BORDER))
+                                .overflow_hidden()
+                                .child(div().h_full().w(relative(frac.clamp(0.04, 1.))).rounded(px(99.)).bg(c(theme::ACCENT))),
+                        )
+                    })
             })
     }
 }
@@ -183,7 +229,7 @@ impl Frame {
         let r = f32::from(b.size.width.min(b.size.height)) * 0.36;
         match self.phase {
             Phase::Failed => self.broken(window, cx, cy, r),
-            Phase::Unpack => {
+            Phase::Unpack | Phase::RuntimeUnpack => {
                 let m = ease(self.since / 0.35);
                 if m < 1. {
                     let rr = r * (1. - 0.6 * m);
@@ -193,7 +239,11 @@ impl Frame {
                 self.fluxbox(window, cx, cy, r, m);
             }
             _ => {
-                let breathe = if self.phase == Phase::Verify { 0.82 + 0.18 * (self.since * 4.).cos() } else { 1. };
+                let breathe = if matches!(self.phase, Phase::Verify | Phase::RuntimeVerify | Phase::EnvCheck) {
+                    0.82 + 0.18 * (self.since * 4.).cos()
+                } else {
+                    1.
+                };
                 self.ring(window, cx, cy, r, breathe);
                 if self.phase == Phase::Done {
                     self.check(window, cx, cy, r);
@@ -260,8 +310,11 @@ impl Frame {
     }
 
     fn broken(self, window: &mut Window, cx: f32, cy: f32, r: f32) {
-        let t = self.t;
-        fill(window, &[arc_band(cx, cy, r * 0.84, r, -PI / 2. + 0.42, -PI / 2. + TAU - 0.42, r * 0.03, t)], self.danger.opacity(0.85));
+        let p = ease(self.since / FAIL_SETTLE_SECS);
+        let gap = 0.08 + 0.34 * p;
+        let amp = r * 0.025 * (1. - 0.7 * p);
+        fill(window, &[arc_band(cx, cy, r * 0.78, r * 1.06, -PI / 2. + gap, -PI / 2. + TAU - gap, amp, self.t)], self.danger.opacity(0.14 * p));
+        fill(window, &[arc_band(cx, cy, r * 0.84, r, -PI / 2. + gap, -PI / 2. + TAU - gap, amp, self.t)], self.danger.opacity(0.86));
     }
 
     fn fluxbox(self, window: &mut Window, cx: f32, cy: f32, r: f32, show: f32) {
@@ -405,22 +458,28 @@ mod tests {
 
     #[test]
     fn the_fill_target_follows_the_install() {
-        let s = |phase, done, total| Snapshot { phase, done, total };
+        let s = |phase, done, total| Snapshot { phase, runtime: None, done, total };
         assert_eq!(target(&s(Phase::Download, 25, 100)), (Some(0.25), true));
+        assert_eq!(target(&s(Phase::RuntimeDownload, 50, 100)), (Some(0.5), true));
         assert_eq!(target(&s(Phase::Download, 25, 0)), (None, false));
         assert_eq!(target(&s(Phase::Unpack, 3, 9)), (Some(1.), true));
+        assert_eq!(target(&s(Phase::RuntimeUnpack, 3, 9)), (Some(1.), true));
+        assert_eq!(target(&s(Phase::EnvCheck, 0, 0)), (None, false));
         assert_eq!(target(&s(Phase::Npm, 0, 0)), (None, false));
         assert_eq!(target(&s(Phase::Failed, 0, 0)), (None, false));
     }
 
     #[test]
     fn the_detail_line_says_what_was_measured() {
-        let s = |phase, done, total| Snapshot { phase, done, total };
+        use crate::acp::RuntimeKind;
+        let s = |phase, done, total| Snapshot { phase, runtime: None, done, total };
         assert_eq!(detail(&s(Phase::Download, 5 * 1_048_576, 20 * 1_048_576)), "Downloading · 5.0 of 20.0 MB · 25%");
         assert_eq!(detail(&s(Phase::Download, 3 * 1_048_576, 0)), "Downloading · 3.0 MB");
         assert_eq!(detail(&s(Phase::Download, 0, 0)), "Downloading…");
         assert_eq!(detail(&s(Phase::Unpack, 4, 10)), "Unpacking · 4 of 10 files");
         assert_eq!(detail(&s(Phase::Unpack, 12, 12)), "Unpacking · 12 files");
         assert_eq!(detail(&s(Phase::Verify, 0, 0)), "Checking the download…");
+        let rt = Snapshot { phase: Phase::RuntimeDownload, runtime: Some(RuntimeKind::Node), done: 10 * 1_048_576, total: 20 * 1_048_576 };
+        assert_eq!(detail(&rt), "Installing Node.js LTS · 10.0 of 20.0 MB · 50%");
     }
 }

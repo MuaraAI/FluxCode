@@ -203,8 +203,19 @@ impl Launch {
 }
 
 pub fn agents_dir() -> PathBuf {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    home.join(".fluxcode").join("agents")
+    fluxcode_home().join("agents")
+}
+
+pub fn runtime_dir() -> PathBuf {
+    fluxcode_home().join("runtime")
+}
+
+fn fluxcode_home() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".fluxcode")
 }
 
 fn launch_file(id: &str) -> PathBuf {
@@ -225,6 +236,18 @@ pub fn which(exe: &str) -> Option<PathBuf> {
     exts.iter().find_map(|e| index.get(&key(e)).filter(|p| p.is_file()).cloned())
 }
 
+fn sanitize_path_dir(d: PathBuf) -> Option<PathBuf> {
+    let s = d.to_string_lossy();
+    // Registry Path entries occasionally retain embedded NULs, which make Command::env fail.
+    let clean = if s.contains('\0') {
+        s.replace('\0', "")
+    } else {
+        return (!s.trim().is_empty()).then_some(d);
+    };
+    let trimmed = clean.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
 pub fn fresh_path() -> std::ffi::OsString {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     #[cfg(windows)]
@@ -240,7 +263,7 @@ pub fn fresh_path() -> std::ffi::OsString {
     let mut seen = std::collections::HashSet::new();
     let dirs: Vec<PathBuf> = dirs
         .into_iter()
-        .filter(|d| !d.as_os_str().is_empty())
+        .filter_map(sanitize_path_dir)
         .filter(|d| seen.insert(if cfg!(windows) { d.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase() } else { d.to_string_lossy().into_owned() }))
         .collect();
     std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
@@ -249,6 +272,13 @@ pub fn fresh_path() -> std::ffi::OsString {
 fn install_dirs() -> Vec<PathBuf> {
     let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let mut out = Vec::new();
+    let rt = runtime_dir();
+    if cfg!(windows) {
+        out.push(rt.join("node").join("current"));
+    } else {
+        out.push(rt.join("node").join("current").join("bin"));
+    }
+    out.push(rt.join("uv").join("current"));
     if let Some(home) = var("USERPROFILE").or_else(|| var("HOME")) {
         for rel in [".local/bin", ".opencode/bin", ".bun/bin", ".cargo/bin", ".volta/bin", "scoop/shims", ".deno/bin", ".npm-global/bin"] {
             out.push(home.join(rel));
@@ -715,8 +745,34 @@ fn is_svg(b: &[u8]) -> bool {
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeKind {
+    Node,
+    Uv,
+}
+
+impl RuntimeKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            RuntimeKind::Node => "Node.js & npm",
+            RuntimeKind::Uv => "uv (Python runtime)",
+        }
+    }
+
+    pub fn short(self) -> &'static str {
+        match self {
+            RuntimeKind::Node => "Node.js LTS",
+            RuntimeKind::Uv => "uv",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Registry,
+    EnvCheck,
+    RuntimeDownload,
+    RuntimeVerify,
+    RuntimeUnpack,
     Download,
     Verify,
     Unpack,
@@ -729,6 +785,10 @@ impl Phase {
     pub fn label(self) -> &'static str {
         match self {
             Phase::Registry => "Reading the ACP registry",
+            Phase::EnvCheck => "Checking environment",
+            Phase::RuntimeDownload => "Installing runtime",
+            Phase::RuntimeVerify => "Verifying runtime integrity",
+            Phase::RuntimeUnpack => "Setting up runtime",
             Phase::Download => "Downloading",
             Phase::Verify => "Checking the download",
             Phase::Unpack => "Unpacking",
@@ -742,6 +802,7 @@ impl Phase {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snapshot {
     pub phase: Phase,
+    pub runtime: Option<RuntimeKind>,
     pub done: u64,
     pub total: u64,
 }
@@ -757,18 +818,25 @@ pub struct Tracker(std::sync::Arc<Mutex<Snapshot>>);
 
 impl Default for Tracker {
     fn default() -> Self {
-        Tracker(std::sync::Arc::new(Mutex::new(Snapshot { phase: Phase::Registry, done: 0, total: 0 })))
+        Tracker(std::sync::Arc::new(Mutex::new(Snapshot { phase: Phase::Registry, runtime: None, done: 0, total: 0 })))
     }
 }
 
 impl Tracker {
     pub fn get(&self) -> Snapshot {
-        self.0.lock().map(|g| *g).unwrap_or(Snapshot { phase: Phase::Failed, done: 0, total: 0 })
+        self.0.lock().map(|g| *g).unwrap_or(Snapshot { phase: Phase::Failed, runtime: None, done: 0, total: 0 })
     }
     pub fn phase(&self, phase: Phase) {
         if let Ok(mut g) = self.0.lock() {
             if !matches!(g.phase, Phase::Done | Phase::Failed) {
-                *g = Snapshot { phase, done: 0, total: 0 };
+                *g = Snapshot { phase, runtime: None, done: 0, total: 0 };
+            }
+        }
+    }
+    pub fn runtime(&self, phase: Phase, runtime: RuntimeKind) {
+        if let Ok(mut g) = self.0.lock() {
+            if !matches!(g.phase, Phase::Done | Phase::Failed) {
+                *g = Snapshot { phase, runtime: Some(runtime), done: 0, total: 0 };
             }
         }
     }
@@ -780,6 +848,248 @@ impl Tracker {
             }
         }
     }
+}
+
+pub fn missing_runtime_for(id: &str) -> Option<RuntimeKind> {
+    let entry = registry().iter().find(|e| e.id == id)?.clone();
+    match entry.method()? {
+        Method::Npm { .. } if which("node").is_none() || which("npm").is_none() => Some(RuntimeKind::Node),
+        Method::Uv { .. } if which("uvx").is_none() => Some(RuntimeKind::Uv),
+        _ => None,
+    }
+}
+
+fn atomic_swap_dir(staging: &Path, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let prev = dest.with_extension("prev");
+    if prev.exists() {
+        let _ = std::fs::remove_dir_all(&prev);
+    }
+    let had_dest = dest.exists();
+    if had_dest {
+        std::fs::rename(dest, &prev).map_err(|e| format!("Could not replace previous installation ({e})."))?;
+    }
+    if let Err(e) = std::fs::rename(staging, dest) {
+        if had_dest && prev.exists() {
+            let _ = std::fs::rename(&prev, dest);
+        }
+        return Err(format!("Could not finalize installation ({e})."));
+    }
+    if prev.exists() {
+        let _ = std::fs::remove_dir_all(&prev);
+    }
+    Ok(())
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+fn runtime_ok(exe: &Path) -> bool {
+    if !exe.is_file() {
+        return false;
+    }
+    let mut c = Launch { cmd: exe.to_path_buf(), args: vec!["--version".into()], ..Default::default() }.command();
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let Ok(mut child) = c.spawn() else { return false };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) => return st.success(),
+            Ok(None) if start.elapsed() > std::time::Duration::from_secs(5) => {
+                let _ = child.kill();
+                return false;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => return false,
+        }
+    }
+}
+
+fn fetch_text(url: &str) -> Result<String, String> {
+    let out = curl()
+        .args(["-s", "-S", "-f", "-L", "--max-time", "25", "-H", "User-Agent: FluxCode", url])
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
+    if !out.status.success() {
+        return Err(curl_error(&String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+pub fn parse_node_shasums(text: &str, plat: &str) -> Option<(String, String)> {
+    let suffix = match plat {
+        "windows-x86_64" => "-win-x64.zip",
+        "windows-aarch64" => "-win-arm64.zip",
+        "darwin-aarch64" => "-darwin-arm64.tar.gz",
+        "darwin-x86_64" => "-darwin-x64.tar.gz",
+        "linux-aarch64" => "-linux-arm64.tar.gz",
+        _ => "-linux-x64.tar.gz",
+    };
+    text.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let sum = parts.next()?.to_ascii_lowercase();
+        let file = parts.next()?.trim_start_matches('*');
+        let ok_sum = sum.len() == 64 && sum.chars().all(|c| c.is_ascii_hexdigit());
+        (ok_sum && file.starts_with("node-") && file.ends_with(suffix)).then(|| (file.to_string(), sum))
+    })
+}
+
+pub fn parse_uv_sha256(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .next()
+        .map(str::to_ascii_lowercase)
+        .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn uv_asset(plat: &str) -> &'static str {
+    match plat {
+        "windows-x86_64" => "uv-x86_64-pc-windows-msvc.zip",
+        "windows-aarch64" => "uv-aarch64-pc-windows-msvc.zip",
+        "darwin-aarch64" => "uv-aarch64-apple-darwin.tar.gz",
+        "darwin-x86_64" => "uv-x86_64-apple-darwin.tar.gz",
+        "linux-aarch64" => "uv-aarch64-unknown-linux-gnu.tar.gz",
+        _ => "uv-x86_64-unknown-linux-gnu.tar.gz",
+    }
+}
+
+fn node_bins_in(root: &Path) -> (PathBuf, PathBuf) {
+    if cfg!(windows) {
+        (root.join("node.exe"), root.join("npm.cmd"))
+    } else {
+        (root.join("bin").join("node"), root.join("bin").join("npm"))
+    }
+}
+
+fn find_extracted_root(extract: &Path, probe: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    if probe(extract) {
+        return Some(extract.to_path_buf());
+    }
+    let rd = std::fs::read_dir(extract).ok()?;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() && probe(&p) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn ensure_node(t: &Tracker) -> Result<(PathBuf, PathBuf), String> {
+    if let (Some(node), Some(npm)) = (which("node"), which("npm")) {
+        if runtime_ok(&node) {
+            return Ok((node, npm));
+        }
+    }
+    let plat = platform();
+    const BASE: &str = "https://nodejs.org/dist/latest-v22.x";
+    t.runtime(Phase::RuntimeDownload, RuntimeKind::Node);
+    let sums = fetch_text(&format!("{BASE}/SHASUMS256.txt"))
+        .map_err(|e| format!("Node.js & npm are missing on this PC and could not be downloaded: {e}"))?;
+    let (file, want_sha) = parse_node_shasums(&sums, plat)
+        .ok_or_else(|| format!("Node.js LTS archive was not listed for this platform ({plat})."))?;
+    let root = runtime_dir().join("node");
+    let staging = root.join(format!(".staging-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    let res: Result<(PathBuf, PathBuf), String> = (|| {
+        let archive = staging.join(&file);
+        download(&format!("{BASE}/{file}"), &archive, t)
+            .map_err(|e| format!("Could not download Node.js LTS: {e}"))?;
+        t.runtime(Phase::RuntimeVerify, RuntimeKind::Node);
+        if sha256_of(&archive)? != want_sha {
+            return Err("The Node.js LTS download failed SHA-256 verification and was discarded.".into());
+        }
+        let extract = staging.join("extract");
+        std::fs::create_dir_all(&extract).map_err(|e| e.to_string())?;
+        t.runtime(Phase::RuntimeUnpack, RuntimeKind::Node);
+        unpack(&archive, &extract, t)?;
+        let _ = std::fs::remove_file(&archive);
+        let unpacked = find_extracted_root(&extract, |dir| {
+            let (n, m) = node_bins_in(dir);
+            n.is_file() && m.is_file()
+        })
+        .ok_or_else(|| "Node.js archive unpacked without node and npm.".to_string())?;
+        let (staged_node, _) = node_bins_in(&unpacked);
+        if !runtime_ok(&staged_node) {
+            return Err("Downloaded Node.js could not start cleanly, so it was removed.".into());
+        }
+        let dest = root.join("current");
+        atomic_swap_dir(&unpacked, &dest)?;
+        let (node, npm) = node_bins_in(&dest);
+        Ok((node, npm))
+    })();
+    let _ = std::fs::remove_dir_all(&staging);
+    let (node, npm) = res?;
+    rescan();
+    Ok((node, npm))
+}
+
+fn ensure_uv(t: &Tracker) -> Result<PathBuf, String> {
+    if let Some(uvx) = which("uvx") {
+        if runtime_ok(&uvx) {
+            return Ok(uvx);
+        }
+    }
+    let plat = platform();
+    let asset = uv_asset(plat);
+    const BASE: &str = "https://github.com/astral-sh/uv/releases/latest/download";
+    t.runtime(Phase::RuntimeDownload, RuntimeKind::Uv);
+    let sum_text = fetch_text(&format!("{BASE}/{asset}.sha256"))
+        .map_err(|e| format!("uv (Python runtime) is missing on this PC and could not be downloaded: {e}"))?;
+    let want_sha = parse_uv_sha256(&sum_text)
+        .ok_or_else(|| "Could not read the official SHA-256 checksum for uv.".to_string())?;
+    let root = runtime_dir().join("uv");
+    let staging = root.join(format!(".staging-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    let uvx_name = if cfg!(windows) { "uvx.exe" } else { "uvx" };
+    let res: Result<PathBuf, String> = (|| {
+        let archive = staging.join(asset);
+        download(&format!("{BASE}/{asset}"), &archive, t)
+            .map_err(|e| format!("Could not download uv: {e}"))?;
+        t.runtime(Phase::RuntimeVerify, RuntimeKind::Uv);
+        if sha256_of(&archive)? != want_sha {
+            return Err("The uv download failed SHA-256 verification and was discarded.".into());
+        }
+        let extract = staging.join("extract");
+        std::fs::create_dir_all(&extract).map_err(|e| e.to_string())?;
+        t.runtime(Phase::RuntimeUnpack, RuntimeKind::Uv);
+        unpack(&archive, &extract, t)?;
+        let _ = std::fs::remove_file(&archive);
+        let unpacked = find_extracted_root(&extract, |dir| dir.join(uvx_name).is_file())
+            .ok_or_else(|| "uv archive unpacked without uvx.".to_string())?;
+        let staged_uvx = unpacked.join(uvx_name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&staged_uvx, std::fs::Permissions::from_mode(0o755));
+            let uv_bin = unpacked.join("uv");
+            if uv_bin.is_file() {
+                let _ = std::fs::set_permissions(&uv_bin, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        if !runtime_ok(&staged_uvx) {
+            return Err("Downloaded uv could not start cleanly, so it was removed.".into());
+        }
+        let dest = root.join("current");
+        atomic_swap_dir(&unpacked, &dest)?;
+        Ok(dest.join(uvx_name))
+    })();
+    let _ = std::fs::remove_dir_all(&staging);
+    let uvx = res?;
+    rescan();
+    Ok(uvx)
 }
 
 pub fn install(entry: &Entry, t: &Tracker) -> Result<Launch, String> {
@@ -797,7 +1107,8 @@ pub fn install(entry: &Entry, t: &Tracker) -> Result<Launch, String> {
     }
     let launch = res?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    std::fs::write(launch_file(&entry.id), serde_json::to_string_pretty(&launch).unwrap_or_default()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&launch).unwrap_or_default();
+    write_atomic(&launch_file(&entry.id), json.as_bytes())?;
     if let Ok(rd) = std::fs::read_dir(&root) {
         for e in rd.flatten() {
             if e.path().is_dir() && e.path() != dir {
@@ -844,18 +1155,35 @@ fn install_into(method: &Method, entry: &Entry, dir: &Path, t: &Tracker) -> Resu
             Launch { cmd: exe, args, env, version: entry.version.clone() }
         }
         Method::Npm { package, args, env } => {
-            let npm = which("npm").ok_or("This agent is an npm package, and Node.js (npm) isn't installed. Get it from nodejs.org, then try again.")?;
-            let node = which("node").ok_or("Node.js isn't on PATH.")?;
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            t.phase(Phase::EnvCheck);
+            let (node, npm) = ensure_node(t)?;
+            let staging = dir.with_extension(format!("staging-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
             t.phase(Phase::Npm);
             let mut c = Launch { cmd: npm, ..Default::default() }.command();
-            c.args(["install", "--no-audit", "--no-fund", "--omit=dev", "--loglevel=error", "--prefix"]).arg(dir).arg(&package);
-            let out = c.output().map_err(|e| format!("npm could not start ({e})"))?;
+            c.args(["install", "--no-audit", "--no-fund", "--omit=dev", "--loglevel=error", "--prefix"]).arg(&staging).arg(&package);
+            let out = match c.output() {
+                Ok(out) => out,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(format!("npm could not start ({e})"));
+                }
+            };
             if !out.status.success() {
+                let _ = std::fs::remove_dir_all(&staging);
                 let err = String::from_utf8_lossy(&out.stderr);
                 return Err(format!("npm could not install {package}: {}", last_lines(&err, 3)));
             }
             let name = package_name(&package);
+            if npm_bin(&staging.join("node_modules").join(name), name).is_none() {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!("{name} has no program to start."));
+            }
+            if let Err(e) = atomic_swap_dir(&staging, dir) {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(e);
+            }
             let pkg_dir = dir.join("node_modules").join(name);
             let script = npm_bin(&pkg_dir, name).ok_or_else(|| format!("{name} has no program to start."))?;
             let mut all = vec![script.to_string_lossy().into_owned()];
@@ -863,7 +1191,8 @@ fn install_into(method: &Method, entry: &Entry, dir: &Path, t: &Tracker) -> Resu
             Launch { cmd: node, args: all, env, version: entry.version.clone() }
         }
         Method::Uv { package, args, env } => {
-            let uvx = which("uvx").ok_or("This agent is a Python package started with uv, and uv isn't installed. Get it from docs.astral.sh/uv, then try again.")?;
+            t.phase(Phase::EnvCheck);
+            let uvx = ensure_uv(t)?;
             let mut all = vec![package];
             all.extend(args);
             Launch { cmd: uvx, args: all, env, version: entry.version.clone() }
@@ -1046,22 +1375,19 @@ fn unpack(archive: &Path, into: &Path, t: &Tracker) -> Result<(), String> {
 }
 
 fn sha256_of(file: &Path) -> Result<String, String> {
-    let out = if cfg!(windows) {
-        crate::proc::command("certutil").arg("-hashfile").arg(file).arg("SHA256").output()
-    } else if which("sha256sum").is_some() {
-        crate::proc::command("sha256sum").arg(file).output()
-    } else {
-        crate::proc::command("shasum").args(["-a", "256"]).arg(file).output()
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(file).map_err(|e| format!("could not check the download ({e})"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("could not check the download ({e})"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
     }
-    .map_err(|e| format!("could not check the download ({e})"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines()
-        .map(|l| l.split_whitespace().collect::<String>().to_ascii_lowercase())
-        .find_map(|l| {
-            let h: String = l.chars().take(64).collect();
-            (h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())).then_some(h)
-        })
-        .ok_or_else(|| "could not read the checksum".to_string())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -1187,7 +1513,7 @@ mod tests {
         t.amount(100, 100);
         t.phase(Phase::Unpack);
         assert_eq!(t.get().phase, Phase::Failed);
-        assert_eq!(Snapshot { phase: Phase::Download, done: 5, total: 0 }.fraction(), None);
+        assert_eq!(Snapshot { phase: Phase::Download, runtime: None, done: 5, total: 0 }.fraction(), None);
     }
 
     #[test]
@@ -1276,6 +1602,47 @@ mod install_errors {
         std::fs::write(&a, b"this is not a tarball at all, just text").unwrap();
         let e = install_into(&binary(url(&a), "./bin/agent", None), &entry(), &d.join("install"), &Tracker::default()).unwrap_err();
         assert!(e.starts_with("Unpacking failed"), "{e}");
+    }
+
+    #[test]
+    fn fresh_path_sanitizes_embedded_nul_bytes() {
+        assert_eq!(sanitize_path_dir(PathBuf::from("C:\\Tools\0")), Some(PathBuf::from("C:\\Tools")));
+        assert_eq!(sanitize_path_dir(PathBuf::from("\0\0")), None);
+        assert!(!fresh_path().to_string_lossy().contains('\0'));
+    }
+
+    #[test]
+    fn parses_node_shasums_and_uv_checksums() {
+        let sha_a = "a".repeat(64);
+        let sha_b = "B".repeat(64);
+        let txt = format!(
+            "{sha_a}  node-v22.14.0-win-x64.zip\n{sha_b}  node-v22.14.0-linux-x64.tar.gz\n"
+        );
+        assert_eq!(
+            parse_node_shasums(&txt, "windows-x86_64"),
+            Some(("node-v22.14.0-win-x64.zip".into(), sha_a.clone()))
+        );
+        assert_eq!(
+            parse_node_shasums(&txt, "linux-x86_64"),
+            Some(("node-v22.14.0-linux-x64.tar.gz".into(), "b".repeat(64)))
+        );
+        assert_eq!(parse_uv_sha256(&format!("{sha_b}  uv-x86_64.zip\n")), Some("b".repeat(64)));
+        assert_eq!(parse_uv_sha256("short"), None);
+    }
+
+    #[test]
+    fn atomic_swap_dir_replaces_without_leaving_partial_state() {
+        let d = scratch("swap");
+        let old = d.join("current");
+        let stage = d.join("staging");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(old.join("ver.txt"), b"v1").unwrap();
+        std::fs::write(stage.join("ver.txt"), b"v2").unwrap();
+        atomic_swap_dir(&stage, &old).unwrap();
+        assert_eq!(std::fs::read_to_string(old.join("ver.txt")).unwrap(), "v2");
+        assert!(!stage.exists());
+        assert!(!old.with_extension("prev").exists());
     }
 }
 

@@ -54,6 +54,7 @@ pub(crate) mod reg {
     const REG_NONE: u32 = 0;
     const REG_SZ: u32 = 1;
     const RRF_RT_REG_SZ: u32 = 0x2;
+    const RRF_RT_REG_EXPAND_SZ: u32 = 0x4;
     const ERROR_SUCCESS: i32 = 0;
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const ERROR_MORE_DATA: i32 = 234;
@@ -116,19 +117,22 @@ pub(crate) mod reg {
     pub fn get(root: Hkey, sub: &str, name: Option<&str>) -> Option<String> {
         let sub_w = wide(sub);
         let name_w = opt_wide(name);
+        let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ;
         let mut buf = vec![0u16; 1024];
         let mut len = (buf.len() * 2) as u32;
-        let mut rc = unsafe { RegGetValueW(root, sub_w.as_ptr(), ptr(&name_w), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+        let mut rc = unsafe { RegGetValueW(root, sub_w.as_ptr(), ptr(&name_w), flags, null_mut(), buf.as_mut_ptr().cast(), &mut len) };
         if rc == ERROR_MORE_DATA {
             buf = vec![0u16; len as usize / 2 + 64];
             len = (buf.len() * 2) as u32;
-            rc = unsafe { RegGetValueW(root, sub_w.as_ptr(), ptr(&name_w), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+            rc = unsafe { RegGetValueW(root, sub_w.as_ptr(), ptr(&name_w), flags, null_mut(), buf.as_mut_ptr().cast(), &mut len) };
         }
         if rc != ERROR_SUCCESS {
             return None;
         }
-        let n = (len as usize / 2).saturating_sub(1).min(buf.len());
-        Some(String::from_utf16_lossy(&buf[..n]))
+        // Stop at the first UTF-16 NUL so values padded with extra NULs never leak into env vars.
+        let max_n = (len as usize / 2).min(buf.len());
+        let end = buf[..max_n].iter().position(|&c| c == 0).unwrap_or(max_n);
+        Some(String::from_utf16_lossy(&buf[..end]))
     }
 
     pub fn delete_tree(root: Hkey, sub: &str) -> Result<(), String> {
