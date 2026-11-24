@@ -5,6 +5,14 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Wheel scroll speed is a setting (24 November 2026)
+
+- A mouse whose wheel scrolls too little or too much per notch can now be corrected in
+  **Settings > Editor > Wheel scroll speed**, from 50% to 300% in 10% steps
+  ([#112](https://github.com/MuaraAI/FluxCode/issues/112)).
+- It scales how far one notch asks the view to move, so the smooth glide and the rest of
+  the editor stay as they are. Trackpads send precise pixel deltas and keep their own speed.
+
 ## Saving in a WSL folder no longer hangs (21 November 2026)
 
 - Saving a file through the WSL helper hung the editor: the helper answers a write

@@ -1547,6 +1547,11 @@ pub const ID: &[(&str, &str)] = &[
     ("Unexpected closing tag </{tag}>", "Tag penutup </{tag}> tidak terduga"),
     ("Expected '=' in TOML key-value assignment", "Harusnya '=' pada penetapan key-value TOML"),
     ("Unterminated raw string", "Raw string belum ditutup"),
+    ("Wheel scroll speed", "Kecepatan scroll roda mouse"),
+    (
+        "How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).",
+        "Sejauh apa satu klik roda mouse menggulir (100%: langkah bawaan dari mouse).",
+    ),
 ];
 
 #[cfg(test)]
