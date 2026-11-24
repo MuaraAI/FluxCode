@@ -106,6 +106,7 @@ pub struct Settings {
     pub smart_indent: bool,
     pub cursor_padding: u32,
     pub scroll_past_end: bool,
+    pub scroll_sensitivity: f32,
     #[serde(default = "default_true")]
     pub copilot: bool,
     pub last_build: String,
@@ -167,6 +168,7 @@ impl Default for Settings {
             smart_indent: true,
             cursor_padding: 0,
             scroll_past_end: true,
+            scroll_sensitivity: 1.,
             copilot: true,
             last_build: String::new(),
             rev: SETTINGS_REV,
@@ -211,6 +213,11 @@ impl Settings {
 
     pub fn access_off(&self) -> &'static str {
         if self.agent_access_off == "read" { "read" } else { "write" }
+    }
+
+    /// A hand-edited settings.json can hold anything; NaN falls back to the default step.
+    pub fn scroll_speed(&self) -> f32 {
+        if self.scroll_sensitivity.is_finite() { self.scroll_sensitivity.clamp(0.5, 3.0) } else { 1. }
     }
 
     pub fn background(&self) -> Option<&Path> {
@@ -262,6 +269,7 @@ impl Settings {
         self.smart_indent = def.smart_indent;
         self.cursor_padding = def.cursor_padding;
         self.scroll_past_end = def.scroll_past_end;
+        self.scroll_sensitivity = def.scroll_sensitivity;
         self.copilot = def.copilot;
     }
 }
@@ -489,6 +497,7 @@ impl SettingsSection {
                     || s.smart_indent != def.smart_indent
                     || s.cursor_padding != def.cursor_padding
                     || s.scroll_past_end != def.scroll_past_end
+                    || s.scroll_sensitivity != def.scroll_sensitivity
                     || s.copilot != def.copilot
             }
             SettingsSection::Wsl => s.wsl_helper,
@@ -1778,6 +1787,9 @@ impl Workbench {
                 w.settings.cursor_padding = (w.settings.cursor_padding as i32 + d).clamp(0, 12) as u32
             })),
             SettingEntry::inline("Editing & scrolling", "Scroll past the last line", tr("Leave room below the end of a file, so its last lines can sit mid-screen.").into(), "scroll beyond last line", settings_toggle("spe", "Scroll past the last line", s.scroll_past_end, cx, |w| w.settings.scroll_past_end = !w.settings.scroll_past_end)),
+            SettingEntry::inline("Editing & scrolling", "Wheel scroll speed", tr("How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).").into(), "mouse wheel scroll speed sensitivity", settings_stepper("wss", format!("{}%", (s.scroll_speed() * 100.).round() as i32), s.scroll_speed() > 0.5, s.scroll_speed() < 3., cx, |w, d| {
+                w.settings.scroll_sensitivity = ((w.settings.scroll_speed() * 100.).round() as i32 + d * 10).clamp(50, 300) as f32 / 100.
+            })),
             SettingEntry::inline("Completions", "Copilot suggestions", tr("Ghost-text completions from GitHub Copilot, a moment after you stop typing. Tab accepts, Esc dismisses. The Copilot language server does the work in its own process, so the editor stays light.").into(), "copilot ai autocomplete ghost", settings_toggle("cpl", "Copilot suggestions", s.copilot, cx, |w| w.settings.copilot = !w.settings.copilot)),
         ]
     }
@@ -2444,6 +2456,18 @@ mod tests {
         assert!(matches_query("font size", &["Font size", "Pixels in editor"]));
         assert!(matches_query("liquid glass", &["Appearance", "Translucent Liquid Glass panel"]));
         assert!(!matches_query("font missingword", &["Font size", "Pixels in editor"]));
+    }
+
+    #[test]
+    fn scroll_speed_clamps_hand_edited_values() {
+        let mut s = Settings::default();
+        assert_eq!(s.scroll_speed(), 1.);
+        s.scroll_sensitivity = 0.1;
+        assert_eq!(s.scroll_speed(), 0.5);
+        s.scroll_sensitivity = 9.;
+        assert_eq!(s.scroll_speed(), 3.);
+        s.scroll_sensitivity = f32::NAN;
+        assert_eq!(s.scroll_speed(), 1.);
     }
 
     #[test]

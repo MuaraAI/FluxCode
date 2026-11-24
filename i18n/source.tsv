@@ -1279,3 +1279,5 @@ You are on battery: it drains a little faster while the scene moves.	Kamu sedang
 Unmatched {b}	{b} tanpa pasangan
 {b} does not close {open}	{b} tidak menutup {open}
 Unclosed {b}	{b} belum ditutup
+Wheel scroll speed	Kecepatan scroll roda mouse
+How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).	Sejauh apa satu klik roda mouse menggulir (100%: langkah bawaan dari mouse).

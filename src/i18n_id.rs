@@ -1627,6 +1627,11 @@ pub const ID: &[(&str, &str)] = &[
     ("Parent folder (Alt+Up)", "Folder induk (Alt+Up)"),
     ("Go: Back", "Buka: Kembali"),
     ("Go: Forward", "Buka: Maju"),
+    ("Wheel scroll speed", "Kecepatan scroll roda mouse"),
+    (
+        "How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).",
+        "Sejauh apa satu klik roda mouse menggulir (100%: langkah bawaan dari mouse).",
+    ),
 ];
 
 #[cfg(test)]

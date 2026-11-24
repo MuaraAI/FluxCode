@@ -4735,7 +4735,9 @@ impl Workbench {
     }
 
     fn smooth_scroll(&mut self, target: ScrollTarget, delta: ScrollDelta, window: &mut Window, cx: &mut Context<Self>) {
+        let speed = self.settings.scroll_speed();
         let d = delta.pixel_delta(target.line_height(cx));
+        let d = point(d.x * speed, d.y * speed);
         let key = target.key();
         let running = self.smooth.as_ref().is_some_and(|s| s.target.key() == key);
         let base = match self.smooth.as_ref().filter(|s| s.target.key() == key) {
