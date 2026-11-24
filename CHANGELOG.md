@@ -5,6 +5,13 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The terminal holds more than one shell (24 November 2026)
+
+- The panel header shows a tab per terminal, a **+** opens another one next to the
+  running shell, and **Ctrl+Shift+`** does the same from the keyboard. Each tab keeps
+  its own working directory, output, scroll position and half-typed command, and its own
+  **×** closes it; the last tab stays.
+
 ## Wheel scroll speed is a setting (24 November 2026)
 
 - A mouse whose wheel scrolls too little or too much per notch can now be corrected in

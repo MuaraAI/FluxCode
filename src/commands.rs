@@ -54,6 +54,7 @@ pub fn commands() -> Vec<Command> {
         cmd!("View: Disk Usage (WizTree)", "Ctrl+Shift+Y", ShowWizTree),
         cmd!("View: Toggle Panel", "Ctrl+J", TogglePanel),
         cmd!("View: Toggle Terminal", "Ctrl+`", ToggleTerminal),
+        cmd!("Terminal: New Terminal", "Ctrl+Shift+`", NewTerminal),
         cmd!("View: Show Output", "Ctrl+Shift+U", ShowOutput),
         cmd!("View: Show Problems", "Ctrl+Shift+M", ShowProblems),
         cmd!("Run: Run File", "F5", RunFile),

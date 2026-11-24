@@ -141,7 +141,7 @@ impl Workbench {
     pub(crate) fn agent_cwd(&self) -> PathBuf {
         match &self.agent.worktree {
             Some(w) => w.path.clone(),
-            None => self.agent.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.term_cwd.clone()),
+            None => self.agent.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
         }
     }
 

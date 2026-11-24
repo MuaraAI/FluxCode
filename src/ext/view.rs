@@ -378,19 +378,19 @@ impl Workbench {
     fn ext_run_in_terminal(&mut self, project: &Project, line: &str, jdk: Option<&super::java::Jdk>, cx: &mut Context<Self>) {
         self.panel_open = true;
         self.panel_tab = PanelTab::Terminal;
-        if self.term_proc.is_some() {
+        if self.terms[self.term_ix].proc.is_some() {
             self.status = tr("The terminal is busy: stop what runs there first (Ctrl+C)").into();
             cx.notify();
             return;
         }
-        self.term_cwd = project.dir.clone();
-        if !self.term_lines.is_empty() {
-            push_line(&mut self.term_lines, "", LineKind::Blank);
+        self.terms[self.term_ix].cwd = project.dir.clone();
+        if !self.terms[self.term_ix].lines.is_empty() {
+            push_line(&mut self.terms[self.term_ix].lines, "", LineKind::Blank);
         }
         let mut prompt = Line::new(line, LineKind::Cmd);
-        prompt.meta = crate::term::short_cwd(&self.term_cwd, self.root.as_deref()).into();
-        close_line(&mut self.term_lines);
-        self.term_lines.push(prompt);
+        prompt.meta = crate::term::short_cwd(&self.terms[self.term_ix].cwd, self.root.as_deref()).into();
+        close_line(&mut self.terms[self.term_ix].lines);
+        self.terms[self.term_ix].lines.push(prompt);
         let mut cmd = crate::proc::shell_command(line);
         crate::github::apply_env(&mut cmd);
         if let Some(j) = jdk {
@@ -403,12 +403,12 @@ impl Workbench {
         }
         match self.procs.spawn(cmd, Some(&project.dir)) {
             Ok(id) => {
-                self.term_proc = Some(id);
-                self.term_run = Some(RunInfo { started: Instant::now(), block: self.term_lines.len(), python: String::new(), cwd: project.dir.clone(), command: line.to_string() });
+                self.terms[self.term_ix].proc = Some(id);
+                self.terms[self.term_ix].run = Some(RunInfo { started: Instant::now(), block: self.terms[self.term_ix].lines.len(), python: String::new(), cwd: project.dir.clone(), command: line.to_string() });
             }
-            Err(e) => push_line(&mut self.term_lines, &e, LineKind::Err),
+            Err(e) => push_line(&mut self.terms[self.term_ix].lines, &e, LineKind::Err),
         }
-        self.term_scroll.scroll_to_bottom();
+        self.terms[self.term_ix].scroll.scroll_to_bottom();
         cx.notify();
     }
 

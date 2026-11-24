@@ -672,7 +672,7 @@ impl Workbench {
         self.agent_save();
         let next_cwd = match &next.worktree {
             Some(w) => w.path.clone(),
-            None => next.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.term_cwd.clone()),
+            None => next.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
         };
         let cur = &self.agent.run;
         let handoff = !next.live()
@@ -2565,7 +2565,7 @@ impl Workbench {
                 chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), Icon::new(IconName::CircleX), !off("err")));
             }
         }
-        if agent_ctx::wants_output(&text) && !self.term_lines.is_empty() {
+        if agent_ctx::wants_output(&text) && !self.terms[self.term_ix].lines.is_empty() {
             chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), Icon::new(IconName::SquareTerminal), !off("out")));
         }
         if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
@@ -2610,7 +2610,7 @@ impl Workbench {
     }
 
     fn agent_last_failure(&self) -> Option<String> {
-        for lines in [&self.term_lines, &self.out_lines] {
+        for lines in [&self.terms[self.term_ix].lines, &self.out_lines] {
             let end = lines.iter().rposition(|l| l.kind == crate::term::LineKind::Status && l.err)?;
             let start = lines[..end].iter().rposition(|l| l.kind == crate::term::LineKind::Cmd).unwrap_or(0);
             let body: Vec<&str> = lines[start..=end].iter().map(|l| l.text.as_ref()).collect();
@@ -2688,8 +2688,8 @@ impl Workbench {
                     blocks.push(json!({ "type": "text", "text": t }));
                 }
                 "out" => {
-                    let n = self.term_lines.len();
-                    let tail: Vec<&str> = self.term_lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
+                    let n = self.terms[self.term_ix].lines.len();
+                    let tail: Vec<&str> = self.terms[self.term_ix].lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
                     blocks.push(json!({ "type": "text", "text": format!("Recent terminal output:\n```\n{}\n```", tail.join("\n")) }));
                 }
                 k if k.starts_with('@') => {
