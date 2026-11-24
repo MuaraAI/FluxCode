@@ -1,13 +1,14 @@
 
 use crate::i18n::tr;
-use crate::theme::{self, c, UiSize, Visibility, PALETTES};
+use crate::theme::{self, c, GlassExt, UiSize, Visibility, PALETTES};
 use crate::workbench::{ScrollTarget, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
+    popover::Popover,
     switch::Switch,
-    v_flex, Disableable, Icon, Sizable,
+    v_flex, Disableable, Icon, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
@@ -323,14 +324,18 @@ impl Session {
 
 const SETTINGS_SCROLL_KEY: u64 = 0x5E77_1A65;
 
-fn theme_grid_cols(content_w: f32) -> u16 {
-    if content_w >= 660. {
-        3
-    } else if content_w >= 430. {
-        2
-    } else {
-        1
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ThemeSnapshot {
+    pub theme: String,
+    pub bg_scene: String,
+    pub bg_scene_before_sky: String,
+}
+
+fn step_theme_sel(cur: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
     }
+    (cur as isize + delta).rem_euclid(len as isize) as usize
 }
 
 fn scene_grid_cols(content_w: f32) -> u16 {
@@ -532,6 +537,7 @@ impl SettingEntry {
 fn settings_row_inline(title: &'static str, desc: SharedString, control: AnyElement) -> AnyElement {
     h_flex()
         .w_full()
+        .min_w_0()
         .py_3()
         .px_4()
         .gap_4()
@@ -544,7 +550,7 @@ fn settings_row_inline(title: &'static str, desc: SharedString, control: AnyElem
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
                 .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(desc)),
         )
-        .child(div().flex_none().child(control))
+        .child(div().flex_none().max_w_full().child(control))
         .into_any_element()
 }
 
@@ -591,22 +597,17 @@ fn settings_group(label: &'static str, rows: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-fn settings_segmented(items: impl IntoIterator<Item = AnyElement>) -> AnyElement {
-    h_flex()
-        .p(px(2.))
-        .gap(px(2.))
-        .flex_wrap()
-        .rounded(theme::u(7.))
-        .border_1()
-        .border_color(c(theme::BORDER))
-        .bg(c(theme::BG_SIDE))
-        .children(items)
-        .into_any_element()
+fn settings_segmented(id: &'static str, items: impl IntoIterator<Item = crate::ui::SegItem>) -> AnyElement {
+    crate::ui::SegmentedControl::new(id, items).into_any_element()
 }
 
-fn settings_pill(id: SharedString, label: impl Into<SharedString>, active: bool, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
-    let btn = Button::new(id).label(label.into()).xsmall();
-    if active { btn.primary() } else { btn.ghost() }.on_click(on_click).into_any_element()
+fn settings_pill(
+    id: SharedString,
+    label: impl Into<SharedString>,
+    active: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> crate::ui::SegItem {
+    crate::ui::SegItem::new(id, label, active, on_click)
 }
 
 fn settings_switch(
@@ -617,7 +618,6 @@ fn settings_switch(
     toggle: impl Fn(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static,
 ) -> AnyElement {
     Switch::new(id)
-        .small()
         .checked(on)
         .accessibility_label(tr(label))
         .on_click(cx.listener(move |this, _: &bool, w, cx| toggle(this, w, cx)))
@@ -626,7 +626,6 @@ fn settings_switch(
 
 fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Context<Workbench>, flip: fn(&mut Workbench)) -> AnyElement {
     Switch::new(id)
-        .small()
         .checked(on)
         .accessibility_label(tr(label))
         .on_click(cx.listener(move |this, _: &bool, w, cx| {
@@ -716,77 +715,34 @@ fn scene_cards(cols: u16, current: &str, cx: &mut Context<Workbench>) -> AnyElem
         .into_any_element()
 }
 
-fn theme_cards(cols: u16, cx: &mut Context<Workbench>) -> AnyElement {
-    let active_theme = theme::palette().id;
-    div()
-        .grid()
-        .grid_cols(cols)
-        .w_full()
-        .gap_3()
-        .children(theme::all().into_iter().map(|p| {
-            let on = p.id == active_theme;
-            let id = p.id;
-            let [surface, side, accent, text] = p.swatches();
-            v_flex()
-                .id(SharedString::from(format!("theme-{id}")))
-                .w_full()
-                .min_w_0()
-                .rounded(px(8.))
-                .overflow_hidden()
-                .cursor_pointer()
-                .border_2()
-                .border_color(if on { c(theme::ACCENT) } else { c(theme::BORDER) })
-                .hover(move |s| s.border_color(c(if on { theme::ACCENT } else { theme::BORDER_STRONG })))
-                .on_click(cx.listener(move |this, _, w, cx| this.set_theme(id, w, cx)))
-                .child(
-                    h_flex()
-                        .h(theme::u(56.))
-                        .child(div().w(px(36.)).h_full().bg(c(side)))
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .h_full()
-                                .p_2p5()
-                                .gap_1()
-                                .bg(c(surface))
-                                .child(div().w(px(72.)).h(px(4.)).rounded(px(2.)).bg(c(text)))
-                                .child(div().w(px(48.)).h(px(4.)).rounded(px(2.)).bg(c(accent)))
-                                .child(div().w(px(96.)).h(px(4.)).rounded(px(2.)).bg(c(text)).opacity(0.6)),
-                        ),
-                )
-                .child(
-                    v_flex()
-                        .px_3()
-                        .py_2()
-                        .gap(px(2.))
-                        .bg(c(theme::BG_ELEVATED))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .child(div().flex_1().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(p.name))
-                                .when(on, |h| {
-                                    h.child(
-                                        h_flex()
-                                            .gap_1()
-                                            .items_center()
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(c(theme::ACCENT_TEXT))
-                                            .child(Icon::new(gpui_kit::assets::IconName::Check).size(theme::u(11.)))
-                                            .child(tr("Active")),
-                                    )
-                                }),
-                        )
-                        .child(div().text_xs().truncate().text_color(c(theme::FG_MUTED)).child(tr(p.note))),
-                )
-        }))
-        .into_any_element()
+pub(crate) fn theme_swatch(p: &theme::Palette) -> Div {
+    let [surface, _, accent, _] = p.swatches();
+    h_flex()
+        .flex_none()
+        .w(theme::u(22.))
+        .h(theme::u(14.))
+        .rounded(px(4.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(c(theme::BORDER_STRONG))
+        .child(div().flex_1().h_full().bg(c(surface)))
+        .child(div().w(theme::u(7.)).h_full().bg(c(accent)))
 }
 
-fn step_theme_fade(weak: WeakEntity<Workbench>, window: &mut Window, _cx: &mut App) {
+static THEME_FADE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn start_theme_fade(weak: WeakEntity<Workbench>, window: &mut Window, cx: &mut App) {
+    let gen = THEME_FADE_GEN
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .wrapping_add(1);
+    step_theme_fade(gen, weak, window, cx);
+}
+
+fn step_theme_fade(gen: u64, weak: WeakEntity<Workbench>, window: &mut Window, _cx: &mut App) {
     window.on_next_frame(move |window, cx| {
-        if weak.upgrade().is_none() {
+        if THEME_FADE_GEN.load(std::sync::atomic::Ordering::Relaxed) != gen
+            || weak.upgrade().is_none()
+        {
             return;
         }
         let more = theme::fading();
@@ -794,7 +750,7 @@ fn step_theme_fade(weak: WeakEntity<Workbench>, window: &mut Window, _cx: &mut A
         window.refresh();
         _ = weak.update(cx, |_, cx| cx.notify());
         if more {
-            step_theme_fade(weak, window, cx);
+            step_theme_fade(gen, weak, window, cx);
         }
     });
 }
@@ -867,22 +823,354 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn set_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let old = theme::palette();
-        self.settings.theme = id.into();
+    pub(crate) fn committed_theme_id(&self) -> &str {
+        self.theme_preview_origin
+            .as_ref()
+            .map(|o| o.theme.as_str())
+            .unwrap_or(self.settings.theme.as_str())
+    }
+
+    fn apply_sky_scene_rule(&mut self, old_id: &str, new_id: &str) {
         let sky = crate::scene::Scene::Sky.id();
-        if id == "flux-sky" && old.id != id && self.settings.bg_image.is_none() && self.settings.bg_scene != sky {
-            self.settings.bg_scene_before_sky = std::mem::replace(&mut self.settings.bg_scene, sky.into());
-        } else if id != "flux-sky" && old.id == "flux-sky" && self.settings.bg_scene == sky && !self.settings.bg_scene_before_sky.is_empty() {
+        if new_id == "flux-sky"
+            && old_id != new_id
+            && self.settings.bg_image.is_none()
+            && self.settings.bg_scene != sky
+        {
+            self.settings.bg_scene_before_sky =
+                std::mem::replace(&mut self.settings.bg_scene, sky.into());
+        } else if new_id != "flux-sky"
+            && old_id == "flux-sky"
+            && self.settings.bg_scene == sky
+            && !self.settings.bg_scene_before_sky.is_empty()
+        {
             self.settings.bg_scene = std::mem::take(&mut self.settings.bg_scene_before_sky);
         }
+    }
+
+    pub(crate) fn begin_theme_preview(&mut self) {
+        if self.theme_preview_origin.is_none() {
+            self.theme_preview_origin = Some(ThemeSnapshot {
+                theme: self.settings.theme.clone(),
+                bg_scene: self.settings.bg_scene.clone(),
+                bg_scene_before_sky: self.settings.bg_scene_before_sky.clone(),
+            });
+        }
+        let current = theme::palette().id;
+        self.settings_theme_sel = theme::all()
+            .iter()
+            .position(|p| p.id == current)
+            .unwrap_or(0);
+        self.settings_theme_anim = self.settings_theme_anim.wrapping_add(1);
+    }
+
+    pub(crate) fn preview_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.theme_preview_origin.is_none() {
+            self.begin_theme_preview();
+        }
+        let old = theme::palette();
+        if old.id == id {
+            return;
+        }
+        let snap = theme::snapshot_live();
+        self.settings.theme = id.into();
+        self.apply_sky_scene_rule(old.id, id);
+        self.settings.apply_backdrop();
+        if !cx.reduce_motion() {
+            theme::fade_from_snapshot(snap, theme::HOVER_FADE, true);
+            start_theme_fade(cx.entity().downgrade(), window, cx);
+        }
+        theme::apply(cx);
+        window.refresh();
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_theme_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(orig) = self.theme_preview_origin.take() else {
+            return;
+        };
+        if self.settings.theme == orig.theme && self.settings.bg_scene == orig.bg_scene {
+            return;
+        }
+        let snap = theme::snapshot_live();
+        self.settings.theme = orig.theme;
+        self.settings.bg_scene = orig.bg_scene;
+        self.settings.bg_scene_before_sky = orig.bg_scene_before_sky;
+        self.settings.apply_backdrop();
+        if !cx.reduce_motion() {
+            theme::fade_from_snapshot(snap, theme::HOVER_FADE, true);
+            start_theme_fade(cx.entity().downgrade(), window, cx);
+        }
+        theme::apply(cx);
+        window.refresh();
+        cx.notify();
+    }
+
+    pub(crate) fn commit_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme_preview_origin = None;
+        if theme::palette().id == id && self.settings.theme == id {
+            self.settings.save();
+            let name = theme::find(id).map_or("", |p| p.name);
+            self.status = crate::trf!("Color theme: {name}"; name => name).into();
+            cx.notify();
+            return;
+        }
+        self.set_theme(id, window, cx);
+    }
+
+    pub(crate) fn set_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.theme_preview_origin = None;
+        let old = theme::palette();
+        let snap = theme::snapshot_live();
+        self.settings.theme = id.into();
+        self.apply_sky_scene_rule(old.id, id);
         if old.id != id && !cx.reduce_motion() {
-            theme::fade_from(old);
-            step_theme_fade(cx.entity().downgrade(), window, cx);
+            theme::fade_from_snapshot(snap, theme::FADE, false);
+            start_theme_fade(cx.entity().downgrade(), window, cx);
         }
         self.apply_appearance(window, cx);
         let name = theme::find(id).map_or("", |p| p.name);
         self.status = crate::trf!("Color theme: {name}"; name => name).into();
+    }
+
+    fn render_theme_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let active = theme::palette();
+        let committed = self.committed_theme_id().to_string();
+        let open = self.settings_theme_open;
+        let anim_seq = self.settings_theme_anim;
+        let sel = self.settings_theme_sel;
+        let focus = self.settings_theme_focus.clone();
+        let weak_open = cx.entity().downgrade();
+        let weak_content = cx.entity().downgrade();
+        let trigger = Button::new("settings-theme-trigger")
+            .outline()
+            .small()
+            .dropdown_caret(true)
+            .selected(open)
+            .when(compact, |b| b.w_full())
+            .when(!compact, |b| b.w(theme::u(220.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(theme_swatch(active))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(active.name),
+                    ),
+            );
+        Popover::new("settings-theme-dd")
+            .anchor(if compact {
+                Anchor::TopLeft
+            } else {
+                Anchor::TopRight
+            })
+            .open(open)
+            .track_focus(&focus)
+            .appearance(false)
+            .when(compact, |p| {
+                p.trigger_style(StyleRefinement::default().w_full())
+            })
+            .on_open_change(move |next_open, window, cx| {
+                _ = weak_open.update(cx, |this, cx| {
+                    this.settings_theme_open = *next_open;
+                    if *next_open {
+                        this.begin_theme_preview();
+                    } else {
+                        this.cancel_theme_preview(window, cx);
+                    }
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |pop_state, _, cx| {
+                let palettes = theme::all();
+                let current_live = theme::palette().id;
+                let pop_entity = cx.entity().downgrade();
+                let weak_key = weak_content.clone();
+                let pop_key = pop_entity.clone();
+                let _ = pop_state;
+                let mut list = v_flex()
+                    .id("settings-theme-list")
+                    .max_h(theme::u(340.))
+                    .overflow_y_scroll()
+                    .gap_0p5();
+                for (i, p) in palettes.iter().enumerate() {
+                    let id = p.id;
+                    let is_committed = p.id == committed.as_str();
+                    let is_live = p.id == current_live;
+                    let is_sel = i == sel;
+                    let weak_hov = weak_content.clone();
+                    let weak_clk = weak_content.clone();
+                    let pop_clk = pop_entity.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(("settings-theme-opt", i))
+                            .w_full()
+                            .min_w_0()
+                            .h(theme::u(34.))
+                            .px_2()
+                            .gap_2p5()
+                            .items_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(is_live || is_sel, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|d| d.bg(c(theme::BG_HOVER)))
+                            .on_hover(move |entered: &bool, window, cx| {
+                                if *entered {
+                                    _ = weak_hov.update(cx, |this, cx| {
+                                        this.settings_theme_sel = i;
+                                        this.preview_theme(id, window, cx);
+                                    });
+                                }
+                            })
+                            .on_click(move |_, window, cx| {
+                                _ = weak_clk.update(cx, |this, cx| {
+                                    this.settings_theme_open = false;
+                                    this.commit_theme(id, window, cx);
+                                });
+                                _ = pop_clk.update(cx, |st, cx| st.dismiss(window, cx));
+                            })
+                            .child(theme_swatch(p))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_sm()
+                                            .font_weight(if is_committed {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::NORMAL
+                                            })
+                                            .text_color(c(theme::FG_STRONG))
+                                            .child(p.name),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(tr(p.note)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(theme::u(14.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(is_committed, |d| {
+                                        d.child(
+                                            Icon::new(gpui_kit::assets::IconName::Check)
+                                                .size(theme::u(13.))
+                                                .text_color(c(theme::ACCENT_TEXT)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                let panel = v_flex()
+                    .id("settings-theme-pop")
+                    .key_context("ThemeDropdown")
+                    .track_focus(&focus)
+                    .w(theme::u(264.))
+                    .max_w(relative(0.92))
+                    .p_1p5()
+                    .gap_1()
+                    .glass_pop()
+                    .occlude()
+                    .on_key_down(move |e: &KeyDownEvent, window, cx| {
+                        let list = theme::all();
+                        match e.keystroke.key.as_str() {
+                            "down" | "up" => {
+                                cx.stop_propagation();
+                                let delta = if e.keystroke.key == "down" { 1 } else { -1 };
+                                _ = weak_key.update(cx, |this, cx| {
+                                    let next =
+                                        step_theme_sel(this.settings_theme_sel, list.len(), delta);
+                                    this.settings_theme_sel = next;
+                                    if let Some(p) = list.get(next) {
+                                        this.preview_theme(p.id, window, cx);
+                                    }
+                                });
+                            }
+                            "enter" | "space" => {
+                                cx.stop_propagation();
+                                _ = weak_key.update(cx, |this, cx| {
+                                    this.settings_theme_open = false;
+                                    if let Some(p) = list.get(this.settings_theme_sel) {
+                                        this.commit_theme(p.id, window, cx);
+                                    }
+                                });
+                                _ = pop_key.update(cx, |st, cx| st.dismiss(window, cx));
+                            }
+                            "escape" => {
+                                cx.stop_propagation();
+                                _ = weak_key.update(cx, |this, cx| {
+                                    this.settings_theme_open = false;
+                                    this.cancel_theme_preview(window, cx);
+                                });
+                                _ = pop_key.update(cx, |st, cx| st.dismiss(window, cx));
+                            }
+                            _ => {}
+                        }
+                    })
+                    .child(
+                        div()
+                            .px_2()
+                            .pt_0p5()
+                            .pb_0p5()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr("Hover to preview")),
+                    )
+                    .child(list);
+                if cx.reduce_motion() {
+                    panel.into_any_element()
+                } else {
+                    panel
+                        .with_animation(
+                            SharedString::from(format!("settings-theme-in-{anim_seq}")),
+                            Animation::new(Duration::from_millis(150))
+                                .with_easing(gpui_kit::ease_out_quint()),
+                            |el, t| el.opacity(0.2 + 0.8 * t).mt(px((1. - t) * -6.)),
+                        )
+                        .into_any_element()
+                }
+            })
+            .into_any_element()
+    }
+
+    fn theme_setting_entry(&self, compact: bool, cx: &mut Context<Self>) -> SettingEntry {
+        let active = theme::palette();
+        let previewing = self
+            .theme_preview_origin
+            .as_ref()
+            .is_some_and(|o| o.theme != active.id);
+        let desc: SharedString = if previewing {
+            crate::trf!("Previewing {name} · {note}"; name => active.name, note => tr(active.note))
+                .into()
+        } else {
+            tr(active.note).into()
+        };
+        SettingEntry::inline(
+            "Theme",
+            "Color theme",
+            desc,
+            "theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky",
+            self.render_theme_dropdown(compact, cx),
+        )
     }
 
     pub(crate) fn choose_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -916,10 +1204,18 @@ impl Workbench {
 
     pub(crate) fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let vp_w = f32::from(window.viewport_size().width);
+        let stacked_nav = vp_w < 640.;
         let narrow_nav = vp_w < 820.;
-        let nav_w = if narrow_nav { 188. } else { 240. } * theme::scale();
+        let nav_w = if stacked_nav {
+            0.
+        } else if narrow_nav {
+            188. * theme::scale()
+        } else {
+            240. * theme::scale()
+        };
         let pad_x = if vp_w < 920. { 40. } else { 64. };
-        let content_w = (vp_w - 44. * theme::scale() - nav_w - pad_x).clamp(300., 780. * theme::scale());
+        let content_w =
+            (vp_w - 44. * theme::scale() - nav_w - pad_x).clamp(260., 780. * theme::scale());
         let compact = content_w < 540.;
 
         let sections = Self::settings_sections();
@@ -943,41 +1239,53 @@ impl Workbench {
             .relative()
             .flex_1()
             .min_w_0()
-            .h_full()
+            .min_h_0()
+            .size_full()
             .child(
                 v_flex()
                     .id("settings-content")
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.settings_scroll)
-                    .when(vp_w < 920., |d| d.px_5())
+                    .when(vp_w < 920., |d| d.px_4())
                     .when(vp_w >= 920., |d| d.px_8())
-                    .pt_7()
+                    .pt_6()
                     .pb(theme::u(120.))
                     .child(v_flex().w_full().max_w(theme::u(780.)).mx_auto().child(body)),
             )
             .child(self.smooth_scroll_layer(ScrollTarget::Handle(SETTINGS_SCROLL_KEY, self.settings_scroll.clone()), cx));
 
-        h_flex()
-            .id("settings")
+        let root = if stacked_nav { v_flex() } else { h_flex() };
+        root.id("settings")
             .key_context("Settings")
             .track_focus(&self.settings_focus)
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .bg(c(theme::BG_EDITOR))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
-                    if !this.settings_search.read(cx).value().trim().is_empty() {
-                        this.settings_search.update(cx, |s, cx| s.set_value("", w, cx));
+                    if this.settings_theme_open {
+                        this.settings_theme_open = false;
+                        this.cancel_theme_preview(w, cx);
+                    } else if !this.settings_search.read(cx).value().trim().is_empty() {
+                        this.settings_search
+                            .update(cx, |s, cx| s.set_value("", w, cx));
                         this.settings_focus.focus(w, cx);
                     } else {
+                        this.cancel_theme_preview(w, cx);
                         this.settings_open = false;
                         this.focus.focus(w, cx);
                     }
                     cx.notify();
                 }
             }))
-            .child(self.render_settings_nav(&sections, active, searching, narrow_nav, cx))
+            .child(if stacked_nav {
+                self.render_settings_top_nav(&sections, active, searching, cx)
+            } else {
+                self.render_settings_nav(&sections, active, searching, narrow_nav, cx)
+            })
             .child(scroll_area)
             .into_any_element()
     }
@@ -1025,6 +1333,8 @@ impl Workbench {
         };
         let header = h_flex()
             .w_full()
+            .min_w_0()
+            .flex_wrap()
             .gap_3()
             .items_start()
             .pb_4()
@@ -1033,7 +1343,7 @@ impl Workbench {
             .child(
                 v_flex()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(theme::u(160.))
                     .gap_1()
                     .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr(active.title())))
                     .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr(active.description()))),
@@ -1056,6 +1366,111 @@ impl Workbench {
         }
     }
 
+    fn render_settings_top_nav(
+        &self,
+        sections: &[SettingsSection],
+        active: SettingsSection,
+        searching: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let close_btn = Button::new("settings-close-top")
+            .icon(gpui_kit::component::IconName::Close)
+            .xsmall()
+            .ghost()
+            .tooltip(tr("Close"))
+            .on_click(cx.listener(|this, _, w, cx| {
+                this.settings_theme_open = false;
+                this.cancel_theme_preview(w, cx);
+                this.settings_open = false;
+                this.focus.focus(w, cx);
+                cx.notify();
+            }));
+        let pills = h_flex()
+            .id("settings-top-pills")
+            .w_full()
+            .min_w_0()
+            .overflow_x_scroll()
+            .gap_1()
+            .pb_1()
+            .children(sections.iter().copied().map(|sec| {
+                let on = !searching && sec == active;
+                h_flex()
+                    .id(SharedString::from(format!("settings-top-{}", sec.title())))
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .h(theme::u(28.))
+                    .px_2p5()
+                    .gap_1p5()
+                    .rounded(theme::u(6.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .when(on, |d| {
+                        d.bg(c(theme::SELECT))
+                            .text_color(c(theme::FG_STRONG))
+                            .font_weight(FontWeight::MEDIUM)
+                    })
+                    .when(!on, |d| {
+                        d.text_color(c(theme::FG_MUTED))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                    })
+                    .child(sec.icon().size(theme::u(12.)).text_color(c(if on {
+                        theme::ACCENT_TEXT
+                    } else {
+                        theme::FG_MUTED
+                    })))
+                    .child(tr(sec.nav_label()))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        this.settings_section = sec;
+                        if !this.settings_search.read(cx).value().is_empty() {
+                            this.settings_search
+                                .update(cx, |s, cx| s.set_value("", w, cx));
+                        }
+                        this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                        cx.notify();
+                    }))
+            }));
+        v_flex()
+            .w_full()
+            .flex_none()
+            .bg(c(theme::BG_SIDE))
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .px_3()
+            .pt_2p5()
+            .pb_1p5()
+            .gap_2()
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr("Settings")),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.settings_search)
+                                .small()
+                                .cleanable(true)
+                                .prefix(
+                                    Icon::new(gpui_kit::component::IconName::Search)
+                                        .xsmall()
+                                        .text_color(c(theme::FG_MUTED)),
+                                ),
+                        ),
+                    )
+                    .child(close_btn),
+            )
+            .child(pills)
+            .into_any_element()
+    }
+
     fn render_settings_nav(
         &self,
         sections: &[SettingsSection],
@@ -1070,6 +1485,8 @@ impl Workbench {
             .ghost()
             .tooltip(tr("Close"))
             .on_click(cx.listener(|this, _, w, cx| {
+                this.settings_theme_open = false;
+                this.cancel_theme_preview(w, cx);
                 this.settings_open = false;
                 this.focus.focus(w, cx);
                 cx.notify();
@@ -1224,7 +1641,11 @@ impl Workbench {
 
     fn appearance_entries(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<SettingEntry> {
         let lang = s.language.clone();
-        let lang_controls = settings_segmented([("auto", tr("Automatic")), ("en", "English"), ("id", "Bahasa Indonesia"), ("fr", "Français"), ("ms", "Bahasa Melayu")].into_iter().map(|(id, name)| {
+        let lang_controls = settings_segmented(
+            "seg-lang",
+            [("auto", tr("Automatic")), ("en", "English"), ("id", "Bahasa Indonesia"), ("fr", "Français"), ("ms", "Bahasa Melayu")]
+                .into_iter()
+                .map(|(id, name)| {
             settings_pill(SharedString::from(format!("lang-{id}")), name, lang == id, cx.listener(move |this, _, w, cx| {
                 this.settings.language = id.into();
                 crate::i18n::set(id);
@@ -1233,7 +1654,7 @@ impl Workbench {
             }))
         }));
         let size = s.ui_size;
-        let size_controls = settings_segmented(UiSize::ALL.iter().map(|z| {
+        let size_controls = settings_segmented("seg-ui-size", UiSize::ALL.iter().map(|z| {
             let z = *z;
             settings_pill(SharedString::from(format!("ui-size-{}", z.label())), tr(z.label()), z == size, cx.listener(move |this, _, w, cx| {
                 this.settings.ui_size = z;
@@ -1258,7 +1679,7 @@ impl Workbench {
             })
             .into_any_element();
         let vis = s.bg_visibility;
-        let vis_controls = settings_segmented(Visibility::ALL.iter().map(|v| {
+        let vis_controls = settings_segmented("seg-bg-vis", Visibility::ALL.iter().map(|v| {
             let v = *v;
             settings_pill(SharedString::from(format!("bg-vis-{}", v.label())), tr(v.label()), v == vis, cx.listener(move |this, _, w, cx| {
                 this.settings.bg_visibility = v;
@@ -1331,7 +1752,7 @@ impl Workbench {
             &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"]
         };
         let current_font = s.font_family.to_string();
-        let font_controls = settings_segmented(fonts.iter().map(|f| {
+        let font_controls = settings_segmented("seg-font", fonts.iter().map(|f| {
             let f = *f;
             settings_pill(SharedString::from(format!("font-{f}")), f, current_font == f, cx.listener(move |this, _, w, cx| {
                 this.settings.font_family = f.into();
@@ -1363,7 +1784,7 @@ impl Workbench {
 
     fn agent_entries(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<SettingEntry> {
         let access = s.access().to_string();
-        let access_controls = settings_segmented([("read", tr("Read only")), ("write", tr("Read & write")), ("full", tr("Full access"))].into_iter().map(|(id, name)| {
+        let access_controls = settings_segmented("seg-access", [("read", tr("Read only")), ("write", tr("Read & write")), ("full", tr("Full access"))].into_iter().map(|(id, name)| {
             settings_pill(SharedString::from(format!("access-{id}")), name, access == id, cx.listener(move |this, _, w, cx| {
                 this.settings.agent_access = id.into();
                 this.apply_settings(w, cx);
@@ -1403,7 +1824,10 @@ impl Workbench {
                 v_flex()
                     .w_full()
                     .gap_5()
-                    .child(settings_group("Theme", vec![div().p_4().child(theme_cards(theme_grid_cols(content_w), cx)).into_any_element()]))
+                    .child(settings_group(
+                        "Theme",
+                        vec![self.theme_setting_entry(compact, cx).render(compact)],
+                    ))
                     .child(settings_group("Display & language", display_rows))
                     .child(settings_group("Backdrop & scenes", scene_rows))
                     .into_any_element()
@@ -1548,15 +1972,8 @@ impl Workbench {
                     rows.push(entry.render(compact));
                 }
             }
-            if sec == SettingsSection::Appearance && matches_query(query, &["theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky", tr("Theme")]) {
-                rows.insert(
-                    0,
-                    settings_row_inline(
-                        tr("Theme"),
-                        tr("Color scheme and surface palette across panels and editor.").into(),
-                        open_btn(SettingsSection::Appearance, cx).into_any_element(),
-                    ),
-                );
+            if sec == SettingsSection::Appearance && matches_query(query, &["theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky", tr("Theme"), tr("Color theme")]) {
+                rows.insert(0, self.theme_setting_entry(compact, cx).render(compact));
             }
             if sec == SettingsSection::SoulFiles && matches_query(query, &[sec.title(), tr(sec.title()), sec.description(), tr(sec.description()), "claude codex mura opencode gemini soul"]) {
                 rows.push(div().p_4().child(self.render_soul_files(cx)).into_any_element());
@@ -1686,13 +2103,22 @@ impl Workbench {
             list = list.child(
                 h_flex()
                     .w_full()
+                    .flex_wrap()
                     .py_2()
-                    .gap_4()
+                    .gap_x_4()
+                    .gap_y_1p5()
                     .items_start()
                     .border_b_1()
                     .border_color(c(theme::BORDER))
-                    .child(div().w(theme::u(150.)).flex_none().text_sm().text_color(c(theme::FG_STRONG)).child(crate::acp::display_name(&id)))
-                    .child(div().flex_1().min_w_0().child(files)),
+                    .child(
+                        div()
+                            .w(theme::u(140.))
+                            .flex_none()
+                            .text_sm()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(crate::acp::display_name(&id)),
+                    )
+                    .child(div().flex_1().min_w(theme::u(180.)).child(files)),
             );
         }
         list.into_any_element()
@@ -1755,7 +2181,9 @@ impl Workbench {
         };
         let code = self.copilot.user_code();
         let mut col = v_flex()
-            .w(px(300.))
+            .w_full()
+            .max_w(theme::u(360.))
+            .min_w_0()
             .gap_1()
             .text_sm()
             .child(div().child(text));
@@ -1982,7 +2410,7 @@ fn install_progress(animate: bool) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{matches_query, scene_grid_cols, theme_grid_cols, Settings};
+    use super::{matches_query, scene_grid_cols, step_theme_sel, Settings};
 
     #[test]
     #[cfg(feature = "embedded-preview")]
@@ -2000,9 +2428,14 @@ mod tests {
             let cols = scene_grid_cols(w);
             assert_eq!(12 % cols, 0, "12 scenes should divide evenly for width {w} (got {cols})");
         }
-        assert_eq!(theme_grid_cols(780.), 3);
-        assert_eq!(theme_grid_cols(560.), 2);
-        assert_eq!(theme_grid_cols(360.), 1);
+    }
+
+    #[test]
+    fn theme_dropdown_selection_wraps_around() {
+        assert_eq!(step_theme_sel(0, 7, -1), 6);
+        assert_eq!(step_theme_sel(6, 7, 1), 0);
+        assert_eq!(step_theme_sel(2, 7, 1), 3);
+        assert_eq!(step_theme_sel(0, 0, 1), 0);
     }
 
     #[test]

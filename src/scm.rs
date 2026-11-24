@@ -864,98 +864,170 @@ impl Workbench {
         let section = |id: &'static str, title: String, count: usize, open: bool| {
             h_flex()
                 .id(id)
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .h(theme::u(22.))
                 .px_2()
                 .gap_1()
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c(theme::FG_MUTED))
-                .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(14.)))
-                .child(div().flex_1().child(title))
-                .when(count > 0, |h| h.child(div().px_1p5().rounded_full().bg(c(theme::BG_HOVER)).text_color(c(theme::FG)).child(count.to_string())))
+                .child(
+                    Icon::new(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .flex_none()
+                    .size(theme::u(14.)),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .when(count > 0, |h| {
+                    h.child(
+                        div()
+                            .flex_none()
+                            .px_1p5()
+                            .rounded_full()
+                            .bg(c(theme::BG_HOVER))
+                            .text_color(c(theme::FG))
+                            .child(count.to_string()),
+                    )
+                })
         };
 
-        let file_row = |i: usize, kind: u8, ch: &FileChange, this: &Self, cx: &mut Context<Self>| {
-            let name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
-            let dir = ch.path.rsplit_once('/').map(|d| d.0.replace('/', "\\")).unwrap_or_default();
-            let (icon, tint) = crate::files::icon_for(&name);
-            let col = code_color(ch.code);
-            let deleted = ch.code == 'D';
-            let full = this.scm.repo.as_ref().map(|r| r.join(ch.path.replace('/', "\\")));
-            let staged = kind == 1;
-            let confirm = this.scm.confirm_discard.as_deref() == Some(ch.path.as_str());
-            let (c1, c2, c3) = (ch.clone(), ch.clone(), ch.clone());
-            h_flex()
-                .id(("scm-f", i * 4 + kind as usize))
-                .group("scm-row")
-                .h(theme::u(22.))
-                .pl(theme::u(18.))
-                .pr_2()
-                .gap_1p5()
-                .text_size(theme::u(11.5))
-                .cursor_pointer()
-                .hover(|s| s.bg(c(theme::BG_HOVER)))
-                .child(Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
-                .child(div().text_color(c(col)).when(deleted, |d| d.line_through()).child(name))
-                .child(div().flex_1().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir))
-                .child(
-                    h_flex()
-                        .gap_px()
-                        .invisible()
-                        .group_hover("scm-row", |s| s.visible())
-                        .when(!staged && kind != 2, |h| {
-                            h.child(
-                                Button::new(("scm-diff", i))
-                                    .icon(Icon::new(Ico::FileDiff))
+        let file_row =
+            |i: usize, kind: u8, ch: &FileChange, this: &Self, cx: &mut Context<Self>| {
+                let name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
+                let dir = ch
+                    .path
+                    .rsplit_once('/')
+                    .map(|d| d.0.replace('/', "\\"))
+                    .unwrap_or_default();
+                let (icon, tint) = crate::files::icon_for(&name);
+                let col = code_color(ch.code);
+                let deleted = ch.code == 'D';
+                let full = this
+                    .scm
+                    .repo
+                    .as_ref()
+                    .map(|r| r.join(ch.path.replace('/', "\\")));
+                let staged = kind == 1;
+                let confirm = this.scm.confirm_discard.as_deref() == Some(ch.path.as_str());
+                let (c1, c2, c3) = (ch.clone(), ch.clone(), ch.clone());
+                h_flex()
+                    .id(("scm-f", i * 4 + kind as usize))
+                    .group("scm-row")
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .h(theme::u(22.))
+                    .pl(theme::u(18.))
+                    .pr_2()
+                    .gap_1p5()
+                    .text_size(theme::u(11.5))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .child(
+                        Icon::new(icon)
+                            .flex_none()
+                            .size(theme::u(14.))
+                            .text_color(theme::tint(tint)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(col))
+                            .when(deleted, |d| d.line_through())
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(dir),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap_px()
+                            .invisible()
+                            .group_hover("scm-row", |s| s.visible())
+                            .when(!staged && kind != 2, |h| {
+                                h.child(
+                                    Button::new(("scm-diff", i))
+                                        .icon(Icon::new(Ico::FileDiff))
+                                        .ghost()
+                                        .xsmall()
+                                        .tooltip(tr("Show changes"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.scm_show_diff(c1.clone(), false, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("scm-discard", i))
+                                        .icon(Icon::new(Ico::Undo2))
+                                        .ghost()
+                                        .xsmall()
+                                        .when(confirm, |b| b.label(tr("Discard?")))
+                                        .tooltip(tr("Discard changes (click twice)"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.scm_discard(c2.clone(), cx);
+                                        })),
+                                )
+                            })
+                            .when(staged, |h| {
+                                h.child(
+                                    Button::new(("scm-sdiff", i))
+                                        .icon(Icon::new(Ico::FileDiff))
+                                        .ghost()
+                                        .xsmall()
+                                        .tooltip(tr("Show staged changes"))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.scm_show_diff(c3.clone(), true, cx);
+                                        })),
+                                )
+                            })
+                            .child({
+                                let p = ch.path.clone();
+                                Button::new(("scm-stage", i * 4 + kind as usize))
+                                    .icon(Icon::new(if staged {
+                                        IconName::Minus
+                                    } else {
+                                        IconName::Plus
+                                    }))
                                     .ghost()
                                     .xsmall()
-                                    .tooltip(tr("Show changes"))
+                                    .tooltip(if staged { "Unstage" } else { "Stage" })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.scm_show_diff(c1.clone(), false, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new(("scm-discard", i))
-                                    .icon(Icon::new(Ico::Undo2))
-                                    .ghost()
-                                    .xsmall()
-                                    .when(confirm, |b| b.label(tr("Discard?")))
-                                    .tooltip(tr("Discard changes (click twice)"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.scm_discard(c2.clone(), cx);
-                                    })),
-                            )
-                        })
-                        .when(staged, |h| {
-                            h.child(Button::new(("scm-sdiff", i)).icon(Icon::new(Ico::FileDiff)).ghost().xsmall().tooltip(tr("Show staged changes")).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.scm_show_diff(c3.clone(), true, cx);
-                                },
-                            )))
-                        })
-                        .child({
-                            let p = ch.path.clone();
-                            Button::new(("scm-stage", i * 4 + kind as usize))
-                                .icon(Icon::new(if staged { IconName::Minus } else { IconName::Plus }))
-                                .ghost()
-                                .xsmall()
-                                .tooltip(if staged { "Unstage" } else { "Stage" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.scm_stage(Some(p.clone()), !staged, cx);
-                                }))
-                        }),
-                )
-                .child(div().w(theme::u(12.)).text_xs().font_weight(FontWeight::BOLD).text_color(c(col)).child(ch.code.to_string()))
-                .on_click(cx.listener(move |this, _, w, cx| {
-                    if let Some(f) = full.clone().filter(|f| f.is_file()) {
-                        this.open_file(f, w, cx);
-                    }
-                }))
-        };
+                                        this.scm_stage(Some(p.clone()), !staged, cx);
+                                    }))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(theme::u(12.))
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(c(col))
+                            .child(ch.code.to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        if let Some(f) = full.clone().filter(|f| f.is_file()) {
+                            this.open_file(f, w, cx);
+                        }
+                    }))
+            };
 
         if !st.conflicts.is_empty() {
             body = body.child(section("scm-sec-conf", "Merge Changes".into(), st.conflicts.len(), true));
@@ -1098,6 +1170,9 @@ impl Workbench {
                 body = body.child(
                     h_flex()
                         .id(("scm-c", i))
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .h(theme::u(22.))
                         .pl(theme::u(12.))
                         .pr_2()
@@ -1106,12 +1181,20 @@ impl Workbench {
                         .cursor_pointer()
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
                         .child(lane)
-                        .child(div().flex_1().min_w(theme::u(80.)).truncate().text_color(c(theme::FG)).child(cm.subject.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(c(theme::FG))
+                                .child(cm.subject.clone()),
+                        )
                         .children(cm.refs.first().map(|r| {
                             let remote = r.starts_with("origin/");
                             div()
-                                .flex_none()
-                                .max_w(theme::u(120.))
+                                .flex_shrink(1.)
+                                .min_w_0()
+                                .max_w(theme::u(110.))
                                 .truncate()
                                 .px_1p5()
                                 .rounded(px(8.))
@@ -1148,13 +1231,16 @@ impl Workbench {
                 let w = wf.clone();
                 body = body.child(
                     h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .h(theme::u(22.))
                         .pl(theme::u(18.))
                         .pr_2()
                         .gap_1p5()
                         .text_size(theme::u(11.5))
-                        .child(Icon::new(Ico::Rocket).size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_1().truncate().child(wf.name.clone()))
+                        .child(Icon::new(Ico::Rocket).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
+                        .child(div().flex_1().min_w_0().truncate().child(wf.name.clone()))
                         .child(
                             Button::new(("scm-wf", i))
                                 .icon(Icon::new(IconName::Play))
@@ -1177,6 +1263,9 @@ impl Workbench {
                 body = body.child(
                     h_flex()
                         .id(("scm-run", i))
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .h(theme::u(22.))
                         .pl(theme::u(18.))
                         .pr_2()
@@ -1184,9 +1273,24 @@ impl Workbench {
                         .text_size(theme::u(11.5))
                         .cursor_pointer()
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .child(div().w(theme::u(12.)).text_color(c(col)).child(mark))
-                        .child(div().flex_1().min_w(theme::u(70.)).truncate().child(r.title.clone()))
-                        .child(div().flex_none().max_w(theme::u(150.)).truncate().text_xs().text_color(c(theme::FG_DIM)).child(format!("{} · {}", r.workflow, r.branch)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(theme::u(12.))
+                                .text_color(c(col))
+                                .child(mark),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(r.title.clone()))
+                        .child(
+                            div()
+                                .flex_shrink(1.)
+                                .min_w_0()
+                                .max_w(theme::u(130.))
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(format!("{} · {}", r.workflow, r.branch)),
+                        )
                         .on_click(move |_, _, cx| cx.open_url(&url)),
                 );
             }

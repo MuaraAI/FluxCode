@@ -1,5 +1,6 @@
 
 use crate::i18n::tr;
+use crate::settings::theme_swatch;
 use crate::theme::{self, c, GlassExt};
 use crate::workbench::*;
 use gpui_kit::component::{h_flex, v_flex, Icon, IconName};
@@ -9,37 +10,14 @@ fn rgb_of(v: u32) -> Hsla {
     rgb(v).into()
 }
 
-fn thumb(p: &theme::Palette) -> Div {
-    let [editor, side, accent, fg] = p.swatches();
-    h_flex()
-        .flex_none()
-        .w(theme::u(46.))
-        .h(theme::u(30.))
-        .rounded(px(4.))
-        .overflow_hidden()
-        .border_1()
-        .border_color(c(theme::BORDER_STRONG))
-        .child(div().w(theme::u(11.)).h_full().bg(rgb_of(side)))
-        .child(
-            v_flex()
-                .flex_1()
-                .h_full()
-                .px(theme::u(5.))
-                .py(theme::u(6.))
-                .gap(theme::u(4.))
-                .bg(rgb_of(editor))
-                .child(div().w(relative(0.8)).h(px(2.)).rounded(px(1.)).bg(rgb_of(fg)).opacity(0.85))
-                .child(div().w(relative(0.5)).h(px(2.)).rounded(px(1.)).bg(rgb_of(accent)))
-                .child(div().w(relative(0.65)).h(px(2.)).rounded(px(1.)).bg(rgb_of(fg)).opacity(0.5)),
-        )
-}
-
 impl Workbench {
     pub(crate) fn render_theme_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette();
         let open = self.theme_menu;
         h_flex()
             .id("sb-theme")
+            .flex_none()
+            .whitespace_nowrap()
             .h_full()
             .px_2()
             .mr_1()
@@ -47,12 +25,33 @@ impl Workbench {
             .cursor_pointer()
             .when(open, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
             .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-            .child(div().size(theme::u(8.)).rounded_full().bg(rgb_of(p.swatches()[2])).border_1().border_color(c(theme::BORDER_STRONG)))
+            .child(
+                div()
+                    .flex_none()
+                    .size(theme::u(8.))
+                    .rounded_full()
+                    .bg(rgb_of(p.swatches()[2]))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG)),
+            )
             .child(p.name)
-            .when(!open, |d| d.tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Color theme (Ctrl+K Ctrl+T for the next one)")).build(w, cx)))
-            .on_click(cx.listener(|this, _, _, cx| {
+            .when(!open, |d| {
+                d.tooltip(|w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tr(
+                        "Color theme (Ctrl+K Ctrl+T for the next one)",
+                    ))
+                    .build(w, cx)
+                })
+            })
+            .on_click(cx.listener(|this, _, w, cx| {
                 let may = this.pop_may_open("theme");
-                this.theme_menu = !this.theme_menu && may;
+                let opening = !this.theme_menu && may;
+                this.theme_menu = opening;
+                if opening {
+                    this.begin_theme_preview();
+                } else {
+                    this.cancel_theme_preview(w, cx);
+                }
                 cx.notify();
             }))
             .into_any_element()
@@ -62,22 +61,35 @@ impl Workbench {
         if !self.theme_menu {
             return None;
         }
-        let current = theme::palette().id;
-        let mut list = v_flex().id("theme-list").p_1().gap_0p5().max_h(theme::u(460.)).overflow_y_scroll();
+        let committed = self.committed_theme_id();
+        let current_live = theme::palette().id;
+        let mut list = v_flex()
+            .id("theme-list")
+            .p_1()
+            .gap_0p5()
+            .max_h(theme::u(380.))
+            .overflow_y_scroll();
         for (i, p) in theme::all().into_iter().enumerate() {
-            let on = p.id == current;
+            let on = p.id == committed;
+            let live = p.id == current_live;
             let id = p.id;
             list = list.child(
                 h_flex()
                     .id(("theme-pick", i))
+                    .h(theme::u(34.))
                     .px_2()
-                    .py_1p5()
                     .gap_2p5()
-                    .rounded(px(5.))
+                    .items_center()
+                    .rounded(px(6.))
                     .cursor_pointer()
-                    .when(on, |d| d.bg(c(theme::BG_HOVER)))
+                    .when(live, |d| d.bg(c(theme::BG_HOVER)))
                     .hover(|d| d.bg(c(theme::BG_HOVER)))
-                    .child(thumb(p))
+                    .on_hover(cx.listener(move |this, entered: &bool, w, cx| {
+                        if *entered {
+                            this.preview_theme(id, w, cx);
+                        }
+                    }))
+                    .child(theme_swatch(p))
                     .child(
                         v_flex()
                             .flex_1()
@@ -88,7 +100,7 @@ impl Workbench {
                     .child(div().flex_none().w(theme::u(16.)).when(on, |d| d.child(Icon::new(IconName::Check).size(theme::u(14.)).text_color(c(theme::ACCENT_TEXT)))))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.theme_menu = false;
-                        this.set_theme(id, w, cx);
+                        this.commit_theme(id, w, cx);
                         cx.notify();
                     })),
             );
@@ -99,22 +111,44 @@ impl Workbench {
             .absolute()
             .right(px(8.))
             .bottom(theme::u(30.))
-            .w(theme::u(272.))
+            .w(theme::u(264.))
             .max_w(relative(0.92))
             .glass_pop()
             .occlude()
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            .on_mouse_down_out(cx.listener(|this, _, w, cx| {
                 this.pop_closed_outside("theme");
                 this.theme_menu = false;
+                this.cancel_theme_preview(w, cx);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     this.theme_menu = false;
+                    this.cancel_theme_preview(w, cx);
                     cx.notify();
                 }
             }))
-            .child(div().px_3().pt_2().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("Color theme")))
+            .child(
+                h_flex()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_MUTED))
+                            .child(tr("Color theme")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr("Hover to preview")),
+                    ),
+            )
             .child(list)
             .child(
                 h_flex()
@@ -132,9 +166,16 @@ impl Workbench {
                     .text_color(c(theme::FG_MUTED))
                     .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                     .child(Icon::new(IconName::Settings).size(theme::u(13.)))
-                    .child(div().flex_1().child(tr("Background image and more in Settings")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(tr("Background image and more in Settings")),
+                    )
                     .on_click(cx.listener(|this, _, w, cx| {
                         this.theme_menu = false;
+                        this.cancel_theme_preview(w, cx);
                         w.dispatch_action(Box::new(ShowSettings), cx);
                     })),
             );

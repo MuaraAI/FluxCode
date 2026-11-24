@@ -5,6 +5,12 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Built-in Rust WizTree, safe agent runtime auto-install, and fluid responsive UI (24 November 2026)
+
+- **Built-in WizTree (Disk Usage Analyzer) in Rust**: Open from the Activity Bar drive icon, **View > Disk Usage (WizTree)**, or `Ctrl+Shift+Y`. Indexes your workspace or any chosen folder in parallel using a compact flat arena with zero extra dependencies and zero idle resource usage. Includes an interactive squarified treemap with hover inspection and folder zoom, expandable size-sorted tree, extension breakdown, top 100 largest files, live filter, and one-click open or reveal in Explorer.
+- **Safe automatic agent runtime installation & Windows `PATH` fix**: Fixes `npm could not start (nul byte found in provided data)` by truncating embedded NULs from Windows registry `Path` entries (`REG_SZ` and `REG_EXPAND_SZ`) and sanitizing `fresh_path()`. When an ACP agent needs **Node.js & npm** or **uv** and the environment is missing or broken, FluxCode clearly informs the user, downloads the official release with live progress, verifies its **SHA-256** checksum in pure Rust, validates `--version`, and swaps it atomically into `~/.fluxcode/runtime/` without modifying system directories or leaving partial files.
+- **Responsive UI & smooth interactions**: Fixes overlapping toolbar/row layouts at narrow widths across Extensions, Search, Source Control, Panel, Agent, Settings, Titlebar, and Status Bar. Replaces the Settings theme card grid with a minimalist **realtime hover-preview theme dropdown** with smooth interpolated color fades (shared with the status bar theme menu). Makes toggle switches and segmented controls glide smoothly with blended track colors and sliding active pills. Clicking an **Agent file chip** exits overlays/full-screen agent and jumps smoothly to the file with an arrival highlight in the editor and Explorer. Opening or activating any file now smoothly auto-scrolls the tab bar after layout so the active tab is always visible.
+
 ## Saving in a WSL folder no longer hangs (21 November 2026)
 
 - Saving a file through the WSL helper hung the editor: the helper answers a write

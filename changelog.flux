@@ -10,6 +10,22 @@
 //   @en / @id                the Markdown that follows is English / Indonesian
 // Lines starting with // before the first @release are comments.
 
+@release 2026-11-24
+@title en: Built-in Rust WizTree, safe agent runtime auto-install, and fluid responsive UI
+@title id: WizTree Rust bawaan, pasang runtime agent otomatis yang aman, dan UI responsif yang mulus
+@en
+FluxCode now ships a **built-in WizTree disk usage analyzer** written in pure Rust (`Ctrl+Shift+Y` or the drive icon in the Activity Bar). A bounded parallel indexer scans your project or any folder on your PC with low memory overhead and zero idle background work, presenting an interactive squarified treemap, an expandable size-sorted tree, extension breakdown, and top 100 largest files with instant click-to-open.
+
+**Agent environment setup** is now automatic and corruption-proof: FluxCode fixes the Windows registry `Path` NUL-byte bug (`npm could not start`), detects when **Node.js & npm** or **uv** is missing or broken, notifies you upfront, and installs the official **SHA-256-verified** runtime atomically inside `~/.fluxcode/runtime/` with smooth progress animations.
+
+**Interface responsiveness and motion** were also refined across the workbench: narrow-width overlaps in Extensions, Search, Source Control, Panel, Agent, Settings, Titlebar, and Status Bar are fixed; Settings > Appearance now uses a minimalist **live hover-preview theme dropdown** with smooth color transitions; switches and segmented controls glide smoothly instead of snapping; clicking an **Agent file chip** smoothly jumps straight to that file with an arrival highlight; and opening any file now smoothly auto-scrolls the tab bar to bring the active tab into view.
+@id
+FluxCode kini membawa **penganalisis penggunaan disk WizTree** bawaan berbasis Rust murni (`Ctrl+Shift+Y` atau ikon drive di Activity Bar). Indekser paralel ringan memindai folder proyek atau folder mana saja di PC dengan pemakaian memori kecil dan nol beban saat idle, lengkap dengan treemap interaktif, pohon folder terurut berdasarkan ukuran, rincian ekstensi, dan daftar 100 file terbesar yang langsung bisa diklik untuk dibuka.
+
+**Pemasangan environment agent** kini otomatis dan aman dari korup: FluxCode memperbaiki bug NUL-byte pada registry `Path` Windows (`npm could not start`), mendeteksi saat **Node.js & npm** atau **uv** belum ada atau rusak, memberi tahu pengguna, lalu mengunduh dan memasang runtime resmi berverifikasi **SHA-256** secara atomik di `~/.fluxcode/runtime/` dengan animasi progres yang halus.
+
+**Responsivitas dan transisi UI** juga diperbaiki menyeluruh: elemen yang bertabrakan di panel sempit pada Extensions, Search, Source Control, Panel, Agent, Settings, Titlebar, dan Status Bar telah dibenahi; Pengaturan > Tampilan kini memakai **dropdown tema minimalis dengan pratinjau langsung saat hover** dan transisi warna lembut; switch dan kontrol segmen meluncur mulus tanpa kaku; klik **chip file di panel Agent** langsung melompat halus ke file tujuan; dan membuka file kini otomatis menggeser tab bar secara halus ke tab yang sedang aktif.
+
 @release 2026-11-21
 @title en: Saving in a WSL folder no longer hangs
 @title id: Menyimpan di folder WSL tidak macet lagi

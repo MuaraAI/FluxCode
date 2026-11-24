@@ -3,12 +3,24 @@ use crate::{
     ThemeStyled as _, text::Text, tooltip::ComponentTooltip,
 };
 use gpui::{
-    App, Background, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement as _,
-    RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
-    px,
+    App, Background, BoxShadow, ElementId, Hsla, InteractiveElement, IntoElement,
+    ParentElement as _, RenderOnce, Rgba, SharedString, StyleRefinement, Styled, Window, div,
+    point, prelude::FluentBuilder as _, px,
 };
-use gpui_base::{Switch as BaseSwitch, SwitchThumb, SwitchTrack, spring};
+use gpui_base::{Spring, Switch as BaseSwitch, SwitchThumb, SwitchTrack, spring};
 use std::{rc::Rc, time::Duration};
+
+fn blend_hsla(a: Hsla, b: Hsla, t: f32) -> Hsla {
+    let t = t.clamp(0., 1.);
+    let ra = a.to_rgb();
+    let rb = b.to_rgb();
+    Hsla::from(Rgba {
+        r: ra.r + (rb.r - ra.r) * t,
+        g: ra.g + (rb.g - ra.g) * t,
+        b: ra.b + (rb.b - ra.b) * t,
+        a: ra.a + (rb.a - ra.a) * t,
+    })
+}
 
 /// A Switch element that can be toggled on or off.
 #[derive(IntoElement)]
@@ -178,16 +190,8 @@ impl RenderOnce for Switch {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
-        let checked_bg = self
-            .color
-            .map(Background::from)
-            .unwrap_or(cx.theme().tokens.primary.into());
-        let unchecked_bg: Background = cx.theme().tokens.switch.into();
-        // GPUI's element opacity multiplies each primitive's alpha instead of
-        // compositing the subtree as one group, so fading the whole control
-        // would let the track show through the thumb. Fading the track alone
-        // lands on the pixels a grouped fade would: the thumb is `background`.
-        let disabled_bg = if checked { checked_bg } else { unchecked_bg }.opacity(0.5);
+        let checked_hsla: Hsla = self.color.unwrap_or(*cx.theme().tokens.primary);
+        let unchecked_hsla: Hsla = *cx.theme().tokens.switch;
         let toggle_bg: Background = cx.theme().tokens.switch_thumb.into();
         let disabled_label_color = cx.theme().muted_foreground;
 
@@ -207,23 +211,50 @@ impl RenderOnce for Switch {
         } else {
             cx.theme().radius
         };
+        let max_travel = (bg_width - bar_width - inset * 2).max(px(0.));
+        let switch_spring = Spring::new(Duration::from_millis(210))
+            .with_damping(0.84)
+            .with_epsilon(0.05);
 
-        // The thumb's position is geometry, not a semantic state style: a
-        // `checked` style setting `left` outranks the instance style by the
-        // documented precedence, which left the travel visible in one direction
-        // only. The spring owns it end to end and reverses from wherever the
-        // thumb is when the switch is toggled again mid-travel.
+        // The spring owns thumb position end to end and reverses cleanly if
+        // toggled mid-flight. Track color and subtle thumb stretch follow its
+        // normalized progress so track and thumb move as one fluid gesture.
         let thumb_x = spring(
             (self.id.clone(), "thumb"),
-            if checked {
-                bg_width - bar_width - inset * 2
-            } else {
-                px(0.)
-            },
-            cx.theme().motion_tokens().spring_move,
+            if checked { max_travel } else { px(0.) },
+            switch_spring,
             window,
             cx,
         );
+        let max_f = f32::from(max_travel);
+        let progress = if max_f > 0. {
+            (f32::from(thumb_x) / max_f).clamp(0., 1.)
+        } else if checked {
+            1.
+        } else {
+            0.
+        };
+        let live_track_hsla = blend_hsla(unchecked_hsla, checked_hsla, progress);
+        let track_bg: Background = live_track_hsla.into();
+        // GPUI's element opacity multiplies each primitive's alpha instead of
+        // compositing the subtree as one group, so fading the track alone keeps
+        // the thumb opaque on disabled switches.
+        let disabled_bg = track_bg.opacity(0.5);
+        let stretch = if cx.reduce_motion() {
+            0.
+        } else {
+            (progress * std::f32::consts::PI).sin() * (f32::from(bar_width) * 0.16).min(2.4)
+        };
+        let thumb_w = bar_width + px(stretch);
+        let thumb_left = px((f32::from(thumb_x) - stretch * progress)
+            .clamp(0., (max_f - stretch).max(0.)));
+        let thumb_shadow = BoxShadow {
+            color: gpui::black().opacity(0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        };
 
         div().refine_style(&self.style).child(
             BaseSwitch::new(self.id.clone())
@@ -264,18 +295,17 @@ impl RenderOnce for Switch {
                         // The thumb inset is a 1px border plus 1px padding,
                         // not a 2px border: the focus ring tints the border
                         // solid, and that 1px line is what keeps the ring
-                        // visible on an unchecked track. Its 50% halo alone
-                        // lands within a few values of `switch.background`
-                        // in both default modes.
+                        // visible on an unchecked track.
                         .border_1()
                         .border_color(cx.theme().transparent)
                         .p(inset - px(1.))
-                        .when(!checked, |this| this.bg(unchecked_bg))
-                        .styles(|styles| {
-                            styles
-                                .checked(|style| style.bg(checked_bg))
-                                .disabled(|style| style.bg(disabled_bg))
+                        .bg(track_bg)
+                        .when(!self.disabled, |this| {
+                            this.hover(|style| {
+                                style.border_color(cx.theme().tokens.ring.opacity(0.42))
+                            })
                         })
+                        .styles(|styles| styles.disabled(|style| style.bg(disabled_bg)))
                         // The ring hugs the track, not the row, so the label
                         // stays outside it.
                         .when(is_focused && self.focus_ring_enabled, |this| {
@@ -286,9 +316,11 @@ impl RenderOnce for Switch {
                             // Switch Toggle
                             SwitchThumb::new(checked)
                                 .rounded(radius)
-                                .size(bar_width)
-                                .left(thumb_x)
-                                .bg(toggle_bg),
+                                .w(thumb_w)
+                                .h(bar_width)
+                                .left(thumb_left)
+                                .bg(toggle_bg)
+                                .shadow(vec![thumb_shadow]),
                         ),
                 )
                 .when_some(self.label, |this, label| {

@@ -1264,6 +1264,8 @@ impl Workbench {
                         h_flex()
                             .id(("prob-row", i))
                             .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
                             .h(row_h)
                             .px_3()
                             .gap_2()
@@ -1282,7 +1284,15 @@ impl Workbench {
                                     .text_color(c(theme::FG_DIM))
                                     .child(r.source),
                             )
-                            .child(div().flex_none().text_color(c(theme::FG_MUTED)).child(loc))
+                            .child(
+                                div()
+                                    .flex_shrink(1.)
+                                    .min_w_0()
+                                    .max_w(relative(0.45))
+                                    .truncate()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(loc),
+                            )
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.open_location(path.clone(), line, col_ix, w, cx);
                             }))
@@ -1313,6 +1323,8 @@ impl Workbench {
             let on = this.panel_tab == which;
             h_flex()
                 .id(id)
+                .flex_none()
+                .whitespace_nowrap()
                 .px_1()
                 .h_full()
                 .gap_1p5()
@@ -1355,9 +1367,12 @@ impl Workbench {
             .flatten();
         let prob_badge = (prob_total > 0).then_some((prob_total, if prob_errs > 0 { theme::DANGER } else { theme::WARN }));
         let header = h_flex()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .h(theme::u(35.))
             .px_3()
-            .gap_4()
+            .gap_3()
             .flex_none()
             .child(tab("p-term", tr("Terminal"), None, PanelTab::Terminal, self, cx))
             .child(tab("p-out", tr("Output"), None, PanelTab::Output, self, cx))

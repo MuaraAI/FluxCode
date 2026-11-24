@@ -559,6 +559,10 @@ impl Workbench {
                 let marks = this.scm.marks.clone();
                 let dirty_dirs = this.scm.dirty_dirs.clone();
                 let folder_anim = this.explorer.folder_anim.clone();
+                let jump_anim = this
+                    .file_jump_anim
+                    .as_ref()
+                    .map(|(p, s)| (p.to_string_lossy().into_owned(), *s));
                 let ws_anim = this.explorer.workspace_anim;
                 let added_roots = this.explorer.added_roots.clone();
 
@@ -770,6 +774,20 @@ impl Workbench {
 
                         if !motion {
                             return row_el.into_any_element();
+                        }
+
+                        if let Some((jump_id, seq)) = &jump_anim {
+                            if *jump_id == id {
+                                let accent = c(theme::ACCENT);
+                                return row_el
+                                    .with_animation(
+                                        SharedString::from(format!("xr-jump-{seq}-{id}")),
+                                        Animation::new(Duration::from_millis(420))
+                                            .with_easing(gpui_kit::ease_out_quint()),
+                                        move |d, t| d.bg(accent.opacity((1. - t) * 0.28)),
+                                    )
+                                    .into_any_element();
+                            }
                         }
 
                         if ws_anim > 0 && row.depth == 0 && added_roots.contains(&id) {

@@ -112,21 +112,39 @@ impl Workbench {
             Button::new(id).icon(Icon::new(icon)).xsmall().ghost().selected(on && can).tooltip(tip)
         };
         h_flex()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .h(theme::u(42.))
             .flex_none()
             .px_3()
             .gap_1()
             .border_b_1()
             .border_color(theme::glass_edge())
-            .child(toggle("agf-left", IconName::PanelLeft, self.agent.full.left, w >= MEDIUM, tr("Chats")).on_click(cx.listener(|this, _, _, cx| {
-                this.agent.full.left = !this.agent.full.left;
-                cx.notify();
-            })))
-            .child(self.render_agent_picker(cx))
-            .child(self.render_agent_switch(cx))
+            .child(
+                toggle(
+                    "agf-left",
+                    IconName::PanelLeft,
+                    self.agent.full.left,
+                    w >= MEDIUM,
+                    tr("Chats"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.agent.full.left = !this.agent.full.left;
+                    cx.notify();
+                })),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .overflow_hidden()
+                    .child(self.render_agent_picker(cx)),
+            )
+            .child(div().flex_none().child(self.render_agent_switch(cx)))
             .child(div().flex_1())
-            .child(self.render_agent_tools(cx))
-            .child(self.render_agent_more(cx))
+            .child(div().flex_none().child(self.render_agent_tools(cx)))
+            .child(div().flex_none().child(self.render_agent_more(cx)))
             .child({
                 let focused = !self.agent.full.left && !self.agent.full.right;
                 Button::new("agf-focus")

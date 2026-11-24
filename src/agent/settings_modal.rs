@@ -475,18 +475,19 @@ fn segmented(o: &ConfigOpt, cx: &mut Context<Workbench>) -> AnyElement {
     if o.category == "thought_level" {
         choices.sort_by_key(|c| if c.0 == "default" { 0 } else { 1 });
     }
-    h_flex()
-        .gap_1()
-        .flex_wrap()
-        .children(choices.into_iter().map(|(v, n, _)| {
+    let group_id = SharedString::from(format!("ag-set-seg-{}", o.id));
+    crate::ui::SegmentedControl::new(
+        group_id,
+        choices.into_iter().map(|(v, n, _)| {
             let id = o.id.clone();
             let on = o.current == v;
-            Button::new(SharedString::from(format!("ag-set-{id}-{v}")))
-                .label(n)
-                .small()
-                .when(on, |b| b.primary())
-                .when(!on, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)))
-        }))
-        .into_any_element()
+            crate::ui::SegItem::new(
+                SharedString::from(format!("ag-set-{id}-{v}")),
+                n,
+                on,
+                cx.listener(move |this, _, _, cx| this.agent_set_option(&id, v.clone(), true, cx)),
+            )
+        }),
+    )
+    .into_any_element()
 }

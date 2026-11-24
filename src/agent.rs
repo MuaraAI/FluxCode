@@ -1789,20 +1789,35 @@ impl Workbench {
             .border_color(c(theme::BORDER))
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
                     .h(theme::u(35.))
                     .pl_3()
                     .pr_2()
                     .gap_1()
                     .flex_none()
-                    .child(self.render_agent_picker(cx))
-                    .child(self.render_agent_switch(cx))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_shrink(1.)
+                            .overflow_hidden()
+                            .child(self.render_agent_picker(cx)),
+                    )
+                    .child(div().flex_none().child(self.render_agent_switch(cx)))
                     .child(div().flex_1())
-                    .child(self.render_agent_tools(cx))
-                    .child(self.render_agent_more(cx))
+                    .child(div().flex_none().child(self.render_agent_tools(cx)))
+                    .child(div().flex_none().child(self.render_agent_more(cx)))
                     .children(self.render_right_tabs(cx))
-                    .child(tool_button("ag-dock-close", IconName::Close, crate::i18n::tr("Hide (Ctrl+L)"), cx, |this, _, cx| {
-                        this.set_right_open(false, cx);
-                    })),
+                    .child(div().flex_none().child(tool_button(
+                        "ag-dock-close",
+                        IconName::Close,
+                        crate::i18n::tr("Hide (Ctrl+L)"),
+                        cx,
+                        |this, _, cx| {
+                            this.set_right_open(false, cx);
+                        },
+                    ))),
             )
             .children(self.render_worktree_strip(cx))
             .child(h_flex().flex_1().min_h_0().justify_center().child(div().h_full().w_full().when(self.agent_full && self.settings.agent_right, |d| d.max_w(theme::u(860.))).child(self.render_agent(window, cx))))
@@ -2518,8 +2533,18 @@ impl Workbench {
         let text = self.agent.input.read(cx).value().to_string();
         let off = |k: &str| self.agent.off_ctx.contains(k);
         let mut chips = Vec::new();
-        if let Some(d) = self.active.map(|ix| &self.docs[ix]).filter(|d| d.image.is_none()) {
-            chips.push(("file".into(), d.name.to_string(), Icon::new(IconName::FileText), !off("file")));
+        if let Some(d) = self
+            .active
+            .map(|ix| &self.docs[ix])
+            .filter(|d| d.image.is_none())
+        {
+            let (ic, tint) = crate::files::icon_for(&d.name);
+            chips.push((
+                "file".into(),
+                d.name.to_string(),
+                Icon::new(ic).text_color(theme::tint(tint)),
+                !off("file"),
+            ));
             if let Some(ed) = d.editor.as_ref() {
                 let ed = ed.read(cx);
                 let range = ed.selected_range();
@@ -2864,26 +2889,47 @@ impl Workbench {
 
     fn agent_chip_go(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         match key {
-            "file" | "sel" => {
-                if let Some(ed) = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.as_ref()) {
-                    let h = ed.focus_handle(cx);
-                    h.focus(window, cx);
+            "file" => {
+                if let Some(path) = self
+                    .active
+                    .and_then(|ix| self.docs.get(ix))
+                    .map(|d| d.path.clone())
+                {
+                    self.jump_to_file_smooth(path, None, window, cx);
+                    return;
+                }
+            }
+            "sel" => {
+                if let Some(d) = self.active.and_then(|ix| self.docs.get(ix)) {
+                    let path = d.path.clone();
+                    let line = d.editor.as_ref().and_then(|ed| {
+                        let ed = ed.read(cx);
+                        let r = ed.selected_range();
+                        (!r.is_empty())
+                            .then(|| agent_ctx::line_span(&ed.value(), r.start, r.end).0 as u32)
+                    });
+                    self.jump_to_file_smooth(path, line, window, cx);
+                    return;
                 }
             }
             "err" => {
                 if let Some(p) = self.problems.first() {
                     let (path, line) = (p.path.clone(), p.line);
-                    self.open_location(path, line, 0, window, cx);
+                    self.jump_to_file_smooth(path, Some(line), window, cx);
+                    return;
                 } else {
+                    self.agent_full = false;
                     self.panel_open = true;
                     self.panel_tab = crate::workbench::PanelTab::Terminal;
                 }
             }
             "out" => {
+                self.agent_full = false;
                 self.panel_open = true;
                 self.panel_tab = crate::workbench::PanelTab::Terminal;
             }
             "ws" => {
+                self.agent_full = false;
                 self.view = crate::workbench::SideView::Explorer;
                 self.sidebar_open = true;
             }
@@ -2891,8 +2937,10 @@ impl Workbench {
                 if let Some(root) = self.root.clone() {
                     let p = root.join(&k[1..]);
                     if p.is_file() {
-                        self.open_file(p, window, cx);
+                        self.jump_to_file_smooth(p, None, window, cx);
+                        return;
                     } else if p.is_dir() {
+                        self.agent_full = false;
                         self.selected = Some(p);
                         self.view = crate::workbench::SideView::Explorer;
                         self.sidebar_open = true;
@@ -2921,17 +2969,24 @@ impl Workbench {
                     Some(p) => img(p).flex_none().size(theme::u(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element(),
                     None => icon.size(theme::u(12.)).flex_none().into_any_element(),
                 };
+                let go_tip: SharedString =
+                    crate::trf!("Go to {name}"; name => label.clone()).into();
                 chip_shell(SharedString::from(format!("ag-chip-{i}")), true)
                     .child(
                         h_flex()
                             .id(SharedString::from(format!("ag-chip-open-{i}")))
                             .flex_1()
                             .min_w_0()
+                            .h_full()
+                            .items_center()
                             .pl_1p5()
                             .gap_1()
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Go to it")).build(w, cx))
+                            .tooltip(move |w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(go_tip.clone())
+                                    .build(w, cx)
+                            })
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 cx.stop_propagation();
                                 this.agent_chip_go(&key, w, cx);
@@ -3222,8 +3277,7 @@ impl Workbench {
                             .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
                             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
                             .on_click(cx.listener(move |this, _, w, cx| {
-                                this.agent.user_nav = Some(std::time::Instant::now());
-                                this.open_file(path.clone(), w, cx)
+                                this.jump_to_file_smooth(path.clone(), None, w, cx)
                             }))
                             .child(Icon::new(IconName::FileText).size(theme::u(13.))),
                     )
@@ -3726,6 +3780,8 @@ impl Workbench {
                         .id(SharedString::from(format!("ag-att-open-{i}")))
                         .flex_1()
                         .min_w_0()
+                        .h_full()
+                        .items_center()
                         .pl_1p5()
                         .gap_1()
                         .cursor_pointer()
@@ -3747,7 +3803,7 @@ impl Workbench {
                         .on_click(cx.listener(move |this, _, w, cx| {
                             cx.stop_propagation();
                             if path.is_file() {
-                                this.open_file(path.clone(), w, cx);
+                                this.jump_to_file_smooth(path.clone(), None, w, cx);
                             }
                         }))
                         .child(lead)
@@ -3790,8 +3846,8 @@ impl Workbench {
         .absolute()
         .inset_0();
         let w = a.compose_w.get();
-        let narrow = w > 0. && w < NARROW;
-        let tight = w > 0. && w < TIGHT;
+        let narrow = w > 0. && w < f32::from(theme::u(NARROW));
+        let tight = w > 0. && w < f32::from(theme::u(TIGHT));
         let boxed = v_flex()
             .id("ag-composer")
             .relative()
@@ -3872,6 +3928,7 @@ impl Workbench {
                     .gap_0p5()
                     .items_center()
                     .min_w_0()
+                    .overflow_hidden()
                     .child(
                         icon_btn("ag-attach", Icon::new(gpui_kit::assets::IconName::Paperclip), tr("Attach files: images, PDF, Word, Excel, PowerPoint, code… (or drop / paste them)"))
                             .on_click(cx.listener(|this, _, w, cx| {
@@ -4186,16 +4243,28 @@ impl Workbench {
             Some(e) => crate::trf!("Model: {m} · effort {e}"; m => current, e => e).into(),
             None => crate::trf!("Model: {m}"; m => current).into(),
         };
-        chip_button("ag-model-btn", self.agent.menu.open == Some(Menu::Model), tip)
-            .flex_shrink(1.)
-            .min_w(theme::u(48.))
-            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(short))
-            .when_some(effort.filter(|_| !narrow), |h, e| h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(e)))
-            .child(chevron())
-            .on_click(cx.listener(|this, _, w, cx| {
-                cx.stop_propagation();
-                this.agent_menu_toggle(Menu::Model, w, cx)
-            }))
+        chip_button(
+            "ag-model-btn",
+            self.agent.menu.open == Some(Menu::Model),
+            tip,
+        )
+        .flex_shrink(1.)
+        .min_w_0()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(c(theme::FG))
+                .child(short),
+        )
+        .when_some(effort.filter(|_| !narrow), |h, e| {
+            h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(e))
+        })
+        .child(chevron())
+        .on_click(cx.listener(|this, _, w, cx| {
+            cx.stop_propagation();
+            this.agent_menu_toggle(Menu::Model, w, cx)
+        }))
     }
 
     fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4229,8 +4298,9 @@ impl Workbench {
         }
         if let Some((who, why, Some(anim))) = &self.agent.install_err {
             let retry = who.clone();
-            return col
-                .child(anim.clone())
+            let err_card = v_flex()
+                .items_center()
+                .gap_2()
                 .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} wasn't installed"; name => crate::acp::display_name(who))))
                 .child(div().max_w(theme::u(320.)).text_xs().text_center().text_color(c(theme::DANGER)).child(why.clone()))
                 .child(
@@ -4242,8 +4312,19 @@ impl Workbench {
                             this.agent.install_err = None;
                             cx.notify();
                         }))),
-                )
-                .into_any_element();
+                );
+            let err_el: AnyElement = if cx.reduce_motion() {
+                err_card.into_any_element()
+            } else {
+                err_card
+                    .with_animation(
+                        SharedString::from(format!("ag-err-in-{who}")),
+                        Animation::new(std::time::Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        |el, t| el.opacity(t).mt(px((1. - t) * 8.)),
+                    )
+                    .into_any_element()
+            };
+            return col.child(anim.clone()).child(err_el).into_any_element();
         }
         col = col.child(crate::ui::meander(36., c(theme::FG_DIM), c(theme::ACCENT_TEXT)).mb_2());
         let err_box = self.agent.install_err.as_ref().map(|(i, e, _)| {
@@ -4375,8 +4456,28 @@ impl Workbench {
                 )
                 .on_click(cx.listener(move |this, _, w, cx| this.agent_install(kid.clone(), w, cx)))
         }));
+        let missing_env = crate::acp::missing_runtime_for(&id);
         col.child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
             .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(note))
+            .when_some(missing_env, |v, rt| {
+                v.child(
+                    div()
+                        .max_w(theme::u(300.))
+                        .px_2p5()
+                        .py_1()
+                        .rounded(px(6.))
+                        .bg(c(theme::BG_ELEVATED))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .text_xs()
+                        .text_center()
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child(crate::trf!(
+                            "{env} isn't installed on this PC yet. FluxCode will install it safely when you download.";
+                            env => rt.name()
+                        )),
+                )
+            })
             .child(list)
             .when(!any, |v| v.child(div().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("The menu above lists every agent in the ACP registry."))))
             .children(err_box)
@@ -4495,6 +4596,12 @@ fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
         .border_color(theme::glass_pop_edge())
         .bg(if on { c(theme::FG_DIM).opacity(0.12) } else { gpui_kit::transparent_black() })
         .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
+        .hover(|s| {
+            s.bg(c(theme::BG_HOVER))
+                .border_color(c(theme::BORDER_STRONG))
+                .text_color(c(theme::FG_STRONG))
+        })
+        .active(|s| s.opacity(0.84))
 }
 
 fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
