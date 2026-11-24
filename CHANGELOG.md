@@ -5,6 +5,21 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## The terminal holds more than one shell (24 November 2026)
+
+- The panel header shows a tab per terminal, a **+** opens another one next to the
+  running shell, and **Ctrl+Shift+`** does the same from the keyboard. Each tab keeps
+  its own working directory, output, scroll position and half-typed command, and its own
+  **×** closes it; the last tab stays.
+
+## Wheel scroll speed is a setting (24 November 2026)
+
+- A mouse whose wheel scrolls too little or too much per notch can now be corrected in
+  **Settings > Editor > Wheel scroll speed**, from 50% to 300% in 10% steps
+  ([#112](https://github.com/MuaraAI/FluxCode/issues/112)).
+- It scales how far one notch asks the view to move, so the smooth glide and the rest of
+  the editor stay as they are. Trackpads send precise pixel deltas and keep their own speed.
+
 ## Precision Explorer hover tracking, mouse Back/Forward navigation, and smoother WizTree (24 November 2026)
 
 - **Explorer hover alignment fix**: Replaces the hardcoded row height assumption with measured `uniform_list` row metrics and container-level cursor tracking (re-synced after wheel scroll), fixing the vertical offset bug where the gliding hover highlight drifted below the pointer on scrolled file lists.

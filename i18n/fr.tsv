@@ -1279,3 +1279,8 @@ You are on battery: it drains a little faster while the scene moves.	Vous êtes 
 Unmatched {b}	{b} sans correspondance
 {b} does not close {open}	{b} ne ferme pas {open}
 Unclosed {b}	{b} non fermé
+Wheel scroll speed	Vitesse de la molette
+How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).	Distance parcourue par un cran de molette (100 % : le pas envoyé par la souris).
+New Terminal	Nouveau terminal
+New terminal	Nouveau terminal
+Terminal {0}	Terminal {0}

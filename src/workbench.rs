@@ -34,7 +34,7 @@ actions!(
     [
         Save, SaveAll, CloseTab, OpenFolder, AddFolderToWorkspace, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
         ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput, ShowProblems,
-        RunFile, StopRun, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
+        RunFile, StopRun, NewTerminal, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
@@ -87,6 +87,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", AgentMenuClose, Some("AgentMenu > Input")),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
+        KeyBinding::new("ctrl-shift-`", NewTerminal, None),
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
         KeyBinding::new("ctrl-shift-m", ShowProblems, None),
         KeyBinding::new("f8", GoToProblem, None),
@@ -359,19 +360,13 @@ pub struct Workbench {
     pub(crate) procs: Procs,
     pub(crate) panel_open: bool,
     pub(crate) panel_tab: PanelTab,
-    pub(crate) term_lines: Vec<Line>,
-    pub(crate) term_cwd: PathBuf,
+    pub(crate) terms: Vec<crate::panel::TermTab>,
+    pub(crate) term_ix: usize,
     pub(crate) wsl: Option<crate::remote::WslTarget>,
     pub(crate) term_input: Entity<InputState>,
-    pub(crate) term_typed: bool,
-    pub(crate) term_proc: Option<u32>,
-    pub(crate) term_history: Vec<String>,
-    pub(crate) term_scroll: UniformListScrollHandle,
     pub(crate) out_lines: Vec<Line>,
     pub(crate) out_proc: Option<u32>,
     pub(crate) out_scroll: UniformListScrollHandle,
-    pub(crate) term_run: Option<crate::panel::RunInfo>,
-    pub(crate) term_wrap: crate::panel::WrapCache,
     pub(crate) out_wrap: crate::panel::WrapCache,
     pub(crate) panel_size: Rc<std::cell::Cell<(f32, f32)>>,
     pub(crate) panel_left: Rc<std::cell::Cell<f32>>,
@@ -402,7 +397,6 @@ pub struct Workbench {
     pub(crate) anim_seq: u64,
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
-    pub(crate) term_hist_ix: Option<usize>,
     pub(crate) problems: Vec<crate::panel::Problem>,
     pub(crate) python_version: Option<SharedString>,
     pub(crate) agent: crate::agent::AgentState,
@@ -483,8 +477,9 @@ impl Workbench {
                     InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
                     InputEvent::Change => {
                         let typed = !this.term_input.read(cx).value().is_empty();
-                        if typed != this.term_typed {
-                            this.term_typed = typed;
+                        let ix = this.term_ix;
+                        if typed != this.terms[ix].typed {
+                            this.terms[ix].typed = typed;
                             cx.notify();
                         }
                     }
@@ -607,19 +602,13 @@ impl Workbench {
             procs,
             panel_open: false,
             panel_tab: PanelTab::Terminal,
-            term_lines: Vec::new(),
-            term_cwd,
+            terms: vec![crate::panel::TermTab::new(term_cwd)],
+            term_ix: 0,
             wsl: None,
             term_input,
-            term_typed: false,
-            term_proc: None,
-            term_history: Vec::new(),
-            term_scroll: UniformListScrollHandle::new(),
             out_lines: Vec::new(),
             out_proc: None,
             out_scroll: UniformListScrollHandle::new(),
-            term_run: None,
-            term_wrap: Default::default(),
             out_wrap: Default::default(),
             panel_size: Rc::default(),
             panel_left: Rc::default(),
@@ -650,7 +639,6 @@ impl Workbench {
             anim_seq: 0,
             wash: std::cell::Cell::new((false, 0)),
             out_run: None,
-            term_hist_ix: None,
             problems: Vec::new(),
             python_version: None,
             agent,
@@ -748,8 +736,8 @@ impl Workbench {
         if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
             crate::remote::drop_client();
         }
-        if !self.term_proc.is_some_and(|id| self.procs.is_running(id)) {
-            self.term_cwd = root.clone();
+        if !self.terms[self.term_ix].proc.is_some_and(|id| self.procs.is_running(id)) {
+            self.terms[self.term_ix].cwd = root.clone();
         }
         self.explorer.gen = self.explorer.gen.wrapping_add(1);
         self.tree_nodes.clear();
@@ -2185,9 +2173,9 @@ impl Workbench {
     pub(crate) fn on_proc_event(&mut self, ev: ProcEvent, cx: &mut Context<Self>) {
         match ev {
             ProcEvent::Output { id, text, err } => {
-                if Some(id) == self.term_proc {
-                    push_text(&mut self.term_lines, &text, err);
-                    self.term_scroll.scroll_to_bottom();
+                if let Some(ix) = self.terms.iter().position(|t| t.proc == Some(id)) {
+                    push_text(&mut self.terms[ix].lines, &text, err);
+                    self.terms[ix].scroll.scroll_to_bottom();
                 } else if Some(id) == self.out_proc {
                     push_text(&mut self.out_lines, &text, err);
                     self.ext_fold();
@@ -2200,12 +2188,12 @@ impl Workbench {
             }
             ProcEvent::Exit { id, code } => {
                 self.procs.forget(id);
-                if Some(id) == self.term_proc {
-                    self.term_proc = None;
-                    self.finish_run(true, code, cx);
+                if let Some(ix) = self.terms.iter().position(|t| t.proc == Some(id)) {
+                    self.terms[ix].proc = None;
+                    self.finish_run(Some(ix), code, cx);
                 } else if Some(id) == self.out_proc {
                     self.out_proc = None;
-                    self.finish_run(false, code, cx);
+                    self.finish_run(None, code, cx);
                 } else if self.agent.owns(id) {
                     self.agent_on_exit(cx);
                 } else if let Some(key) = self.agent.run_of(id) {
@@ -2347,7 +2335,9 @@ impl Workbench {
                     .separator()
                     .menu(tr("Live Preview"), Box::new(TogglePreview))
             }))
-            .child(Self::render_menu("m-term", tr("Terminal"), |m| m.menu(tr("Toggle Terminal"), Box::new(ToggleTerminal))))
+            .child(Self::render_menu("m-term", tr("Terminal"), |m| {
+                m.menu(tr("Toggle Terminal"), Box::new(ToggleTerminal)).menu(tr("New Terminal"), Box::new(NewTerminal))
+            }))
             .child(Self::render_menu("m-help", tr("Help"), |m| {
                 m.menu(tr("Command Palette..."), Box::new(CommandPalette))
                     .menu(tr("Next Color Theme"), Box::new(NextTheme))
@@ -3560,7 +3550,7 @@ impl Workbench {
         };
         let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
         let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
-        let running = self.out_proc.is_some() || self.term_proc.is_some();
+        let running = self.out_proc.is_some() || self.terms.iter().any(|t| t.proc.is_some());
         let code_errs: usize = self.docs.iter().map(|d| d.error_count).sum();
         let code_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
         let total_errs = self.problems.len() + code_errs;
@@ -4289,6 +4279,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_toggle_panel))
             .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_new_terminal))
             .on_action(cx.listener(Self::on_show_output))
             .on_action(cx.listener(Self::on_show_problems))
             .on_action(cx.listener(Self::on_run_file))
@@ -4735,7 +4726,9 @@ impl Workbench {
     }
 
     fn smooth_scroll(&mut self, target: ScrollTarget, delta: ScrollDelta, window: &mut Window, cx: &mut Context<Self>) {
+        let speed = self.settings.scroll_speed();
         let d = delta.pixel_delta(target.line_height(cx));
+        let d = point(d.x * speed, d.y * speed);
         let key = target.key();
         let running = self.smooth.as_ref().is_some_and(|s| s.target.key() == key);
         let base = match self.smooth.as_ref().filter(|s| s.target.key() == key) {

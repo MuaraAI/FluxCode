@@ -143,6 +143,48 @@ pub(crate) struct RunInfo {
     pub command: String,
 }
 
+pub(crate) struct TermTab {
+    pub lines: Vec<Line>,
+    pub cwd: PathBuf,
+    pub history: Vec<String>,
+    pub hist_ix: Option<usize>,
+    pub proc: Option<u32>,
+    pub run: Option<RunInfo>,
+    pub typed: bool,
+    /// Typed but not sent yet, so switching tabs does not eat a half-written command.
+    pub draft: String,
+    pub wrap: WrapCache,
+    pub scroll: UniformListScrollHandle,
+}
+
+impl TermTab {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
+        Self {
+            lines: Vec::new(),
+            cwd,
+            history: Vec::new(),
+            hist_ix: None,
+            proc: None,
+            run: None,
+            typed: false,
+            draft: String::new(),
+            wrap: Default::default(),
+            scroll: UniformListScrollHandle::new(),
+        }
+    }
+}
+
+/// Which tab is in front after closing `closed` while `active` was; `len` is the list length after the removal.
+fn close_index(active: usize, closed: usize, len: usize) -> usize {
+    if active > closed {
+        active - 1
+    } else if active == closed {
+        active.min(len.saturating_sub(1))
+    } else {
+        active
+    }
+}
+
 pub(crate) struct Row {
     pub line: usize,
     pub text: SharedString,
@@ -215,6 +257,58 @@ impl Workbench {
         }
     }
 
+    pub(crate) fn on_new_terminal(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_terminal(window, cx);
+    }
+
+    pub(crate) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = self.term_ix;
+        self.terms[ix].draft = self.term_input.read(cx).value().to_string();
+        let cwd = self.terms[ix].cwd.clone();
+        self.terms.push(TermTab::new(cwd));
+        self.show_terminal(self.terms.len() - 1, window, cx);
+    }
+
+    pub(crate) fn show_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.terms.len() {
+            return;
+        }
+        if ix != self.term_ix {
+            self.terms[self.term_ix].draft = self.term_input.read(cx).value().to_string();
+            self.term_ix = ix;
+            self.panel_sel = self.panel_sel.filter(|s| !s.terminal);
+            let draft = self.terms[ix].draft.clone();
+            self.set_term_input(&draft, window, cx);
+        }
+        self.terms[ix].hist_ix = None;
+        self.panel_tab = PanelTab::Terminal;
+        self.set_panel_open(true, cx);
+        self.terms[ix].scroll.scroll_to_bottom();
+        let h = self.term_input.focus_handle(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    /// The last tab stays: there is always one terminal to type in.
+    pub(crate) fn close_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terms.len() < 2 || ix >= self.terms.len() {
+            return;
+        }
+        if let Some(id) = self.terms[ix].proc.take() {
+            self.procs.kill(id);
+        }
+        let was = self.term_ix;
+        self.terms.remove(ix);
+        self.term_ix = close_index(was, ix, self.terms.len());
+        if ix == was {
+            self.panel_sel = self.panel_sel.filter(|s| !s.terminal);
+            self.terms[self.term_ix].hist_ix = None;
+            let draft = self.terms[self.term_ix].draft.clone();
+            self.set_term_input(&draft, window, cx);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn on_show_output(&mut self, _: &ShowOutput, _: &mut Window, cx: &mut Context<Self>) {
         self.panel_tab = PanelTab::Output;
         self.set_panel_open(true, cx);
@@ -230,12 +324,12 @@ impl Workbench {
     }
 
     fn term_running(&self) -> bool {
-        self.term_proc.is_some_and(|id| self.procs.is_running(id))
+        self.terms[self.term_ix].proc.is_some_and(|id| self.procs.is_running(id))
     }
 
     fn set_term_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let chars = text.chars().count() as u32;
-        self.term_typed = !text.is_empty();
+        self.terms[self.term_ix].typed = !text.is_empty();
         self.term_input.update(cx, |s, cx| {
             s.set_value(text.to_string(), window, cx);
             s.set_cursor_position(Position::new(0, chars), window, cx);
@@ -245,12 +339,12 @@ impl Workbench {
     pub(crate) fn terminal_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let line = self.term_input.read(cx).value().to_string();
         self.term_input.update(cx, |s, cx| s.set_value("", window, cx));
-        self.term_typed = false;
-        self.term_hist_ix = None;
-        if let Some(id) = self.term_proc.filter(|id| self.procs.is_running(*id)) {
-            push_text(&mut self.term_lines, &format!("{line}\n"), false);
+        self.terms[self.term_ix].typed = false;
+        self.terms[self.term_ix].hist_ix = None;
+        if let Some(id) = self.terms[self.term_ix].proc.filter(|id| self.procs.is_running(*id)) {
+            push_text(&mut self.terms[self.term_ix].lines, &format!("{line}\n"), false);
             self.procs.write_stdin(id, &format!("{line}\n"));
-            self.term_scroll.scroll_to_bottom();
+            self.terms[self.term_ix].scroll.scroll_to_bottom();
             cx.notify();
             return;
         }
@@ -258,27 +352,27 @@ impl Workbench {
         if typed.is_empty() {
             return;
         }
-        if self.term_history.last() != Some(&typed) {
-            self.term_history.push(typed.clone());
+        if self.terms[self.term_ix].history.last() != Some(&typed) {
+            self.terms[self.term_ix].history.push(typed.clone());
         }
         self.run_in_terminal(&typed, cx);
     }
 
     pub(crate) fn run_in_terminal(&mut self, typed: &str, cx: &mut Context<Self>) {
-        if !self.term_lines.is_empty() {
-            push_line(&mut self.term_lines, "", LineKind::Blank);
+        if !self.terms[self.term_ix].lines.is_empty() {
+            push_line(&mut self.terms[self.term_ix].lines, "", LineKind::Blank);
         }
         let mut prompt = Line::new(typed, LineKind::Cmd);
         prompt.meta = self.term_meta().into();
-        close_line(&mut self.term_lines);
-        self.term_lines.push(prompt);
+        close_line(&mut self.terms[self.term_ix].lines);
+        self.terms[self.term_ix].lines.push(prompt);
 
-        let cmdline = match term::autocorrect(typed, &self.term_cwd) {
+        let cmdline = match term::autocorrect(typed, &self.terms[self.term_ix].cwd) {
             Some(fix) => {
                 let what = fix.fixes.iter().map(|(a, b)| format!("{a} → {b}")).collect::<Vec<_>>().join(",  ");
                 let mut l = Line::new(&what, LineKind::Fixed);
                 l.meta = fix.line.clone().into();
-                self.term_lines.push(l);
+                self.terms[self.term_ix].lines.push(l);
                 fix.line
             }
             None => typed.to_string(),
@@ -286,15 +380,16 @@ impl Workbench {
 
         let lower = cmdline.to_ascii_lowercase();
         if lower == "cls" || lower == "clear" {
-            self.term_lines.clear();
+            self.terms[self.term_ix].lines.clear();
         } else if lower == "pwd" {
             let meta = self.term_full();
-            push_line(&mut self.term_lines, &meta, LineKind::Normal);
+            push_line(&mut self.terms[self.term_ix].lines, &meta, LineKind::Normal);
         } else if lower == "cd" || lower.starts_with("cd ") || lower.starts_with("cd\\") || lower.starts_with("cd..") || lower.starts_with("chdir") {
             let arg = cmdline.trim_start_matches(|c: char| c.is_ascii_alphabetic()).trim();
             let arg = arg.strip_prefix("/d").or_else(|| arg.strip_prefix("/D")).unwrap_or(arg).trim().trim_matches('"');
             if arg.is_empty() {
-                push_line(&mut self.term_lines, &self.term_cwd.display().to_string(), LineKind::Normal);
+                let dir = self.terms[self.term_ix].cwd.display().to_string();
+                push_line(&mut self.terms[self.term_ix].lines, &dir, LineKind::Normal);
             } else {
                 self.change_dir(arg);
             }
@@ -313,48 +408,48 @@ impl Workbench {
             self.apply_problems(cx);
             let mut cmd = match &self.wsl {
                 Some(t) => {
-                    let cwd = t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone());
+                    let cwd = t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone());
                     crate::remote::shell_command(t, &cwd, &cmdline)
                 }
                 None => proc::shell_command(&cmdline),
             };
             crate::github::apply_env(&mut cmd);
-            let local_cwd = self.wsl.is_none().then(|| self.term_cwd.clone());
+            let local_cwd = self.wsl.is_none().then(|| self.terms[self.term_ix].cwd.clone());
             match self.procs.spawn(cmd, local_cwd.as_deref()) {
                 Ok(id) => {
-                    self.term_proc = Some(id);
-                    self.term_run = Some(RunInfo {
+                    self.terms[self.term_ix].proc = Some(id);
+                    self.terms[self.term_ix].run = Some(RunInfo {
                         started: Instant::now(),
-                        block: self.term_lines.len(),
+                        block: self.terms[self.term_ix].lines.len(),
                         python: py,
-                        cwd: self.term_cwd.clone(),
+                        cwd: self.terms[self.term_ix].cwd.clone(),
                         command: cmdline.clone(),
                     });
                 }
-                Err(e) => push_line(&mut self.term_lines, &e, LineKind::Err),
+                Err(e) => push_line(&mut self.terms[self.term_ix].lines, &e, LineKind::Err),
             }
         }
-        self.term_scroll.scroll_to_bottom();
+        self.terms[self.term_ix].scroll.scroll_to_bottom();
         cx.notify();
     }
 
     fn term_meta(&self) -> String {
         match &self.wsl {
-            Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
-            None => term::short_cwd(&self.term_cwd, self.root.as_deref()),
+            Some(t) => t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone()),
+            None => term::short_cwd(&self.terms[self.term_ix].cwd, self.root.as_deref()),
         }
     }
 
     fn term_full(&self) -> String {
         match &self.wsl {
-            Some(t) => t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone()),
-            None => self.term_cwd.display().to_string(),
+            Some(t) => t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone()),
+            None => self.terms[self.term_ix].cwd.display().to_string(),
         }
     }
 
     fn change_dir(&mut self, arg: &str) {
         if let Some(t) = self.wsl.clone() {
-            let current = t.linux_path(&self.term_cwd).unwrap_or_else(|| t.linux_root.clone());
+            let current = t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone());
             let linux = if arg == "~" {
                 crate::remote::home_dir(&t.distro).unwrap_or_else(|| "/".to_string())
             } else if arg.starts_with('/') {
@@ -373,47 +468,47 @@ impl Workbench {
                 .map(|o| o.status.success())
                 .unwrap_or(false);
             if exists {
-                self.term_cwd = t.unc_path(&linux);
+                self.terms[self.term_ix].cwd = t.unc_path(&linux);
             } else {
-                push_line(&mut self.term_lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err);
+                push_line(&mut self.terms[self.term_ix].lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err);
             }
             return;
         }
         let target = if arg == "~" {
             std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default()
         } else {
-            self.term_cwd.join(arg)
+            self.terms[self.term_ix].cwd.join(arg)
         };
         match target.canonicalize() {
             Ok(p) if p.is_dir() => {
-                self.term_cwd = PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
+                self.terms[self.term_ix].cwd = PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
             }
-            _ => push_line(&mut self.term_lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err),
+            _ => push_line(&mut self.terms[self.term_ix].lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err),
         }
     }
 
 
     pub(crate) fn on_term_history_prev(&mut self, _: &TermHistoryPrev, window: &mut Window, cx: &mut Context<Self>) {
-        if self.term_history.is_empty() || self.term_running() {
+        if self.terms[self.term_ix].history.is_empty() || self.term_running() {
             return;
         }
-        let ix = match self.term_hist_ix {
-            None => self.term_history.len() - 1,
+        let ix = match self.terms[self.term_ix].hist_ix {
+            None => self.terms[self.term_ix].history.len() - 1,
             Some(i) => i.saturating_sub(1),
         };
-        self.term_hist_ix = Some(ix);
-        let text = self.term_history[ix].clone();
+        self.terms[self.term_ix].hist_ix = Some(ix);
+        let text = self.terms[self.term_ix].history[ix].clone();
         self.set_term_input(&text, window, cx);
     }
 
     pub(crate) fn on_term_history_next(&mut self, _: &TermHistoryNext, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(i) = self.term_hist_ix else { return };
-        if i + 1 < self.term_history.len() {
-            self.term_hist_ix = Some(i + 1);
-            let text = self.term_history[i + 1].clone();
+        let Some(i) = self.terms[self.term_ix].hist_ix else { return };
+        if i + 1 < self.terms[self.term_ix].history.len() {
+            self.terms[self.term_ix].hist_ix = Some(i + 1);
+            let text = self.terms[self.term_ix].history[i + 1].clone();
             self.set_term_input(&text, window, cx);
         } else {
-            self.term_hist_ix = None;
+            self.terms[self.term_ix].hist_ix = None;
             self.set_term_input("", window, cx);
         }
     }
@@ -423,7 +518,7 @@ impl Workbench {
             return;
         }
         let value = self.term_input.read(cx).value().to_string();
-        let (new, choices) = term::complete(&value, &self.term_cwd);
+        let (new, choices) = term::complete(&value, &self.terms[self.term_ix].cwd);
         if let Some(new) = new {
             self.set_term_input(&new, window, cx);
         }
@@ -431,8 +526,8 @@ impl Workbench {
             let shown: Vec<String> = choices.iter().take(40).cloned().collect();
             let more = choices.len().saturating_sub(40);
             let text = if more > 0 { crate::trf!("{0}   … {more} more"; 0 => shown.join("   "), more => more) } else { shown.join("   ") };
-            push_line(&mut self.term_lines, &text, LineKind::Dim);
-            self.term_scroll.scroll_to_bottom();
+            push_line(&mut self.terms[self.term_ix].lines, &text, LineKind::Dim);
+            self.terms[self.term_ix].scroll.scroll_to_bottom();
             cx.notify();
         }
     }
@@ -447,8 +542,8 @@ impl Workbench {
             window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
             return;
         }
-        if let Some(id) = self.term_proc.filter(|id| self.procs.is_running(*id)) {
-            push_text(&mut self.term_lines, "^C\n", false);
+        if let Some(id) = self.terms[self.term_ix].proc.filter(|id| self.procs.is_running(*id)) {
+            push_text(&mut self.terms[self.term_ix].lines, "^C\n", false);
             self.procs.kill(id);
         } else {
             self.set_term_input("", window, cx);
@@ -458,7 +553,7 @@ impl Workbench {
 
     pub(crate) fn on_term_escape(&mut self, _: &TermEscape, window: &mut Window, cx: &mut Context<Self>) {
         self.panel_sel = None;
-        self.term_hist_ix = None;
+        self.terms[self.term_ix].hist_ix = None;
         self.set_term_input("", window, cx);
     }
 
@@ -548,14 +643,23 @@ impl Workbench {
     }
 
     pub(crate) fn on_stop_run(&mut self, _: &StopRun, _: &mut Window, cx: &mut Context<Self>) {
-        for id in [self.out_proc, self.term_proc].into_iter().flatten() {
+        for id in [self.out_proc, self.terms[self.term_ix].proc].into_iter().flatten() {
             self.procs.kill(id);
         }
         cx.notify();
     }
 
-    pub(crate) fn finish_run(&mut self, terminal: bool, code: Option<i32>, cx: &mut Context<Self>) {
-        let (lines, run) = if terminal { (&mut self.term_lines, self.term_run.take()) } else { (&mut self.out_lines, self.out_run.take()) };
+    /// `term` names the terminal tab that finished; `None` is the Output tab.
+    pub(crate) fn finish_run(&mut self, term: Option<usize>, code: Option<i32>, cx: &mut Context<Self>) {
+        let terminal = term.is_some();
+        let run = match term {
+            Some(ix) => self.terms[ix].run.take(),
+            None => self.out_run.take(),
+        };
+        let lines = match term {
+            Some(ix) => &mut self.terms[ix].lines,
+            None => &mut self.out_lines,
+        };
         close_line(lines);
         let mut error: Option<PyError> = None;
         let mut reason: Option<String> = None;
@@ -619,11 +723,12 @@ impl Workbench {
                 self.apply_problems(cx);
             }
         }
-        if terminal {
-            self.term_scroll.scroll_to_bottom();
-        } else {
-            self.out_scroll.scroll_to_bottom();
-            self.ext_after_run(code, cx);
+        match term {
+            Some(ix) => self.terms[ix].scroll.scroll_to_bottom(),
+            None => {
+                self.out_scroll.scroll_to_bottom();
+                self.ext_after_run(code, cx);
+            }
         }
     }
 
@@ -754,7 +859,7 @@ impl Workbench {
         cx.stop_propagation();
         let p = PathBuf::from(path);
         let base = if terminal {
-            self.term_run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.term_cwd.clone())
+            self.terms[self.term_ix].run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone())
         } else {
             self.out_run.as_ref().map(|r| r.cwd.clone()).or_else(|| self.ext.last_cwd.clone()).or_else(|| self.root.clone()).unwrap_or_default()
         };
@@ -771,8 +876,8 @@ impl Workbench {
             cx.notify();
             return;
         }
-        if self.term_history.last().map(String::as_str) != Some(command) {
-            self.term_history.push(command.to_string());
+        if self.terms[self.term_ix].history.last().map(String::as_str) != Some(command) {
+            self.terms[self.term_ix].history.push(command.to_string());
         }
         self.run_in_terminal(command, cx);
     }
@@ -1076,13 +1181,13 @@ impl Workbench {
     }
 
     fn panel_rows(&self, terminal: bool) -> std::rc::Rc<Vec<Row>> {
-        (if terminal { &self.term_wrap } else { &self.out_wrap }).borrow().1.clone()
+        (if terminal { &self.terms[self.term_ix].wrap } else { &self.out_wrap }).borrow().1.clone()
     }
 
     pub(crate) fn panel_sel_text(&self) -> Option<String> {
         let sel = self.panel_sel.filter(|s| !s.is_empty())?;
         let rows = self.panel_rows(sel.terminal);
-        let lines = if sel.terminal { &self.term_lines } else { &self.out_lines };
+        let lines = if sel.terminal { &self.terms[self.term_ix].lines } else { &self.out_lines };
         let ((r0, _), (r1, _)) = sel.span();
         let last = r1.min(rows.len().checked_sub(1)?);
         let mut out: Vec<String> = Vec::new();
@@ -1129,7 +1234,7 @@ impl Workbench {
     }
 
     fn wrapped_rows(&self, terminal: bool, cols: Cols) -> std::rc::Rc<Vec<Row>> {
-        let (lines, cache) = if terminal { (&self.term_lines, &self.term_wrap) } else { (&self.out_lines, &self.out_wrap) };
+        let (lines, cache) = if terminal { (&self.terms[self.term_ix].lines, &self.terms[self.term_ix].wrap) } else { (&self.out_lines, &self.out_wrap) };
         let key = (
             lines.len(),
             lines.first().map_or(0, |l| l.text.as_ptr() as usize),
@@ -1360,8 +1465,8 @@ impl Workbench {
         };
         let is_problems = self.panel_tab == PanelTab::Problems;
         let terminal = self.panel_tab == PanelTab::Terminal;
-        let running = if terminal { self.term_proc.is_some() } else if is_problems { false } else { self.out_proc.is_some() };
-        let shown_lines = if terminal { &self.term_lines } else { &self.out_lines };
+        let running = if terminal { self.terms[self.term_ix].proc.is_some() } else if is_problems { false } else { self.out_proc.is_some() };
+        let shown_lines = if terminal { &self.terms[self.term_ix].lines } else { &self.out_lines };
         let python = (!is_problems)
             .then(|| self.python_version.clone().filter(|_| Self::ran_python(shown_lines)))
             .flatten();
@@ -1377,6 +1482,58 @@ impl Workbench {
             .child(tab("p-term", tr("Terminal"), None, PanelTab::Terminal, self, cx))
             .child(tab("p-out", tr("Output"), None, PanelTab::Output, self, cx))
             .child(tab("p-prob", tr("Problems"), prob_badge, PanelTab::Problems, self, cx))
+            .when(terminal, |h| {
+                h.child(div().flex_none().w(px(1.)).h(theme::u(16.)).bg(c(theme::BORDER)))
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .gap_1()
+                            .items_center()
+                            .children((0..self.terms.len()).map(|ix| {
+                                let on = ix == self.term_ix;
+                                let name: SharedString = crate::trf!("Terminal {0}"; 0 => ix + 1).into();
+                                h_flex()
+                                    .id(("p-tt", ix))
+                                    .flex_none()
+                                    .h(theme::u(22.))
+                                    .px_1p5()
+                                    .gap_1()
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                                    .when(on, |d| d.bg(c(theme::BG_ELEVATED)))
+                                    .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                                    .child(name)
+                                    .when(self.terms.len() > 1, |d| {
+                                        d.child(
+                                            div()
+                                                .id(("p-ttx", ix))
+                                                .flex_none()
+                                                .size(theme::u(14.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(px(3.))
+                                                .text_color(c(theme::FG_DIM))
+                                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                                .child("×")
+                                                .on_click(cx.listener(move |this, _, w, cx| {
+                                                    cx.stop_propagation();
+                                                    this.close_terminal(ix, w, cx);
+                                                })),
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |this, _, w, cx| this.show_terminal(ix, w, cx)))
+                                    .into_any_element()
+                            })),
+                    )
+                    .child(tool_button("p-newterm", IconName::Plus, tr("New terminal"), cx, |this, w, cx| {
+                        this.on_new_terminal(&NewTerminal, w, cx)
+                    }))
+            })
             .child(div().flex_1())
             .when_some(python, |h, v| {
                 h.child(
@@ -1401,7 +1558,7 @@ impl Workbench {
                 h.child(tool_button("p-clear", IconName::Delete, "Clear", cx, |this, _, cx| {
                     this.panel_sel = None;
                     match this.panel_tab {
-                        PanelTab::Terminal => this.term_lines.clear(),
+                        PanelTab::Terminal => this.terms[this.term_ix].lines.clear(),
                         PanelTab::Output => this.out_lines.clear(),
                         PanelTab::Problems => {
                             this.problems.clear();
@@ -1451,7 +1608,7 @@ impl Workbench {
         }
 
         let count = shown_lines.len();
-        let scroll = if terminal { self.term_scroll.clone() } else { self.out_scroll.clone() };
+        let scroll = if terminal { self.terms[self.term_ix].scroll.clone() } else { self.out_scroll.clone() };
         let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
         let mono_font = theme::resolve_mono_font(&self.settings.font_family, cx);
         let m = {
@@ -1490,7 +1647,7 @@ impl Workbench {
                 range
                     .map(|i| {
                         let r = &rows[i];
-                        let lines = if terminal { &this.term_lines } else { &this.out_lines };
+                        let lines = if terminal { &this.terms[this.term_ix].lines } else { &this.out_lines };
                         match lines.get(r.line) {
                             Some(l) => this.render_line(i, r.line, l, &r.text, r.first, terminal, m, cx),
                             None => div().id(("pl", i)).h(m.row).into_any_element(),
@@ -1593,16 +1750,16 @@ impl Workbench {
 
     fn render_prompt(&self, mono_font: SharedString, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
         let busy = self.term_running();
-        let short = term::short_cwd(&self.term_cwd, self.root.as_deref());
+        let short = term::short_cwd(&self.terms[self.term_ix].cwd, self.root.as_deref());
         let place: SharedString = prompt_place(&short, self.panel_size.get().0).into();
-        let full: SharedString = self.term_cwd.display().to_string().into();
+        let full: SharedString = self.terms[self.term_ix].cwd.display().to_string().into();
         let placeholder = match (busy, narrow) {
             (false, false) => tr("Type a command, then press Enter"),
             (false, true) => tr("Type a command"),
             (true, false) => tr("Running. Type here if the program asks for something"),
             (true, true) => tr("Running"),
         };
-        let hint = !self.term_typed && (busy || self.term_lines.is_empty());
+        let hint = !self.terms[self.term_ix].typed && (busy || self.terms[self.term_ix].lines.is_empty());
         h_flex()
             .h(m.row)
             .w_full()
@@ -1778,8 +1935,17 @@ pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::
 
 #[cfg(test)]
 mod tests {
-    use super::{can_run, run_command_for, PanelSel};
+    use super::{can_run, close_index, run_command_for, PanelSel};
     use std::path::Path;
+
+    #[test]
+    fn close_index_lands_on_a_tab_that_still_exists() {
+        assert_eq!(close_index(0, 1, 2), 0, "closing a tab to the right keeps the active one");
+        assert_eq!(close_index(2, 0, 2), 1, "closing a tab to the left shifts the active one down");
+        assert_eq!(close_index(1, 0, 2), 0);
+        assert_eq!(close_index(0, 0, 1), 0, "the last tab stays");
+        assert_eq!(close_index(1, 1, 1), 0, "closing the active last tab steps back");
+    }
 
     #[test]
     fn a_selection_covers_its_rows_in_either_direction() {
