@@ -5,6 +5,12 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Precision Explorer hover tracking, mouse Back/Forward navigation, and smoother WizTree (24 November 2026)
+
+- **Explorer hover alignment fix**: Replaces the hardcoded row height assumption with measured `uniform_list` row metrics and container-level cursor tracking (re-synced after wheel scroll), fixing the vertical offset bug where the gliding hover highlight drifted below the pointer on scrolled file lists.
+- **Global Back/Forward navigation (Mouse side buttons + top bar + shortcuts)**: Adds `MouseButton::Navigate(Back | Forward)`, `Alt+Left` / `Alt+Right`, Command Palette `Go: Back` / `Go: Forward`, and sleek **Back (`←`) / Forward (`→`)** buttons in the top Title Bar and WizTree breadcrumb bar (`←`, `→`, `↑` Parent). Step cleanly through WizTree folder history, jump from a file back into WizTree, and move back and forth across opened files with smooth directional transitions.
+- **WizTree polish & Settings popover**: Fixes file row column alignment with sticky headers (`Name`, `Share`, `Size`, `Files`) and consistent action widths, syncs hover highlight between tree rows and treemap blocks, surfaces hovered item name/size/share cleanly before the path, adds smooth directional view transitions, and introduces a clean animated **WizTree Settings (`⚙`)** popover (Show Treemap, Include hidden files, Skip build caches, Sort by Size/Files/Name, Minimum size filter, and Treemap height).
+
 ## Built-in Rust WizTree, safe agent runtime auto-install, and fluid responsive UI (24 November 2026)
 
 - **Built-in WizTree (Disk Usage Analyzer) in Rust**: Open from the Activity Bar drive icon, **View > Disk Usage (WizTree)**, or `Ctrl+Shift+Y`. Indexes your workspace or any chosen folder in parallel using a compact flat arena with zero extra dependencies and zero idle resource usage. Includes an interactive squarified treemap with hover inspection and folder zoom, expandable size-sorted tree, extension breakdown, top 100 largest files, live filter, and one-click open or reveal in Explorer.

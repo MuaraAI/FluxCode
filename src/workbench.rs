@@ -45,7 +45,7 @@ actions!(
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
         InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
-        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions, ShowWizTree
+        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions, ShowWizTree, NavBack, NavForward
     ]
 );
 
@@ -64,6 +64,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-x", ShowExtensions, None),
         KeyBinding::new("ctrl-shift-y", ShowWizTree, None),
+        KeyBinding::new("alt-left", NavBack, None),
+        KeyBinding::new("alt-right", NavForward, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
@@ -149,6 +151,22 @@ pub(crate) enum PanelTab {
     Terminal,
     Output,
     Problems,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NavTarget {
+    File(PathBuf),
+    WizTree,
+}
+
+fn push_nav_stack(stack: &mut Vec<NavTarget>, target: NavTarget) {
+    if stack.last() == Some(&target) {
+        return;
+    }
+    stack.push(target);
+    if stack.len() > 60 {
+        stack.remove(0);
+    }
 }
 
 pub(crate) use crate::term::LineKind;
@@ -319,6 +337,10 @@ pub struct Workbench {
     pub(crate) settings_sec_anim: std::cell::Cell<(crate::settings::SettingsSection, u64)>,
     pub(crate) whats_new: Option<crate::whatsnew::Page>,
     pub(crate) closed_tabs: Vec<PathBuf>,
+    pub(crate) nav_back: Vec<NavTarget>,
+    pub(crate) nav_forward: Vec<NavTarget>,
+    pub(crate) nav_replaying: bool,
+    pub(crate) nav_suppress_path: Option<PathBuf>,
     pub(crate) collab: crate::collab::Collab,
     pub(crate) wiztree: crate::wiztree::WizTreeState,
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
@@ -560,6 +582,10 @@ impl Workbench {
             settings_sec_anim: std::cell::Cell::new((crate::settings::SettingsSection::Appearance, 0)),
             whats_new: None,
             closed_tabs: Vec::new(),
+            nav_back: Vec::new(),
+            nav_forward: Vec::new(),
+            nav_replaying: false,
+            nav_suppress_path: None,
             last_switch: None,
             switch_fast: false,
             session_save_pending: false,
@@ -881,6 +907,10 @@ impl Workbench {
     }
 
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.wiztree.page && !self.nav_replaying {
+            self.push_nav_history(NavTarget::WizTree);
+            self.nav_suppress_path = Some(path.clone());
+        }
         self.ext.page = None;
         self.settings_open = false;
         self.whats_new = None;
@@ -1481,7 +1511,18 @@ impl Workbench {
         if ix >= self.docs.len() {
             return;
         }
+        let suppressed = self
+            .nav_suppress_path
+            .as_ref()
+            .is_some_and(|p| *p == self.docs[ix].path);
+        if suppressed {
+            self.nav_suppress_path = None;
+        }
         if let Some(prev) = self.active.filter(|&p| p < self.docs.len() && p != ix) {
+            if !self.nav_replaying && !suppressed {
+                let prev_path = self.docs[prev].path.clone();
+                self.push_nav_history(NavTarget::File(prev_path));
+            }
             if let Some(ed) = &self.docs[prev].editor {
                 let state = ed.read(cx);
                 self.docs[prev].saved_cursor = state.cursor_position();
@@ -1565,6 +1606,104 @@ impl Workbench {
             .detach();
         }
         cx.notify();
+    }
+
+    pub(crate) fn active_doc_path(&self) -> Option<PathBuf> {
+        self.active
+            .and_then(|ix| self.docs.get(ix))
+            .map(|d| d.path.clone())
+    }
+
+    pub(crate) fn push_nav_history(&mut self, target: NavTarget) {
+        if self.nav_replaying {
+            return;
+        }
+        push_nav_stack(&mut self.nav_back, target);
+        self.nav_forward.clear();
+    }
+
+    fn nav_target_valid(&self, target: &NavTarget) -> bool {
+        match target {
+            NavTarget::WizTree => true,
+            NavTarget::File(p) => self.docs.iter().any(|d| d.path == *p) || p.is_file(),
+        }
+    }
+
+    fn nav_current_target(&self) -> Option<NavTarget> {
+        if self.wiztree.page && !self.settings_open {
+            Some(NavTarget::WizTree)
+        } else {
+            self.active_doc_path().map(NavTarget::File)
+        }
+    }
+
+    fn nav_apply_target(
+        &mut self,
+        target: NavTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.nav_replaying = true;
+        match target {
+            NavTarget::WizTree => {
+                self.settings_open = false;
+                self.collab.page = false;
+                self.ext.page = None;
+                self.whats_new = None;
+                self.agent_full = false;
+                self.wiztree.page = true;
+                self.wiztree.open_seq = self.wiztree.open_seq.wrapping_add(1);
+                if self.wiztree.tree.is_none() && self.wiztree.scanning.is_none() {
+                    if let Some(dir) = self.wiztree.target.clone().or_else(|| self.root.clone()) {
+                        self.wiztree_scan(dir, window, cx);
+                    }
+                }
+                cx.notify();
+            }
+            NavTarget::File(path) => {
+                self.nav_suppress_path = Some(path.clone());
+                self.jump_to_file_smooth(path, None, window, cx);
+            }
+        }
+        self.nav_replaying = false;
+    }
+
+    pub(crate) fn workbench_nav_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wiztree.page && !self.settings_open && self.wiztree_back(cx) {
+            return;
+        }
+        let current = self.nav_current_target();
+        let mut next = None;
+        while let Some(cand) = self.nav_back.pop() {
+            if current.as_ref() != Some(&cand) && self.nav_target_valid(&cand) {
+                next = Some(cand);
+                break;
+            }
+        }
+        let Some(target) = next else { return };
+        if let Some(cur) = current {
+            push_nav_stack(&mut self.nav_forward, cur);
+        }
+        self.nav_apply_target(target, window, cx);
+    }
+
+    pub(crate) fn workbench_nav_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wiztree.page && !self.settings_open && self.wiztree_forward(cx) {
+            return;
+        }
+        let current = self.nav_current_target();
+        let mut next = None;
+        while let Some(cand) = self.nav_forward.pop() {
+            if current.as_ref() != Some(&cand) && self.nav_target_valid(&cand) {
+                next = Some(cand);
+                break;
+            }
+        }
+        let Some(target) = next else { return };
+        if let Some(cur) = current {
+            push_nav_stack(&mut self.nav_back, cur);
+        }
+        self.nav_apply_target(target, window, cx);
     }
 
     pub(crate) fn close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -2217,6 +2356,7 @@ impl Workbench {
                     .menu(tr("Check for Updates"), Box::new(CheckUpdates))
                     .menu(tr("About FluxCode"), Box::new(About))
             }))
+            .child(self.render_title_nav(cx))
             .child({
                 let cell = self.title_menu_end.clone();
                 let id = cx.entity_id();
@@ -2337,6 +2477,73 @@ impl Workbench {
                     .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
                     .child(center_layer)
                     .into_any_element()
+    }
+
+    fn render_title_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let can_back = !self.nav_back.is_empty()
+            || (self.wiztree.page && !self.wiztree.history.back.is_empty());
+        let can_fwd = !self.nav_forward.is_empty()
+            || (self.wiztree.page && !self.wiztree.history.forward.is_empty());
+        let nav_btn = |id: &'static str, icon: IconName, enabled: bool, tip: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .size(theme::u(22.))
+                .rounded(px(4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .occlude()
+                .when(enabled, |d| {
+                    d.cursor_pointer()
+                        .text_color(c(theme::FG_MUTED))
+                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                })
+                .when(!enabled, |d| d.text_color(c(theme::FG_DIM)).opacity(0.38))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx)
+                })
+                .child(Icon::new(icon).size(theme::u(13.)))
+        };
+        h_flex()
+            .flex_none()
+            .items_center()
+            .gap_0p5()
+            .child(div().w(px(1.)).h(theme::u(14.)).mx_1().bg(c(theme::BORDER)))
+            .child(
+                nav_btn(
+                    "tb-nav-back",
+                    IconName::ArrowLeft,
+                    can_back,
+                    "Back (Mouse Back / Alt+Left)",
+                )
+                .when(can_back, |d| {
+                    d.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, w, cx| {
+                            cx.stop_propagation();
+                            this.workbench_nav_back(w, cx);
+                        }),
+                    )
+                }),
+            )
+            .child(
+                nav_btn(
+                    "tb-nav-fwd",
+                    IconName::ArrowRight,
+                    can_fwd,
+                    "Forward (Mouse Forward / Alt+Right)",
+                )
+                .when(can_fwd, |d| {
+                    d.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, w, cx| {
+                            cx.stop_propagation();
+                            this.workbench_nav_forward(w, cx);
+                        }),
+                    )
+                }),
+            )
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4123,6 +4330,26 @@ impl Render for Workbench {
             .on_action(cx.listener(|this, _: &ShowWizTree, w, cx| {
                 this.toggle_wiztree(w, cx);
             }))
+            .on_action(cx.listener(|this, _: &NavBack, w, cx| {
+                this.workbench_nav_back(w, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NavForward, w, cx| {
+                this.workbench_nav_forward(w, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.workbench_nav_back(w, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.workbench_nav_forward(w, cx);
+                }),
+            )
             .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)))
             .child(self.render_title_bar(window, cx))
             .child(main)
@@ -4671,7 +4898,11 @@ impl Workbench {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{fit_columns, select_eviction_indices, tab_scroll_target, tab_width, visible_tab_window};
+    use super::{
+        fit_columns, push_nav_stack, select_eviction_indices, tab_scroll_target, tab_width,
+        visible_tab_window, NavTarget,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn columns_always_fit() {
@@ -4725,6 +4956,19 @@ mod fit_tests {
         assert!((mid_right - (840. + 32. - 500.)).abs() < 0.5, "{mid_right}");
         // Already well inside viewport stays put.
         assert_eq!(tab_scroll_target(&widths, 2, 100., vw, 1.0), 100.);
+    }
+
+    #[test]
+    fn nav_history_stack_deduplicates_and_caps_entries() {
+        let mut stack = Vec::new();
+        push_nav_stack(&mut stack, NavTarget::WizTree);
+        push_nav_stack(&mut stack, NavTarget::WizTree);
+        assert_eq!(stack, vec![NavTarget::WizTree]);
+        for i in 0..70 {
+            push_nav_stack(&mut stack, NavTarget::File(PathBuf::from(format!("f{i}.rs"))));
+        }
+        assert_eq!(stack.len(), 60);
+        assert_eq!(stack.last(), Some(&NavTarget::File(PathBuf::from("f69.rs"))));
     }
 }
 

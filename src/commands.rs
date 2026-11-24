@@ -30,6 +30,8 @@ pub fn commands() -> Vec<Command> {
         cmd!("View: Reopen Closed Editor", "Ctrl+Shift+T", ReopenClosedTab),
         cmd!("View: Next Editor", "Ctrl+Tab", NextTab),
         cmd!("View: Previous Editor", "Ctrl+Shift+Tab", PrevTab),
+        cmd!("Go: Back", "Alt+Left", NavBack),
+        cmd!("Go: Forward", "Alt+Right", NavForward),
         cmd!("Go to Line", "Ctrl+G", GoToLine),
         cmd!("Toggle Line Comment", "Ctrl+/", ToggleLineComment),
         cmd!("Move Line Up", "Alt+Up", MoveLineUp),

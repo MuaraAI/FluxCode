@@ -1,12 +1,14 @@
 use crate::files;
 use crate::i18n::tr;
-use crate::theme::{self, c};
+use crate::theme::{self, c, GlassExt};
 use crate::workbench::Workbench;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
-    v_flex, Disableable, Icon, Sizable,
+    popover::Popover,
+    switch::Switch,
+    v_flex, Disableable, Icon, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -21,6 +23,119 @@ pub(crate) enum WizTab {
     Extensions,
     Largest,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WizSort {
+    Size,
+    Files,
+    Name,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WizMinSize {
+    All,
+    Kb100,
+    Mb1,
+    Mb10,
+}
+
+impl WizMinSize {
+    fn bytes(self) -> u64 {
+        match self {
+            Self::All => 0,
+            Self::Kb100 => 100 * 1024,
+            Self::Mb1 => 1024 * 1024,
+            Self::Mb10 => 10 * 1024 * 1024,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Kb100 => "100 KB+",
+            Self::Mb1 => "1 MB+",
+            Self::Mb10 => "10 MB+",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WizMapHeight {
+    Compact,
+    Normal,
+    Tall,
+}
+
+impl WizMapHeight {
+    fn px(self) -> f32 {
+        match self {
+            Self::Compact => 165.,
+            Self::Normal => 230.,
+            Self::Tall => 310.,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Normal => "Normal",
+            Self::Tall => "Tall",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WizConfig {
+    pub show_map: bool,
+    pub show_hidden: bool,
+    pub skip_caches: bool,
+    pub sort: WizSort,
+    pub min_size: WizMinSize,
+    pub map_height: WizMapHeight,
+}
+
+impl Default for WizConfig {
+    fn default() -> Self {
+        Self {
+            show_map: true,
+            show_hidden: true,
+            skip_caches: false,
+            sort: WizSort::Size,
+            min_size: WizMinSize::All,
+            map_height: WizMapHeight::Normal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScanOpts {
+    pub show_hidden: bool,
+    pub skip_caches: bool,
+}
+
+impl Default for ScanOpts {
+    fn default() -> Self {
+        Self {
+            show_hidden: true,
+            skip_caches: false,
+        }
+    }
+}
+
+const CACHE_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    ".gradle",
+    ".venv",
+    "venv",
+    "vendor",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileCategory {
@@ -214,19 +329,64 @@ pub(crate) struct TreemapTile {
     pub depth: u8,
 }
 
+#[derive(Default)]
+pub(crate) struct FolderHistory {
+    pub back: Vec<u32>,
+    pub forward: Vec<u32>,
+}
+
+impl FolderHistory {
+    pub fn push(&mut self, from: u32, to: u32) {
+        if from == to {
+            return;
+        }
+        self.back.push(from);
+        if self.back.len() > 80 {
+            self.back.remove(0);
+        }
+        self.forward.clear();
+    }
+
+    pub fn go_back(&mut self, cur: u32) -> Option<u32> {
+        let prev = self.back.pop()?;
+        self.forward.push(cur);
+        Some(prev)
+    }
+
+    pub fn go_forward(&mut self, cur: u32) -> Option<u32> {
+        let next = self.forward.pop()?;
+        self.back.push(cur);
+        Some(next)
+    }
+
+    pub fn clear(&mut self) {
+        self.back.clear();
+        self.forward.clear();
+    }
+}
+
+type TilesCache = std::rc::Rc<std::cell::RefCell<(f32, f32, u32, Vec<TreemapTile>)>>;
+type ToggleFn = Box<dyn Fn(&bool, &mut Window, &mut App)>;
+
 pub(crate) struct WizTreeState {
     pub page: bool,
     pub target: Option<PathBuf>,
     pub tree: Option<Arc<DiskTree>>,
     pub focus: u32,
+    pub history: FolderHistory,
     pub tab: WizTab,
+    pub cfg: WizConfig,
+    pub settings_open: bool,
+    pub settings_anim: u64,
+    pub open_seq: u64,
+    pub nav_seq: u64,
+    pub nav_dir: i8,
     pub expanded: HashSet<u32>,
     pub scanning: Option<Arc<ScanProgress>>,
     pub error: Option<String>,
     pub filter: Entity<InputState>,
-    pub show_map: bool,
     pub hovered_tile: Option<u32>,
-    pub tiles_cache: std::rc::Rc<std::cell::RefCell<(f32, f32, u32, Vec<TreemapTile>)>>,
+    pub tiles_cache: TilesCache,
     pub map_origin: std::rc::Rc<std::cell::Cell<Point<Pixels>>>,
     pub scan_gen: u64,
     _sub: Subscription,
@@ -247,12 +407,18 @@ impl WizTreeState {
             target: None,
             tree: None,
             focus: 0,
+            history: FolderHistory::default(),
             tab: WizTab::Tree,
+            cfg: WizConfig::default(),
+            settings_open: false,
+            settings_anim: 0,
+            open_seq: 0,
+            nav_seq: 0,
+            nav_dir: 0,
             expanded: HashSet::new(),
             scanning: None,
             error: None,
             filter,
-            show_map: true,
             hovered_tile: None,
             tiles_cache: std::rc::Rc::new(std::cell::RefCell::new((0., 0., u32::MAX, Vec::new()))),
             map_origin: std::rc::Rc::new(std::cell::Cell::new(point(px(0.), px(0.)))),
@@ -269,6 +435,13 @@ impl WizTreeState {
 
     fn invalidate_map(&self) {
         self.tiles_cache.borrow_mut().2 = u32::MAX;
+    }
+
+    pub fn scan_opts(&self) -> ScanOpts {
+        ScanOpts {
+            show_hidden: self.cfg.show_hidden,
+            skip_caches: self.cfg.skip_caches,
+        }
     }
 }
 
@@ -326,7 +499,24 @@ fn entry_file_size(md: &std::fs::Metadata) -> u64 {
     }
 }
 
-pub(crate) fn scan_tree(root: &Path, progress: &Arc<ScanProgress>) -> Result<DiskTree, String> {
+fn should_skip_entry(name: &str, is_dir: bool, opts: ScanOpts) -> bool {
+    if !opts.show_hidden && name.starts_with('.') {
+        return true;
+    }
+    if opts.skip_caches && is_dir {
+        let lower = name.to_ascii_lowercase();
+        if CACHE_DIRS.iter().any(|&c| c == lower) {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn scan_tree(
+    root: &Path,
+    opts: ScanOpts,
+    progress: &Arc<ScanProgress>,
+) -> Result<DiskTree, String> {
     if !root.is_dir() {
         return Err(format!("{} is not a readable folder.", root.display()));
     }
@@ -428,7 +618,11 @@ pub(crate) fn scan_tree(root: &Path, progress: &Arc<ScanProgress>) -> Result<Dis
                                 continue;
                             }
                             let name = entry.file_name().to_string_lossy().into_owned();
-                            if ft.is_dir() {
+                            let is_dir = ft.is_dir();
+                            if should_skip_entry(&name, is_dir, opts) {
+                                continue;
+                            }
+                            if is_dir {
                                 local_folders += 1;
                                 local.push(LocalEntry {
                                     name,
@@ -671,7 +865,7 @@ fn squarify_rect(
         return out;
     }
     let area = (w as f64) * (h as f64);
-    let mut scaled: Vec<(u32, f32)> = items
+    let scaled: Vec<(u32, f32)> = items
         .iter()
         .filter(|&&(_, s)| s > 0)
         .map(|&(id, s)| (id, ((s as f64 / total) * area) as f32))
@@ -733,7 +927,6 @@ fn squarify_rect(
             rh = (rh - strip_h).max(0.);
         }
     }
-    scaled.clear();
     out
 }
 
@@ -797,7 +990,7 @@ pub(crate) fn layout_treemap(tree: &DiskTree, focus: u32, w: f32, h: f32) -> Vec
                 })
                 .collect();
             let pad = 3.;
-            let head = 16.;
+            let head = 17.;
             let iw = (tw - pad * 2.).max(0.);
             let ih = (th - head - pad).max(0.);
             for (sid, sx, sy, sw, sh) in squarify_rect(&sub_items, x + pad, y + head, iw, ih) {
@@ -824,11 +1017,42 @@ struct TreeRow {
     parent_size: u64,
 }
 
+fn sorted_children(tree: &DiskTree, children: &[u32], sort: WizSort, min_bytes: u64) -> Vec<u32> {
+    let mut list: Vec<u32> = children
+        .iter()
+        .copied()
+        .filter(|&cid| {
+            tree.nodes
+                .get(cid as usize)
+                .is_some_and(|n| n.size >= min_bytes)
+        })
+        .collect();
+    match sort {
+        WizSort::Size => {}
+        WizSort::Files => list.sort_by_key(|&cid| {
+            let n = &tree.nodes[cid as usize];
+            (std::cmp::Reverse(n.files), std::cmp::Reverse(n.size))
+        }),
+        WizSort::Name => list.sort_by(|&a, &b| {
+            let na = &tree.nodes[a as usize];
+            let nb = &tree.nodes[b as usize];
+            nb.is_dir.cmp(&na.is_dir).then_with(|| {
+                na.name
+                    .to_ascii_lowercase()
+                    .cmp(&nb.name.to_ascii_lowercase())
+            })
+        }),
+    }
+    list
+}
+
 fn flatten_visible_rows(
     tree: &DiskTree,
     focus: u32,
     expanded: &HashSet<u32>,
     query: &str,
+    sort: WizSort,
+    min_bytes: u64,
     limit: usize,
 ) -> Vec<TreeRow> {
     let mut out = Vec::new();
@@ -836,11 +1060,11 @@ fn flatten_visible_rows(
         return out;
     };
     if query.is_empty() {
-        let mut stack: Vec<(u32, usize, u64)> = root
-            .children
-            .iter()
+        let initial = sorted_children(tree, &root.children, sort, min_bytes);
+        let mut stack: Vec<(u32, usize, u64)> = initial
+            .into_iter()
             .rev()
-            .map(|&cid| (cid, 0usize, root.size.max(1)))
+            .map(|cid| (cid, 0usize, root.size.max(1)))
             .collect();
         while let Some((id, depth, parent_size)) = stack.pop() {
             out.push(TreeRow {
@@ -854,7 +1078,8 @@ fn flatten_visible_rows(
             let node = &tree.nodes[id as usize];
             if node.is_dir && expanded.contains(&id) {
                 let psize = node.size.max(1);
-                for &cid in node.children.iter().rev() {
+                let kids = sorted_children(tree, &node.children, sort, min_bytes);
+                for cid in kids.into_iter().rev() {
                     stack.push((cid, depth + 1, psize));
                 }
             }
@@ -862,22 +1087,21 @@ fn flatten_visible_rows(
         return out;
     }
 
-    // Filtered flat match inside the focused subtree, sorted largest-first.
     let q = query.to_ascii_lowercase();
     let mut matches: Vec<u32> = Vec::new();
     let mut stack = vec![focus];
     while let Some(id) = stack.pop() {
         let node = &tree.nodes[id as usize];
-        if id != focus && node.name.to_ascii_lowercase().contains(&q) {
+        if id != focus && node.size >= min_bytes && node.name.to_ascii_lowercase().contains(&q) {
             matches.push(id);
         }
         for &cid in &node.children {
             stack.push(cid);
         }
     }
-    matches.sort_by_key(|&id| std::cmp::Reverse(tree.nodes[id as usize].size));
+    let ordered = sorted_children(tree, &matches, sort, min_bytes);
     let denom = root.size.max(1);
-    for id in matches.into_iter().take(limit) {
+    for id in ordered.into_iter().take(limit) {
         out.push(TreeRow {
             id,
             depth: 0,
@@ -889,6 +1113,12 @@ fn flatten_visible_rows(
 
 impl Workbench {
     pub(crate) fn open_wiztree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.wiztree.page {
+            if let Some(p) = self.active_doc_path() {
+                self.push_nav_history(crate::workbench::NavTarget::File(p));
+            }
+            self.wiztree.open_seq = self.wiztree.open_seq.wrapping_add(1);
+        }
         self.settings_open = false;
         self.collab.page = false;
         self.ext.page = None;
@@ -912,11 +1142,79 @@ impl Workbench {
     pub(crate) fn toggle_wiztree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.wiztree.page && !self.settings_open {
             self.wiztree.page = false;
+            self.wiztree.settings_open = false;
             self.wiztree.cancel_scan();
             cx.notify();
         } else {
             self.open_wiztree(window, cx);
         }
+    }
+
+    pub(crate) fn wiztree_goto(&mut self, target: u32, dir: i8, cx: &mut Context<Self>) {
+        let max_id = self
+            .wiztree
+            .tree
+            .as_ref()
+            .map_or(0, |t| t.nodes.len().saturating_sub(1) as u32);
+        let next = target.min(max_id);
+        if next == self.wiztree.focus {
+            return;
+        }
+        self.wiztree.history.push(self.wiztree.focus, next);
+        self.nav_forward.clear();
+        self.wiztree.focus = next;
+        self.wiztree.hovered_tile = None;
+        self.wiztree.nav_dir = dir;
+        self.wiztree.nav_seq = self.wiztree.nav_seq.wrapping_add(1);
+        self.wiztree.invalidate_map();
+        cx.notify();
+    }
+
+    pub(crate) fn wiztree_back(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(prev) = self.wiztree.history.go_back(self.wiztree.focus) else {
+            return false;
+        };
+        self.wiztree.focus = prev;
+        self.wiztree.hovered_tile = None;
+        self.wiztree.nav_dir = -1;
+        self.wiztree.nav_seq = self.wiztree.nav_seq.wrapping_add(1);
+        self.wiztree.invalidate_map();
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn wiztree_forward(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(next) = self.wiztree.history.go_forward(self.wiztree.focus) else {
+            return false;
+        };
+        self.wiztree.focus = next;
+        self.wiztree.hovered_tile = None;
+        self.wiztree.nav_dir = 1;
+        self.wiztree.nav_seq = self.wiztree.nav_seq.wrapping_add(1);
+        self.wiztree.invalidate_map();
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn wiztree_up(&mut self, cx: &mut Context<Self>) -> bool {
+        let parent = self
+            .wiztree
+            .tree
+            .as_ref()
+            .and_then(|t| t.nodes.get(self.wiztree.focus as usize))
+            .and_then(|n| n.parent);
+        let Some(pid) = parent else { return false };
+        self.wiztree_goto(pid, -1, cx);
+        true
+    }
+
+    fn wiztree_open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // Record WizTree in workbench history so Mouse Back returns straight to this WizTree view.
+        self.push_nav_history(crate::workbench::NavTarget::WizTree);
+        self.nav_suppress_path = Some(path.clone());
+        self.nav_replaying = true;
+        self.jump_to_file_smooth(path, None, window, cx);
+        self.nav_replaying = false;
     }
 
     pub(crate) fn wiztree_pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -945,6 +1243,7 @@ impl Workbench {
         self.wiztree.cancel_scan();
         self.wiztree.scan_gen = self.wiztree.scan_gen.wrapping_add(1);
         let gen = self.wiztree.scan_gen;
+        let opts = self.wiztree.scan_opts();
         let progress = Arc::new(ScanProgress::new());
         self.wiztree.target = Some(dir.clone());
         self.wiztree.scanning = Some(progress.clone());
@@ -977,7 +1276,7 @@ impl Workbench {
         .detach();
 
         let progress_bg = progress.clone();
-        let task = cx.background_spawn(async move { scan_tree(&dir, &progress_bg) });
+        let task = cx.background_spawn(async move { scan_tree(&dir, opts, &progress_bg) });
         cx.spawn_in(window, async move |this, cx| {
             let res = task.await;
             _ = this.update(cx, |this, cx| {
@@ -988,8 +1287,11 @@ impl Workbench {
                 match res {
                     Ok(tree) => {
                         this.wiztree.focus = 0;
+                        this.wiztree.history.clear();
                         this.wiztree.expanded.clear();
                         this.wiztree.hovered_tile = None;
+                        this.wiztree.nav_dir = 0;
+                        this.wiztree.nav_seq = this.wiztree.nav_seq.wrapping_add(1);
                         this.wiztree.tree = Some(Arc::new(tree));
                         this.wiztree.error = None;
                         this.wiztree.invalidate_map();
@@ -1005,6 +1307,261 @@ impl Workbench {
         .detach();
     }
 
+    fn render_wiztree_settings_popover(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.wiztree.settings_open;
+        let anim_seq = self.wiztree.settings_anim;
+        let cfg = self.wiztree.cfg;
+        let weak_open = cx.entity().downgrade();
+        let weak_body = cx.entity().downgrade();
+
+        let trigger = Button::new("wt-settings-btn")
+            .icon(Icon::new(gpui_kit::assets::IconName::Settings).size(theme::u(14.)))
+            .ghost()
+            .xsmall()
+            .selected(open)
+            .tooltip(tr("WizTree Settings"));
+
+        Popover::new("wt-settings-pop")
+            .anchor(Anchor::TopRight)
+            .open(open)
+            .appearance(false)
+            .on_open_change(move |next_open, _, cx| {
+                _ = weak_open.update(cx, |this, cx| {
+                    this.wiztree.settings_open = *next_open;
+                    if *next_open {
+                        this.wiztree.settings_anim = this.wiztree.settings_anim.wrapping_add(1);
+                    }
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let w_map = weak_body.clone();
+                let w_hid = weak_body.clone();
+                let w_cac = weak_body.clone();
+                let w_sort = weak_body.clone();
+                let w_min = weak_body.clone();
+                let w_ht = weak_body.clone();
+
+                let toggle_row = |id: &'static str,
+                                  title: &'static str,
+                                  desc: &'static str,
+                                  on: bool,
+                                  on_flip: ToggleFn| {
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .py_1()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(c(theme::FG_STRONG))
+                                            .child(tr(title)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(tr(desc)),
+                                    ),
+                            )
+                            .child(
+                                Switch::new(id)
+                                    .small()
+                                    .checked(on)
+                                    .accessibility_label(tr(title))
+                                    .on_click(move |v, w, cx| on_flip(v, w, cx)),
+                            )
+                    };
+
+                let sort_seg = crate::ui::SegmentedControl::new(
+                    "wt-cfg-sort",
+                    [
+                        (WizSort::Size, "wt-s-size", tr("Size")),
+                        (WizSort::Files, "wt-s-files", tr("Files")),
+                        (WizSort::Name, "wt-s-name", tr("Name")),
+                    ]
+                    .into_iter()
+                    .map(|(s, id, label)| {
+                        let w = w_sort.clone();
+                        crate::ui::SegItem::new(id, label, cfg.sort == s, move |_, _, cx| {
+                            _ = w.update(cx, |this, cx| {
+                                this.wiztree.cfg.sort = s;
+                                this.wiztree.nav_dir = 0;
+                                this.wiztree.nav_seq = this.wiztree.nav_seq.wrapping_add(1);
+                                cx.notify();
+                            });
+                        })
+                    }),
+                );
+
+                let min_seg = crate::ui::SegmentedControl::new(
+                    "wt-cfg-min",
+                    [
+                        WizMinSize::All,
+                        WizMinSize::Kb100,
+                        WizMinSize::Mb1,
+                        WizMinSize::Mb10,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let w = w_min.clone();
+                        crate::ui::SegItem::new(
+                            SharedString::from(format!("wt-m-{i}")),
+                            tr(m.label()),
+                            cfg.min_size == m,
+                            move |_, _, cx| {
+                                _ = w.update(cx, |this, cx| {
+                                    this.wiztree.cfg.min_size = m;
+                                    cx.notify();
+                                });
+                            },
+                        )
+                    }),
+                );
+
+                let ht_seg = crate::ui::SegmentedControl::new(
+                    "wt-cfg-ht",
+                    [
+                        WizMapHeight::Compact,
+                        WizMapHeight::Normal,
+                        WizMapHeight::Tall,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, mh)| {
+                        let w = w_ht.clone();
+                        crate::ui::SegItem::new(
+                            SharedString::from(format!("wt-h-{i}")),
+                            tr(mh.label()),
+                            cfg.map_height == mh,
+                            move |_, _, cx| {
+                                _ = w.update(cx, |this, cx| {
+                                    this.wiztree.cfg.map_height = mh;
+                                    this.wiztree.invalidate_map();
+                                    cx.notify();
+                                });
+                            },
+                        )
+                    }),
+                );
+
+                let panel = v_flex()
+                    .id("wt-settings-card")
+                    .w(theme::u(290.))
+                    .max_w(relative(0.92))
+                    .p_3()
+                    .gap_2()
+                    .glass_pop()
+                    .occlude()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr("WizTree Settings")),
+                    )
+                    .child(toggle_row(
+                        "wt-sw-map",
+                        "Show Treemap",
+                        "Visual disk map at the bottom",
+                        cfg.show_map,
+                        Box::new(move |_, _, cx| {
+                            _ = w_map.update(cx, |this, cx| {
+                                this.wiztree.cfg.show_map = !this.wiztree.cfg.show_map;
+                                cx.notify();
+                            });
+                        }),
+                    ))
+                    .child(toggle_row(
+                        "wt-sw-hidden",
+                        "Include hidden files",
+                        "Scan dotfiles like .git and .env",
+                        cfg.show_hidden,
+                        Box::new(move |_, w, cx| {
+                            _ = w_hid.update(cx, |this, cx| {
+                                this.wiztree.cfg.show_hidden = !this.wiztree.cfg.show_hidden;
+                                if let Some(dir) = this.wiztree.target.clone() {
+                                    this.wiztree_scan(dir, w, cx);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                    ))
+                    .child(toggle_row(
+                        "wt-sw-cache",
+                        "Skip build caches",
+                        "Skip node_modules, target, dist, build",
+                        cfg.skip_caches,
+                        Box::new(move |_, w, cx| {
+                            _ = w_cac.update(cx, |this, cx| {
+                                this.wiztree.cfg.skip_caches = !this.wiztree.cfg.skip_caches;
+                                if let Some(dir) = this.wiztree.target.clone() {
+                                    this.wiztree_scan(dir, w, cx);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                    ))
+                    .child(div().h(px(1.)).bg(c(theme::BORDER)))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Sort by")),
+                            )
+                            .child(sort_seg),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Minimum size")),
+                            )
+                            .child(min_seg),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Treemap height")),
+                            )
+                            .child(ht_seg),
+                    );
+
+                if cx.reduce_motion() {
+                    panel.into_any_element()
+                } else {
+                    panel
+                        .with_animation(
+                            SharedString::from(format!("wt-cfg-in-{anim_seq}")),
+                            Animation::new(Duration::from_millis(150))
+                                .with_easing(gpui_kit::ease_out_quint()),
+                            |el, t| el.opacity(0.2 + 0.8 * t).mt(px((1. - t) * -6.)),
+                        )
+                        .into_any_element()
+                }
+            })
+            .into_any_element()
+    }
+
     pub(crate) fn render_wiztree(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let _ = window;
         let scanning = self.wiztree.scanning.as_ref();
@@ -1013,6 +1570,7 @@ impl Workbench {
             .root
             .as_ref()
             .is_some_and(|r| self.wiztree.target.as_ref() != Some(r));
+        let motion = !cx.reduce_motion();
 
         let summary: SharedString = if let Some(p) = scanning {
             let files = format_count(p.files.load(Ordering::Relaxed));
@@ -1060,7 +1618,7 @@ impl Workbench {
             .justify_between()
             .gap_2()
             .px_4()
-            .py_2p5()
+            .py_2()
             .border_b_1()
             .border_color(c(theme::BORDER))
             .bg(c(theme::BG_SIDE))
@@ -1145,27 +1703,16 @@ impl Workbench {
                                 }
                             }))
                     })
-                    .child(
-                        Button::new("wt-map-toggle")
-                            .label(if self.wiztree.show_map {
-                                tr("Hide Map")
-                            } else {
-                                tr("Show Map")
-                            })
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.wiztree.show_map = !this.wiztree.show_map;
-                                cx.notify();
-                            })),
-                    )
+                    .child(self.render_wiztree_settings_popover(cx))
                     .child(
                         Button::new("wt-close")
-                            .label(tr("Close"))
+                            .icon(Icon::new(gpui_kit::assets::IconName::X).size(theme::u(14.)))
                             .xsmall()
                             .ghost()
+                            .tooltip(tr("Close"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.wiztree.page = false;
+                                this.wiztree.settings_open = false;
                                 this.wiztree.cancel_scan();
                                 cx.notify();
                             })),
@@ -1236,15 +1783,27 @@ impl Workbench {
                 .justify_center()
                 .gap_3()
                 .p_6()
-                .child(Icon::new(gpui_kit::assets::IconName::HardDrive).size(theme::u(32.)).text_color(c(theme::FG_DIM)))
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(tr("No folder scanned yet")))
+                .child(
+                    Icon::new(gpui_kit::assets::IconName::HardDrive)
+                        .size(theme::u(32.))
+                        .text_color(c(theme::FG_DIM)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c(theme::FG_STRONG))
+                        .child(tr("No folder scanned yet")),
+                )
                 .child(
                     div()
                         .max_w(theme::u(360.))
                         .text_xs()
                         .text_center()
                         .text_color(c(theme::FG_DIM))
-                        .child(tr("Open a project folder or pick any directory on your PC to inspect disk usage, largest files, and extension breakdown.")),
+                        .child(tr(
+                            "Open a project folder or pick any directory on your PC to inspect disk usage, largest files, and extension breakdown.",
+                        )),
                 )
                 .child(
                     Button::new("wt-empty-pick")
@@ -1256,22 +1815,58 @@ impl Workbench {
                 .into_any_element()
         };
 
-        v_flex()
+        let page = v_flex()
             .id("wiztree-page")
             .size_full()
             .min_w_0()
             .min_h_0()
             .bg(c(theme::BG_EDITOR))
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                if e.keystroke.key == "escape" {
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.workbench_nav_back(w, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.workbench_nav_forward(w, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
+                let k = e.keystroke.key.as_str();
+                if k == "escape" {
                     this.wiztree.page = false;
+                    this.wiztree.settings_open = false;
                     this.wiztree.cancel_scan();
                     cx.notify();
+                } else if e.keystroke.modifiers.alt && k == "left" {
+                    cx.stop_propagation();
+                    this.workbench_nav_back(w, cx);
+                } else if e.keystroke.modifiers.alt && k == "right" {
+                    cx.stop_propagation();
+                    this.workbench_nav_forward(w, cx);
+                } else if e.keystroke.modifiers.alt && k == "up" {
+                    cx.stop_propagation();
+                    this.wiztree_up(cx);
                 }
             }))
             .child(header)
-            .child(body)
+            .child(body);
+
+        if !motion {
+            page.into_any_element()
+        } else {
+            let seq = self.wiztree.open_seq;
+            page.with_animation(
+                SharedString::from(format!("wt-open-{seq}")),
+                Animation::new(Duration::from_millis(165)).with_easing(gpui_kit::ease_out_quint()),
+                |el, t| el.opacity(0.35 + 0.65 * t),
+            )
             .into_any_element()
+        }
     }
 
     fn render_wiztree_content(&self, tree: &Arc<DiskTree>, cx: &mut Context<Self>) -> AnyElement {
@@ -1281,6 +1876,28 @@ impl Workbench {
             .min(tree.nodes.len().saturating_sub(1) as u32);
         let crumbs = tree.breadcrumbs(focus);
         let query = self.wiztree.filter.read(cx).value().trim().to_string();
+        let can_back = !self.wiztree.history.back.is_empty() || !self.nav_back.is_empty();
+        let can_fwd = !self.wiztree.history.forward.is_empty() || !self.nav_forward.is_empty();
+        let can_up = tree
+            .nodes
+            .get(focus as usize)
+            .and_then(|n| n.parent)
+            .is_some();
+        let motion = !cx.reduce_motion();
+        let nav_seq = self.wiztree.nav_seq;
+        let nav_dir = self.wiztree.nav_dir;
+
+        let nav_btn = |id: &'static str,
+                       icon: gpui_kit::assets::IconName,
+                       tip: &'static str,
+                       enabled: bool| {
+            Button::new(id)
+                .icon(Icon::new(icon).size(theme::u(13.)))
+                .ghost()
+                .xsmall()
+                .disabled(!enabled)
+                .tooltip(tr(tip))
+        };
 
         let crumb_bar = h_flex()
             .w_full()
@@ -1289,7 +1906,7 @@ impl Workbench {
             .items_center()
             .justify_between()
             .gap_2()
-            .px_4()
+            .px_3()
             .py_1p5()
             .border_b_1()
             .border_color(c(theme::BORDER))
@@ -1300,6 +1917,54 @@ impl Workbench {
                     .flex_wrap()
                     .gap_1()
                     .items_center()
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap_0p5()
+                            .pr_1()
+                            .mr_1()
+                            .border_r_1()
+                            .border_color(c(theme::BORDER))
+                            .child(
+                                nav_btn(
+                                    "wt-nav-back",
+                                    gpui_kit::assets::IconName::ArrowLeft,
+                                    "Back (Mouse Back / Alt+Left)",
+                                    can_back,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, w, cx| {
+                                        this.workbench_nav_back(w, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                nav_btn(
+                                    "wt-nav-fwd",
+                                    gpui_kit::assets::IconName::ArrowRight,
+                                    "Forward (Mouse Forward / Alt+Right)",
+                                    can_fwd,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, w, cx| {
+                                        this.workbench_nav_forward(w, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                nav_btn(
+                                    "wt-nav-up",
+                                    gpui_kit::assets::IconName::ArrowUp,
+                                    "Parent folder (Alt+Up)",
+                                    can_up,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.wiztree_up(cx);
+                                    },
+                                )),
+                            ),
+                    )
                     .children(crumbs.iter().enumerate().map(|(i, &cid)| {
                         let name = tree.nodes[cid as usize].name.clone();
                         let last = i + 1 == crumbs.len();
@@ -1333,10 +1998,7 @@ impl Workbench {
                                                     .text_color(c(theme::FG_STRONG))
                                             })
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.wiztree.focus = cid;
-                                                this.wiztree.hovered_tile = None;
-                                                this.wiztree.invalidate_map();
-                                                cx.notify();
+                                                this.wiztree_goto(cid, -1, cx);
                                             }))
                                     })
                                     .child(name),
@@ -1363,8 +2025,12 @@ impl Workbench {
                                 label,
                                 self.wiztree.tab == tab,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.wiztree.tab = tab;
-                                    cx.notify();
+                                    if this.wiztree.tab != tab {
+                                        this.wiztree.tab = tab;
+                                        this.wiztree.nav_dir = 0;
+                                        this.wiztree.nav_seq = this.wiztree.nav_seq.wrapping_add(1);
+                                        cx.notify();
+                                    }
                                 }),
                             )
                         }),
@@ -1383,20 +2049,47 @@ impl Workbench {
             WizTab::Largest => self.render_wiztree_largest(tree, &query, cx),
         };
 
+        let table_wrap: AnyElement = if !motion || nav_seq == 0 {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(table)
+                .into_any_element()
+        } else {
+            let dx = match nav_dir {
+                d if d > 0 => 10.,
+                d if d < 0 => -10.,
+                _ => 0.,
+            };
+            let dy = if nav_dir == 0 { 5. } else { 0. };
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(table)
+                .with_animation(
+                    SharedString::from(format!("wt-nav-{nav_seq}")),
+                    Animation::new(Duration::from_millis(165))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                    move |el, t| {
+                        el.opacity(0.25 + 0.75 * t)
+                            .ml(px((1. - t) * dx))
+                            .mt(px((1. - t) * dy))
+                    },
+                )
+                .into_any_element()
+        };
+
         v_flex()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .child(crumb_bar)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(table),
-            )
-            .when(self.wiztree.show_map, |v| {
+            .child(table_wrap)
+            .when(self.wiztree.cfg.show_map, |v| {
                 v.child(self.render_wiztree_treemap(tree, focus, cx))
             })
             .into_any_element()
@@ -1409,233 +2102,314 @@ impl Workbench {
         query: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows = flatten_visible_rows(tree, focus, &self.wiztree.expanded, query, 260);
+        let cfg = self.wiztree.cfg;
+        let rows = flatten_visible_rows(
+            tree,
+            focus,
+            &self.wiztree.expanded,
+            query,
+            cfg.sort,
+            cfg.min_size.bytes(),
+            260,
+        );
+        let hovered = self.wiztree.hovered_tile;
+
+        let col_header = h_flex()
+            .w_full()
+            .min_w_0()
+            .h(theme::u(22.))
+            .px_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .bg(c(theme::BG_SIDE))
+            .text_size(px(10.5))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(c(theme::FG_DIM))
+            .child(div().flex_1().min_w_0().pl(theme::u(18.)).child(tr("Name")))
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme::u(112.))
+                    .text_right()
+                    .child(tr("Share")),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme::u(76.))
+                    .text_right()
+                    .child(tr("Size")),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme::u(60.))
+                    .text_right()
+                    .child(tr("Files")),
+            )
+            .child(div().flex_none().w(theme::u(48.)))
+            .child(div().flex_none().w(theme::u(20.)));
+
         if rows.is_empty() {
             return v_flex()
                 .size_full()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .text_color(c(theme::FG_DIM))
-                .child(if query.is_empty() {
-                    tr("This folder is empty.")
-                } else {
-                    tr("No matching files or folders.")
-                })
+                .child(col_header)
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(if query.is_empty() && cfg.min_size == WizMinSize::All {
+                            tr("This folder is empty.")
+                        } else {
+                            tr("No matching files or folders.")
+                        }),
+                )
                 .into_any_element();
         }
-        v_flex()
-            .id("wt-tree-list")
-            .size_full()
-            .overflow_y_scroll()
-            .py_1()
-            .children(rows.into_iter().map(|row| {
-                let node = &tree.nodes[row.id as usize];
-                let pct = ((node.size as f64 / row.parent_size.max(1) as f64) * 100.)
-                    .clamp(0., 100.) as f32;
-                let expanded = self.wiztree.expanded.contains(&row.id);
-                let is_dir = node.is_dir;
-                let rid = row.id;
-                let path = tree.full_path(rid);
-                let path_reveal = path.clone();
-                let row_icon = if is_dir {
-                    Icon::new(if expanded {
-                        gpui_kit::assets::IconName::FolderOpen
-                    } else {
-                        gpui_kit::assets::IconName::Folder
-                    })
-                    .flex_none()
-                    .size(theme::u(14.))
-                    .text_color(c(theme::FOLDER))
-                } else {
-                    let (ic, tint) = files::icon_for(&node.name);
-                    Icon::new(ic)
-                        .flex_none()
-                        .size(theme::u(14.))
-                        .text_color(theme::tint(tint))
-                };
-                let bar_col = dominant_category(tree, rid).color();
-                let indent = (row.depth as f32 * 16.).min(160.);
-                let display_name = if query.is_empty() {
-                    node.name.clone()
-                } else {
-                    tree.rel_path(rid)
-                };
 
-                h_flex()
-                    .id(("wt-row", rid as usize))
-                    .w_full()
-                    .min_w_0()
-                    .h(theme::u(28.))
-                    .px_3()
-                    .gap_2()
-                    .items_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .on_click(cx.listener(move |this, _, w, cx| {
-                        if is_dir {
-                            if !this.wiztree.expanded.remove(&rid) {
-                                this.wiztree.expanded.insert(rid);
-                            }
-                            cx.notify();
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(col_header)
+            .child(
+                v_flex()
+                    .id("wt-tree-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .py_0p5()
+                    .children(rows.into_iter().map(|row| {
+                        let node = &tree.nodes[row.id as usize];
+                        let pct = ((node.size as f64 / row.parent_size.max(1) as f64) * 100.)
+                            .clamp(0., 100.) as f32;
+                        let expanded = self.wiztree.expanded.contains(&row.id);
+                        let is_dir = node.is_dir;
+                        let is_hov = hovered == Some(row.id);
+                        let rid = row.id;
+                        let path = tree.full_path(rid);
+                        let path_reveal = path.clone();
+                        let row_icon = if is_dir {
+                            Icon::new(if expanded {
+                                gpui_kit::assets::IconName::FolderOpen
+                            } else {
+                                gpui_kit::assets::IconName::Folder
+                            })
+                            .flex_none()
+                            .size(theme::u(14.))
+                            .text_color(c(theme::FOLDER))
                         } else {
-                            this.jump_to_file_smooth(path.clone(), None, w, cx);
-                        }
-                    }))
-                    .child(
+                            let (ic, tint) = files::icon_for(&node.name);
+                            Icon::new(ic)
+                                .flex_none()
+                                .size(theme::u(14.))
+                                .text_color(theme::tint(tint))
+                        };
+                        let bar_col = dominant_category(tree, rid).color();
+                        let indent = (row.depth as f32 * 16.).min(160.);
+                        let display_name = if query.is_empty() {
+                            node.name.clone()
+                        } else {
+                            tree.rel_path(rid)
+                        };
+
                         h_flex()
-                            .flex_1()
+                            .id(("wt-row", rid as usize))
+                            .w_full()
                             .min_w_0()
-                            .pl(px(indent))
-                            .gap_1p5()
+                            .h(theme::u(28.))
+                            .px_3()
+                            .gap_2()
                             .items_center()
+                            .cursor_pointer()
+                            .when(is_hov, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
+                                if *entered {
+                                    if this.wiztree.hovered_tile != Some(rid) {
+                                        this.wiztree.hovered_tile = Some(rid);
+                                        cx.notify();
+                                    }
+                                } else if this.wiztree.hovered_tile == Some(rid) {
+                                    this.wiztree.hovered_tile = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                if is_dir {
+                                    if !this.wiztree.expanded.remove(&rid) {
+                                        this.wiztree.expanded.insert(rid);
+                                    }
+                                    cx.notify();
+                                } else {
+                                    this.wiztree_open_file(path.clone(), w, cx);
+                                }
+                            }))
                             .child(
-                                div()
-                                    .flex_none()
-                                    .w(theme::u(14.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(is_dir, |d| {
-                                        d.child(
-                                            Icon::new(if expanded {
-                                                gpui_kit::assets::IconName::ChevronDown
-                                            } else {
-                                                gpui_kit::assets::IconName::ChevronRight
-                                            })
-                                            .size(theme::u(12.))
-                                            .text_color(c(theme::FG_DIM)),
-                                        )
-                                    }),
-                            )
-                            .child(row_icon)
-                            .child(
-                                div()
+                                h_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(c(if is_dir {
-                                        theme::FG_STRONG
-                                    } else {
-                                        theme::FG
-                                    }))
-                                    .child(display_name),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_none()
-                            .w(theme::u(110.))
-                            .gap_1p5()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(6.))
-                                    .rounded(px(3.))
-                                    .bg(c(theme::BG_SIDE))
-                                    .overflow_hidden()
+                                    .pl(px(indent))
+                                    .gap_1p5()
+                                    .items_center()
                                     .child(
                                         div()
-                                            .h_full()
-                                            .w(relative((pct / 100.).clamp(0.02, 1.)))
-                                            .bg(bar_col.opacity(0.85)),
+                                            .flex_none()
+                                            .w(theme::u(14.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(is_dir, |d| {
+                                                d.child(
+                                                    Icon::new(if expanded {
+                                                        gpui_kit::assets::IconName::ChevronDown
+                                                    } else {
+                                                        gpui_kit::assets::IconName::ChevronRight
+                                                    })
+                                                    .size(theme::u(12.))
+                                                    .text_color(c(theme::FG_DIM)),
+                                                )
+                                            }),
+                                    )
+                                    .child(row_icon)
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(c(if is_dir {
+                                                theme::FG_STRONG
+                                            } else {
+                                                theme::FG
+                                            }))
+                                            .child(display_name),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_none()
+                                    .w(theme::u(112.))
+                                    .gap_1p5()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .h(px(6.))
+                                            .rounded(px(3.))
+                                            .bg(c(theme::BG_SIDE))
+                                            .overflow_hidden()
+                                            .child(
+                                                div()
+                                                    .h_full()
+                                                    .w(relative((pct / 100.).clamp(0.02, 1.)))
+                                                    .bg(bar_col.opacity(0.85)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(theme::u(38.))
+                                            .text_right()
+                                            .text_xs()
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(format!("{pct:.1}%")),
                                     ),
                             )
                             .child(
                                 div()
-                                    .w(theme::u(38.))
+                                    .flex_none()
+                                    .w(theme::u(76.))
+                                    .text_right()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(format_bytes(node.size)),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(theme::u(60.))
                                     .text_right()
                                     .text_xs()
                                     .text_color(c(theme::FG_DIM))
-                                    .child(format!("{pct:.1}%")),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(theme::u(76.))
-                            .text_right()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(c(theme::FG_STRONG))
-                            .child(format_bytes(node.size)),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(theme::u(64.))
-                            .text_right()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
+                                    .child(if is_dir {
+                                        format_count(node.files)
+                                    } else {
+                                        String::new()
+                                    }),
+                            )
+                            // Keep a fixed 48px Focus slot on both folders and files so columns stay aligned.
                             .child(if is_dir {
-                                format_count(node.files)
+                                div()
+                                    .id(("wt-zoom", rid as usize))
+                                    .flex_none()
+                                    .w(theme::u(48.))
+                                    .py_0p5()
+                                    .rounded(px(4.))
+                                    .text_center()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .hover(|s| {
+                                        s.bg(c(theme::BG_ELEVATED))
+                                            .text_color(c(theme::ACCENT_TEXT))
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.wiztree_goto(rid, 1, cx);
+                                    }))
+                                    .child(tr("Focus"))
+                                    .into_any_element()
                             } else {
-                                String::new()
-                            }),
-                    )
-                    .when(is_dir, |h| {
-                        h.child(
-                            div()
-                                .id(("wt-zoom", rid as usize))
-                                .flex_none()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded(px(4.))
-                                .text_xs()
-                                .text_color(c(theme::FG_MUTED))
-                                .hover(|s| {
-                                    s.bg(c(theme::BG_ELEVATED))
-                                        .text_color(c(theme::ACCENT_TEXT))
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.wiztree.focus = rid;
-                                    this.wiztree.hovered_tile = None;
-                                    this.wiztree.invalidate_map();
-                                    cx.notify();
-                                }))
-                                .child(tr("Focus")),
-                        )
-                    })
-                    .child(
-                        div()
-                            .id(("wt-rev", rid as usize))
-                            .flex_none()
-                            .size(theme::u(20.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.))
-                            .text_color(c(theme::FG_DIM))
-                            .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(tr(
-                                    "Reveal in File Explorer",
-                                ))
-                                .build(w, cx)
-                            })
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.reveal_path(&path_reveal);
+                                div().flex_none().w(theme::u(48.)).into_any_element()
                             })
                             .child(
-                                Icon::new(gpui_kit::assets::IconName::ExternalLink)
-                                    .size(theme::u(12.)),
-                            ),
-                    )
-            }))
+                                div()
+                                    .id(("wt-rev", rid as usize))
+                                    .flex_none()
+                                    .size(theme::u(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(4.))
+                                    .text_color(c(theme::FG_DIM))
+                                    .hover(|s| {
+                                        s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG))
+                                    })
+                                    .tooltip(|w, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(tr(
+                                            "Reveal in File Explorer",
+                                        ))
+                                        .build(w, cx)
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        cx.reveal_path(&path_reveal);
+                                    })
+                                    .child(
+                                        Icon::new(gpui_kit::assets::IconName::ExternalLink)
+                                            .size(theme::u(12.)),
+                                    ),
+                            )
+                    })),
+            )
             .into_any_element()
     }
 
     fn render_wiztree_extensions(&self, tree: &Arc<DiskTree>, query: &str) -> AnyElement {
         let q = query.to_ascii_lowercase();
+        let min_bytes = self.wiztree.cfg.min_size.bytes();
         let total = tree.total_size().max(1) as f64;
         let items: Vec<&ExtStat> = tree
             .extensions
             .iter()
-            .filter(|e| q.is_empty() || e.ext.to_ascii_lowercase().contains(&q))
+            .filter(|e| {
+                e.bytes >= min_bytes && (q.is_empty() || e.ext.to_ascii_lowercase().contains(&q))
+            })
             .take(150)
             .collect();
         if items.is_empty() {
@@ -1741,17 +2515,19 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let q = query.to_ascii_lowercase();
+        let min_bytes = self.wiztree.cfg.min_size.bytes();
         let total = tree.total_size().max(1) as f64;
         let items: Vec<&LargestFile> = tree
             .largest
             .iter()
             .filter(|f| {
-                q.is_empty()
-                    || tree.nodes[f.node as usize]
-                        .name
-                        .to_ascii_lowercase()
-                        .contains(&q)
-                    || tree.rel_path(f.node).to_ascii_lowercase().contains(&q)
+                f.size >= min_bytes
+                    && (q.is_empty()
+                        || tree.nodes[f.node as usize]
+                            .name
+                            .to_ascii_lowercase()
+                            .contains(&q)
+                        || tree.rel_path(f.node).to_ascii_lowercase().contains(&q))
             })
             .collect();
         if items.is_empty() {
@@ -1787,7 +2563,7 @@ impl Workbench {
                     .cursor_pointer()
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
                     .on_click(cx.listener(move |this, _, w, cx| {
-                        this.jump_to_file_smooth(path.clone(), None, w, cx);
+                        this.wiztree_open_file(path.clone(), w, cx);
                     }))
                     .child(
                         Icon::new(icon)
@@ -1861,30 +2637,76 @@ impl Workbench {
     ) -> AnyElement {
         let hovered = self.wiztree.hovered_tile;
         let focus_size = tree.nodes.get(focus as usize).map_or(1, |n| n.size.max(1));
-        let hover_text: SharedString = if let Some(hid) =
+        let hover_info: AnyElement = if let Some(hid) =
             hovered.filter(|&i| (i as usize) < tree.nodes.len())
         {
             let n = &tree.nodes[hid as usize];
             let pct = (n.size as f64 / focus_size as f64 * 100.).clamp(0., 100.);
             let rel = tree.rel_path(hid);
-            if n.is_dir {
+            let title = if n.is_dir {
+                format!("{}/", n.name)
+            } else {
+                n.name.clone()
+            };
+            let meta = if n.is_dir {
                 format!(
-                    "{rel}/  ·  {} ({pct:.1}%)  ·  {}",
+                    "{} ({pct:.1}%) · {}",
                     format_bytes(n.size),
                     crate::trf!("{n} files"; n => format_count(n.files))
                 )
-                .into()
             } else {
-                format!("{rel}  ·  {} ({pct:.1}%)", format_bytes(n.size)).into()
-            }
+                format!("{} ({pct:.1}%)", format_bytes(n.size))
+            };
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(theme::u(190.))
+                        .truncate()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(theme::FG_STRONG))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child(meta),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(rel),
+                )
+                .into_any_element()
         } else {
-            tr("Hover a block to inspect size, click a folder to zoom in, or click a file to open it.").into()
+            div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(tr(
+                        "Hover a block to inspect size, click a folder to zoom in, or click a file to open it.",
+                    ))
+                    .into_any_element()
         };
 
         let legend = h_flex()
             .flex_none()
             .flex_wrap()
-            .gap_2p5()
+            .gap_2()
             .items_center()
             .children(
                 [
@@ -1947,12 +2769,16 @@ impl Workbench {
                         );
                         let is_hov = hovered == Some(tile.node);
                         let fill_col = if tile.is_dir && tile.depth == 0 {
-                            folder_bg
+                            if is_hov {
+                                folder_bg.opacity(1.)
+                            } else {
+                                folder_bg
+                            }
                         } else {
                             tile.category.color().opacity(if is_hov {
                                 0.96
                             } else if tile.depth == 1 {
-                                0.62
+                                0.64
                             } else {
                                 0.78
                             })
@@ -1989,8 +2815,11 @@ impl Workbench {
             cache
                 .3
                 .iter()
-                .filter(|t| t.depth == 0 && t.w >= 82. && t.h >= 22.)
-                .take(18)
+                .filter(|t| {
+                    (t.depth == 0 && t.w >= 82. && t.h >= 22.)
+                        || (t.depth == 1 && t.w >= 96. && t.h >= 34.)
+                })
+                .take(26)
                 .filter_map(|t| {
                     let n = tree.nodes.get(t.node as usize)?;
                     let text = if t.w >= 132. {
@@ -2009,7 +2838,7 @@ impl Workbench {
                             .truncate()
                             .text_size(px(10.5))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(if t.is_dir {
+                            .text_color(if t.is_dir && t.depth == 0 {
                                 c(theme::FG_STRONG)
                             } else {
                                 c(theme::ON_ACCENT)
@@ -2021,9 +2850,70 @@ impl Workbench {
                 .collect()
         };
 
+        let map_inner = div()
+            .id("wt-treemap")
+            .relative()
+            .flex_1()
+            .w_full()
+            .min_h_0()
+            .cursor_pointer()
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                let o = origin_move.get();
+                let lx = f32::from(ev.position.x - o.x);
+                let ly = f32::from(ev.position.y - o.y);
+                let hit = hit_test_tile(&cache_move.borrow().3, lx, ly);
+                if this.wiztree.hovered_tile != hit {
+                    this.wiztree.hovered_tile = hit;
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(|this, entered: &bool, _, cx| {
+                if !*entered && this.wiztree.hovered_tile.is_some() {
+                    this.wiztree.hovered_tile = None;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, w, cx| {
+                    let o = origin_click.get();
+                    let lx = f32::from(ev.position.x - o.x);
+                    let ly = f32::from(ev.position.y - o.y);
+                    let Some(hit) = hit_test_tile(&cache_click.borrow().3, lx, ly) else {
+                        return;
+                    };
+                    let Some(node) = tree_click.nodes.get(hit as usize) else {
+                        return;
+                    };
+                    if node.is_dir {
+                        this.wiztree_goto(hit, 1, cx);
+                    } else {
+                        let path = tree_click.full_path(hit);
+                        this.wiztree_open_file(path, w, cx);
+                    }
+                }),
+            )
+            .child(map_canvas)
+            .children(labels);
+
+        let motion = !cx.reduce_motion();
+        let nav_seq = self.wiztree.nav_seq;
+        let map_body: AnyElement = if !motion || nav_seq == 0 {
+            map_inner.into_any_element()
+        } else {
+            map_inner
+                .with_animation(
+                    SharedString::from(format!("wt-map-{nav_seq}")),
+                    Animation::new(Duration::from_millis(165))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                    |el, t| el.opacity(0.35 + 0.65 * t),
+                )
+                .into_any_element()
+        };
+
         v_flex()
             .w_full()
-            .h(theme::u(220.))
+            .h(theme::u(self.wiztree.cfg.map_height.px()))
             .flex_none()
             .border_t_1()
             .border_color(c(theme::BORDER))
@@ -2040,67 +2930,10 @@ impl Workbench {
                     .py_1()
                     .border_b_1()
                     .border_color(c(theme::BORDER))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(c(theme::FG_MUTED))
-                            .child(hover_text),
-                    )
+                    .child(hover_info)
                     .child(legend),
             )
-            .child(
-                div()
-                    .id("wt-treemap")
-                    .relative()
-                    .flex_1()
-                    .w_full()
-                    .min_h_0()
-                    .cursor_pointer()
-                    .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
-                        let o = origin_move.get();
-                        let lx = f32::from(ev.position.x - o.x);
-                        let ly = f32::from(ev.position.y - o.y);
-                        let hit = hit_test_tile(&cache_move.borrow().3, lx, ly);
-                        if this.wiztree.hovered_tile != hit {
-                            this.wiztree.hovered_tile = hit;
-                            cx.notify();
-                        }
-                    }))
-                    .on_hover(cx.listener(|this, entered: &bool, _, cx| {
-                        if !*entered && this.wiztree.hovered_tile.is_some() {
-                            this.wiztree.hovered_tile = None;
-                            cx.notify();
-                        }
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, ev: &MouseDownEvent, w, cx| {
-                            let o = origin_click.get();
-                            let lx = f32::from(ev.position.x - o.x);
-                            let ly = f32::from(ev.position.y - o.y);
-                            let Some(hit) = hit_test_tile(&cache_click.borrow().3, lx, ly) else {
-                                return;
-                            };
-                            let Some(node) = tree_click.nodes.get(hit as usize) else {
-                                return;
-                            };
-                            if node.is_dir {
-                                this.wiztree.focus = hit;
-                                this.wiztree.hovered_tile = None;
-                                this.wiztree.invalidate_map();
-                                cx.notify();
-                            } else {
-                                let path = tree_click.full_path(hit);
-                                this.jump_to_file_smooth(path, None, w, cx);
-                            }
-                        }),
-                    )
-                    .child(map_canvas)
-                    .children(labels),
-            )
+            .child(map_body)
             .into_any_element()
     }
 }
@@ -2116,8 +2949,10 @@ fn hit_test_tile(tiles: &[TreemapTile], x: f32, y: f32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_bytes, format_count, hit_test_tile, layout_treemap, scan_tree, ScanProgress,
+        flatten_visible_rows, format_bytes, format_count, hit_test_tile, layout_treemap, scan_tree,
+        FolderHistory, ScanOpts, ScanProgress, WizSort,
     };
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     #[test]
@@ -2135,16 +2970,14 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("README"), vec![b'x'; 200]).unwrap();
 
-        let tree = scan_tree(&root, &Arc::new(ScanProgress::new())).unwrap();
+        let tree = scan_tree(&root, ScanOpts::default(), &Arc::new(ScanProgress::new())).unwrap();
         assert_eq!(tree.total_size(), 6200);
         assert_eq!(tree.total_files(), 4);
         assert_eq!(tree.total_folders(), 3);
         assert_eq!(tree.nodes[0].children.len(), 3);
-        // Largest child folder (`assets`, 4000 bytes) must sort first.
         let first = &tree.nodes[tree.nodes[0].children[0] as usize];
         assert_eq!(first.name, "assets");
         assert_eq!(first.size, 4000);
-        // Extension breakdown sorted descending: .png (4000), .rs (2000), (no extension) (200).
         assert_eq!(tree.extensions[0].ext, ".png");
         assert_eq!(tree.extensions[0].bytes, 4000);
         assert_eq!(tree.extensions[1].ext, ".rs");
@@ -2156,6 +2989,64 @@ mod tests {
     }
 
     #[test]
+    fn scan_respects_hidden_and_skip_cache_options() {
+        let root = std::env::temp_dir().join(format!("fluxcode-wt-opts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("node_modules").join("dep.js"), vec![0u8; 5000]).unwrap();
+        std::fs::write(root.join(".git").join("HEAD"), vec![0u8; 100]).unwrap();
+        std::fs::write(root.join("app.rs"), vec![0u8; 400]).unwrap();
+
+        let full = scan_tree(&root, ScanOpts::default(), &Arc::new(ScanProgress::new())).unwrap();
+        assert_eq!(full.total_size(), 5500);
+
+        let clean = scan_tree(
+            &root,
+            ScanOpts {
+                show_hidden: false,
+                skip_caches: true,
+            },
+            &Arc::new(ScanProgress::new()),
+        )
+        .unwrap();
+        assert_eq!(clean.total_size(), 400);
+        assert_eq!(clean.total_files(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn folder_history_back_and_forward_track_navigation() {
+        let mut h = FolderHistory::default();
+        h.push(0, 3);
+        h.push(3, 7);
+        assert_eq!(h.go_back(7), Some(3));
+        assert_eq!(h.go_back(3), Some(0));
+        assert_eq!(h.go_back(0), None);
+        assert_eq!(h.go_forward(0), Some(3));
+        h.push(3, 9);
+        assert_eq!(h.go_forward(9), None);
+        assert_eq!(h.go_back(9), Some(3));
+    }
+
+    #[test]
+    fn tree_rows_respect_sort_and_min_size() {
+        let root = std::env::temp_dir().join(format!("fluxcode-wt-sort-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("z_big.bin"), vec![0u8; 2000]).unwrap();
+        std::fs::write(root.join("a_small.rs"), vec![0u8; 100]).unwrap();
+
+        let tree = scan_tree(&root, ScanOpts::default(), &Arc::new(ScanProgress::new())).unwrap();
+        let by_name = flatten_visible_rows(&tree, 0, &HashSet::new(), "", WizSort::Name, 0, 50);
+        assert_eq!(tree.nodes[by_name[0].id as usize].name, "a_small.rs");
+        let filtered = flatten_visible_rows(&tree, 0, &HashSet::new(), "", WizSort::Size, 500, 50);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(tree.nodes[filtered[0].id as usize].name, "z_big.bin");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn squarified_treemap_tiles_stay_inside_bounds() {
         let root = std::env::temp_dir().join(format!("fluxcode-wt-map-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2163,7 +3054,7 @@ mod tests {
         std::fs::write(root.join("big").join("a.bin"), vec![1u8; 5000]).unwrap();
         std::fs::write(root.join("big").join("b.rs"), vec![2u8; 2500]).unwrap();
         std::fs::write(root.join("small.json"), vec![3u8; 1000]).unwrap();
-        let tree = scan_tree(&root, &Arc::new(ScanProgress::new())).unwrap();
+        let tree = scan_tree(&root, ScanOpts::default(), &Arc::new(ScanProgress::new())).unwrap();
         let tiles = layout_treemap(&tree, 0, 600., 220.);
         assert!(!tiles.is_empty());
         for t in &tiles {

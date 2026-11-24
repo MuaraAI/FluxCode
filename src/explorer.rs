@@ -51,6 +51,10 @@ pub(crate) struct ExplorerState {
     pub hover_fade_in: bool,
     pub hover_leave: Option<(f32, u64)>,
     pub hover_last_at: Option<std::time::Instant>,
+    pub row_height: std::rc::Rc<std::cell::Cell<f32>>,
+    pub body_origin_y: std::rc::Rc<std::cell::Cell<f32>>,
+    pub last_scroll_y: std::rc::Rc<std::cell::Cell<f32>>,
+    pub last_mouse_y: std::rc::Rc<std::cell::Cell<Option<f32>>>,
 }
 
 impl ExplorerState {
@@ -73,6 +77,10 @@ impl ExplorerState {
             hover_fade_in: false,
             hover_leave: None,
             hover_last_at: None,
+            row_height: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            body_origin_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            last_scroll_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            last_mouse_y: std::rc::Rc::new(std::cell::Cell::new(None)),
         }
     }
 
@@ -244,11 +252,84 @@ fn is_descendant_of(path: &str, ancestor: &str) -> bool {
     next == b'\\' || next == b'/' || next == 1
 }
 
+fn explorer_row_top(ix: usize, scroll_y: f32, row_h: f32) -> f32 {
+    (ix as f64 * row_h as f64 + scroll_y as f64) as f32
+}
+
+fn explorer_row_at_y(rel_y: f32, scroll_y: f32, row_h: f32, count: usize) -> Option<usize> {
+    if rel_y < 0. || row_h <= 0.5 || count == 0 {
+        return None;
+    }
+    let pos = (rel_y as f64 - scroll_y as f64) / row_h as f64;
+    if pos < 0. {
+        return None;
+    }
+    let ix = pos.floor() as usize;
+    (ix < count).then_some(ix)
+}
+
+struct ExplorerMetricsProbe {
+    row_h: std::rc::Rc<std::cell::Cell<f32>>,
+    origin_y: std::rc::Rc<std::cell::Cell<f32>>,
+    last_scroll_y: std::rc::Rc<std::cell::Cell<f32>>,
+    last_mouse_y: std::rc::Rc<std::cell::Cell<Option<f32>>>,
+    wb: WeakEntity<Workbench>,
+}
+
+impl UniformListDecoration for ExplorerMetricsProbe {
+    fn compute(
+        &self,
+        _visible_range: std::ops::Range<usize>,
+        bounds: Bounds<Pixels>,
+        scroll_offset: Point<Pixels>,
+        item_height: Pixels,
+        _item_count: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let h = f32::from(item_height);
+        if h.is_finite() && h > 4. {
+            self.row_h.set(h);
+        }
+        // UniformList passes bounds.origin = padded_bounds.origin + scroll_offset.
+        let sy = f32::from(scroll_offset.y);
+        self.origin_y.set(f32::from(bounds.origin.y) - sy);
+        if (self.last_scroll_y.get() - sy).abs() > 0.25 {
+            self.last_scroll_y.set(sy);
+            if let Some(rel_y) = self.last_mouse_y.get() {
+                let wb = self.wb.clone();
+                cx.defer(move |cx| {
+                    _ = wb.update(cx, |this, cx| this.explorer_hover_at_y(rel_y, cx));
+                });
+            }
+        }
+        div().into_any_element()
+    }
+}
+
 impl Workbench {
-    fn explorer_row_y(&self, ix: usize) -> f32 {
-        let row_h = f32::from(theme::u(20.));
+    fn explorer_row_metrics(&self) -> (f32, f32) {
         let scroll_y = f32::from(self.explorer.scroll.0.borrow().base_handle.offset().y);
-        ix as f32 * row_h + scroll_y
+        let measured = self.explorer.row_height.get();
+        let row_h = if measured.is_finite() && measured > 4. {
+            measured
+        } else {
+            f32::from(theme::u(20.))
+        };
+        (row_h, scroll_y)
+    }
+
+    fn explorer_row_y(&self, ix: usize) -> f32 {
+        let (row_h, scroll_y) = self.explorer_row_metrics();
+        explorer_row_top(ix, scroll_y, row_h)
+    }
+
+    fn explorer_hover_at_y(&mut self, rel_y: f32, cx: &mut Context<Self>) {
+        let (row_h, scroll_y) = self.explorer_row_metrics();
+        match explorer_row_at_y(rel_y, scroll_y, row_h, self.explorer.rows.len()) {
+            Some(ix) => self.explorer_hover_row(ix, cx),
+            None => self.explorer_hover_clear(cx),
+        }
     }
 
     fn explorer_hover_row(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -664,13 +745,13 @@ impl Workbench {
                         let view_l = view.clone();
                         let view_md = view.clone();
                         let view_r = view.clone();
-                        let view_hov = view.clone();
                         let focus_l = this.explorer.focus.clone();
 
                         let row_el = h_flex()
                             .id(SharedString::from(format!("xr-{}", id)))
                             .w_full()
                             .h(theme::u(20.))
+                            .overflow_hidden()
                             .pl(px(base_pl))
                             .pr_2()
                             .gap_1()
@@ -681,11 +762,6 @@ impl Workbench {
                             .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
                             .when(focused && is_sel, |s| s.border_l_2().border_color(c(theme::ACCENT)))
                             .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }))
-                            .on_hover(move |entered: &bool, _, cx| {
-                                if *entered {
-                                    view_hov.update(cx, |this, cx| this.explorer_hover_row(ix, cx));
-                                }
-                            })
                             .active(|s| s.bg(c(theme::SELECT)))
                             .child(chevron)
                             .child(icon)
@@ -846,9 +922,16 @@ impl Workbench {
             }),
         )
         .track_scroll(&self.explorer.scroll)
+        .with_decoration(ExplorerMetricsProbe {
+            row_h: self.explorer.row_height.clone(),
+            origin_y: self.explorer.body_origin_y.clone(),
+            last_scroll_y: self.explorer.last_scroll_y.clone(),
+            last_mouse_y: self.explorer.last_mouse_y.clone(),
+            wb: cx.entity().downgrade(),
+        })
         .size_full();
 
-        let row_h = f32::from(theme::u(20.));
+        let (row_h, _) = self.explorer_row_metrics();
         let hover_outline: Option<AnyElement> = if !motion {
             None
         } else if let Some(hix) = self.explorer.hovered_ix.filter(|&i| i < self.explorer.rows.len()) {
@@ -911,8 +994,14 @@ impl Workbench {
             .min_h_0()
             .size_full()
             .overflow_hidden()
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                let rel_y = f32::from(ev.position.y) - this.explorer.body_origin_y.get();
+                this.explorer.last_mouse_y.set(Some(rel_y));
+                this.explorer_hover_at_y(rel_y, cx);
+            }))
             .on_hover(cx.listener(|this, entered: &bool, _, cx| {
                 if !*entered {
+                    this.explorer.last_mouse_y.set(None);
                     this.explorer_hover_clear(cx);
                 }
             }))
@@ -1186,7 +1275,10 @@ fn short(p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{flatten_nodes, is_descendant_of, stray_press_keeps_input, PENDING_ROW_ID};
+    use super::{
+        explorer_row_at_y, explorer_row_top, flatten_nodes, is_descendant_of,
+        stray_press_keeps_input, PENDING_ROW_ID,
+    };
     use crate::files::Node;
     use crate::workbench::PendingOp;
     use std::collections::HashSet;
@@ -1281,5 +1373,17 @@ mod tests {
         assert!(stray_press_keeps_input(&Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))), "b"));
         assert!(!stray_press_keeps_input(&Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))), "main.py"));
         assert!(!stray_press_keeps_input(&None, "main.py"));
+    }
+
+    #[test]
+    fn explorer_hover_row_matches_scrolled_cursor() {
+        let row_h = 22.5;
+        let scroll_y = -4800.0;
+        let ix = 220;
+        let top = explorer_row_top(ix, scroll_y, row_h);
+        assert_eq!(explorer_row_at_y(top + 0.5, scroll_y, row_h, 500), Some(ix));
+        assert_eq!(explorer_row_at_y(top + row_h - 0.5, scroll_y, row_h, 500), Some(ix));
+        assert_eq!(explorer_row_at_y(-1.0, scroll_y, row_h, 500), None);
+        assert_eq!(explorer_row_at_y(500.0, 0.0, 20.0, 5), None);
     }
 }

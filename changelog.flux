@@ -11,6 +11,22 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-24
+@title en: Precision Explorer hover tracking, mouse Back/Forward navigation, and smoother WizTree
+@title id: Hover Explorer presisi, navigasi tombol Back/Forward mouse, dan WizTree lebih mulus
+@en
+**Explorer hover pill tracking** is now pixel-accurate at any scroll depth and display scale: hover highlight computes the cursor row directly against the measured `uniform_list` row metrics and container origin, eliminating vertical drift when scrolling long folders.
+
+**Navigation history & mouse side buttons** now work across the entire workbench: press the rear/front thumb buttons on your mouse (`Mouse Back` / `Mouse Forward`), `Alt+Left` / `Alt+Right`, or the new **Back (`←`) and Forward (`→`)** buttons in the top Title Bar and WizTree header to move smoothly between files, folders, and WizTree without losing your place.
+
+**WizTree** was refined with directional smooth transitions when drilling into folders or switching views, aligned table columns (`Name`, `Share`, `Size`, `Files`) with fixed action slots, synchronized hover between tree rows and treemap blocks, a clearer hover inspector, and a clean animated **WizTree Settings (`⚙`)** popover for treemap visibility, hidden files, skipping build caches (`node_modules`, `target`, `dist`, `build`), sorting, minimum size filters, and treemap height.
+@id
+**Sorotan hover di Explorer** kini presisi di semua posisi scroll dan skala layar: posisi baris dihitung langsung dari metrik tinggi baris `uniform_list` dan posisi kontainer sehingga pill hover tidak lagi meleset ke bawah di daftar folder yang panjang.
+
+**Riwayat navigasi & tombol samping mouse** kini aktif di seluruh workbench: gunakan tombol belakang/depan pada mouse (`Mouse Back` / `Mouse Forward`), pintasan `Alt+Left` / `Alt+Right`, atau tombol **Kembali (`←`) dan Maju (`→`)** baru di Title Bar atas dan header WizTree untuk berpindah mulus antar file, folder, dan WizTree.
+
+**WizTree** juga ditingkatkan dengan animasi perpindahan terarah yang mulus saat masuk/kembali antar folder dan tab, kolom tabel yang sejajar rapi (`Nama`, `Porsi`, `Ukuran`, `File`), sinkronisasi hover antara baris pohon dan blok treemap, inspektor hover yang lebih jelas, serta popover **Pengaturan WizTree (`⚙`)** yang ringkas dan halus untuk toggle treemap, file tersembunyi, lewati cache build (`node_modules`, `target`, `dist`, `build`), urutan, filter ukuran minimum, dan tinggi treemap.
+
+@release 2026-11-24
 @title en: Built-in Rust WizTree, safe agent runtime auto-install, and fluid responsive UI
 @title id: WizTree Rust bawaan, pasang runtime agent otomatis yang aman, dan UI responsif yang mulus
 @en
