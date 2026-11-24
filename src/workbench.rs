@@ -2190,11 +2190,10 @@ impl Workbench {
                 self.procs.forget(id);
                 if let Some(ix) = self.terms.iter().position(|t| t.proc == Some(id)) {
                     self.terms[ix].proc = None;
-                    self.terms[ix].scroll.scroll_to_bottom();
-                    self.finish_run(true, code, cx);
+                    self.finish_run(Some(ix), code, cx);
                 } else if Some(id) == self.out_proc {
                     self.out_proc = None;
-                    self.finish_run(false, code, cx);
+                    self.finish_run(None, code, cx);
                 } else if self.agent.owns(id) {
                     self.agent_on_exit(cx);
                 } else if let Some(key) = self.agent.run_of(id) {
@@ -3551,7 +3550,7 @@ impl Workbench {
         };
         let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
         let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
-        let running = self.out_proc.is_some() || self.terms[self.term_ix].proc.is_some();
+        let running = self.out_proc.is_some() || self.terms.iter().any(|t| t.proc.is_some());
         let code_errs: usize = self.docs.iter().map(|d| d.error_count).sum();
         let code_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
         let total_errs = self.problems.len() + code_errs;

@@ -300,7 +300,9 @@ impl Workbench {
         let was = self.term_ix;
         self.terms.remove(ix);
         self.term_ix = close_index(was, ix, self.terms.len());
-        if self.term_ix != was {
+        if ix == was {
+            self.panel_sel = self.panel_sel.filter(|s| !s.terminal);
+            self.terms[self.term_ix].hist_ix = None;
             let draft = self.terms[self.term_ix].draft.clone();
             self.set_term_input(&draft, window, cx);
         }
@@ -647,12 +649,8 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn finish_run(&mut self, terminal: bool, code: Option<i32>, cx: &mut Context<Self>) {
-        self.finish(terminal.then_some(self.term_ix), code, cx);
-    }
-
     /// `term` names the terminal tab that finished; `None` is the Output tab.
-    fn finish(&mut self, term: Option<usize>, code: Option<i32>, cx: &mut Context<Self>) {
+    pub(crate) fn finish_run(&mut self, term: Option<usize>, code: Option<i32>, cx: &mut Context<Self>) {
         let terminal = term.is_some();
         let run = match term {
             Some(ix) => self.terms[ix].run.take(),
@@ -1486,45 +1484,52 @@ impl Workbench {
             .child(tab("p-prob", tr("Problems"), prob_badge, PanelTab::Problems, self, cx))
             .when(terminal, |h| {
                 h.child(div().flex_none().w(px(1.)).h(theme::u(16.)).bg(c(theme::BORDER)))
-                    .children((0..self.terms.len()).map(|ix| {
-                        let on = ix == self.term_ix;
-                        let name: SharedString = crate::trf!("Terminal {0}"; 0 => ix + 1).into();
+                    .child(
                         h_flex()
-                            .id(("p-tt", ix))
-                            .flex_none()
-                            .h(theme::u(22.))
-                            .px_1p5()
+                            .min_w_0()
+                            .overflow_hidden()
                             .gap_1()
                             .items_center()
-                            .rounded(px(4.))
-                            .text_xs()
-                            .cursor_pointer()
-                            .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                            .when(on, |d| d.bg(c(theme::BG_ELEVATED)))
-                            .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
-                            .child(name)
-                            .when(self.terms.len() > 1, |d| {
-                                d.child(
-                                    div()
-                                        .id(("p-ttx", ix))
-                                        .flex_none()
-                                        .size(theme::u(14.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(3.))
-                                        .text_color(c(theme::FG_DIM))
-                                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                        .child("×")
-                                        .on_click(cx.listener(move |this, _, w, cx| {
-                                            cx.stop_propagation();
-                                            this.close_terminal(ix, w, cx);
-                                        })),
-                                )
-                            })
-                            .on_click(cx.listener(move |this, _, w, cx| this.show_terminal(ix, w, cx)))
-                            .into_any_element()
-                    }))
+                            .children((0..self.terms.len()).map(|ix| {
+                                let on = ix == self.term_ix;
+                                let name: SharedString = crate::trf!("Terminal {0}"; 0 => ix + 1).into();
+                                h_flex()
+                                    .id(("p-tt", ix))
+                                    .flex_none()
+                                    .h(theme::u(22.))
+                                    .px_1p5()
+                                    .gap_1()
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                                    .when(on, |d| d.bg(c(theme::BG_ELEVATED)))
+                                    .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                                    .child(name)
+                                    .when(self.terms.len() > 1, |d| {
+                                        d.child(
+                                            div()
+                                                .id(("p-ttx", ix))
+                                                .flex_none()
+                                                .size(theme::u(14.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(px(3.))
+                                                .text_color(c(theme::FG_DIM))
+                                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                                .child("×")
+                                                .on_click(cx.listener(move |this, _, w, cx| {
+                                                    cx.stop_propagation();
+                                                    this.close_terminal(ix, w, cx);
+                                                })),
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |this, _, w, cx| this.show_terminal(ix, w, cx)))
+                                    .into_any_element()
+                            })),
+                    )
                     .child(tool_button("p-newterm", IconName::Plus, tr("New terminal"), cx, |this, w, cx| {
                         this.on_new_terminal(&NewTerminal, w, cx)
                     }))
@@ -1939,6 +1944,7 @@ mod tests {
         assert_eq!(close_index(2, 0, 2), 1, "closing a tab to the left shifts the active one down");
         assert_eq!(close_index(1, 0, 2), 0);
         assert_eq!(close_index(0, 0, 1), 0, "the last tab stays");
+        assert_eq!(close_index(1, 1, 1), 0, "closing the active last tab steps back");
     }
 
     #[test]
