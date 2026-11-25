@@ -45,7 +45,7 @@ pub(crate) fn save_json<T: Serialize>(name: &str, value: &T) {
 
 pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
-const SETTINGS_REV: u32 = 1;
+const SETTINGS_REV: u32 = 2;
 
 fn default_true() -> bool {
     true
@@ -143,7 +143,7 @@ impl Default for Settings {
             agent_accounts: Vec::new(),
             agent_account: Default::default(),
             agent_cli: "auto".into(),
-            agent_idle_min: 10,
+            agent_idle_min: 0,
             language: "auto".into(),
             agent_options: Default::default(),
             agent_access: String::new(),
@@ -182,6 +182,10 @@ impl Settings {
         let mut s: Self = load_json("settings.json");
         if s.rev < 1 {
             s.show_whitespace = false;
+        }
+        if s.rev < 2 && s.agent_idle_min == 10 {
+            // Replaced auto-stop default with non-destructive idle Working Set cooling + EcoQoS.
+            s.agent_idle_min = 0;
         }
         if s.agent_cli == "opencode" {
             s.agent_cli = "opencode-v2".into();
@@ -505,7 +509,7 @@ impl SettingsSection {
                 !s.agent_access.is_empty()
                     || s.agent_auto_approve
                     || s.agent_access_off != "write"
-                    || s.agent_idle_min != 10
+                    || s.agent_idle_min != 0
                     || !s.agent_right
                     || !s.agent_follow_edits
                     || w.github.is_some()
@@ -1804,7 +1808,7 @@ impl Workbench {
         }));
         vec![
             SettingEntry::inline("Permissions & behavior", "AI agent: access", tr("Read only: it reads and explains, edits and commands are refused. Read & write: it edits files (Undo is under the chat), commands ask first. Full access: nothing asks.").into(), "agent access permissions", access_controls),
-            SettingEntry::inline("Permissions & behavior", "AI agent: turn off when idle", tr("After 10 idle minutes the agent process stops and frees its memory (OpenCode uses several hundred MB). Your next message starts it again and continues the same chat.").into(), "idle memory agent timeout", settings_toggle("idle", "AI agent: turn off when idle", s.agent_idle_min > 0, cx, |w| w.settings.agent_idle_min = if w.settings.agent_idle_min == 0 { 10 } else { 0 })),
+            SettingEntry::inline("Permissions & behavior", "AI agent: turn off when idle", tr("FluxCode already cools idle agent RAM and CPU automatically without disconnecting it. Turn this on only if you also want the agent process stopped after 10 quiet minutes.").into(), "idle memory agent timeout", settings_toggle("idle", "AI agent: turn off when idle", s.agent_idle_min > 0, cx, |w| w.settings.agent_idle_min = if w.settings.agent_idle_min == 0 { 10 } else { 0 })),
             SettingEntry::inline("Permissions & behavior", "Agent panel on the right", tr("Dock the agent chat beside the editor instead of in the side bar. The arrow button in its header does the same.").into(), "agent dock right panel", settings_toggle("ar", "Agent panel on the right", s.agent_right, cx, |w| w.settings.agent_right = !w.settings.agent_right)),
             SettingEntry::inline("Permissions & behavior", "Follow the agent's edits", tr("When the agent changes a file, it opens in the editor and the change is typed in line by line while the view follows it. Takes under a second and never slows the agent.").into(), "agent follow edits typing", settings_toggle("follow", "Follow the agent's edits", s.agent_follow_edits, cx, |w| w.settings.agent_follow_edits = !w.settings.agent_follow_edits)),
             SettingEntry::stacked("Accounts", "GitHub", tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), "github token cli account login", self.render_github(cx)),

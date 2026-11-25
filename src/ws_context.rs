@@ -379,13 +379,48 @@ pub fn signature(i: &Inputs) -> u64 {
     i.files.len().hash(&mut h);
     if let Some(g) = i.git {
         g.branch.hash(&mut h);
-        g.count().hash(&mut h);
     }
     if let Some(wt) = i.wiztree {
         wt.total_size().hash(&mut h);
         wt.total_files().hash(&mut h);
     }
     h.finish()
+}
+
+pub fn git_signature(g: Option<&RepoStatus>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Some(g) = g {
+        g.branch.hash(&mut h);
+        g.ahead.hash(&mut h);
+        g.behind.hash(&mut h);
+        for c in g.conflicts.iter().chain(&g.staged).chain(&g.changes) {
+            c.code.hash(&mut h);
+            c.path.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+pub fn git_delta(g: &RepoStatus) -> String {
+    let branch = g.branch.as_deref().unwrap_or("(detached)");
+    let mut line = format!("[FluxCode context delta] Git status on {branch}");
+    if let Some(up) = &g.upstream {
+        let _ = write!(line, " ({} ahead, {} behind {up})", g.ahead, g.behind);
+    }
+    let changed: Vec<String> = g
+        .conflicts
+        .iter()
+        .chain(&g.staged)
+        .chain(&g.changes)
+        .map(|c| format!("{} {}", c.code, c.path))
+        .collect();
+    if changed.is_empty() {
+        line.push_str(": working tree clean");
+    } else {
+        let _ = write!(line, ": {}", first_n(changed, 15));
+    }
+    line
 }
 
 #[cfg(test)]

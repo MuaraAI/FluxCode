@@ -510,8 +510,34 @@ impl Workbench {
         let (procs, rx) = Procs::new();
         cx.spawn(async move |this, cx| {
             let mut rx = rx;
-            while let Some(ev) = rx.next().await {
-                if this.update(cx, |this, cx| this.on_proc_event(ev, cx)).is_err() {
+            while let Some(first) = rx.next().await {
+                let mut batch: Vec<ProcEvent> = Vec::with_capacity(8);
+                batch.push(first);
+                while batch.len() < 64 {
+                    match rx.try_recv() {
+                        Ok(ev) => {
+                            // Coalesce adjacent output chunks for the same process & stream to avoid UI redraw storms.
+                            match (batch.last_mut(), ev) {
+                                (
+                                    Some(ProcEvent::Output { id: lid, text: ltext, err: lerr }),
+                                    ProcEvent::Output { id, text, err },
+                                ) if *lid == id && *lerr == err => {
+                                    ltext.push_str(&text);
+                                }
+                                (_, ev) => batch.push(ev),
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                if this
+                    .update(cx, |this, cx| {
+                        for ev in batch {
+                            this.on_proc_event(ev, cx);
+                        }
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }

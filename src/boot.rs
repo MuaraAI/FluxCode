@@ -13,7 +13,7 @@ pub fn start() {
 }
 
 #[cfg(windows)]
-pub fn memory_mb() -> (f64, f64) {
+fn process_memory_counters(handle: isize) -> Option<(usize, usize)> {
     #[repr(C)]
     #[derive(Default)]
     struct Counters {
@@ -31,15 +31,27 @@ pub fn memory_mb() -> (f64, f64) {
     }
     #[link(name = "kernel32")]
     extern "system" {
-        fn GetCurrentProcess() -> isize;
         fn K32GetProcessMemoryInfo(process: isize, counters: *mut Counters, cb: u32) -> i32;
     }
     let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, ..Default::default() };
-    let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0;
-    if !ok {
-        return (0., 0.);
+    (unsafe { K32GetProcessMemoryInfo(handle, &mut c, c.cb) } != 0).then_some((c.working_set, c.private))
+}
+
+#[cfg(windows)]
+pub(crate) fn handle_working_set_bytes(handle: isize) -> Option<usize> {
+    process_memory_counters(handle).map(|(ws, _)| ws)
+}
+
+#[cfg(windows)]
+pub fn memory_mb() -> (f64, f64) {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
     }
-    (c.working_set as f64 / 1_048_576., c.private as f64 / 1_048_576.)
+    match process_memory_counters(unsafe { GetCurrentProcess() }) {
+        Some((ws, priv_b)) => (ws as f64 / 1_048_576., priv_b as f64 / 1_048_576.),
+        None => (0., 0.),
+    }
 }
 
 #[cfg(not(windows))]

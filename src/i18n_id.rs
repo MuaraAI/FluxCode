@@ -258,8 +258,8 @@ pub const ID: &[(&str, &str)] = &[
     ("AI agents and GitHub", "Agent AI dan GitHub"),
     ("AI agent: turn off when idle", "Agent AI: matikan saat nganggur"),
     (
-        "After 10 idle minutes the agent process stops and frees its memory (OpenCode uses several hundred MB). Your next message starts it again and continues the same chat.",
-        "Setelah 10 menit nganggur, proses agent berhenti dan melepas memorinya (OpenCode makan ratusan MB). Pesan berikutnya menyalakannya lagi dan melanjutkan chat yang sama.",
+        "FluxCode already cools idle agent RAM and CPU automatically without disconnecting it. Turn this on only if you also want the agent process stopped after 10 quiet minutes.",
+        "FluxCode sudah otomatis mendinginkan RAM dan CPU agent saat diam tanpa memutus sambungannya. Nyalakan ini hanya jika kamu juga ingin proses agent dihentikan setelah 10 menit tanpa aktivitas.",
     ),
     ("Agent panel on the right", "Panel agent di kanan"),
     (
@@ -1223,7 +1223,10 @@ pub const ID: &[(&str, &str)] = &[
     ("The request shows in the chat and the taskbar button flashes while FluxCode is in the background.", "Permintaannya muncul di chat dan tombol taskbar berkedip saat FluxCode di belakang."),
     ("The agent's own rules still come first: what its config denies stays denied, even with full access, and what it allows never reaches you.", "Aturan agent sendiri tetap didahulukan: yang ditolak config-nya tetap ditolak, walau akses penuh, dan yang diizinkannya tidak akan sampai ke kamu."),
     ("Stop when idle", "Berhenti saat diam"),
-    ("Turns the agent off after 10 quiet minutes to free memory. Your next message starts it again in the same chat.", "Mematikan agent setelah 10 menit tanpa aktivitas untuk melegakan memori. Pesan berikutnya menyalakannya lagi di chat yang sama."),
+    (
+        "FluxCode already trims idle RAM and CPU automatically while keeping the agent live. Turn this on only if you want it fully stopped after 10 quiet minutes.",
+        "FluxCode sudah otomatis memangkas RAM dan CPU saat diam sambil menjaga agent tetap aktif. Nyalakan ini hanya jika ingin agent dimatikan penuh setelah 10 menit tanpa aktivitas.",
+    ),
     ("1 chat saved on this PC.", "1 chat tersimpan di PC ini."),
     ("{n} chats saved on this PC.", "{n} chat tersimpan di PC ini."),
     ("Switch agent", "Ganti agent"),
