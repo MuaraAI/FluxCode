@@ -1,7 +1,7 @@
 # gpui-fast-windows 0.1.13, as FluxCode builds it
 
 A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
-(Apache-2.0, see LICENSE) with four changes, in `src/directx_renderer.rs`,
+(Apache-2.0, see LICENSE) with five changes, in `src/directx_renderer.rs`,
 `src/fast/frame.rs`, `src/window.rs` and `src/events.rs`. Search for "FluxCode" to find them.
 
 1. **Path textures on demand.** Upstream makes two window-sized textures for drawing
@@ -30,4 +30,11 @@ A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
    While fullscreen, `zoom()` is a no-op — fullscreen is `toggle_fullscreen`'s
    mode, not a maximize.
 
-To update: copy the new upstream version over this folder and apply the four changes again.
+5. **`start_window_move()` for Windows titlebar drag** (MuaraAI/FluxCode#126).
+   Implements `PlatformWindow::start_window_move` via `WM_GPUI_START_WINDOW_MOVE`,
+   which verifies `VK_LBUTTON` is still pressed, releases capture, and invokes
+   `DefWindowProcW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam)` directly instead of
+   posting `WM_NCLBUTTONDOWN` through `handle_nc_mouse_down_msg` (which incremented
+   `click_state` to 2 on a single press).
+
+To update: copy the new upstream version over this folder and apply the five changes again.

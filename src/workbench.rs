@@ -2371,8 +2371,6 @@ impl Workbench {
             div().id(id).flex_1().h_full().min_w(px(8.)).on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
                 if ev.click_count >= 2 {
                     window.zoom_window();
-                } else if cfg!(windows) {
-                    crate::wintitle::begin_move();
                 } else {
                     window.start_window_move();
                 }

@@ -999,6 +999,28 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn start_window_move(&self) {
+        // FluxCode (#126): defer caption drag until the input callback unwinds so
+        // DefWindowProcW's modal loop cannot re-enter GPUI while callbacks.input is taken.
+        if !self.0.is_movable {
+            return;
+        }
+        unsafe {
+            let mut cursor_point = POINT::default();
+            if GetCursorPos(&mut cursor_point).is_err() {
+                return;
+            }
+            ReleaseCapture().log_err();
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_GPUI_START_WINDOW_MOVE,
+                WPARAM(self.0.validation_number),
+                LPARAM(pack_cursor_lparam(cursor_point.x, cursor_point.y)),
+            )
+            .log_err();
+        }
+    }
+
     fn is_fullscreen(&self) -> bool {
         self.state.is_fullscreen()
     }
@@ -1787,6 +1809,13 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
     }
 }
 
+#[inline]
+fn pack_cursor_lparam(x: i32, y: i32) -> isize {
+    let x = x.clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16 as u32;
+    let y = y.clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16 as u32;
+    ((y << 16) | x) as i32 as isize
+}
+
 #[cfg(test)]
 mod tests {
     use super::ClickState;
@@ -1840,5 +1869,18 @@ mod tests {
             state.update(MouseButton::Right, point(DevicePixels(10), DevicePixels(0))),
             1
         );
+    }
+
+    #[test]
+    fn test_pack_cursor_lparam() {
+        use super::pack_cursor_lparam;
+        use crate::HiLoWord;
+        use windows::Win32::Foundation::LPARAM;
+
+        let p = LPARAM(pack_cursor_lparam(640, 24));
+        assert_eq!((p.signed_loword(), p.signed_hiword()), (640, 24));
+
+        let neg = LPARAM(pack_cursor_lparam(-500, -20));
+        assert_eq!((neg.signed_loword(), neg.signed_hiword()), (-500, -20));
     }
 }

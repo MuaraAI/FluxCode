@@ -29,6 +29,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
 pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
 pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
+pub(crate) const WM_GPUI_START_WINDOW_MOVE: u32 = WM_USER + 11;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
@@ -162,7 +163,8 @@ impl WindowsWindowInner {
             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
             WM_GPUI_CURSOR_STYLE_CHANGED
             | WM_GPUI_FORCE_UPDATE_WINDOW
-            | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
+            | WM_GPUI_GPU_DEVICE_LOST
+            | WM_GPUI_START_WINDOW_MOVE => self.handle_gpui_events(handle, msg, wparam, lparam),
             _ => None,
         };
         if let Some(n) = handled {
@@ -1330,7 +1332,20 @@ impl WindowsWindowInner {
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_START_WINDOW_MOVE => self.handle_start_window_move(handle, lparam),
             _ => unreachable!(),
+        }
+    }
+
+    fn handle_start_window_move(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        // FluxCode (#126): invoke DefWindowProcW directly so programmatic drag never
+        // re-enters handle_nc_mouse_down_msg and double-counts click_count.
+        if !self.is_movable || !is_virtual_key_pressed(VK_LBUTTON) {
+            return Some(0);
+        }
+        unsafe {
+            ReleaseCapture().log_err();
+            Some(DefWindowProcW(handle, WM_NCLBUTTONDOWN, WPARAM(HTCAPTION as usize), lparam).0)
         }
     }
 
