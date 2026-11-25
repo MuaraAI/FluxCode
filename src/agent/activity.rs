@@ -75,11 +75,71 @@ pub struct Step<'a> {
     pub title: &'a str,
     pub status: &'a str,
     pub joined_up: bool,
+    pub pull_up: bool,
     pub joined_down: bool,
     pub live: bool,
     pub note: Option<String>,
     pub open: bool,
     pub detail: Option<String>,
+}
+
+fn circle_px() -> f32 {
+    // Keep circle diameter an odd integer so the 1px vertical rail sits at exact integer center.
+    let raw = f32::from(theme::u(18.)).round();
+    if (raw as i32) % 2 == 0 { raw + 1. } else { raw }
+}
+
+fn build_rail(icon: IconName, running: bool, col: theme::Tok, joined_up: bool, joined_down: bool) -> AnyElement {
+    let d = circle_px();
+    let row_h = f32::from(theme::u(28.)).round();
+    let top = ((row_h - d) / 2.).round().max(0.);
+    let rail_x = (d - 1.) / 2.;
+    let mid = top + rail_x;
+    let icon_sz = f32::from(theme::u(10.)).round().min(d - 8.).max(9.);
+    div()
+        .relative()
+        .flex_none()
+        .w(px(d))
+        .min_h(px(row_h))
+        .h_full()
+        .when(joined_up, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .left(px(rail_x))
+                    .top_0()
+                    .w(px(1.))
+                    .h(px(mid))
+                    .bg(c(theme::BORDER_STRONG)),
+            )
+        })
+        .when(joined_down, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .left(px(rail_x))
+                    .top(px(mid))
+                    .bottom_0()
+                    .w(px(1.))
+                    .bg(c(theme::BORDER_STRONG)),
+            )
+        })
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px(top))
+                .size(px(d))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(c(if running { theme::ACCENT_TEXT } else { theme::BORDER }))
+                .bg(c(theme::BG_ELEVATED))
+                .child(Icon::new(icon).size(px(icon_sz)).text_color(c(col))),
+        )
+        .into_any_element()
 }
 
 impl Workbench {
@@ -98,26 +158,7 @@ impl Workbench {
         let time = self.agent.times.get(&s.key).and_then(|(_, d)| *d).map(took);
         let col = if failed { theme::DANGER } else if running { theme::ACCENT_TEXT } else { theme::FG_DIM };
 
-        let rail = v_flex()
-            .flex_none()
-            .w(theme::u(18.))
-            .h_full()
-            .items_center()
-            .child(div().w(px(1.)).h(theme::u(5.)).when(s.joined_up, |d| d.bg(c(theme::BORDER_STRONG))))
-            .child(
-                div()
-                    .flex_none()
-                    .size(theme::u(18.))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_1()
-                    .border_color(c(if running { theme::ACCENT_TEXT } else { theme::BORDER }))
-                    .bg(c(theme::BG_ELEVATED))
-                    .child(Icon::new(icon).size(theme::u(10.)).text_color(c(col))),
-            )
-            .child(div().w(px(1.)).flex_1().min_h(theme::u(5.)).when(s.joined_down, |d| d.bg(c(theme::BORDER_STRONG))));
+        let rail = build_rail(icon, running, col, s.joined_up, s.joined_down);
 
         let state_key: SharedString = format!("ag-step-{}-{}", s.key, if running { "run" } else { s.status }).into();
         let head = h_flex()
@@ -183,7 +224,7 @@ impl Workbench {
         let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
-            .when(s.joined_up, |d| d.mt(px(-8.)))
+            .when(s.pull_up, |d| d.mt(px(-8.)))
             .gap_2()
             .items_stretch()
             .when(on_click.is_some(), |d| d.cursor_pointer())
@@ -206,26 +247,7 @@ impl Workbench {
             parts.push(if g.tools == 1 { tr("1 tool").to_string() } else { crate::trf!("{n} tools"; n => g.tools) });
         }
         let col = if g.running { theme::ACCENT_TEXT } else { theme::FG_DIM };
-        let rail = v_flex()
-            .flex_none()
-            .w(theme::u(18.))
-            .h_full()
-            .items_center()
-            .child(div().h(theme::u(5.)))
-            .child(
-                div()
-                    .flex_none()
-                    .size(theme::u(18.))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_1()
-                    .border_color(c(if g.running { theme::ACCENT_TEXT } else { theme::BORDER }))
-                    .bg(c(theme::BG_ELEVATED))
-                    .child(Icon::new(IconName::ListCollapse).size(theme::u(10.)).text_color(c(col))),
-            )
-            .child(div().w(px(1.)).flex_1().min_h(theme::u(5.)).when(g.joined_down, |d| d.bg(c(theme::BORDER_STRONG))));
+        let rail = build_rail(IconName::ListCollapse, g.running, col, false, g.joined_down);
         h_flex()
             .id(("ag-group", first))
             .gap_2()

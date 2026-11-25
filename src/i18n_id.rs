@@ -1676,6 +1676,15 @@ pub const ID: &[(&str, &str)] = &[
         "AI Agent finished its task. Click the tray icon or reopen FluxCode to view the result.",
         "AI Agent selesai mengerjakan tugasnya. Klik ikon tray atau buka lagi FluxCode untuk melihat hasilnya.",
     ),
+    ("1 row", "1 baris"),
+    ("{n} rows", "{n} baris"),
+    ("Copy table as Markdown", "Salin tabel sebagai Markdown"),
+    ("Table copied", "Tabel disalin"),
+    ("Copy table as CSV", "Salin tabel sebagai CSV"),
+    ("CSV copied", "CSV disalin"),
+    ("Click to sort", "Klik untuk mengurutkan"),
+    ("Click to open file", "Klik untuk membuka file"),
+    ("Copied: {0}", "Disalin: {0}"),
 ];
 
 #[cfg(test)]

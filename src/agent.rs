@@ -32,7 +32,7 @@ pub(crate) enum Req {
     NewSession,
     LoadSession,
     Prompt,
-    SetOption,
+    SetOption { silent: bool, apply_effort: bool },
     Probe,
 }
 
@@ -43,6 +43,7 @@ mod follow;
 mod full;
 mod limit;
 mod saver;
+mod table;
 pub(crate) mod updates;
 mod tidy;
 pub(crate) mod worktree;
@@ -317,6 +318,7 @@ pub struct Run {
     pub(crate) times: activity::Times,
     pub(crate) limit: limit::LimitState,
     pub(crate) open_thought: Option<String>,
+    pub(crate) table_sorts: HashMap<String, (usize, bool)>,
 }
 
 static RUN_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -381,6 +383,7 @@ impl Run {
         web_open: HashSet::new(),
         times: Default::default(),
         open_thought: None,
+        table_sorts: HashMap::new(),
         ask: None,
         }
     }
@@ -804,6 +807,18 @@ impl Workbench {
     }
 
     pub(crate) fn agent_set_option(&mut self, id: &str, value: String, remember: bool, cx: &mut Context<Self>) {
+        self.agent_set_option_opts(id, value, remember, !remember, false, cx);
+    }
+
+    fn agent_set_option_opts(
+        &mut self,
+        id: &str,
+        value: String,
+        remember: bool,
+        silent: bool,
+        apply_effort: bool,
+        cx: &mut Context<Self>,
+    ) {
         if remember {
             let key = format!("{}:{id}", self.agent.agent);
             if self.settings.agent_options.get(&key) != Some(&value) {
@@ -822,13 +837,36 @@ impl Workbench {
             o.current = value.clone();
         }
         if let Some(session) = self.agent.session.clone() {
+            let req = Req::SetOption { silent, apply_effort };
             if id == MODE_ID {
-                self.agent_request(Req::SetOption, "session/set_mode", json!({ "sessionId": session, "modeId": value }));
+                self.agent_request(req, "session/set_mode", json!({ "sessionId": session, "modeId": value }));
             } else {
-                self.agent_request(Req::SetOption, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
+                self.agent_request(req, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
             }
         }
         cx.notify();
+    }
+
+    fn agent_apply_effort_option(&mut self, cx: &mut Context<Self>) {
+        let harness = self.agent.agent.clone();
+        let wanted = self
+            .agent
+            .config
+            .iter()
+            .find(|o| o.category == "thought_level")
+            .and_then(|o| {
+                let target = self
+                    .settings
+                    .agent_options
+                    .get(&format!("{harness}:{}", o.id))
+                    .map(String::as_str)
+                    .unwrap_or("medium");
+                (o.current != target && o.choices.iter().any(|c| c.0 == target))
+                    .then(|| (o.id.clone(), target.to_string()))
+            });
+        if let Some((id, value)) = wanted {
+            self.agent_set_option_opts(&id, value, false, true, false, cx);
+        }
     }
 
     pub(crate) fn agent_config_view(&self) -> Vec<ConfigOpt> {
@@ -955,6 +993,7 @@ impl Workbench {
         self.agent.items.truncate(ix);
         self.agent.open_thoughts.retain(|k| *k < ix);
         self.agent.open_groups.retain(|k| *k < ix);
+        self.agent.table_sorts.clear();
         self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
         self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
         self.agent.queue = vec![Queued { text, files }];
@@ -1259,7 +1298,7 @@ impl Workbench {
             self.agent.items.push(Item::Note(crate::trf!("Attached: {0}"; 0 => names.join(", ")), false));
         }
         let prompt_text = build_steer_prompt(&item.text, interrupted.as_ref());
-        self.agent_prompt(prompt_text, item.files, cx);
+        self.agent_prompt(prompt_text, item.text, item.files, cx);
     }
 
     fn agent_flush_queue(&mut self, cx: &mut Context<Self>) {
@@ -1335,7 +1374,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn agent_prompt(&mut self, text: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+    fn agent_prompt(&mut self, text: String, context_text: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(session) = self.agent.session.clone() else { return };
         let mut prompt = Vec::new();
         if let Some(earlier) = self.agent.carry.take() {
@@ -1346,7 +1385,7 @@ impl Workbench {
             prompt.push(json!({ "type": "text", "text": style }));
         }
         prompt.extend(self.agent_attachment_blocks(&files));
-        prompt.extend(self.agent_context_blocks(cx));
+        prompt.extend(self.agent_context_blocks(&context_text, cx));
         if !text.starts_with("(Your previous answer stopped at a usage limit.") {
             self.agent.limit.last = Some((text, files));
         }
@@ -1463,7 +1502,8 @@ impl Workbench {
                     }
                     self.sync_tray_agent_state();
                 }
-                Req::SetOption => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
+                Req::SetOption { silent: true, .. } => {}
+                Req::SetOption { silent: false, .. } => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
                 Req::Probe => {
                     self.agent.status = Status::Ready;
                     if std::mem::take(&mut self.agent.compacting) {
@@ -1515,34 +1555,43 @@ impl Workbench {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
                 self.agent_take_config(&result);
                 let harness = self.agent.agent.clone();
-                let wanted: Vec<(String, String)> = self
-                    .agent
-                    .config
-                    .iter()
-                    .filter_map(|o| {
-                        let v = self.settings.agent_options.get(&format!("{harness}:{}", o.id))?;
-                        (o.current != *v && o.choices.iter().any(|c| c.0 == *v)).then(|| (o.id.clone(), v.clone()))
-                    })
-                    .collect();
-                for (id, v) in wanted {
-                    self.agent_set_option(&id, v, false, cx);
+                let mut model_opt: Option<(String, String)> = None;
+                let mut other_opts: Vec<(String, String)> = Vec::new();
+                for o in &self.agent.config {
+                    if o.category == "thought_level" {
+                        continue;
+                    }
+                    let Some(v) = self.settings.agent_options.get(&format!("{harness}:{}", o.id)) else {
+                        continue;
+                    };
+                    if o.current != *v && o.choices.iter().any(|c| c.0 == *v) {
+                        if o.category == "model" {
+                            model_opt = Some((o.id.clone(), v.clone()));
+                        } else {
+                            other_opts.push((o.id.clone(), v.clone()));
+                        }
+                    }
                 }
-                let effort = self
-                    .agent
-                    .config
-                    .iter()
-                    .find(|o| o.category == "thought_level")
-                    .filter(|o| !self.settings.agent_options.contains_key(&format!("{harness}:{}", o.id)) && o.current != "medium" && o.choices.iter().any(|c| c.0 == "medium"))
-                    .map(|o| o.id.clone());
-                if let Some(id) = effort {
-                    self.agent_set_option(&id, "medium".into(), false, cx);
+                for (id, v) in other_opts {
+                    self.agent_set_option_opts(&id, v, false, true, false, cx);
+                }
+                // Apply thought_level only after any saved model switch updates the model's valid choices.
+                if let Some((id, v)) = model_opt {
+                    self.agent_set_option_opts(&id, v, false, true, true, cx);
+                } else {
+                    self.agent_apply_effort_option(cx);
                 }
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(cx);
                 self.agent_flush_queue(cx);
                 self.agent_probe_next(cx);
             }
-            Req::SetOption => self.agent_take_config(&result),
+            Req::SetOption { apply_effort, .. } => {
+                self.agent_take_config(&result);
+                if apply_effort {
+                    self.agent_apply_effort_option(cx);
+                }
+            }
             Req::Probe => {
                 self.agent.status = Status::Ready;
                 if std::mem::take(&mut self.agent.compacting) {
@@ -2776,6 +2825,10 @@ impl Workbench {
 
     fn agent_chips(&self, cx: &App) -> Vec<(String, String, Icon, bool)> {
         let text = self.agent.input.read(cx).value().to_string();
+        self.agent_chips_for(&text, cx)
+    }
+
+    fn agent_chips_for(&self, text: &str, cx: &App) -> Vec<(String, String, Icon, bool)> {
         let off = |k: &str| self.agent.off_ctx.contains(k);
         let mut chips = Vec::new();
         if let Some(d) = self
@@ -2801,7 +2854,7 @@ impl Workbench {
                 }
             }
         }
-        if agent_ctx::wants_error(&text) {
+        if agent_ctx::wants_error(text) {
             if let Some(p) = self.problems.first() {
                 let name = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let kind = p.message.split(':').next().unwrap_or("Error").to_string();
@@ -2810,11 +2863,14 @@ impl Workbench {
                 chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), Icon::new(IconName::CircleX), !off("err")));
             }
         }
-        if agent_ctx::wants_output(&text) && !self.terms[self.term_ix].lines.is_empty() {
+        if agent_ctx::wants_output(text) && !self.terms[self.term_ix].lines.is_empty() {
             chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), Icon::new(IconName::SquareTerminal), !off("out")));
         }
-        let has_wiz_mention = agent_ctx::mentions(&text).iter().any(|m| m.eq_ignore_ascii_case("wiztree"));
-        let wants_wiz = self.wiztree.page || self.wiztree.pin_agent || has_wiz_mention || agent_ctx::wants_disk(&text);
+        let mentions = agent_ctx::mentions(text);
+        let has_wiz_mention = mentions
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case("wiztree") || m.eq_ignore_ascii_case("wizztree"));
+        let wants_wiz = self.wiztree.page || self.wiztree.pin_agent || has_wiz_mention || agent_ctx::wants_disk(text);
         if wants_wiz && (self.wiztree.tree.is_some() || self.root.is_some()) {
             let label = match &self.wiztree.tree {
                 Some(t) if self.wiztree.focus != 0 => {
@@ -2828,8 +2884,8 @@ impl Workbench {
         if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
             chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), Icon::new(IconName::FolderOpen), !off("ws")));
         }
-        for m in agent_ctx::mentions(&text) {
-            if m.eq_ignore_ascii_case("wiztree") {
+        for m in mentions {
+            if m.eq_ignore_ascii_case("wiztree") || m.eq_ignore_ascii_case("wizztree") {
                 continue;
             }
             if let Some(root) = &self.root {
@@ -2882,8 +2938,8 @@ impl Workbench {
         None
     }
 
-    fn agent_context_blocks(&mut self, cx: &mut Context<Self>) -> Vec<Value> {
-        let chips = self.agent_chips(cx);
+    fn agent_context_blocks(&mut self, user_text: &str, cx: &mut Context<Self>) -> Vec<Value> {
+        let chips = self.agent_chips_for(user_text, cx);
         let mut blocks = Vec::new();
         let resource = |path: &Path, body: String| json!({ "type": "resource", "resource": { "uri": crate::docs::file_uri(path), "text": body, "mimeType": "text/plain" } });
         for (key, _, _, on) in &chips {
@@ -3730,7 +3786,6 @@ impl Workbench {
     fn render_agent_item(&mut self, i: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let Some(item) = a.items.get(i) else { return div().into_any_element() };
-        let name = agent_name();
         let speaker = |who: &str, icon: Icon| {
             h_flex()
                 .pt_1()
@@ -3746,17 +3801,14 @@ impl Workbench {
         let joined_up = |k: usize| is_step(k.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(k).is_some_and(|r| r.0 == k);
         let last_item = i + 1 == a.items.len();
         let mut col = v_flex().w_full().min_w_0().px_3().pt_2().when(last_item, |v| v.pb_3());
-        let answer = !matches!(item, Item::User(_) | Item::Note(..) | Item::Branch(_));
-        let prev = a.items[..i].iter().rev().find(|x| !matches!(x, Item::Note(..)));
-        if answer && matches!(prev, None | Some(Item::User(_) | Item::Branch(_))) {
-            col = col.child(speaker(name, Icon::new(gpui_kit::assets::IconName::MessageSquareCode)));
-        }
         let top = a.view_start.get();
+        let mut is_group_head = false;
         if let Some((first, last)) = run_of(i) {
             let head = first.max(top);
             let open = a.open_groups.contains(&first);
             let live_tail = busy && last + 1 == a.items.len();
             if i == head {
+                is_group_head = true;
                 let members = &a.items[first..=last];
                 let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
                 let tools = members.len() - thoughts;
@@ -3784,6 +3836,44 @@ impl Workbench {
                 return if i == head { col.into_any_element() } else { div().into_any_element() };
             }
         }
+        let pull_up = joined_up(i) && !is_group_head;
+        let render_md = |id: SharedString, body: String| {
+            TextView::markdown(id, body)
+                .text_sm()
+                .style(chat_text_style())
+                .code_block_actions(|block, _, _| {
+                    let (copy, insert) = (block.code().to_string(), block.code().to_string());
+                    h_flex()
+                        .gap_px()
+                        .p_px()
+                        .rounded(px(4.))
+                        .bg(c(theme::BG_ELEVATED))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .child(
+                            Button::new("cb-copy")
+                                .icon(IconName::Copy)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Copy"))
+                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                        )
+                        .child(
+                            Button::new("cb-insert")
+                                .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
+                                .ghost()
+                                .xsmall()
+                                .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
+                                .on_click(move |_, w, cx| {
+                                    if let Ok(mut p) = PENDING_INSERT.lock() {
+                                        *p = Some(insert.clone());
+                                    }
+                                    w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
+                                }),
+                        )
+                })
+                .into_any_element()
+        };
     col.child(match item {
             Item::User(t) => {
                 let group = SharedString::from(format!("ag-user-{i}"));
@@ -3833,41 +3923,32 @@ impl Workbench {
                     )
                     .into_any_element()
             }
-            Item::Text(t) => TextView::markdown(("ag-md", i), tidy::answer(t).into_owned())
-                .text_sm()
-                .style(chat_text_style())
-                .code_block_actions(|block, _, _| {
-                    let (copy, insert) = (block.code().to_string(), block.code().to_string());
-                    h_flex()
-                        .gap_px()
-                        .p_px()
-                        .rounded(px(4.))
-                        .bg(c(theme::BG_ELEVATED))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .child(
-                            Button::new("cb-copy")
-                                .icon(IconName::Copy)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(tr("Copy"))
-                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
-                        )
-                        .child(
-                            Button::new("cb-insert")
-                                .icon(Icon::new(gpui_kit::assets::IconName::TextCursorInput))
-                                .ghost()
-                                .xsmall()
-                                .tooltip(tr("Insert at the cursor in the open file (replaces the selection)"))
-                                .on_click(move |_, w, cx| {
-                                    if let Ok(mut p) = PENDING_INSERT.lock() {
-                                        *p = Some(insert.clone());
-                                    }
-                                    w.dispatch_action(Box::new(crate::workbench::AgentInsertCode), cx);
-                                }),
-                        )
-                })
-                .into_any_element(),
+            Item::Text(t) => {
+                let cleaned = tidy::answer(t);
+                if !cleaned.contains('|') {
+                    render_md(SharedString::from(format!("ag-md-{i}")), cleaned.into_owned())
+                } else {
+                    let segs = table::split_markdown_tables(&cleaned);
+                    if segs.len() == 1 && matches!(&segs[0], table::Segment::Markdown(_)) {
+                        render_md(SharedString::from(format!("ag-md-{i}")), cleaned.into_owned())
+                    } else {
+                        let mut table_ix = 0usize;
+                        let mut children: Vec<AnyElement> = Vec::with_capacity(segs.len());
+                        for (seg_ix, seg) in segs.into_iter().enumerate() {
+                            match seg {
+                                table::Segment::Markdown(md) => {
+                                    children.push(render_md(SharedString::from(format!("ag-md-{i}-{seg_ix}")), md));
+                                }
+                                table::Segment::Table(tbl) => {
+                                    children.push(self.render_md_table(i, table_ix, &tbl, cx));
+                                    table_ix += 1;
+                                }
+                            }
+                        }
+                        v_flex().w_full().min_w_0().gap_1().children(children).into_any_element()
+                    }
+                }
+            }
             Item::Thought(t) => {
                 let open = a.open_thoughts.contains(&i);
                 let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
@@ -3877,6 +3958,7 @@ impl Workbench {
                     title: "",
                     status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
                     joined_up: joined_up(i),
+                    pull_up,
                     joined_down: is_step(a.items.get(i + 1)),
                     live: a.status == Status::Busy,
                     note: (!open).then_some(last),
@@ -3911,6 +3993,7 @@ impl Workbench {
                     title,
                     status,
                     joined_up: joined_up(i),
+                    pull_up,
                     joined_down: is_step(a.items.get(i + 1)),
                     live: a.status == Status::Busy,
                     note: None,

@@ -2506,8 +2506,9 @@ impl Workbench {
         let box_w = f32::from(theme::u(420.)).min(win_w * 0.3);
         let menus = self.title_menu_end.get() + 12.;
         let left = ((win_w - box_w) / 2.).max(menus);
-        // Reserve space for Run + Min + Max + Close (4 x 46px) and optional Update badge.
-        let right_reserve = 46. * 4.
+        let ctl_w = theme::u(44.);
+        // Reserve space for Run + Min + Max + Close and optional Update badge.
+        let right_reserve = f32::from(ctl_w) * 4.
             + if self.update_waiting().is_some() {
                 96.
             } else {
@@ -2524,12 +2525,13 @@ impl Workbench {
             .items_center()
             .when(show_center && w >= 180., |d| d.child(center.w_full().max_w(relative(1.))));
         let maximized = window.is_maximized();
-        let ctl = |id: &'static str, icon: IconName, close: bool| {
-            div()
+        // Centered 24x24 minimize bar (gpui-kit-assets window-minimize.svg sits above y=12).
+        const MINIMIZE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="11.2" width="16" height="1.6" rx="0.8" fill="#000000"/></svg>"##;
+        let ctl = |id: &'static str, icon: Icon, close: bool| {
+            h_flex()
                 .id(id)
-                .w(px(46.))
+                .w(ctl_w)
                 .h_full()
-                .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
@@ -2541,41 +2543,44 @@ impl Workbench {
                         s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))
                     }
                 })
-                .child(Icon::new(icon).small())
+                .child(icon)
         };
-                let start_btn = div()
-                    .id("tb-start")
-                    .w(px(46.))
-                    .h_full()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .text_color(c(theme::FG_MUTED))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                    .child(Icon::new(IconName::Play).small())
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Run File (F5)")).build(w, cx))
-                    .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)));
+        let start_btn = h_flex()
+            .id("tb-start")
+            .w(ctl_w)
+            .h_full()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .text_color(c(theme::FG_MUTED))
+            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+            .child(Icon::new(IconName::Play).size(theme::u(12.)))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Run File (F5)")).build(w, cx))
+            .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)));
 
-                h_flex()
-                    .id("title-bar")
-                    .relative()
-                    .w_full()
-                    .h(theme::u(34.))
-                    .flex_none()
-                    .bg(c(theme::BG_TITLE))
-                    .border_b_1()
-                    .border_color(c(theme::BORDER))
-                    .child(row)
-                    .child(start_btn)
-                    .child(ctl("tb-min", IconName::WindowMinimize, false).on_click(|_, w, _| w.minimize_window()))
-                    .child(
-                        ctl("tb-max", if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }, false)
-                            .on_click(|_, w, _| w.zoom_window()),
-                    )
-                    .child(ctl("tb-close", IconName::WindowClose, true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
-                    .child(center_layer)
-                    .into_any_element()
+        h_flex()
+            .id("title-bar")
+            .relative()
+            .w_full()
+            .h(theme::u(34.))
+            .flex_none()
+            .bg(c(theme::BG_TITLE))
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .child(row)
+            .child(start_btn)
+            .child(ctl("tb-min", Icon::default().data(MINIMIZE_SVG).size(theme::u(14.)), false).on_click(|_, w, _| w.minimize_window()))
+            .child(
+                ctl(
+                    "tb-max",
+                    Icon::new(if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }).size(theme::u(14.)),
+                    false,
+                )
+                .on_click(|_, w, _| w.zoom_window()),
+            )
+            .child(ctl("tb-close", Icon::new(IconName::WindowClose).size(theme::u(14.)), true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+            .child(center_layer)
+            .into_any_element()
     }
 
     fn render_title_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {

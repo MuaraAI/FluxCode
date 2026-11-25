@@ -103,7 +103,7 @@ impl Workbench {
             return cx.notify();
         }
         self.agent.items.push(Item::Note(tr("Continuing after the usage limit.").into(), false));
-        self.agent_prompt(format!("(Your previous answer stopped at a usage limit. Continue from where you stopped.)\n\n{text}"), files, cx);
+        self.agent_prompt(format!("(Your previous answer stopped at a usage limit. Continue from where you stopped.)\n\n{text}"), text, files, cx);
         cx.notify();
     }
 

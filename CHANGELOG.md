@@ -5,55 +5,38 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
-## Smart Agent Queue & Force Send, background close-to-tray, WizTree AI context, editable Bedrock NBT, and multi-language terminal (25 November 2026)
+## WizTree AI & Disk Analyzer, Smart Agent Queue, Interactive Tables, Editable Bedrock NBT, Multi-Terminal, and Native UI Precision (24-25 November 2026)
 
-- **Rebuilt Agent Queue & Context-Aware Force Send**:
-  - Executes queued messages one-by-one in FIFO order instead of merging them into a single prompt.
-  - Adds a structured Queue panel with **Pause / Resume**, **Clear**, and per-item **Send Now**, **Move Up / Down**, **Edit in input**, and **Remove**.
-  - **Force Send (`Ctrl+Enter` or `Now`)**: when the agent is mid-turn, snapshots the paused task's original prompt, plan state, completed tools, modified files, and partial output, interrupts cleanly, answers/handles the new urgent message first, and resumes the paused task until complete (skipping continuation when the prior task was already finished).
-- **Sharper Native IDE UI**:
-  - Replaces the oversized header pill switch with a compact `On`/`Off` status button and tightens heavy rounded radii (`8-14 px` / `rounded-full`) across context chips, composer, message bubbles, permission/changes cards, and glass overlays down to crisp `2-6 px` native editor geometry.
-- **Isolated Agent Process Environment & Close-to-Tray Lifecycle**:
-  - Spawns AI agents inside a dedicated Windows process group and **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) while preserving full access to the host laptop's `PATH`, SDKs, tools, and workspace.
-  - Closing FluxCode while an AI agent is actively running hides the window to the **Windows System Tray** (with FluxCode's icon, status & completion balloons, `Open FluxCode`, `Stop AI Agent & Exit`, and single-instance wake when relaunching `fluxcode.exe`). Closing when agents are stopped performs a full shutdown and terminates every agent process tree with zero zombie processes.
-- **WizTree AI Agent Context**:
-  - Adds single-pass `DiskTree::ai_summary` covering folder hierarchy (largest -> smallest), lightweight folders & tiny files, cache/waste hotspots, extensions, and top 12 largest files.
-  - Wired into `@wiztree`, **Ask Agent** / **Copy** header buttons, automatic disk-intent detection, workspace context, and CLI `fluxcode --wiztree`.
-- **Full Minecraft Bedrock Data Support**:
+- **Built-in Pure-Rust WizTree & Zero-Overhead AI Disk Context**:
+  - Open from the Activity Bar drive icon, **View > Disk Usage (WizTree)**, or `Ctrl+Shift+Y`. Indexes your workspace or any folder in parallel using a compact flat arena with zero extra dependencies and zero idle resource usage.
+  - Includes an interactive squarified treemap with hover inspection and folder zoom, expandable size-sorted tree, extension breakdown, top 100 largest files, aligned columns (`Name`, `Share`, `Size`, `Files`), synchronized tree/treemap hover, directional transitions, and an animated **WizTree Settings (`⚙`)** popover (Show Treemap, hidden files, skip build caches, sorting, minimum size filter, and treemap height).
+  - Single-pass `DiskTree::ai_summary` feeds folder hierarchy (largest -> smallest), lightweight folders & tiny files, cache/waste hotspots, extensions, and top 12 largest files directly to AI agents via `@wiztree` / `@wizztree`, **Ask Agent** / **Copy** buttons, automatic disk-intent detection, workspace context, and CLI `fluxcode --wiztree`.
+  - Fixed prompt context extraction so `@wiztree`, `@file`, terminal output, and error blocks are read from the actual sent message text instead of the already-cleared composer input, allowing AI agents to answer disk questions in **0-1 tool calls** instead of multi-step shell scripts.
+- **Rebuilt Agent Queue, Context-Aware Force Send, & Startup Effort Fix**:
+  - Executes queued messages one-by-one in strict FIFO order with a full Queue panel (**Pause / Resume**, **Clear**, and per-item **Send Now**, **Move Up / Down**, **Edit in input**, and **Remove**).
+  - **Force Send (`Ctrl+Enter` or `Now`)**: snapshots the paused task's original prompt, plan state, completed tools, modified files, and partial output, cleanly interrupts the active turn, handles the urgent request first, and resumes the paused task until complete (skipping continuation when already finished).
+  - Fixed startup `Invalid params: effort not found: medium` errors on non-reasoning models (e.g. `Hy4 flash`) by deferring `thought_level` until a saved model switch returns its valid choices and silencing background startup option mismatches.
+- **Interactive, Responsive Markdown Tables in Agent Chat**:
+  - Native GPUI Markdown table widget (`src/agent/table.rs`) replaces squished mid-word-breaking tables in Agent responses.
+  - Numeric, percentage, and byte-size columns stay strictly single-line (`whitespace-nowrap`) and right-aligned; text and file path columns get proportional room with automatic horizontal scroll on narrow panels and full-width fit on wide panels.
+  - Click any column header to sort smartly (byte sizes like `33.71 MB` > `5.68 MB` > `240 KB`, percentages, integers, and text) with `Total` summary rows pinned at the bottom; click cells to open workspace files directly or copy cell values; one-click **Copy** (Markdown) and **CSV** export in the table bar.
+- **Isolated Agent Process Environment, Close-to-Tray Lifecycle, & Safe Runtime Auto-Install**:
+  - Spawns AI agents inside a dedicated Windows process group and **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) while retaining full access to the host laptop's `PATH`, SDKs, tools, and workspace.
+  - Closing FluxCode while an AI agent is actively running hides the window to the **Windows System Tray** (with status & completion balloons, `Open FluxCode`, `Stop AI Agent & Exit`, and single-instance wake when relaunching `fluxcode.exe`). Closing when agents are stopped performs a full shutdown and terminates every agent process tree with zero zombie processes.
+  - Fixes `npm could not start (nul byte found in provided data)` by sanitizing Windows registry `Path` entries (`REG_SZ` / `REG_EXPAND_SZ`) and automatically installs **SHA-256-verified** Node.js/npm or `uv` atomically into `~/.fluxcode/runtime/` when missing or broken.
+- **Full Editable Minecraft Bedrock Data Support**:
   - Pure-Rust binary decoder/encoder (`src/nbt.rs`) opens `level.dat`, `level.dat_old` (old and modern headered formats), `.mcstructure`, `.nbt`, and Java NBT as editable SNBT with live syntax diagnostics and lossless binary save.
   - Adds read-only **LevelDB** (`db/*.log` WAL and `db/*.ldb` SSTable with pure-Rust Snappy/Zlib decompression) viewer, Bedrock world summary in workspace context, and pack discovery inside world folders.
-- **Multi-Language Terminal & Tab Completion Fix**:
-  - Parses errors, compiler diagnostics, and stack frames across Python, JS/TS (`tsc`), Rust, Go, Java, Kotlin, C/C++ (GCC/Clang/MSVC), C#/.NET, Zig, PHP, Ruby, Lua, Dart, Swift, Shell, and PowerShell with clickable `file:line:col` links on any terminal/output line that open the exact file, line, and column and focus the editor.
-  - Fixes the empty-prompt `Tab` bug that spammed directory dumps into terminal scrollback; `Tab` now cycles completions inline (directory-only for `cd`) with quiet status feedback.
+- **Multi-Terminal Tabs, Multi-Language Error Parser, & Tab Completion Fix**:
+  - Supports multiple terminals in the bottom panel (`+` or `Ctrl+Shift+\``), each with its own working directory, output, scroll position, draft command, close button, and owning-tab exit routing.
+  - Parses errors, compiler diagnostics, and stack frames across Python, JS/TS (`tsc`), Rust, Go, Java, Kotlin, C/C++ (GCC/Clang/MSVC), C#/.NET, Zig, PHP, Ruby, Lua, Dart, Swift, Shell, and PowerShell with clickable `file:line:col` jump links.
+  - Fixes the empty-prompt `Tab` bug that spammed directory dumps; `Tab` now cycles completions inline (directory-only for `cd`) with quiet status feedback.
+- **Precision Native UI, Navigation, & Editor Ergonomics**:
+  - Tightens heavy rounded radii (`8-14 px` / pills) across the Agent panel and glass overlays to crisp `2-6 px` native geometry; removes the redundant assistant speaker header above `Worked`; aligns activity timeline circles and `1 px` connector rails to exact odd-pixel centers with uniform spacing.
+  - Fixes Windows frameless window top border offset (`WindowBorderOffset` via `ClientToScreen`) so the top of the title bar is never clipped above the monitor, centers the `Minimize` glyph mathematically at `y=12`, and balances `Run` / `Minimize` / `Maximize` / `Close` title bar icon alignment.
+  - Fixes Explorer hover pill alignment at any scroll depth using measured `uniform_list` row metrics; adds global **Mouse Back/Forward** (`Alt+Left` / `Alt+Right` + Title Bar & WizTree `←`/`→` buttons); adds **Settings > Editor > Wheel scroll speed** (50% to 300% in 10% steps, [#112](https://github.com/MuaraAI/FluxCode/issues/112)); fixes narrow-width overlaps across the workbench; adds a live hover-preview theme dropdown, smooth gliding toggles, smooth Agent file chip jumps, and auto-scrolling tab bar.
 - **Removed Discontinued Features**:
   - Completely removes Live Share (`src/collab/`, `relay/`, and 4 unused dependencies) and Mura ACP agent entries/references.
-
-## The terminal holds more than one shell (24 November 2026)
-
-- The panel header shows a tab per terminal, a **+** opens another one next to the
-  running shell, and **Ctrl+Shift+`** does the same from the keyboard. Each tab keeps
-  its own working directory, output, scroll position and half-typed command, and its own
-  **×** closes it; the last tab stays.
-
-## Wheel scroll speed is a setting (24 November 2026)
-
-- A mouse whose wheel scrolls too little or too much per notch can now be corrected in
-  **Settings > Editor > Wheel scroll speed**, from 50% to 300% in 10% steps
-  ([#112](https://github.com/MuaraAI/FluxCode/issues/112)).
-- It scales how far one notch asks the view to move, so the smooth glide and the rest of
-  the editor stay as they are. Trackpads send precise pixel deltas and keep their own speed.
-
-## Precision Explorer hover tracking, mouse Back/Forward navigation, and smoother WizTree (24 November 2026)
-
-- **Explorer hover alignment fix**: Replaces the hardcoded row height assumption with measured `uniform_list` row metrics and container-level cursor tracking (re-synced after wheel scroll), fixing the vertical offset bug where the gliding hover highlight drifted below the pointer on scrolled file lists.
-- **Global Back/Forward navigation (Mouse side buttons + top bar + shortcuts)**: Adds `MouseButton::Navigate(Back | Forward)`, `Alt+Left` / `Alt+Right`, Command Palette `Go: Back` / `Go: Forward`, and sleek **Back (`←`) / Forward (`→`)** buttons in the top Title Bar and WizTree breadcrumb bar (`←`, `→`, `↑` Parent). Step cleanly through WizTree folder history, jump from a file back into WizTree, and move back and forth across opened files with smooth directional transitions.
-- **WizTree polish & Settings popover**: Fixes file row column alignment with sticky headers (`Name`, `Share`, `Size`, `Files`) and consistent action widths, syncs hover highlight between tree rows and treemap blocks, surfaces hovered item name/size/share cleanly before the path, adds smooth directional view transitions, and introduces a clean animated **WizTree Settings (`⚙`)** popover (Show Treemap, Include hidden files, Skip build caches, Sort by Size/Files/Name, Minimum size filter, and Treemap height).
-
-## Built-in Rust WizTree, safe agent runtime auto-install, and fluid responsive UI (24 November 2026)
-
-- **Built-in WizTree (Disk Usage Analyzer) in Rust**: Open from the Activity Bar drive icon, **View > Disk Usage (WizTree)**, or `Ctrl+Shift+Y`. Indexes your workspace or any chosen folder in parallel using a compact flat arena with zero extra dependencies and zero idle resource usage. Includes an interactive squarified treemap with hover inspection and folder zoom, expandable size-sorted tree, extension breakdown, top 100 largest files, live filter, and one-click open or reveal in Explorer.
-- **Safe automatic agent runtime installation & Windows `PATH` fix**: Fixes `npm could not start (nul byte found in provided data)` by truncating embedded NULs from Windows registry `Path` entries (`REG_SZ` and `REG_EXPAND_SZ`) and sanitizing `fresh_path()`. When an ACP agent needs **Node.js & npm** or **uv** and the environment is missing or broken, FluxCode clearly informs the user, downloads the official release with live progress, verifies its **SHA-256** checksum in pure Rust, validates `--version`, and swaps it atomically into `~/.fluxcode/runtime/` without modifying system directories or leaving partial files.
-- **Responsive UI & smooth interactions**: Fixes overlapping toolbar/row layouts at narrow widths across Extensions, Search, Source Control, Panel, Agent, Settings, Titlebar, and Status Bar. Replaces the Settings theme card grid with a minimalist **realtime hover-preview theme dropdown** with smooth interpolated color fades (shared with the status bar theme menu). Makes toggle switches and segmented controls glide smoothly with blended track colors and sliding active pills. Clicking an **Agent file chip** exits overlays/full-screen agent and jumps smoothly to the file with an arrival highlight in the editor and Explorer. Opening or activating any file now smoothly auto-scrolls the tab bar after layout so the active tab is always visible.
 
 ## Saving in a WSL folder no longer hangs (21 November 2026)
 

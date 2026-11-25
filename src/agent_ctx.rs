@@ -118,6 +118,9 @@ mod tests {
         assert_eq!(mention_query("mail a@b.com", 12), None);
         assert_eq!(mention_query("@app.py done", 12), None);
         assert_eq!(mentions("look at @app.py, and @src/main.rs."), vec!["app.py".to_string(), "src/main.rs".to_string()]);
+        assert_eq!(mentions("cek @wiztree"), vec!["wiztree".to_string()]);
+        assert!(wants_disk("cek @wiztree"));
+        assert!(wants_disk("cek @wizztree"));
     }
 
     #[test]

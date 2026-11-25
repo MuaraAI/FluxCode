@@ -1447,6 +1447,8 @@ type Color = (u8, u8, u8, u8);
 pub(crate) struct WindowBorderOffset {
     pub(crate) width_offset: Cell<i32>,
     pub(crate) height_offset: Cell<i32>,
+    pub(crate) left_offset: Cell<i32>,
+    pub(crate) top_offset: Cell<i32>,
 }
 
 impl WindowBorderOffset {
@@ -1461,10 +1463,26 @@ impl WindowBorderOffset {
             GetClientRect(hwnd, &mut rect)?;
             rect
         };
-        self.width_offset
-            .set((window_rect.right - window_rect.left) - (client_rect.right - client_rect.left));
-        self.height_offset
-            .set((window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top));
+        let width_off =
+            (window_rect.right - window_rect.left) - (client_rect.right - client_rect.left);
+        let height_off =
+            (window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top);
+        // Measure actual left/top non-client inset: frameless windows have 0 top inset
+        // (all height_offset is on the bottom resize frame), so splitting height_offset / 2
+        // would push the top of the title bar above the screen.
+        let mut client_origin = POINT { x: 0, y: 0 };
+        let (left_off, top_off) = if unsafe { ClientToScreen(hwnd, &mut client_origin) }.as_bool() {
+            (
+                (client_origin.x - window_rect.left).clamp(0, width_off.max(0)),
+                (client_origin.y - window_rect.top).clamp(0, height_off.max(0)),
+            )
+        } else {
+            (width_off / 2, height_off / 2)
+        };
+        self.width_offset.set(width_off);
+        self.height_offset.set(height_off);
+        self.left_offset.set(left_off);
+        self.top_offset.set(top_off);
         Ok(())
     }
 }
@@ -1602,8 +1620,8 @@ fn calculate_window_rect(bounds: Bounds<DevicePixels>, border_offset: &WindowBor
         right: bounds.right().0,
         bottom: bounds.bottom().0,
     };
-    let left_offset = border_offset.width_offset.get() / 2;
-    let top_offset = border_offset.height_offset.get() / 2;
+    let left_offset = border_offset.left_offset.get();
+    let top_offset = border_offset.top_offset.get();
     let right_offset = border_offset.width_offset.get() - left_offset;
     let bottom_offset = border_offset.height_offset.get() - top_offset;
     rect.left -= left_offset;
@@ -1618,8 +1636,8 @@ fn calculate_client_rect(
     border_offset: &WindowBorderOffset,
     scale_factor: f32,
 ) -> Bounds<Pixels> {
-    let left_offset = border_offset.width_offset.get() / 2;
-    let top_offset = border_offset.height_offset.get() / 2;
+    let left_offset = border_offset.left_offset.get();
+    let top_offset = border_offset.top_offset.get();
     let right_offset = border_offset.width_offset.get() - left_offset;
     let bottom_offset = border_offset.height_offset.get() - top_offset;
     let left = rect.left + left_offset;

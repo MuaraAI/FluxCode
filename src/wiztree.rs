@@ -312,7 +312,7 @@ impl DiskTree {
         let mut out = String::with_capacity(max_chars.min(4096));
         let _ = writeln!(
             out,
-            "WizTree disk map for {focus_rel} ({}): {} total, {} files, {} folders (scanned in {} ms):",
+            "[FluxCode Built-in WizTree Disk Index - ALREADY SCANNED]\nWizTree disk map for {focus_rel} ({}): {} total, {} files, {} folders (scanned in {} ms):",
             self.full_path(fid).display(),
             format_bytes(fnode.size),
             format_count(fnode.files),
@@ -506,7 +506,7 @@ impl DiskTree {
         }
 
         out.push_str(
-            "Note: Indexed natively by FluxCode WizTree. Use this summary directly for size, layout, and cleanup questions instead of running ripgrep, find, or du.",
+            "Instructions for AI agent: This workspace is already indexed natively by FluxCode WizTree above. Answer disk usage, folder size, waste, and largest-file questions directly from this summary with ZERO tool calls (do not run PowerShell, Get-ChildItem, Get-Process, find, du, or grep). Only if the user specifically asks to drill deeper into a subfolder not expanded above, run at most ONE single command: `fluxcode --wiztree <subfolder>`.",
         );
         if out.len() > max_chars && max_chars > 64 {
             let cut = (0..=max_chars - 32).rev().find(|&i| out.is_char_boundary(i)).unwrap_or(0);
