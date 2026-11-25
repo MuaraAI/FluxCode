@@ -37,3 +37,11 @@ The best code is the code never written. Solve the whole problem with the least 
 - Comment only the *why* the code cannot show, in one concise line (and follow `antislop-code`).
 - Put a `#[cfg(test)]` unit test next to new non-trivial logic.
 - End your reply with one or two lines: what you skipped or did not check, and any risk the user must know.
+
+## Git Commits & Pull Requests (`github-repo-pr`)
+
+Always load and follow `.agents/skills/github-repo-pr/SKILL.md` paired with
+`.agents/skills/antislop/SKILL.md` and `.agents/skills/antislop-copywriting/SKILL.md`
+whenever generating git commit messages, PR titles, or PR descriptions in FluxCode.
+Keep them human, direct, lowercase-friendly, zero em dashes, real observed evidence only,
+and free of boilerplate headings, checklists, or AI buzzwords.

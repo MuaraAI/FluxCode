@@ -11,6 +11,14 @@ pub(crate) const EXTENSIONS: &[&str] = &[
 
 const SCRIPTS: &[&str] = &["bat", "cmd", "ps1", "psm1"];
 
+fn is_script(ext: &str) -> bool {
+    SCRIPTS.contains(&ext)
+}
+
+pub(crate) fn open_with_extensions() -> impl Iterator<Item = &'static str> {
+    EXTENSIONS.iter().copied().filter(|ext| !is_script(ext))
+}
+
 pub(crate) const PROG_ID: &str = "FluxCode.File";
 const MENU_KEY: &str = "FluxCode";
 const MENU_LABEL: &str = "Open with FluxCode";
@@ -195,13 +203,21 @@ pub(crate) fn register() -> Result<(), String> {
     for (key, name, data) in entries(&exe) {
         set(HKCU, &format!("{CLASSES}\\{key}"), name, Some(&data))?;
     }
-    for ext in EXTENSIONS {
+    for ext in open_with_extensions() {
         let key = format!("{CLASSES}\\.{ext}");
         set(HKCU, &format!("{key}\\OpenWithProgids"), Some(PROG_ID), None)?;
         set(HKCU, &format!("{CLASSES}\\Applications\\FluxCode.exe\\SupportedTypes"), Some(&format!(".{ext}")), Some(""))?;
-        if !SCRIPTS.contains(ext) && get(HKCR, &format!(".{ext}"), None).filter(|v| !v.is_empty()).is_none() {
+        if get(HKCR, &format!(".{ext}"), None).filter(|v| !v.is_empty()).is_none() {
             set(HKCU, &key, None, Some(PROG_ID))?;
         }
+    }
+    // Remove OpenWithProgids/SupportedTypes on script types from older builds so double-clicking .bat/.cmd still executes them.
+    for ext in SCRIPTS {
+        let key = format!("{CLASSES}\\.{ext}");
+        let _ = reg::delete_value(HKCU, &format!("{key}\\OpenWithProgids"), Some(PROG_ID));
+        reg::delete_if_empty(HKCU, &format!("{key}\\OpenWithProgids"));
+        reg::delete_if_empty(HKCU, &key);
+        let _ = reg::delete_value(HKCU, &format!("{CLASSES}\\Applications\\FluxCode.exe\\SupportedTypes"), Some(&format!(".{ext}")));
     }
     notify_shell();
     Ok(())
@@ -281,6 +297,17 @@ mod tests {
         for e in EXTENSIONS {
             assert!(!e.starts_with('.') && *e == e.to_lowercase(), "{e}");
             assert!(seen.insert(*e), "{e} twice");
+        }
+    }
+
+    #[test]
+    fn scripts_are_excluded_from_open_with() {
+        let list: Vec<&str> = open_with_extensions().collect();
+        for s in SCRIPTS {
+            assert!(!list.contains(s), "script {s} must not be added to Open with");
+        }
+        for code in ["rs", "ts", "json", "md", "txt"] {
+            assert!(list.contains(&code), "expected {code} in Open with");
         }
     }
 }

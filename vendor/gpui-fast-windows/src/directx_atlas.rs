@@ -130,12 +130,34 @@ impl AtlasBackend for DirectXAtlasTextures {
     }
 }
 
+const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
+    width: DevicePixels(1024),
+    height: DevicePixels(1024),
+};
+// Max texture size for DirectX. See:
+// https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
+const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
+    width: DevicePixels(16384),
+    height: DevicePixels(16384),
+};
+
+fn fits_in_atlas(size: Size<DevicePixels>) -> bool {
+    size.width > DevicePixels(0)
+        && size.height > DevicePixels(0)
+        && size.width <= MAX_ATLAS_SIZE.width
+        && size.height <= MAX_ATLAS_SIZE.height
+}
+
 impl DirectXAtlasTextures {
     fn allocate(
         &mut self,
         size: Size<DevicePixels>,
         texture_kind: AtlasTextureKind,
     ) -> Option<AtlasTile> {
+        // Direct3D 11 caps textures at 16384px; rejecting early avoids allocating and leaking an unused texture every frame.
+        if !fits_in_atlas(size) {
+            return None;
+        }
         {
             let textures = match texture_kind {
                 AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
@@ -161,16 +183,6 @@ impl DirectXAtlasTextures {
         min_size: Size<DevicePixels>,
         kind: AtlasTextureKind,
     ) -> Option<&mut DirectXAtlasTexture> {
-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(1024),
-            height: DevicePixels(1024),
-        };
-        // Max texture size for DirectX. See:
-        // https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
-        const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(16384),
-            height: DevicePixels(16384),
-        };
         let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
         let pixel_format;
         let bind_flag;
@@ -416,5 +428,13 @@ mod tests {
 
         let tile_b = insert_tile(&atlas, big_key_b, big);
         assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
+    }
+
+    #[test]
+    fn oversized_tiles_are_rejected_before_allocation() {
+        assert!(!fits_in_atlas(Size { width: DevicePixels(1280), height: DevicePixels(18032) }));
+        assert!(!fits_in_atlas(Size { width: DevicePixels(0), height: DevicePixels(100) }));
+        assert!(!fits_in_atlas(Size { width: DevicePixels(-1), height: DevicePixels(100) }));
+        assert!(fits_in_atlas(Size { width: DevicePixels(16384), height: DevicePixels(16384) }));
     }
 }
