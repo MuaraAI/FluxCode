@@ -19,10 +19,55 @@ const FIRST_PART: usize = 32 << 10;
 const FRAME: usize = 64 << 10;
 const FRAMES_KEPT: usize = 6;
 const DRAW_COLORS: [u32; 4] = [0xF59E0B, 0xEF4444, 0x22C55E, 0x38BDF8];
+const DRAW_COLOR_NAMES: [&str; 4] = ["Amber (1)", "Red (2)", "Green (3)", "Blue (4)"];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InkTool {
+    #[default]
+    Pen,
+    Marker,
+    Highlighter,
+}
+
+impl InkTool {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Pen => Self::Marker,
+            Self::Marker => Self::Highlighter,
+            Self::Highlighter => Self::Pen,
+        }
+    }
+
+    pub fn width(self) -> f32 {
+        match self {
+            Self::Pen => 2.5,
+            Self::Marker => 5.0,
+            Self::Highlighter => 15.0,
+        }
+    }
+
+    pub fn alpha(self) -> f32 {
+        match self {
+            Self::Pen => 1.0,
+            Self::Marker => 0.95,
+            Self::Highlighter => 0.30,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pen => "Pen",
+            Self::Marker => "Marker",
+            Self::Highlighter => "Highlighter",
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Stroke {
     pub color: u32,
+    pub width: f32,
+    pub alpha: f32,
     pub pts: Vec<(f32, f32)>,
 }
 
@@ -31,13 +76,56 @@ pub struct InkState {
     pub zoom: f32,
     pub draw: bool,
     pub color: u32,
+    pub tool: InkTool,
     pub strokes: Vec<Stroke>,
+    pub redo: Vec<Stroke>,
     pub active: Option<Stroke>,
+    pub copied_seq: u64,
+    pub copied_ok: bool,
 }
 
 impl InkState {
     fn new() -> Self {
-        Self { zoom: 1., draw: false, color: DRAW_COLORS[0], strokes: Vec::new(), active: None }
+        Self {
+            zoom: 1.,
+            draw: false,
+            color: DRAW_COLORS[0],
+            tool: InkTool::Pen,
+            strokes: Vec::new(),
+            redo: Vec::new(),
+            active: None,
+            copied_seq: 0,
+            copied_ok: false,
+        }
+    }
+
+    fn push_stroke(&mut self, stroke: Stroke) {
+        if !stroke.pts.is_empty() {
+            self.strokes.push(stroke);
+            self.redo.clear();
+        }
+    }
+
+    fn undo(&mut self) -> bool {
+        let Some(last) = self.strokes.pop() else {
+            return false;
+        };
+        self.redo.push(last);
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        self.strokes.push(next);
+        true
+    }
+
+    fn clear(&mut self) {
+        self.strokes.clear();
+        self.redo.clear();
+        self.active = None;
     }
 }
 
@@ -125,6 +213,8 @@ pub fn prepare(src: String) -> Prepared {
     Prepared { doc, text, ms }
 }
 
+type RectBox = [f32; 4];
+
 struct Shared {
     text: Text,
     doc: Doc,
@@ -134,6 +224,7 @@ struct Shared {
     open: Rc<RefCell<HashSet<u32>>>,
     ink: Rc<RefCell<InkState>>,
     scale: Cell<f32>,
+    last_bounds: Rc<Cell<Option<RectBox>>>,
 }
 
 impl Shared {
@@ -185,7 +276,12 @@ impl FluxView {
         groups.shrink_to_fit();
         let list = ListState::new(groups.len(), ListAlignment::Top, px(600.));
         let z = ink.borrow().zoom.max(0.5);
-        Self { shared: Rc::new(Shared { text, doc, groups, want, base, open, ink, scale: Cell::new(z) }), list, parsed_ms, pending: false }
+        Self {
+            shared: Rc::new(Shared { text, doc, groups, want, base, open, ink, scale: Cell::new(z), last_bounds: Rc::new(Cell::new(None)) }),
+            list,
+            parsed_ms,
+            pending: false,
+        }
     }
 
     pub fn new(src: String, base: PathBuf, lang: &str) -> Self {
@@ -285,7 +381,7 @@ impl FluxView {
 
         let draw_on = sh.ink.borrow().draw;
         let has_ink = draw_on || !sh.ink.borrow().strokes.is_empty() || sh.ink.borrow().active.is_some();
-        let ink_layer = has_ink.then(|| render_ink_layer(sh.ink.clone(), self.list.clone(), notify.clone()));
+        let ink_layer = has_ink.then(|| render_ink_layer(sh.ink.clone(), self.list.clone(), sh.last_bounds.clone(), notify.clone()));
         let sh_wheel = sh.clone();
         let notify_wheel = notify.clone();
 
@@ -966,7 +1062,12 @@ fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops
     out
 }
 
-fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn Fn(&mut App)>) -> AnyElement {
+fn render_ink_layer(
+    ink: Rc<RefCell<InkState>>,
+    list: ListState,
+    last_bounds: Rc<Cell<Option<RectBox>>>,
+    notify: Rc<dyn Fn(&mut App)>,
+) -> AnyElement {
     let ink_draw = ink.clone();
     let list_draw = list.clone();
     let ink_ev = ink;
@@ -975,6 +1076,12 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
     canvas(
         move |bounds, window, _| draw_on.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
         move |bounds, hitbox, window, _| {
+            last_bounds.set(Some([
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ]));
             let scroll_y = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_draw).y);
             let origin = bounds.origin;
             {
@@ -984,10 +1091,12 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
                         continue;
                     }
                     let col: Hsla = rgb(s.color).into();
+                    let col = col.opacity(s.alpha.clamp(0.05, 1.0));
+                    let width = s.width.max(1.0);
                     if s.pts.len() == 1 {
                         let (x, y) = s.pts[0];
                         let p = origin + point(px(x), px(y - scroll_y));
-                        let mut pb = PathBuilder::stroke(px(3.));
+                        let mut pb = PathBuilder::stroke(px(width.max(3.0)));
                         pb.move_to(p);
                         pb.line_to(p + point(px(0.5), px(0.5)));
                         if let Ok(path) = pb.build() {
@@ -995,7 +1104,7 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
                         }
                         continue;
                     }
-                    let mut pb = PathBuilder::stroke(px(2.5));
+                    let mut pb = PathBuilder::stroke(px(width));
                     let (x0, y0) = s.pts[0];
                     pb.move_to(origin + point(px(x0), px(y0 - scroll_y)));
                     for &(x, y) in &s.pts[1..] {
@@ -1010,14 +1119,24 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
             let (ink_down, list_down, notify_down) = (ink_ev.clone(), list_ev.clone(), notify.clone());
             let hb_down = hitbox.clone();
             window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
-                if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !hb_down.is_hovered(window) {
+                if phase != DispatchPhase::Bubble || !hb_down.is_hovered(window) {
+                    return;
+                }
+                if ev.button == MouseButton::Right {
+                    if ink_down.borrow_mut().undo() {
+                        cx.stop_propagation();
+                        notify_down(cx);
+                    }
+                    return;
+                }
+                if ev.button != MouseButton::Left {
                     return;
                 }
                 let sy = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_down).y);
                 let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y) + sy);
                 let mut st = ink_down.borrow_mut();
-                let color = st.color;
-                st.active = Some(Stroke { color, pts: vec![pt] });
+                let (color, width, alpha) = (st.color, st.tool.width(), st.tool.alpha());
+                st.active = Some(Stroke { color, width, alpha, pts: vec![pt] });
                 drop(st);
                 cx.stop_propagation();
                 notify_down(cx);
@@ -1030,9 +1149,7 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
                 if ev.pressed_button != Some(MouseButton::Left) {
                     let mut st = ink_move.borrow_mut();
                     if let Some(s) = st.active.take() {
-                        if !s.pts.is_empty() {
-                            st.strokes.push(s);
-                        }
+                        st.push_stroke(s);
                         drop(st);
                         notify_move(cx);
                     }
@@ -1048,18 +1165,64 @@ fn render_ink_layer(ink: Rc<RefCell<InkState>>, list: ListState, notify: Rc<dyn 
                     notify_move(cx);
                 }
             });
-            let (ink_up, notify_up) = (ink_ev, notify);
+            let (ink_up, notify_up) = (ink_ev.clone(), notify.clone());
             window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
                 if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left {
                     return;
                 }
                 let mut st = ink_up.borrow_mut();
                 if let Some(s) = st.active.take() {
-                    if !s.pts.is_empty() {
-                        st.strokes.push(s);
-                    }
+                    st.push_stroke(s);
                     drop(st);
                     notify_up(cx);
+                }
+            });
+            let (ink_key, notify_key) = (ink_ev, notify);
+            window.on_key_event::<KeyDownEvent>(move |ev, phase, _, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let mut st = ink_key.borrow_mut();
+                if !st.draw {
+                    return;
+                }
+                let m = &ev.keystroke.modifiers;
+                let plain = !m.control && !m.alt && !m.platform;
+                let changed = match ev.keystroke.key.as_str() {
+                    "escape" if plain => {
+                        st.draw = false;
+                        st.active = None;
+                        true
+                    }
+                    "1" if plain => {
+                        st.color = DRAW_COLORS[0];
+                        true
+                    }
+                    "2" if plain => {
+                        st.color = DRAW_COLORS[1];
+                        true
+                    }
+                    "3" if plain => {
+                        st.color = DRAW_COLORS[2];
+                        true
+                    }
+                    "4" if plain => {
+                        st.color = DRAW_COLORS[3];
+                        true
+                    }
+                    "b" if plain => {
+                        st.tool = st.tool.next();
+                        true
+                    }
+                    "z" if m.control && !m.alt && !m.platform && !m.shift => st.undo(),
+                    "y" if m.control && !m.alt && !m.platform && !m.shift => st.redo(),
+                    "z" if m.control && !m.alt && !m.platform && m.shift => st.redo(),
+                    _ => false,
+                };
+                drop(st);
+                if changed {
+                    cx.stop_propagation();
+                    notify_key(cx);
                 }
             });
         },
@@ -1091,16 +1254,254 @@ pub fn ui_lang() -> &'static str {
     if crate::i18n::is_id() { "id" } else { "en" }
 }
 
+pub(crate) fn annotated_png_path(doc_path: &std::path::Path) -> PathBuf {
+    let stem = doc_path.file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("preview");
+    let dir = doc_path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    dir.join(format!("{stem}-annotated.png"))
+}
+
+#[cfg(windows)]
+fn capture_window_crop(hwnd: isize, rect: RectBox, scale: f32) -> Option<image::RgbaImage> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[repr(C)]
+    struct BitmapInfoHeader {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_ppm: i32,
+        y_ppm: i32,
+        clr_used: u32,
+        clr_important: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetClientRect(hwnd: isize, rect: *mut Rect) -> i32;
+        fn GetDC(hwnd: isize) -> isize;
+        fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
+        fn PrintWindow(hwnd: isize, hdc: isize, flags: u32) -> i32;
+    }
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateCompatibleDC(hdc: isize) -> isize;
+        fn DeleteDC(hdc: isize) -> i32;
+        fn CreateDIBSection(hdc: isize, bmi: *const BitmapInfoHeader, usage: u32, bits: *mut *mut u8, sec: isize, off: u32) -> isize;
+        fn SelectObject(hdc: isize, obj: isize) -> isize;
+        fn DeleteObject(obj: isize) -> i32;
+        fn GdiFlush() -> i32;
+    }
+    if hwnd == 0 {
+        return None;
+    }
+    unsafe {
+        let mut rc = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetClientRect(hwnd, &mut rc) == 0 {
+            return None;
+        }
+        let cw = rc.right - rc.left;
+        let ch = rc.bottom - rc.top;
+        if cw <= 0 || ch <= 0 {
+            return None;
+        }
+        let hdc_win = GetDC(hwnd);
+        if hdc_win == 0 {
+            return None;
+        }
+        let hdc_mem = CreateCompatibleDC(hdc_win);
+        if hdc_mem == 0 {
+            ReleaseDC(hwnd, hdc_win);
+            return None;
+        }
+        let bmi = BitmapInfoHeader {
+            size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+            width: cw,
+            height: -ch,
+            planes: 1,
+            bit_count: 32,
+            compression: 0,
+            size_image: 0,
+            x_ppm: 0,
+            y_ppm: 0,
+            clr_used: 0,
+            clr_important: 0,
+        };
+        let mut bits: *mut u8 = std::ptr::null_mut();
+        let hbm = CreateDIBSection(hdc_mem, &bmi, 0, &mut bits, 0, 0);
+        if hbm == 0 || bits.is_null() {
+            if hbm != 0 {
+                DeleteObject(hbm);
+            }
+            DeleteDC(hdc_mem);
+            ReleaseDC(hwnd, hdc_win);
+            return None;
+        }
+        let old = SelectObject(hdc_mem, hbm);
+        // PW_RENDERFULLCONTENT (2) captures DirectComposition swap-chain surfaces.
+        let ok = PrintWindow(hwnd, hdc_mem, 2) != 0;
+        GdiFlush();
+
+        let out = if ok {
+            let rx = (rect[0] * scale).round().clamp(0.0, cw as f32) as usize;
+            let ry = (rect[1] * scale).round().clamp(0.0, ch as f32) as usize;
+            let rw = (rect[2] * scale).round().max(1.0) as usize;
+            let rh = (rect[3] * scale).round().max(1.0) as usize;
+            let w = rw.min((cw as usize).saturating_sub(rx));
+            let h = rh.min((ch as usize).saturating_sub(ry));
+            if w > 0 && h > 0 {
+                let src = std::slice::from_raw_parts(bits, cw as usize * ch as usize * 4);
+                let mut rgba = vec![0u8; w * h * 4];
+                let mut any_non_zero = false;
+                for y in 0..h {
+                    let s_row = ((ry + y) * cw as usize + rx) * 4;
+                    let d_row = y * w * 4;
+                    for x in 0..w {
+                        let s = s_row + x * 4;
+                        let d = d_row + x * 4;
+                        let (b, g, r) = (src[s], src[s + 1], src[s + 2]);
+                        any_non_zero |= (b | g | r) != 0;
+                        rgba[d] = r;
+                        rgba[d + 1] = g;
+                        rgba[d + 2] = b;
+                        rgba[d + 3] = 255;
+                    }
+                }
+                if any_non_zero {
+                    image::RgbaImage::from_raw(w as u32, h as u32, rgba)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let _ = c_void::from; // keep import tidy if unused
+        SelectObject(hdc_mem, old);
+        DeleteObject(hbm);
+        DeleteDC(hdc_mem);
+        ReleaseDC(hwnd, hdc_win);
+        out
+    }
+}
+
+fn hex_rgba(hex: u32, alpha: u8) -> [u8; 4] {
+    [((hex >> 16) & 0xff) as u8, ((hex >> 8) & 0xff) as u8, (hex & 0xff) as u8, alpha]
+}
+
+fn dist_to_segment_sq(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let len_sq = dx * dx + dy * dy;
+    if len_sq <= 1e-6 {
+        return (px - ax).powi(2) + (py - ay).powi(2);
+    }
+    let t = (((px - ax) * dx + (py - ay) * dy) / len_sq).clamp(0.0, 1.0);
+    let (qx, qy) = (ax + dx * t, ay + dy * t);
+    (px - qx).powi(2) + (py - qy).powi(2)
+}
+
+fn blend_pixel(buf: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 3], cov: f32) {
+    if cov <= 0.0 {
+        return;
+    }
+    let p = buf.get_pixel_mut(x, y);
+    let a = cov.clamp(0.0, 1.0);
+    let inv = 1.0 - a;
+    p[0] = (p[0] as f32 * inv + src[0] as f32 * a).round() as u8;
+    p[1] = (p[1] as f32 * inv + src[1] as f32 * a).round() as u8;
+    p[2] = (p[2] as f32 * inv + src[2] as f32 * a).round() as u8;
+    p[3] = 255;
+}
+
+fn rasterize_ink_fallback(width: u32, height: u32, bg_hex: u32, scroll_y: f32, strokes: &[Stroke]) -> image::RgbaImage {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut visible = false;
+    for s in strokes {
+        for &(x, y) in &s.pts {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+            let vy = y - scroll_y;
+            if x >= 0.0 && x <= width as f32 && vy >= 0.0 && vy <= height as f32 {
+                visible = true;
+            }
+        }
+    }
+    let (ox, oy, w, h) = if visible || strokes.is_empty() {
+        (0.0, scroll_y, width.clamp(1, 4096), height.clamp(1, 4096))
+    } else {
+        let pad = 32.0;
+        let sw = (max_x - min_x + pad * 2.0).ceil().clamp(320.0, 4096.0) as u32;
+        let sh = (max_y - min_y + pad * 2.0).ceil().clamp(200.0, 4096.0) as u32;
+        (min_x - pad, min_y - pad, sw, sh)
+    };
+    let bg = image::Rgba(hex_rgba(bg_hex, 255));
+    let mut img = image::RgbaImage::from_pixel(w, h, bg);
+    for s in strokes {
+        if s.pts.is_empty() {
+            continue;
+        }
+        let col = hex_rgba(s.color, 255);
+        let rgb = [col[0], col[1], col[2]];
+        let radius = (s.width.max(1.0)) * 0.5;
+        let alpha = s.alpha.clamp(0.05, 1.0);
+        let draw_seg = |img: &mut image::RgbaImage, a: (f32, f32), b: (f32, f32)| {
+            let x0 = ((a.0.min(b.0) - ox - radius - 1.5).floor() as i32).max(0) as u32;
+            let y0 = ((a.1.min(b.1) - oy - radius - 1.5).floor() as i32).max(0) as u32;
+            let x1 = ((a.0.max(b.0) - ox + radius + 1.5).ceil() as i32).min(w as i32 - 1).max(0) as u32;
+            let y1 = ((a.1.max(b.1) - oy + radius + 1.5).ceil() as i32).min(h as i32 - 1).max(0) as u32;
+            for py in y0..=y1 {
+                for px in x0..=x1 {
+                    let d = dist_to_segment_sq(px as f32 + 0.5, py as f32 + 0.5, a.0 - ox, a.1 - oy, b.0 - ox, b.1 - oy).sqrt();
+                    let cov = (radius + 0.75 - d).clamp(0.0, 1.0) * alpha;
+                    if cov > 0.0 {
+                        blend_pixel(img, px, py, rgb, cov);
+                    }
+                }
+            }
+        };
+        if s.pts.len() == 1 {
+            draw_seg(&mut img, s.pts[0], s.pts[0]);
+        } else {
+            for pair in s.pts.windows(2) {
+                draw_seg(&mut img, pair[0], pair[1]);
+            }
+        }
+    }
+    img
+}
+
+fn encode_png(img: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(img.clone())
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 impl crate::workbench::Workbench {
     pub(crate) fn render_flux_bar(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         use crate::i18n::tr;
         let d = &self.docs[ix];
         let Some(v) = d.flux.as_ref() else { return div().into_any_element() };
         let source = d.flux_source;
-        let (zoom, draw_on, cur_color, has_strokes) = {
+        let (zoom, draw_on, cur_color, cur_tool, stroke_count, has_redo, copied_ok) = {
             let st = v.shared.ink.borrow();
-            (st.zoom, st.draw, st.color, !st.strokes.is_empty())
+            (st.zoom, st.draw, st.color, st.tool, st.strokes.len(), !st.redo.is_empty(), st.copied_ok)
         };
+        let has_strokes = stroke_count > 0;
         let zoom_label: SharedString = format!("{}%", (zoom * 100.).round()).into();
         let tab = |id: &'static str, icon: IconName, label: &'static str, on: bool, want_source: bool, cx: &mut Context<Self>| {
             h_flex()
@@ -1123,6 +1524,8 @@ impl crate::workbench::Workbench {
             crate::trf!("{n} blocks · read in {ms} ms · text in {size}"; n => thousands(v.blocks()), ms => format!("{:.1}", v.parsed_ms), size => crate::viewer::human_size(v.kept_bytes() as u64)).into()
         };
         let md_name = d.path.with_extension("md").file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let png_name = annotated_png_path(&d.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let tool_tip: SharedString = crate::trf!("Brush: {tool} (B, right-click to undo)"; tool => tr(cur_tool.label())).into();
         h_flex()
             .flex_none()
             .gap_1()
@@ -1161,12 +1564,20 @@ impl crate::workbench::Workbench {
                 )
                 .child(
                     ui::tool_button("fx-draw-toggle", IconName::Pencil, draw_on)
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Annotate over preview")).build(w, cx))
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(if draw_on {
+                                tr("Exit annotation mode (Esc)")
+                            } else {
+                                tr("Annotate over preview")
+                            })
+                            .build(w, cx)
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| this.flux_toggle_draw(ix, cx))),
                 )
                 .when(draw_on, |h| {
                     h.children(DRAW_COLORS.into_iter().enumerate().map(|(ci, col)| {
                         let picked = cur_color == col;
+                        let tip = DRAW_COLOR_NAMES[ci];
                         div()
                             .id(("fx-ink-col", ci))
                             .size(theme::u(16.))
@@ -1175,19 +1586,61 @@ impl crate::workbench::Workbench {
                             .bg(rgb(col))
                             .border_2()
                             .border_color(if picked { c(theme::FG_STRONG) } else { gpui_kit::transparent_black() })
+                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
                             .on_click(cx.listener(move |this, _, _, cx| this.flux_set_ink_color(ix, col, cx)))
                     }))
+                    .child(
+                        h_flex()
+                            .id("fx-ink-tool")
+                            .h(theme::u(22.))
+                            .px_1p5()
+                            .gap_1()
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(c(theme::FG))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
+                            .active(|s| s.bg(c(theme::BG_ELEVATED)))
+                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tool_tip.clone()).build(w, cx))
+                            .child(Icon::new(IconName::PencilLine).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)))
+                            .child(tr(cur_tool.label()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.flux_cycle_ink_tool(ix, cx))),
+                    )
+                })
+                .when(has_strokes, |h| {
+                    h.child(div().px_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{stroke_count}")))
+                        .child(
+                            ui::tool_button("fx-ink-undo", IconName::Undo, false)
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Undo last stroke")).build(w, cx))
+                                .on_click(cx.listener(move |this, _, _, cx| this.flux_undo_ink(ix, cx))),
+                        )
+                })
+                .when(has_redo, |h| {
+                    h.child(
+                        ui::tool_button("fx-ink-redo", IconName::Redo, false)
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Redo last stroke")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| this.flux_redo_ink(ix, cx))),
+                    )
                 })
                 .when(has_strokes, |h| {
                     h.child(
-                        ui::tool_button("fx-ink-undo", IconName::Undo, false)
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Undo last stroke")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| this.flux_undo_ink(ix, cx))),
-                    )
-                    .child(
                         ui::tool_button("fx-ink-clear", IconName::Delete, false)
                             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear annotations")).build(w, cx))
                             .on_click(cx.listener(move |this, _, _, cx| this.flux_clear_ink(ix, cx))),
+                    )
+                    .child(
+                        ui::tool_button("fx-ink-copy", if copied_ok { IconName::Check } else { IconName::Copy }, copied_ok)
+                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copy annotated preview PNG to clipboard")).build(w, cx))
+                            .on_click(cx.listener(move |this, _, w, cx| this.flux_copy_annotated_png(ix, w, cx))),
+                    )
+                    .child(
+                        ui::tool_button("fx-ink-export", IconName::ImageDown, false)
+                            .tooltip(move |w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Save annotated preview as PNG ({name})"; name => png_name)).build(w, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, w, cx| this.flux_export_annotated_png(ix, w, cx))),
                     )
                 })
             })
@@ -1246,15 +1699,102 @@ impl crate::workbench::Workbench {
 
     fn flux_undo_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        v.shared.ink.borrow_mut().strokes.pop();
+        v.shared.ink.borrow_mut().undo();
+        cx.notify();
+    }
+
+    fn flux_redo_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        v.shared.ink.borrow_mut().redo();
+        cx.notify();
+    }
+
+    fn flux_cycle_ink_tool(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
+        let next = {
+            let mut st = v.shared.ink.borrow_mut();
+            st.tool = st.tool.next();
+            st.tool
+        };
+        self.status = crate::i18n::tr(next.label()).into();
         cx.notify();
     }
 
     fn flux_clear_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        let mut st = v.shared.ink.borrow_mut();
-        st.strokes.clear();
-        st.active = None;
+        v.shared.ink.borrow_mut().clear();
+        cx.notify();
+    }
+
+    fn flux_snapshot_png(&self, ix: usize, window: &Window) -> Result<(Vec<u8>, u32, u32), String> {
+        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else {
+            return Err("no preview".into());
+        };
+        let bounds = v.shared.last_bounds.get().unwrap_or([0.0, 0.0, 960.0, 640.0]);
+        let scale = window.scale_factor().max(1.0);
+        let scroll_y = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&v.list).y);
+        let strokes = v.shared.ink.borrow().strokes.clone();
+        #[cfg(windows)]
+        let captured = capture_window_crop(crate::wintitle::capture_main_hwnd(), bounds, scale);
+        #[cfg(not(windows))]
+        let captured: Option<image::RgbaImage> = None;
+        let img = captured.unwrap_or_else(|| {
+            rasterize_ink_fallback(
+                bounds[2].round().max(1.0) as u32,
+                bounds[3].round().max(1.0) as u32,
+                theme::palette().editor,
+                scroll_y,
+                &strokes,
+            )
+        });
+        let (w, h) = img.dimensions();
+        let bytes = encode_png(&img)?;
+        Ok((bytes, w, h))
+    }
+
+    fn flux_copy_annotated_png(&mut self, ix: usize, window: &Window, cx: &mut Context<Self>) {
+        match self.flux_snapshot_png(ix, window) {
+            Ok((bytes, w, h)) => {
+                cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, bytes)));
+                if let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) {
+                    let seq = {
+                        let mut st = v.shared.ink.borrow_mut();
+                        st.copied_ok = true;
+                        st.copied_seq = st.copied_seq.wrapping_add(1);
+                        st.copied_seq
+                    };
+                    let ink = v.shared.ink.clone();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+                        let mut st = ink.borrow_mut();
+                        if st.copied_seq == seq {
+                            st.copied_ok = false;
+                            drop(st);
+                            _ = this.update(cx, |_, cx| cx.notify());
+                        }
+                    })
+                    .detach();
+                }
+                self.status = crate::trf!("Copied annotated preview PNG ({w}x{h})"; w => w, h => h).into();
+            }
+            Err(e) => {
+                self.status = crate::trf!("Couldn't export preview PNG: {e}"; e => e).into();
+            }
+        }
+        cx.notify();
+    }
+
+    fn flux_export_annotated_png(&mut self, ix: usize, window: &Window, cx: &mut Context<Self>) {
+        let Some(d) = self.docs.get(ix) else { return };
+        let out = annotated_png_path(&d.path);
+        match self.flux_snapshot_png(ix, window).and_then(|(bytes, _, _)| std::fs::write(&out, bytes).map_err(|e| e.to_string())) {
+            Ok(()) => {
+                self.status = crate::trf!("Saved {name}"; name => out.display()).into();
+            }
+            Err(e) => {
+                self.status = crate::trf!("Couldn't save {name}: {e}"; name => out.display(), e => e).into();
+            }
+        }
         cx.notify();
     }
 
@@ -1382,6 +1922,54 @@ mod tests {
         assert_eq!(v.zoom(), 0.5);
         v.step_zoom(0);
         assert_eq!(v.zoom(), 1.0);
+    }
+
+    #[test]
+    fn ink_undo_redo_and_tool_cycle() {
+        let mut st = super::InkState::new();
+        assert_eq!(st.tool, super::InkTool::Pen);
+        st.tool = st.tool.next();
+        assert_eq!(st.tool, super::InkTool::Marker);
+        st.tool = st.tool.next();
+        assert_eq!(st.tool, super::InkTool::Highlighter);
+        st.tool = st.tool.next();
+        assert_eq!(st.tool, super::InkTool::Pen);
+
+        st.push_stroke(super::Stroke { color: 0xEF4444, width: 2.5, alpha: 1.0, pts: vec![(10.0, 10.0), (40.0, 10.0)] });
+        assert_eq!(st.strokes.len(), 1);
+        assert!(st.undo());
+        assert!(st.strokes.is_empty() && st.redo.len() == 1);
+        assert!(st.redo());
+        assert_eq!(st.strokes.len(), 1);
+        assert!(st.undo());
+        // Pushing a new stroke discards the redo stack.
+        st.push_stroke(super::Stroke { color: 0x22C55E, width: 5.0, alpha: 0.95, pts: vec![(20.0, 20.0)] });
+        assert!(st.redo.is_empty());
+        st.clear();
+        assert!(st.strokes.is_empty() && st.redo.is_empty());
+    }
+
+    #[test]
+    fn annotated_png_fallback_encodes_valid_png_with_strokes() {
+        let strokes = vec![
+            super::Stroke { color: 0xEF4444, width: 4.0, alpha: 1.0, pts: vec![(10.0, 20.0), (90.0, 20.0)] },
+            super::Stroke { color: 0xF59E0B, width: 12.0, alpha: 0.30, pts: vec![(20.0, 50.0), (80.0, 50.0)] },
+        ];
+        let img = super::rasterize_ink_fallback(120, 80, 0x18181B, 0.0, &strokes);
+        assert_eq!(img.dimensions(), (120, 80));
+        assert_ne!(img.get_pixel(50, 20).0, [0x18, 0x18, 0x1B, 255]);
+        let hl = img.get_pixel(50, 50).0;
+        assert!(hl[0] > 0x18 && hl[0] < 0xF5, "translucent highlighter blends with bg: {hl:?}");
+        let png = super::encode_png(&img).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn annotated_png_output_path_appends_suffix() {
+        let p = super::annotated_png_path(std::path::Path::new("docs/README.md"));
+        assert_eq!(p, std::path::PathBuf::from("docs").join("README-annotated.png"));
+        let p2 = super::annotated_png_path(std::path::Path::new("notes.flux"));
+        assert_eq!(p2, std::path::PathBuf::from(".").join("notes-annotated.png"));
     }
 }
 

@@ -1688,6 +1688,22 @@ pub const ID: &[(&str, &str)] = &[
     ("Click to sort", "Klik untuk mengurutkan"),
     ("Click to open file", "Klik untuk membuka file"),
     ("Copied: {0}", "Disalin: {0}"),
+    ("Copy extension ID", "Salin ID ekstensi"),
+    ("Copied {id}", "{id} disalin"),
+    ("Pen", "Pena"),
+    ("Marker", "Spidol"),
+    ("Highlighter", "Stabilo"),
+    ("Brush: {tool} (B, right-click to undo)", "Kuas: {tool} (B, klik kanan untuk urungkan)"),
+    ("Redo last stroke", "Ulangi goresan terakhir"),
+    ("Copy annotated preview PNG to clipboard", "Salin PNG pratinjau beranotasi ke clipboard"),
+    ("Save annotated preview as PNG ({name})", "Simpan pratinjau beranotasi sebagai PNG ({name})"),
+    ("Copied annotated preview PNG ({w}x{h})", "PNG pratinjau beranotasi disalin ({w}x{h})"),
+    ("Couldn't export preview PNG: {e}", "Gagal mengekspor PNG pratinjau: {e}"),
+    ("Exit annotation mode (Esc)", "Keluar dari mode coret-coret (Esc)"),
+    ("Amber (1)", "Kuning (1)"),
+    ("Red (2)", "Merah (2)"),
+    ("Green (3)", "Hijau (3)"),
+    ("Blue (4)", "Biru (4)"),
 ];
 
 #[cfg(test)]
