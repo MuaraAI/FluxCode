@@ -206,15 +206,14 @@ impl Workbench {
         let upstream = s.status.upstream.clone().unwrap_or_default();
         let open_list = s.incoming_shown;
         let dirty = s.status.count() > 0;
-        let header = h_flex()
+        let header = crate::scm::scm_row()
             .id("scm-sec-in")
             .group("scm-in-head")
-            .h(theme::u(22.))
             .px_2()
             .gap_1()
             .text_xs()
             .cursor_pointer()
-            .child(Icon::new(if open_list { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
+            .child(Icon::new(if open_list { IconName::ChevronDown } else { IconName::ChevronRight }).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
             .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("Incoming")))
             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(upstream.clone()))
             .child(div().flex_none().px_1p5().rounded_full().bg(c(theme::BG_HOVER)).text_color(c(theme::FG)).child(n.to_string()))
@@ -234,7 +233,17 @@ impl Workbench {
             this.scm.incoming_dismissed = this.scm.incoming_head.clone();
             cx.notify();
         }));
-        let mut col = v_flex().pb_2().child(h_flex().pr_1().gap_0p5().child(header.flex_1().min_w_0()).child(pull).child(later));
+        let mut col = v_flex().flex_none().pb_2().child(
+            h_flex()
+                .flex_none()
+                .w_full()
+                .min_w_0()
+                .pr_1()
+                .gap_0p5()
+                .child(header.flex_1().min_w_0())
+                .child(pull)
+                .child(later),
+        );
         if !open_list {
             return Some(col.into_any_element());
         }
@@ -242,26 +251,11 @@ impl Workbench {
         for (i, cm) in s.incoming.iter().enumerate() {
             let open = s.incoming_open.as_deref() == Some(cm.hash.as_str());
             let hash = cm.hash.clone();
-            let lane = div()
-                .relative()
-                .w(theme::u(14.))
-                .h_full()
-                .flex_none()
-                .child(
-                    div()
-                        .absolute()
-                        .left(theme::u(6.))
-                        .w(px(2.))
-                        .top(if i == 0 { theme::u(11.) } else { px(0.) })
-                        .bottom(if i == last && !open { theme::u(11.) } else { px(0.) })
-                        .bg(c(theme::BLUE).opacity(0.45)),
-                )
-                .child(div().absolute().left(theme::u(3.)).top(theme::u(7.)).size(theme::u(8.)).rounded_full().border_2().border_color(c(theme::BLUE)).bg(c(theme::BG_SIDE)));
+            let lane = crate::scm::graph_lane(i == 0, i == last && !open, theme::BLUE, 0.45, false);
             let tip: SharedString = format!("{}\n{} · {} · {}", cm.subject, cm.short, cm.author, cm.when).into();
             col = col.child(
-                h_flex()
+                crate::scm::scm_row()
                     .id(("scm-in", i))
-                    .h(theme::u(22.))
                     .pl(theme::u(12.))
                     .pr_2()
                     .gap_1p5()
@@ -280,7 +274,19 @@ impl Workbench {
             }
             let pad = theme::u(34.);
             match s.incoming_files.get(&cm.hash) {
-                None => col = col.child(div().h(theme::u(22.)).pl(pad).flex().items_center().text_xs().text_color(c(theme::FG_DIM)).child(tr("Reading the changed files…"))),
+                None => {
+                    col = col.child(
+                        div()
+                            .flex_none()
+                            .h(theme::u(crate::scm::ROW_H))
+                            .pl(pad)
+                            .flex()
+                            .items_center()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr("Reading the changed files…")),
+                    )
+                }
                 Some(files) => {
                     for (k, (code, path)) in files.iter().enumerate().take(60) {
                         let (h, p) = (cm.hash.clone(), path.clone());
@@ -288,18 +294,17 @@ impl Workbench {
                         let dir = path.rsplit_once('/').map(|(d, _)| d.replace('/', "\\")).unwrap_or_default();
                         let (icon, tint) = crate::files::icon_for(&name);
                         col = col.child(
-                            h_flex()
+                            crate::scm::scm_row()
                                 .id(("scm-in-file", i * 1000 + k))
                                 .relative()
                                 .when(i < last, |h| h.child(div().absolute().left(theme::u(18.)).top_0().bottom_0().w(px(2.)).bg(c(theme::BLUE).opacity(0.45))))
-                                .h(theme::u(22.))
                                 .pl(pad)
                                 .pr_2()
                                 .gap_1p5()
                                 .text_xs()
                                 .cursor_pointer()
                                 .hover(|st| st.bg(c(theme::BG_HOVER)))
-                                .child(Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
+                                .child(Icon::new(icon).flex_none().size(theme::u(14.)).text_color(theme::tint(tint)))
                                 .child(div().flex_none().max_w(relative(0.6)).truncate().text_color(c(theme::FG)).child(name))
                                 .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir))
                                 .child(div().flex_none().w(theme::u(12.)).font_weight(FontWeight::BOLD).text_color(c(code_color(*code))).child(code.to_string()))
@@ -308,13 +313,13 @@ impl Workbench {
                         );
                     }
                     if files.len() > 60 {
-                        col = col.child(div().pl(pad).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} more files"; n => files.len() - 60)));
+                        col = col.child(div().flex_none().pl(pad).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} more files"; n => files.len() - 60)));
                     }
                 }
             }
         }
         if n > s.incoming.len() {
-            col = col.child(div().pl(theme::u(34.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} older ones"; n => n - s.incoming.len())));
+            col = col.child(div().flex_none().pl(theme::u(34.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} older ones"; n => n - s.incoming.len())));
         }
         Some(col.into_any_element())
     }
