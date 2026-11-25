@@ -98,8 +98,13 @@ fn main() {
         .collect();
     let files: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
     let root = paths.iter().find(|p| p.is_dir()).cloned();
-    if root.is_none() && !files.is_empty() && !argv.iter().any(|a| a == "--new-window") && instance::forward(&files) {
-        return;
+    if !argv.iter().any(|a| a == "--new-window") && root.is_none() {
+        if !files.is_empty() && instance::forward(&files) {
+            return;
+        }
+        if files.is_empty() && instance::wake_hidden() {
+            return;
+        }
     }
 
     std::thread::spawn(|| {

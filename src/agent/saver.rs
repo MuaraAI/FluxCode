@@ -224,7 +224,7 @@ impl Workbench {
                 .child(Switch::new(SharedString::from(format!("sv-{key}"))).checked(checked).small().on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))))
         };
         let seg = |id: &'static str, opts: Vec<(SharedString, bool, Box<dyn Fn(&mut Workbench)>)>, cx: &mut Context<Self>| {
-            let mut h = h_flex().flex_1().min_w_0().p(px(2.)).gap(px(2.)).rounded(px(8.)).bg(c(theme::FG_DIM).opacity(0.12));
+            let mut h = h_flex().flex_1().min_w_0().p(px(2.)).gap(px(2.)).rounded(px(4.)).bg(c(theme::FG_DIM).opacity(0.12));
             for (k, (label, picked, f)) in opts.into_iter().enumerate() {
                 h = h.child(
                     div()
@@ -234,7 +234,7 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(px(3.))
                         .text_xs()
                         .cursor_pointer()
                         .text_color(c(if picked { theme::FG_STRONG } else { theme::FG_MUTED }))

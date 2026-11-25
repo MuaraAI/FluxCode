@@ -8,7 +8,6 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
-    switch::Switch,
     text::TextView,
     v_flex, Icon, IconName, Selectable, Sizable,
 };
@@ -112,6 +111,17 @@ pub enum Item {
 pub struct Queued {
     pub text: String,
     pub files: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InterruptedTask {
+    pub user_prompt: String,
+    pub progress: String,
+}
+
+pub(crate) struct PendingSteer {
+    pub item: Queued,
+    pub interrupted: Option<InterruptedTask>,
 }
 
 pub struct Permission {
@@ -265,7 +275,10 @@ pub struct Run {
     pub(crate) pending: HashMap<u64, Req>,
     pub(crate) session: Option<String>,
     pub(crate) queue: Vec<Queued>,
-    pub(crate) steer: bool,
+    pub(crate) queue_paused: bool,
+    pub(crate) pending_steer: Option<PendingSteer>,
+    pub(crate) turn_start_ix: usize,
+    pub(crate) active_user_prompt: Option<String>,
     pub(crate) open_thoughts: HashSet<usize>,
     pub(crate) can_image: bool,
     pub(crate) items: Vec<Item>,
@@ -323,7 +336,10 @@ impl Run {
         pending: HashMap::new(),
         session: None,
         queue: Vec::new(),
-        steer: false,
+        queue_paused: false,
+        pending_steer: None,
+        turn_start_ix: 0,
+        active_user_prompt: None,
         open_thoughts: HashSet::new(),
         can_image: false,
         items: Vec::new(),
@@ -375,6 +391,12 @@ impl Run {
 
     pub(crate) fn working(&self) -> bool {
         self.status == Status::Busy || self.permission.is_some() || self.ask.is_some()
+    }
+
+    pub(crate) fn has_active_work(&self) -> bool {
+        self.working()
+            || (self.status == Status::Starting && (!self.queue.is_empty() || self.pending_steer.is_some()))
+            || (self.live() && (( !self.queue.is_empty() && !self.queue_paused) || self.pending_steer.is_some()))
     }
 }
 
@@ -936,6 +958,9 @@ impl Workbench {
         self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
         self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
         self.agent.queue = vec![Queued { text, files }];
+        self.agent.queue_paused = false;
+        self.agent.pending_steer = None;
+        self.agent.active_user_prompt = None;
         self.agent.changes.clear();
         self.agent.permission = None;
         self.agent.perm_queue.clear();
@@ -1019,7 +1044,7 @@ impl Workbench {
         self.agent.status = Status::Starting;
         self.agent.buf.clear();
         self.agent.log_tail.clear();
-        match self.procs.spawn(cmd, Some(self.agent_cwd().as_path())) {
+        match self.procs.spawn_isolated(cmd, Some(self.agent_cwd().as_path()), &agent_id()) {
             Ok(id) => {
                 self.agent.proc_id = Some(id);
                 self.agent_request(
@@ -1047,10 +1072,51 @@ impl Workbench {
         self.agent.permission = None;
         self.agent.perm_queue.clear();
         self.agent.ask = None;
+        self.agent.pending_steer = None;
+        self.agent.active_user_prompt = None;
+        self.agent.queue_paused = false;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
         self.agent.loading_id = None;
+        self.sync_tray_agent_state();
         cx.notify();
+    }
+
+    pub(crate) fn any_agent_working(&self) -> bool {
+        self.agent.run.has_active_work() || self.agent.runs.iter().any(Run::has_active_work)
+    }
+
+    pub(crate) fn agent_stop_all(&mut self) {
+        self.agent_save();
+        if let Some(id) = self.agent.run.proc_id.take() {
+            self.procs.kill(id);
+        }
+        self.agent.run.status = Status::Off;
+        self.agent.run.session = None;
+        self.agent.run.pending.clear();
+        self.agent.run.permission = None;
+        self.agent.run.perm_queue.clear();
+        self.agent.run.ask = None;
+        self.agent.run.pending_steer = None;
+        self.agent.run.active_user_prompt = None;
+        self.agent.run.queue.clear();
+        self.agent.run.queue_paused = false;
+        for r in &mut self.agent.runs {
+            if let Some(id) = r.proc_id.take() {
+                self.procs.kill(id);
+            }
+            r.status = Status::Off;
+            r.session = None;
+            r.pending.clear();
+            r.permission = None;
+            r.perm_queue.clear();
+            r.ask = None;
+            r.pending_steer = None;
+            r.active_user_prompt = None;
+            r.queue.clear();
+            r.queue_paused = false;
+        }
+        self.agent.runs.clear();
     }
 
     fn agent_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1065,7 +1131,7 @@ impl Workbench {
             "/new" => return self.agent_new_chat(cx),
             "/history" => {
                 self.agent.show_history = true;
-                        self.agent_load_remote_list(cx);
+                self.agent_load_remote_list(cx);
                 return cx.notify();
             }
             "/stop" => return self.agent_set_on(false, cx),
@@ -1076,13 +1142,21 @@ impl Workbench {
             return self.agent_send_edit(ix, text, cx);
         }
         let files = std::mem::take(&mut self.agent.attachments);
+        let was_empty = self.agent.queue.is_empty();
         self.agent.queue.push(Queued { text, files });
+        if was_empty {
+            self.agent.queue_paused = false;
+        }
         self.agent.follow = true;
         self.agent_to_end();
         match (&self.agent.status, &self.agent.session) {
-            (Status::Ready, Some(_)) => self.agent_flush_queue(cx),
+            (Status::Ready, Some(_)) => {
+                self.agent.queue_paused = false;
+                self.agent_flush_queue(cx);
+            }
             (Status::Busy, _) | (Status::Starting, _) => {}
             _ => {
+                self.agent.queue_paused = false;
                 if let Some(id) = self.agent.resume_id.take() {
                     self.agent.pending_load = Some(id);
                     self.agent.silent_load = true;
@@ -1093,30 +1167,169 @@ impl Workbench {
         cx.notify();
     }
 
-    fn agent_flush_queue(&mut self, cx: &mut Context<Self>) {
-        if self.agent.queue.is_empty() || self.agent.session.is_none() {
-            return;
-        }
-        let queued = std::mem::take(&mut self.agent.queue);
-        let mut text = queued.iter().map(|q| q.text.as_str()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
-        let files: Vec<PathBuf> = queued.into_iter().flat_map(|q| q.files).collect();
-        let shown = text.clone();
-        if std::mem::take(&mut self.agent.steer) {
-            text = format!("(I stopped your previous answer to send this. Take it into account and continue.)\n\n{text}");
-        }
-        self.agent.items.push(Item::User(if shown.is_empty() { "(attachments)".into() } else { shown }));
-        if !files.is_empty() {
-            let names: Vec<String> = files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
-            self.agent.items.push(Item::Note(crate::trf!("Attached: {0}"; 0 => names.join(", ")), false));
-        }
-        self.agent_prompt(text, files, cx);
+    pub(crate) fn on_agent_force_send(&mut self, _: &crate::workbench::AgentForceSend, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_force_send_input(window, cx);
     }
 
-    fn agent_steer(&mut self, cx: &mut Context<Self>) {
-        if self.agent.status == Status::Busy {
-            self.agent.steer = true;
-            self.agent_cancel(cx);
-        } else {
+    fn agent_force_send_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.agent.input.read(cx).value().trim().to_string();
+        if text.is_empty() && self.agent.attachments.is_empty() {
+            if !self.agent.queue.is_empty() {
+                self.agent_force_send_queued(0, cx);
+            }
+            return;
+        }
+        self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.agent.mention = None;
+        self.agent.slash = None;
+        if let Some(ix) = self.agent.editing.take() {
+            return self.agent_send_edit(ix, text, cx);
+        }
+        let files = std::mem::take(&mut self.agent.attachments);
+        self.agent_force_send_item(Queued { text, files }, cx);
+    }
+
+    fn agent_force_send_queued(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.agent.queue.len() {
+            return;
+        }
+        let item = self.agent.queue.remove(ix);
+        self.agent_force_send_item(item, cx);
+    }
+
+    fn agent_force_send_item(&mut self, item: Queued, cx: &mut Context<Self>) {
+        self.agent.queue_paused = false;
+        self.agent.follow = true;
+        self.agent_to_end();
+        match (&self.agent.status, &self.agent.session) {
+            (Status::Busy, Some(_)) => {
+                // Capture only when a turn is genuinely mid-flight; finished turns need no continuation.
+                let interrupted = self.capture_interrupted_task();
+                self.agent.pending_steer = Some(PendingSteer { item, interrupted });
+                self.agent.quiet_stop = true;
+                self.agent_cancel_internal(false, cx);
+            }
+            (Status::Ready, Some(_)) => {
+                self.agent_dispatch_item(item, None, cx);
+            }
+            (Status::Starting, _) => {
+                self.agent.queue.insert(0, item);
+            }
+            _ => {
+                self.agent.queue.insert(0, item);
+                if let Some(id) = self.agent.resume_id.take() {
+                    self.agent.pending_load = Some(id);
+                    self.agent.silent_load = true;
+                }
+                self.agent_start(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn capture_interrupted_task(&self) -> Option<InterruptedTask> {
+        if self.agent.status != Status::Busy {
+            return None;
+        }
+        let user_prompt = self.agent.active_user_prompt.as_deref()?.trim();
+        if user_prompt.is_empty() {
+            return None;
+        }
+        let start = self.agent.turn_start_ix.min(self.agent.items.len());
+        let progress = summarize_turn_progress(&self.agent.items[start..], &self.agent.changes);
+        Some(InterruptedTask {
+            user_prompt: truncate_chars(user_prompt, 800),
+            progress,
+        })
+    }
+
+    fn agent_dispatch_item(&mut self, item: Queued, interrupted: Option<InterruptedTask>, cx: &mut Context<Self>) {
+        let shown = item.text.clone();
+        if interrupted.is_some() {
+            self.agent.items.push(Item::Note(
+                crate::i18n::tr("Priority send: handling this first, then continuing the paused task if unfinished.").into(),
+                false,
+            ));
+        }
+        self.agent.turn_start_ix = self.agent.items.len();
+        self.agent.active_user_prompt = (!item.text.trim().is_empty()).then(|| item.text.clone());
+        self.agent.items.push(Item::User(if shown.is_empty() { "(attachments)".into() } else { shown }));
+        if !item.files.is_empty() {
+            let names: Vec<String> = item.files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+            self.agent.items.push(Item::Note(crate::trf!("Attached: {0}"; 0 => names.join(", ")), false));
+        }
+        let prompt_text = build_steer_prompt(&item.text, interrupted.as_ref());
+        self.agent_prompt(prompt_text, item.files, cx);
+    }
+
+    fn agent_flush_queue(&mut self, cx: &mut Context<Self>) {
+        if self.agent.session.is_none() || self.agent.status != Status::Ready {
+            return;
+        }
+        if let Some(steer) = self.agent.pending_steer.take() {
+            self.agent_dispatch_item(steer.item, steer.interrupted, cx);
+            return;
+        }
+        if self.agent.queue_paused || self.agent.queue.is_empty() {
+            return;
+        }
+        let next = self.agent.queue.remove(0);
+        self.agent_dispatch_item(next, None, cx);
+    }
+
+    fn agent_queue_move(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from < self.agent.queue.len() && to < self.agent.queue.len() && from != to {
+            let item = self.agent.queue.remove(from);
+            self.agent.queue.insert(to, item);
+            cx.notify();
+        }
+    }
+
+    fn agent_queue_edit(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.agent.queue.len() {
+            return;
+        }
+        let item = self.agent.queue.remove(ix);
+        if self.agent.queue.is_empty() {
+            self.agent.queue_paused = false;
+        }
+        for f in item.files {
+            if !self.agent.attachments.contains(&f) {
+                self.agent.attachments.push(f);
+            }
+        }
+        let text = item.text;
+        self.agent.input.update(cx, |s, cx| {
+            let cur = s.value().trim().to_string();
+            let merged = if cur.is_empty() { text.clone() } else { format!("{text}\n{cur}") };
+            let end = merged.len();
+            s.set_value(merged, window, cx);
+            s.set_selected_range(end..end, cx);
+        });
+        let h = self.agent.input.focus_handle(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    fn agent_queue_remove(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix < self.agent.queue.len() {
+            self.agent.queue.remove(ix);
+            if self.agent.queue.is_empty() {
+                self.agent.queue_paused = false;
+            }
+            cx.notify();
+        }
+    }
+
+    fn agent_queue_clear(&mut self, cx: &mut Context<Self>) {
+        self.agent.queue.clear();
+        self.agent.queue_paused = false;
+        cx.notify();
+    }
+
+    fn agent_queue_toggle_pause(&mut self, cx: &mut Context<Self>) {
+        self.agent.queue_paused = !self.agent.queue_paused;
+        if !self.agent.queue_paused {
             self.agent_flush_queue(cx);
         }
         cx.notify();
@@ -1157,6 +1370,14 @@ impl Workbench {
     }
 
     fn agent_cancel(&mut self, cx: &mut Context<Self>) {
+        self.agent.pending_steer = None;
+        if !self.agent.queue.is_empty() {
+            self.agent.queue_paused = true;
+        }
+        self.agent_cancel_internal(true, cx);
+    }
+
+    fn agent_cancel_internal(&mut self, _user_stop: bool, cx: &mut Context<Self>) {
         if let (Status::Busy, Some(s)) = (&self.agent.status, self.agent.session.clone()) {
             self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
             let waiting: Vec<Permission> = self.agent.permission.take().into_iter().chain(self.agent.perm_queue.drain(..)).collect();
@@ -1195,11 +1416,14 @@ impl Workbench {
         self.agent.proc_id = None;
         self.agent.session = None;
         self.agent.pending.clear();
+        self.agent.pending_steer = None;
+        self.agent.active_user_prompt = None;
         if self.agent.status != Status::Off {
             let tail = self.agent.log_tail.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("\n");
             let name = agent_name();
             self.agent.status = Status::Error(if tail.is_empty() { format!("{name} stopped.") } else { format!("{name} stopped:\n{tail}") });
         }
+        self.sync_tray_agent_state();
         cx.notify();
     }
 
@@ -1218,7 +1442,16 @@ impl Workbench {
             let m = e.get("message").and_then(Value::as_str).unwrap_or("Agent error").to_string();
             match kind {
                 Req::Prompt => {
+                    self.agent_close_thought();
+                    self.agent.active_user_prompt = None;
                     let low = m.to_lowercase();
+                    let quiet = std::mem::take(&mut self.agent.quiet_stop);
+                    let was_steer_cancel = self.agent.pending_steer.is_some() && (quiet || low.contains("cancel") || low.contains("abort"));
+                    self.agent.status = Status::Ready;
+                    if was_steer_cancel {
+                        self.agent_flush_queue(cx);
+                        return;
+                    }
                     let model_problem = ["credential", "api key", "apikey", "unauthorized", "401", "403", "quota", "rate limit", "model"]
                         .iter()
                         .any(|k| low.contains(k));
@@ -1228,7 +1461,7 @@ impl Workbench {
                     if model_problem && models > 1 {
                         self.agent.items.push(Item::Note(crate::i18n::tr("This looks like a problem with the model. Pick another one with the model button under the message box, then send again.").into(), false));
                     }
-                    self.agent.status = Status::Ready;
+                    self.sync_tray_agent_state();
                 }
                 Req::SetOption => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
                 Req::Probe => {
@@ -1322,6 +1555,7 @@ impl Workbench {
             Req::Prompt => {
                 self.agent_close_thought();
                 self.agent_recount();
+                self.agent.active_user_prompt = None;
                 let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
                 if stop != "end_turn" && !quiet {
@@ -1335,7 +1569,7 @@ impl Workbench {
                     self.agent_check_limit(&t, cx);
                 }
                 self.agent_save();
-                if self.agent.bg && self.agent.queue.is_empty() {
+                if self.agent.bg && self.agent.queue.is_empty() && self.agent.pending_steer.is_none() {
                     self.status = crate::trf!("{name} finished in “{chat}”."; name => agent_name(), chat => self.agent_chat_title()).into();
                 }
                 self.agent_schedule_idle(cx);
@@ -1343,11 +1577,12 @@ impl Workbench {
                 if std::mem::take(&mut self.agent.relaunch) {
                     return self.agent_relaunch(cx);
                 }
-                if self.agent_auto_compact(cx) {
+                if self.agent.pending_steer.is_none() && self.agent_auto_compact(cx) {
                     return cx.notify();
                 }
                 self.agent_flush_queue(cx);
                 self.agent_probe_next(cx);
+                self.sync_tray_agent_state();
             }
         }
     }
@@ -1991,15 +2226,37 @@ impl Workbench {
 
     pub(crate) fn render_agent_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
-        let weak = cx.entity().downgrade();
-        Switch::new("ag-on")
-            .checked(on)
-            .small()
-            .tooltip(if on { format!("{} is on. Click to turn it off", agent_name()) } else { format!("{} is off. Click to turn it on", agent_name()) })
-            .on_click(move |checked, _, cx| {
-                let checked = *checked;
-                _ = weak.update(cx, |this, cx| this.agent_set_on(checked, cx));
-            })
+        let working = self.agent.working();
+        let dot = if working {
+            theme::ACCENT
+        } else if on {
+            theme::GREEN
+        } else {
+            theme::FG_DIM
+        };
+        let tip: SharedString = if on {
+            format!("{} is on. Click to turn it off", agent_name()).into()
+        } else {
+            format!("{} is off. Click to turn it on", agent_name()).into()
+        };
+        h_flex()
+            .id("ag-on")
+            .h(theme::u(22.))
+            .px_1p5()
+            .gap_1()
+            .items_center()
+            .rounded(px(3.))
+            .border_1()
+            .border_color(if on { c(theme::BORDER_STRONG) } else { c(theme::BORDER) })
+            .bg(if on { c(theme::BG_ELEVATED) } else { gpui_kit::transparent_black() })
+            .cursor_pointer()
+            .text_xs()
+            .text_color(c(if on { theme::FG_STRONG } else { theme::FG_DIM }))
+            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)).text_color(c(theme::FG_STRONG)))
+            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+            .on_click(cx.listener(move |this, _, _, cx| this.agent_set_on(!on, cx)))
+            .child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot)))
+            .child(if on { tr("On") } else { tr("Off") })
     }
 
     pub(crate) fn render_agent_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3354,7 +3611,7 @@ impl Workbench {
             v_flex()
                 .mx_3()
                 .mb_2()
-                .rounded(px(6.))
+                .rounded(px(4.))
                 .border_1()
                 .border_color(c(theme::BORDER))
                 .bg(c(theme::BG_ELEVATED))
@@ -3436,14 +3693,14 @@ impl Workbench {
         let snap = tracker.get();
         window.request_animation_frame();
         let frac = snap.fraction().filter(|_| matches!(snap.phase, crate::acp::Phase::Download | crate::acp::Phase::Unpack));
-        let bar = div().relative().w_full().h(px(4.)).rounded_full().bg(c(theme::BG_HOVER)).overflow_hidden().child(match frac {
-            Some(f) => div().absolute().left_0().top_0().bottom_0().rounded_full().bg(c(theme::ACCENT)).w(relative(f)).into_any_element(),
+        let bar = div().relative().w_full().h(px(3.)).rounded(px(2.)).bg(c(theme::BG_HOVER)).overflow_hidden().child(match frac {
+            Some(f) => div().absolute().left_0().top_0().bottom_0().rounded(px(2.)).bg(c(theme::ACCENT)).w(relative(f)).into_any_element(),
             None => div()
                 .absolute()
                 .top_0()
                 .bottom_0()
                 .w(relative(0.3))
-                .rounded_full()
+                .rounded(px(2.))
                 .bg(c(theme::ACCENT))
                 .with_animation("ag-inst-slide", Animation::new(std::time::Duration::from_millis(1300)).repeat(), |d, t| d.left(relative(-0.3 + 1.3 * t)))
                 .into_any_element(),
@@ -3565,7 +3822,7 @@ impl Workbench {
                             .max_w(relative(0.88))
                             .px_2p5()
                             .py_1p5()
-                            .rounded(px(8.))
+                            .rounded(px(4.))
                             .bg(c(theme::BG_ELEVATED))
                             .border_1()
                             .border_color(c(theme::BORDER_STRONG))
@@ -3757,56 +4014,223 @@ impl Workbench {
 
     fn render_queue(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let a = &self.agent;
-        if a.queue.is_empty() {
+        if a.queue.is_empty() && a.pending_steer.is_none() {
             return None;
         }
         let name = agent_name();
-        let status = match &a.status {
-            Status::Busy => crate::trf!("Waiting for {name} to finish, then these are sent together"; name => name),
-            Status::Starting => crate::trf!("Sent as soon as {name} is ready"; name => name),
-            Status::Error(_) => crate::trf!("Not sent: {name} couldn't start. Switch the agent in the title menu, they will go to it"; name => name),
-            _ => crate::i18n::tr("Sent with your next message").to_string(),
-        };
         let busy = a.status == Status::Busy;
-        Some(
-            v_flex()
-                .mx_3()
-                .mb_1()
-                .gap_1()
-                .child(div().text_xs().text_color(c(theme::FG_DIM)).child(status))
-                .children(a.queue.iter().enumerate().map(|(i, q)| {
-                    h_flex()
-                        .id(("ag-queued", i))
-                        .px_2()
-                        .h(theme::u(26.))
-                        .gap_2()
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .bg(c(theme::BG_ELEVATED))
-                        .text_xs()
-                        .child(Icon::new(gpui_kit::assets::IconName::Clock).size(theme::u(12.)).text_color(c(theme::FG_DIM)).flex_none())
-                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(q.text.lines().next().unwrap_or("").to_string()))
-                        .when(!q.files.is_empty(), |h| h.child(div().flex_none().text_color(c(theme::FG_DIM)).child(format!("+{} file{}", q.files.len(), if q.files.len() == 1 { "" } else { "s" }))))
-                        .when(busy && i == 0, |h| {
-                            h.child(
-                                Button::new(("ag-steer", i))
-                                    .label(tr("Send now"))
-                                    .xsmall()
-                                    .ghost()
-                                    .tooltip(tr("Stop the current answer and send this now (the agent keeps the context)"))
-                                    .on_click(cx.listener(|this, _, _, cx| this.agent_steer(cx))),
-                            )
-                        })
-                        .child(Button::new(("ag-unqueue", i)).icon(IconName::Close).xsmall().ghost().tooltip(tr("Remove from the queue")).on_click(cx.listener(move |this, _, _, cx| {
-                            if i < this.agent.queue.len() {
-                                this.agent.queue.remove(i);
-                            }
-                            cx.notify();
-                        })))
-                })),
-        )
-        .map(|v| v.into_any_element())
+        let paused = a.queue_paused;
+        let total = a.queue.len();
+        let (dot_col, state_label): (theme::Tok, String) = if a.pending_steer.is_some() {
+            (theme::ACCENT, tr("Interrupting for priority task…").to_string())
+        } else if paused {
+            (theme::WARN, tr("Paused").to_string())
+        } else {
+            match &a.status {
+                Status::Busy => (theme::BLUE, crate::trf!("Runs next after {name} finishes"; name => name)),
+                Status::Starting => (theme::FG_MUTED, crate::trf!("Starts when {name} is ready"; name => name)),
+                Status::Error(_) => (theme::DANGER, crate::trf!("{name} couldn't start"; name => name)),
+                _ => (theme::FG_DIM, tr("Ready").to_string()),
+            }
+        };
+
+        let q_btn = |id: ElementId, icon: Icon, tip: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .size(theme::u(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .cursor_pointer()
+                .text_color(c(theme::FG_DIM))
+                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
+                .child(icon.size(theme::u(12.)))
+        };
+
+        let mut panel = v_flex()
+            .id("ag-queue-panel")
+            .mx_3()
+            .mb_1p5()
+            .rounded(px(4.))
+            .border_1()
+            .border_color(c(if paused { theme::WARN } else { theme::BORDER_STRONG }).opacity(if paused { 0.55 } else { 1.0 }))
+            .bg(c(theme::BG_ELEVATED))
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .h(theme::u(26.))
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .bg(c(theme::BG_SIDE))
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .text_xs()
+                    .child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot_col)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(if total > 0 { crate::trf!("Queue ({n})"; n => total) } else { tr("Priority").to_string() }),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(state_label))
+                    .when(total > 0 && (busy || paused), |h| {
+                        h.child(
+                            h_flex()
+                                .id("ag-q-pause")
+                                .flex_none()
+                                .h(theme::u(18.))
+                                .px_1p5()
+                                .gap_1()
+                                .items_center()
+                                .rounded(px(3.))
+                                .cursor_pointer()
+                                .text_color(c(if paused { theme::ACCENT_TEXT } else { theme::FG_MUTED }))
+                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                .tooltip(move |w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(if paused {
+                                        tr("Resume automatic queue")
+                                    } else {
+                                        tr("Pause automatic queue after the current turn")
+                                    })
+                                    .build(w, cx)
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.agent_queue_toggle_pause(cx)))
+                                .child(if paused { tr("Resume") } else { tr("Pause") }),
+                        )
+                    })
+                    .when(total > 1, |h| {
+                        h.child(
+                            div()
+                                .id("ag-q-clear")
+                                .flex_none()
+                                .h(theme::u(18.))
+                                .px_1p5()
+                                .flex()
+                                .items_center()
+                                .rounded(px(3.))
+                                .cursor_pointer()
+                                .text_color(c(theme::FG_DIM))
+                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::DANGER)))
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear all queued messages")).build(w, cx))
+                                .on_click(cx.listener(|this, _, _, cx| this.agent_queue_clear(cx)))
+                                .child(tr("Clear")),
+                        )
+                    }),
+            );
+
+        let mut rows = v_flex().id("ag-queue-rows").max_h(theme::u(152.)).overflow_y_scroll();
+        if let Some(steer) = &a.pending_steer {
+            let preview = steer.item.text.lines().next().unwrap_or("(attachments)").to_string();
+            rows = rows.child(
+                h_flex()
+                    .id("ag-q-steering")
+                    .px_2()
+                    .h(theme::u(26.))
+                    .gap_2()
+                    .items_center()
+                    .bg(c(theme::ACCENT).opacity(0.08))
+                    .text_xs()
+                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::ACCENT_TEXT)).child(tr("NOW")))
+                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_STRONG)).child(preview)),
+            );
+        }
+        for (i, q) in a.queue.iter().enumerate() {
+            let preview = if q.text.trim().is_empty() {
+                "(attachments)".to_string()
+            } else {
+                q.text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+            };
+            let is_first = i == 0;
+            let is_last = i + 1 == total;
+            let show_divider = i > 0 || a.pending_steer.is_some();
+            rows = rows.child(
+                h_flex()
+                    .id(("ag-queued", i))
+                    .px_2()
+                    .h(theme::u(28.))
+                    .gap_1p5()
+                    .items_center()
+                    .when(show_divider, |h| h.border_t_1().border_color(c(theme::BORDER)))
+                    .hover(|s| s.bg(c(theme::BG_HOVER).opacity(0.55)))
+                    .text_xs()
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(theme::u(18.))
+                            .font_family("Cascadia Code")
+                            .text_color(c(if is_first && !paused { theme::ACCENT_TEXT } else { theme::FG_DIM }))
+                            .child(format!("#{}", i + 1)),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(preview))
+                    .when(!q.files.is_empty(), |h| {
+                        h.child(
+                            div()
+                                .flex_none()
+                                .px_1()
+                                .rounded(px(2.))
+                                .bg(c(theme::BG_SIDE))
+                                .border_1()
+                                .border_color(c(theme::BORDER))
+                                .text_color(c(theme::FG_DIM))
+                                .child(format!("+{}", q.files.len())),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .id(("ag-steer", i))
+                            .flex_none()
+                            .h(theme::u(20.))
+                            .px_1p5()
+                            .gap_1()
+                            .items_center()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(c(theme::ACCENT).opacity(if is_first { 0.45 } else { 0.25 }))
+                            .bg(c(theme::ACCENT).opacity(if is_first { 0.12 } else { 0.05 }))
+                            .cursor_pointer()
+                            .text_color(c(theme::ACCENT_TEXT))
+                            .hover(|s| s.bg(c(theme::ACCENT).opacity(0.22)).border_color(c(theme::ACCENT)))
+                            .tooltip(move |w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(if busy {
+                                    tr("Force send now: pause current task, handle this first, then continue if unfinished")
+                                } else {
+                                    tr("Send this message now")
+                                })
+                                .build(w, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| this.agent_force_send_queued(i, cx)))
+                            .child(Icon::new(IconName::Play).size(theme::u(10.)))
+                            .when(is_first, |h| h.child(tr("Now"))),
+                    )
+                    .when(!is_first, |h| {
+                        h.child(
+                            q_btn(("ag-q-up", i).into(), Icon::new(IconName::ChevronUp), tr("Move up"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.agent_queue_move(i, i - 1, cx))),
+                        )
+                    })
+                    .when(!is_last, |h| {
+                        h.child(
+                            q_btn(("ag-q-dn", i).into(), Icon::new(IconName::ChevronDown), tr("Move down"))
+                                .on_click(cx.listener(move |this, _, _, cx| this.agent_queue_move(i, i + 1, cx))),
+                        )
+                    })
+                    .child(
+                        q_btn(("ag-q-edit", i).into(), Icon::new(gpui_kit::assets::IconName::Pencil), tr("Edit in input"))
+                            .on_click(cx.listener(move |this, _, w, cx| this.agent_queue_edit(i, w, cx))),
+                    )
+                    .child(
+                        q_btn(("ag-unqueue", i).into(), Icon::new(IconName::Close), tr("Remove from the queue"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.agent_queue_remove(i, cx))),
+                    ),
+            );
+        }
+        panel = panel.child(rows);
+        Some(panel.into_any_element())
     }
 
     fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3904,7 +4328,7 @@ impl Workbench {
         let boxed = v_flex()
             .id("ag-composer")
             .relative()
-            .rounded(px(8.))
+            .rounded(px(4.))
             .border_1()
             .border_color(c(theme::BORDER_STRONG))
             .bg(c(theme::BG_ELEVATED))
@@ -4048,6 +4472,38 @@ impl Workbench {
                     .child(self.render_access_menu(narrow, cx))
                     .child(self.render_saver_button(cx))
                     .children(self.render_context_meter(tight, cx))
+                    .when(busy && has_text, |h| {
+                        h.child(
+                            div()
+                                .id("ag-force-send")
+                                .flex_none()
+                                .h(theme::u(24.))
+                                .px_1p5()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(c(theme::ACCENT).opacity(0.55))
+                                .bg(c(theme::ACCENT).opacity(0.12))
+                                .text_xs()
+                                .text_color(c(theme::ACCENT_TEXT))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(c(theme::ACCENT).opacity(0.22)).border_color(c(theme::ACCENT)))
+                                .tooltip(|w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tr(
+                                        "Force send now (Ctrl+Enter): pause current task, handle this first, then continue if unfinished",
+                                    ))
+                                    .build(w, cx)
+                                })
+                                .on_click(cx.listener(|this, _, w, cx| {
+                                    cx.stop_propagation();
+                                    this.agent_force_send_input(w, cx);
+                                }))
+                                .child(Icon::new(IconName::Play).size(theme::u(11.)))
+                                .when(!tight, |d| d.child(tr("Now"))),
+                        )
+                    })
                     .child(if busy && !has_text {
                         send_btn("ag-stop", true, tr("Stop the answer"))
                             .child(div().size(theme::u(8.)).rounded(px(1.5)).bg(c(theme::ON_ACCENT)))
@@ -4057,7 +4513,7 @@ impl Workbench {
                             }))
                             .into_any_element()
                     } else {
-                        send_btn("ag-send", has_text, if busy { crate::i18n::tr("Queue it (Enter): sent when the answer ends · Shift+Enter new line") } else { crate::i18n::tr("Send (Enter) · Shift+Enter new line") })
+                        send_btn("ag-send", has_text, if busy { crate::i18n::tr("Queue (Enter): runs next in order · Ctrl+Enter force send now") } else { crate::i18n::tr("Send (Enter) · Shift+Enter new line") })
                             .child(Icon::new(IconName::ArrowUp).size(theme::u(14.)).text_color(c(if has_text { theme::ON_ACCENT } else { theme::FG_DIM })))
                             .on_click(cx.listener(|this, _, w, cx| {
                                 cx.stop_propagation();
@@ -4201,7 +4657,7 @@ impl Workbench {
             .id("ag-permission")
             .mx_3()
             .mb_2()
-            .rounded(px(8.))
+            .rounded(px(4.))
             .border_1()
             .border_color(c(theme::WARN).opacity(0.55))
             .bg(c(theme::BG_ELEVATED))
@@ -4238,7 +4694,7 @@ impl Workbench {
                                 .id("ag-perm-exact")
                                 .px_2()
                                 .py_1p5()
-                                .rounded(px(5.))
+                                .rounded(px(3.))
                                 .bg(c(theme::BG_EDITOR))
                                 .border_1()
                                 .border_color(c(theme::BORDER))
@@ -4576,7 +5032,7 @@ fn chip_button(id: &'static str, open: bool, tip: SharedString) -> Stateful<Div>
         .min_w_0()
         .px_1p5()
         .gap_1()
-        .rounded(px(5.))
+        .rounded(px(3.))
         .overflow_hidden()
         .cursor_pointer()
         .text_xs()
@@ -4611,7 +5067,7 @@ fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(px(3.))
         .cursor_pointer()
         .text_color(c(theme::FG_MUTED))
         .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
@@ -4627,7 +5083,7 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(5.))
+        .rounded(px(3.))
         .cursor_pointer()
         .when(active, |d| d.bg(c(theme::ACCENT)).hover(|s| s.opacity(0.9)))
         .when(!active, |d| d.border_1().border_color(c(theme::BORDER_STRONG)).hover(|s| s.bg(c(theme::BG_HOVER))))
@@ -4643,11 +5099,11 @@ fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
         .h(theme::u(22.))
         .pr_0p5()
         .gap_0p5()
-        .rounded_full()
+        .rounded(px(3.))
         .border_1()
         .text_xs()
-        .border_color(theme::glass_pop_edge())
-        .bg(if on { c(theme::FG_DIM).opacity(0.12) } else { gpui_kit::transparent_black() })
+        .border_color(c(theme::BORDER))
+        .bg(if on { c(theme::BG_SIDE) } else { gpui_kit::transparent_black() })
         .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
         .hover(|s| {
             s.bg(c(theme::BG_HOVER))
@@ -4666,7 +5122,7 @@ fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window,
         .flex()
         .items_center()
         .justify_center()
-        .rounded_full()
+        .rounded(px(2.))
         .opacity(0.)
         .group_hover("ag-chip", |s| s.opacity(1.))
         .cursor_pointer()
@@ -4813,10 +5269,10 @@ impl Workbench {
             .child(
                 h_flex()
                     .id("ag-pager")
-                    .px_3()
-                    .h(theme::u(26.))
+                    .px_2p5()
+                    .h(theme::u(24.))
                     .gap_1p5()
-                    .rounded_full()
+                    .rounded(px(4.))
                     .border_1()
                     .border_color(c(theme::BORDER))
                     .bg(c(theme::BG_ELEVATED))
@@ -4891,9 +5347,117 @@ fn opencode_config_file() -> Option<PathBuf> {
 
 static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push_str("...");
+    }
+    out
+}
+
+fn summarize_turn_progress(items: &[Item], changes: &[Change]) -> String {
+    let mut lines = Vec::new();
+    for item in items.iter().rev() {
+        if let Item::Plan(entries) = item {
+            if !entries.is_empty() {
+                lines.push("Plan state:".to_string());
+                for (step, st) in entries.iter().take(12) {
+                    let mark = match st.as_str() {
+                        "completed" => "done",
+                        "in_progress" => "in_progress",
+                        _ => "pending",
+                    };
+                    lines.push(format!("  - [{mark}] {}", truncate_chars(step.trim(), 140)));
+                }
+            }
+            break;
+        }
+    }
+    let tools: Vec<String> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Tool { title, status, .. } => Some(format!("  - [{status}] {}", truncate_chars(title.trim(), 120))),
+            _ => None,
+        })
+        .collect();
+    if !tools.is_empty() {
+        lines.push("Tool actions so far:".to_string());
+        for t in tools.iter().rev().take(10).rev() {
+            lines.push(t.clone());
+        }
+    }
+    if !changes.is_empty() {
+        let names: Vec<String> = changes
+            .iter()
+            .take(12)
+            .map(|ch| {
+                let n = ch.path.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                format!("{n} (+{}/-{})", ch.added, ch.removed)
+            })
+            .collect();
+        lines.push(format!("Modified files: {}", names.join(", ")));
+    }
+    if let Some(partial) = items.iter().rev().find_map(|i| match i {
+        Item::Text(t) if !t.trim().is_empty() => Some(t.trim()),
+        _ => None,
+    }) {
+        lines.push(format!("Last assistant output before pause: {}", truncate_chars(partial, 500)));
+    }
+    if lines.is_empty() {
+        "Started analyzing the request; no tool calls or edits completed yet.".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn build_steer_prompt(new_text: &str, interrupted: Option<&InterruptedTask>) -> String {
+    let Some(prev) = interrupted else {
+        return new_text.to_string();
+    };
+    format!(
+        "[Priority interruption]\n\
+         The user force-sent a new message while you were still working on an earlier task.\n\
+         1. First, answer or complete the user's NEW request below.\n\
+         2. Next, check the paused task context below:\n\
+            - If that earlier task is still unfinished and not replaced by the new request, resume it from the completed progress below and finish it completely.\n\
+            - If that earlier task was already finished or is no longer needed, do not redo or continue it.\n\n\
+         <paused_task>\n\
+         Original request: {}\n\
+         Progress before pause:\n\
+         {}\n\
+         </paused_task>\n\n\
+         <new_request>\n\
+         {}\n\
+         </new_request>",
+        prev.user_prompt, prev.progress, new_text
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::model_groups;
+    use super::{build_steer_prompt, model_groups, summarize_turn_progress, InterruptedTask, Item};
+
+    #[test]
+    fn steer_prompt_wraps_only_unfinished_interrupted_task() {
+        assert_eq!(build_steer_prompt("cek browser", None), "cek browser");
+        let prev = InterruptedTask {
+            user_prompt: "obfuscate script.js".into(),
+            progress: summarize_turn_progress(
+                &[
+                    Item::User("obfuscate script.js".into()),
+                    Item::Tool { id: "1".into(), title: "Read script.js".into(), status: "completed".into(), kind: "read".into() },
+                    Item::Text("Checking JS parser availability.".into()),
+                ],
+                &[],
+            ),
+        };
+        let out = build_steer_prompt("buat kontrol browser ga?", Some(&prev));
+        assert!(out.contains("<paused_task>"));
+        assert!(out.contains("obfuscate script.js"));
+        assert!(out.contains("[completed] Read script.js"));
+        assert!(out.contains("buat kontrol browser ga?"));
+        assert!(out.contains("do not redo or continue it"));
+    }
 
     #[test]
     fn before_an_edit() {

@@ -1631,6 +1631,51 @@ pub const ID: &[(&str, &str)] = &[
         "↑ ↓ history · Tab completes · Ctrl+C stops · Click any file:line error to jump to code",
         "↑ ↓ riwayat · Tab melengkapi · Ctrl+C hentikan · Klik file:baris error untuk langsung ke kode",
     ),
+    (
+        "Priority send: handling this first, then continuing the paused task if unfinished.",
+        "Kirim prioritas: kerjakan ini dulu, lalu lanjutkan tugas sebelumnya jika belum selesai.",
+    ),
+    ("Interrupting for priority task…", "Menjeda untuk tugas prioritas…"),
+    ("Runs next after {name} finishes", "Jalan berikutnya setelah {name} selesai"),
+    ("Starts when {name} is ready", "Mulai saat {name} siap"),
+    ("{name} couldn't start", "{name} gagal dijalankan"),
+    ("Queue ({n})", "Antrean ({n})"),
+    ("Priority", "Prioritas"),
+    ("Resume automatic queue", "Lanjutkan antrean otomatis"),
+    ("Pause automatic queue after the current turn", "Jeda antrean otomatis setelah giliran ini"),
+    ("Resume", "Lanjut"),
+    ("Pause", "Jeda"),
+    ("Clear all queued messages", "Hapus semua pesan di antrean"),
+    ("NOW", "SEKARANG"),
+    (
+        "Force send now: pause current task, handle this first, then continue if unfinished",
+        "Paksa kirim sekarang: jeda tugas aktif, kerjakan ini dulu, lalu lanjutkan jika belum selesai",
+    ),
+    ("Send this message now", "Kirim pesan ini sekarang"),
+    ("Move up", "Naikkan"),
+    ("Move down", "Turunkan"),
+    ("Edit in input", "Edit di kotak pesan"),
+    (
+        "Force send now (Ctrl+Enter): pause current task, handle this first, then continue if unfinished",
+        "Paksa kirim sekarang (Ctrl+Enter): jeda tugas aktif, kerjakan ini dulu, lalu lanjutkan jika belum selesai",
+    ),
+    (
+        "Queue (Enter): runs next in order · Ctrl+Enter force send now",
+        "Antrekan (Enter): jalan berurutan · Ctrl+Enter paksa kirim sekarang",
+    ),
+    ("FluxCode - AI Agent running (click to open)", "FluxCode - AI Agent berjalan (klik untuk buka)"),
+    ("FluxCode AI Agent", "AI Agent FluxCode"),
+    (
+        "Still running in background. Click the tray icon or reopen FluxCode to return.",
+        "Masih berjalan di latar belakang. Klik ikon tray atau buka lagi FluxCode untuk kembali.",
+    ),
+    ("Open FluxCode", "Buka FluxCode"),
+    ("Stop AI Agent & Exit", "Hentikan AI Agent & Keluar"),
+    ("FluxCode - AI Agent finished (click to open)", "FluxCode - AI Agent selesai (klik untuk buka)"),
+    (
+        "AI Agent finished its task. Click the tray icon or reopen FluxCode to view the result.",
+        "AI Agent selesai mengerjakan tugasnya. Klik ikon tray atau buka lagi FluxCode untuk melihat hasilnya.",
+    ),
 ];
 
 #[cfg(test)]

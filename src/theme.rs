@@ -887,10 +887,10 @@ pub fn glass_edge() -> Hsla {
 
 pub trait GlassExt: gpui_kit::Styled + Sized {
     fn glass(self) -> Self {
-        self.bg(glass_fill()).border_1().border_color(glass_edge()).rounded(gpui_kit::px(14.)).shadow_lg()
+        self.bg(glass_fill()).border_1().border_color(glass_edge()).rounded(gpui_kit::px(6.)).shadow_lg()
     }
     fn glass_pop(self) -> Self {
-        self.bg(glass_pop_fill()).border_1().border_color(glass_pop_edge()).rounded(gpui_kit::px(14.)).shadow_lg()
+        self.bg(glass_pop_fill()).border_1().border_color(glass_pop_edge()).rounded(gpui_kit::px(6.)).shadow_lg()
     }
 }
 impl<T: gpui_kit::Styled> GlassExt for T {}

@@ -15,6 +15,23 @@ struct Info {
     port: u16,
     token: String,
     pid: u32,
+    hidden: bool,
+}
+
+pub(crate) fn set_hidden(hidden: bool) {
+    let mut info: Info = crate::settings::load_json(FILE);
+    if info.pid == std::process::id() && info.hidden != hidden {
+        info.hidden = hidden;
+        crate::settings::save_json(FILE, &info);
+    }
+}
+
+pub(crate) fn wake_hidden() -> bool {
+    let info: Info = crate::settings::load_json(FILE);
+    if !info.hidden || info.port == 0 || info.token.is_empty() || info.pid == std::process::id() || !alive(info.pid) {
+        return false;
+    }
+    forward(&[])
 }
 
 pub(crate) fn forward(files: &[PathBuf]) -> bool {
@@ -68,7 +85,7 @@ pub(crate) fn listen() -> Option<UnboundedReceiver<Vec<PathBuf>>> {
     let mut bytes = [0u8; 24];
     getrandom::getrandom(&mut bytes).ok()?;
     let token = hex::encode(bytes);
-    crate::settings::save_json(FILE, &Info { port, token: token.clone(), pid: std::process::id() });
+    crate::settings::save_json(FILE, &Info { port, token: token.clone(), pid: std::process::id(), hidden: false });
     let (tx, rx) = unbounded();
     std::thread::Builder::new()
         .name("instance".into())

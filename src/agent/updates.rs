@@ -189,7 +189,7 @@ impl Workbench {
                 .px_3()
                 .py_2()
                 .gap_1p5()
-                .rounded(theme::u(10.))
+                .rounded(px(4.))
                 .bg(c(theme::BG_HOVER).opacity(0.6))
                 .child(
                     h_flex()

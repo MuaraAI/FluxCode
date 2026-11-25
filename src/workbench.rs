@@ -40,7 +40,7 @@ actions!(
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
         AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
@@ -77,6 +77,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", AgentMentionDown, Some("AgentInput > Input")),
         KeyBinding::new("tab", AgentMentionAccept, Some("AgentInput > Input")),
         KeyBinding::new("escape", AgentMentionClose, Some("AgentInput > Input")),
+        KeyBinding::new("ctrl-enter", AgentForceSend, Some("AgentInput > Input")),
         KeyBinding::new("up", AgentMenuUp, Some("AgentMenu")),
         KeyBinding::new("down", AgentMenuDown, Some("AgentMenu")),
         KeyBinding::new("enter", AgentMenuPick, Some("AgentMenu")),
@@ -421,6 +422,8 @@ pub struct Workbench {
     pub(crate) github_input: Entity<InputState>,
     pub(crate) copilot: crate::copilot::Copilot,
     pub(crate) copilot_installing: bool,
+    pub(crate) hidden_to_tray: bool,
+    pub(crate) force_quit: bool,
     #[cfg(feature = "embedded-preview")]
     pub(crate) preview: Option<(Entity<gpui_webview::WebView>, String)>,
     #[cfg(not(feature = "embedded-preview"))]
@@ -516,11 +519,19 @@ impl Workbench {
         .detach();
 
         cx.on_app_quit(|this, _| {
+            crate::wintitle::tray_hide();
+            crate::instance::set_hidden(false);
+            this.agent_stop_all();
             this.procs.kill_all();
             this.copilot.stop_and_wait();
             async {}
         })
         .detach();
+
+        let close_weak = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            close_weak.update(cx, |this, cx| this.handle_close_request(window, cx)).unwrap_or(true)
+        });
 
         let mut settings = crate::settings::Settings::load();
         crate::agent::worktree::prune_accounts(&mut settings);
@@ -551,6 +562,7 @@ impl Workbench {
                 this.scm_refresh(cx);
             }
             if window.is_window_active() {
+                crate::wintitle::capture_main_hwnd();
                 this.scm_on_return(cx);
             }
         }));
@@ -670,6 +682,8 @@ impl Workbench {
             github_input,
             copilot: crate::copilot::Copilot::new(copilot_enabled),
             copilot_installing: false,
+            hidden_to_tray: false,
+            force_quit: false,
             preview: None,
             #[cfg(feature = "embedded-preview")]
             preview_ask: false,
@@ -1846,6 +1860,7 @@ impl Workbench {
         cx.spawn_in(window, async move |this, cx| {
             while let Some(paths) = rx.next().await {
                 let alive = this.update_in(cx, |this, window, cx| {
+                    this.restore_from_background(window, cx);
                     for p in paths.into_iter().filter(|p| p.is_file()) {
                         this.open_file(p, window, cx);
                     }
@@ -1992,9 +2007,85 @@ impl Workbench {
         .detach();
     }
 
-    fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn handle_close_request(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.save_session_now();
+        self.agent_save();
+        if !self.force_quit && self.any_agent_working() && cfg!(windows) {
+            if !self.hidden_to_tray && crate::wintitle::hide_main_window() {
+                self.hidden_to_tray = true;
+                crate::instance::set_hidden(true);
+                if let Some(mut rx) = crate::wintitle::tray_show(
+                    tr("FluxCode - AI Agent running (click to open)"),
+                    Some(tr("FluxCode AI Agent")),
+                    Some(tr("Still running in background. Click the tray icon or reopen FluxCode to return.")),
+                    tr("Open FluxCode"),
+                    tr("Stop AI Agent & Exit"),
+                ) {
+                    cx.spawn_in(window, async move |this, cx| {
+                        use futures::StreamExt;
+                        while let Some(act) = rx.next().await {
+                            let keep = this
+                                .update_in(cx, |this, window, cx| match act {
+                                    crate::wintitle::TrayAction::Show => {
+                                        this.restore_from_background(window, cx);
+                                        false
+                                    }
+                                    crate::wintitle::TrayAction::StopAndQuit => {
+                                        this.quit_full(cx);
+                                        false
+                                    }
+                                })
+                                .unwrap_or(false);
+                            if !keep {
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
+            }
+            return false;
+        }
+        self.quit_full(cx);
+        true
+    }
+
+    pub(crate) fn restore_from_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.hidden_to_tray {
+            return;
+        }
+        self.hidden_to_tray = false;
+        crate::instance::set_hidden(false);
+        crate::wintitle::tray_hide();
+        crate::wintitle::restore_main_window();
+        window.activate_window();
+        cx.notify();
+    }
+
+    pub(crate) fn sync_tray_agent_state(&self) {
+        if self.hidden_to_tray && !self.any_agent_working() {
+            crate::wintitle::tray_update(
+                tr("FluxCode - AI Agent finished (click to open)"),
+                Some(tr("FluxCode AI Agent")),
+                Some(tr("AI Agent finished its task. Click the tray icon or reopen FluxCode to view the result.")),
+            );
+        }
+    }
+
+    pub(crate) fn quit_full(&mut self, cx: &mut Context<Self>) {
+        self.force_quit = true;
+        self.hidden_to_tray = false;
+        self.save_session_now();
+        self.agent_stop_all();
+        self.procs.kill_all();
+        self.copilot.stop_and_wait();
+        crate::wintitle::tray_hide();
+        crate::instance::set_hidden(false);
         cx.quit();
+    }
+
+    fn on_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
+        self.handle_close_request(window, cx);
     }
 
     pub(crate) fn set_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -4234,6 +4325,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_mention_down))
             .on_action(cx.listener(Self::on_agent_mention_accept))
             .on_action(cx.listener(Self::on_agent_mention_close))
+            .on_action(cx.listener(Self::on_agent_force_send))
             .on_action(cx.listener(Self::on_agent_menu_up))
             .on_action(cx.listener(Self::on_agent_menu_down))
             .on_action(cx.listener(Self::on_agent_menu_pick))
