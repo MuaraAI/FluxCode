@@ -86,6 +86,126 @@ impl ProcessJob {
         self.terminate_inner();
     }
 
+    fn pids(&self) -> Vec<u32> {
+        if self.0 == 0 {
+            return Vec::new();
+        }
+        #[repr(C)]
+        struct JobPidList {
+            assigned: u32,
+            in_list: u32,
+            pids: [usize; 64],
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn QueryInformationJobObject(
+                job: isize,
+                class: u32,
+                info: *mut std::ffi::c_void,
+                len: u32,
+                ret_len: *mut u32,
+            ) -> i32;
+        }
+        const JOB_OBJECT_BASIC_PROCESS_ID_LIST: u32 = 3;
+        unsafe {
+            let mut list: JobPidList = std::mem::zeroed();
+            if QueryInformationJobObject(
+                self.0,
+                JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                &mut list as *mut JobPidList as *mut std::ffi::c_void,
+                std::mem::size_of::<JobPidList>() as u32,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Vec::new();
+            }
+            let count = (list.in_list as usize).min(list.pids.len());
+            list.pids[..count].iter().map(|&p| p as u32).collect()
+        }
+    }
+
+    fn working_set_mb(&self) -> f64 {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn CloseHandle(handle: isize) -> i32;
+        }
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_VM_READ: u32 = 0x0010;
+        let mut total_bytes: u64 = 0;
+        for pid in self.pids() {
+            unsafe {
+                let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+                if h != 0 {
+                    if let Some(ws) = crate::boot::handle_working_set_bytes(h) {
+                        total_bytes = total_bytes.saturating_add(ws as u64);
+                    }
+                    CloseHandle(h);
+                }
+            }
+        }
+        total_bytes as f64 / (1024.0 * 1024.0)
+    }
+
+    /// Non-destructively trims cold resident RAM pages across the entire Job Object and
+    /// optionally engages Windows EcoQoS (`PROCESS_POWER_THROTTLING_EXECUTION_SPEED`).
+    /// The agent remains 100% live and connected.
+    fn set_thermal_state(&self, trim_ws: bool, eco_qos: Option<bool>) -> usize {
+        #[repr(C)]
+        struct PowerThrottlingState {
+            version: u32,
+            control_mask: u32,
+            state_mask: u32,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn SetProcessWorkingSetSize(proc: isize, min_sz: usize, max_sz: usize) -> i32;
+            fn SetProcessInformation(proc: isize, class: u32, info: *const std::ffi::c_void, len: u32) -> i32;
+            fn SetPriorityClass(proc: isize, class: u32) -> i32;
+            fn CloseHandle(handle: isize) -> i32;
+        }
+        const PROCESS_SET_QUOTA: u32 = 0x0100;
+        const PROCESS_SET_INFORMATION: u32 = 0x0200;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_POWER_THROTTLING: u32 = 4;
+        const EXECUTION_SPEED: u32 = 0x1;
+        const NORMAL_PRIORITY_CLASS: u32 = 0x0020;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+
+        let access = PROCESS_QUERY_LIMITED_INFORMATION
+            | if trim_ws { PROCESS_SET_QUOTA } else { 0 }
+            | if eco_qos.is_some() { PROCESS_SET_INFORMATION } else { 0 };
+        let mut touched = 0usize;
+        for pid in self.pids() {
+            unsafe {
+                let h = OpenProcess(access, 0, pid);
+                if h != 0 {
+                    if let Some(eco) = eco_qos {
+                        let pt = PowerThrottlingState {
+                            version: 1,
+                            control_mask: EXECUTION_SPEED,
+                            state_mask: if eco { EXECUTION_SPEED } else { 0 },
+                        };
+                        let _ = SetProcessInformation(
+                            h,
+                            PROCESS_POWER_THROTTLING,
+                            &pt as *const PowerThrottlingState as *const std::ffi::c_void,
+                            std::mem::size_of::<PowerThrottlingState>() as u32,
+                        );
+                        let _ = SetPriorityClass(h, if eco { BELOW_NORMAL_PRIORITY_CLASS } else { NORMAL_PRIORITY_CLASS });
+                    }
+                    if trim_ws {
+                        let _ = SetProcessWorkingSetSize(h, usize::MAX, usize::MAX);
+                    }
+                    CloseHandle(h);
+                    touched += 1;
+                }
+            }
+        }
+        touched
+    }
+
     fn terminate_inner(&mut self) {
         if self.0 == 0 {
             return;
@@ -410,6 +530,42 @@ impl Procs {
         }
     }
 
+    pub fn job_working_set_mb(&self, id: u32) -> f64 {
+        #[cfg(windows)]
+        {
+            self.running
+                .get(&id)
+                .and_then(|e| e.job.as_ref())
+                .map_or(0.0, ProcessJob::working_set_mb)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = id;
+            0.0
+        }
+    }
+
+    /// Non-destructively trims cold working-set RAM and optionally enables Windows EcoQoS on a live agent job.
+    pub fn cool_job(&self, id: u32, trim_ws: bool, eco_qos: Option<bool>) -> usize {
+        #[cfg(windows)]
+        {
+            self.running
+                .get(&id)
+                .and_then(|e| e.job.as_ref())
+                .map_or(0, |j| j.set_thermal_state(trim_ws, eco_qos))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (id, trim_ws, eco_qos);
+            0
+        }
+    }
+
+    /// Restores full CPU clocks and normal priority on a live agent job before dispatching a turn.
+    pub fn wake_job(&self, id: u32) {
+        let _ = self.cool_job(id, false, Some(false));
+    }
+
     pub fn kill_all(&mut self) {
         let ids: Vec<u32> = self.running.keys().copied().collect();
         for id in ids {
@@ -442,6 +598,14 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
+            if carry.is_empty() {
+                if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                    if tx.unbounded_send(ProcEvent::Output { id, text: s.to_owned(), err }).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+            }
             carry.extend_from_slice(&buf[..n]);
             let valid = match std::str::from_utf8(&carry) {
                 Ok(_) => carry.len(),
@@ -449,7 +613,14 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
                 Err(_) => carry.len(),
             };
             let text = String::from_utf8_lossy(&carry[..valid]).into_owned();
-            carry.drain(..valid);
+            if valid == carry.len() {
+                carry.clear();
+                if carry.capacity() > 32_768 {
+                    carry.shrink_to(4096);
+                }
+            } else {
+                carry.drain(..valid);
+            }
             if tx.unbounded_send(ProcEvent::Output { id, text, err }).is_err() {
                 break;
             }
@@ -530,6 +701,11 @@ mod tests {
         let pid = entry.pid;
         std::thread::sleep(std::time::Duration::from_millis(120));
         assert!(is_alive(pid), "resumed process should be running");
+        let ws_before = procs.job_working_set_mb(id);
+        assert!(ws_before > 0.0, "job working set should report positive MB");
+        assert!(procs.cool_job(id, true, Some(true)) >= 1, "cooling should touch job processes");
+        procs.wake_job(id);
+        assert!(is_alive(pid), "cooling and waking must keep process 100% alive");
         procs.kill(id);
         assert!(!procs.is_running(id));
         std::thread::sleep(std::time::Duration::from_millis(80));

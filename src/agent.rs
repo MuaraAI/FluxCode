@@ -42,6 +42,7 @@ pub(crate) mod chats;
 mod follow;
 mod full;
 mod limit;
+mod opt;
 mod saver;
 mod table;
 pub(crate) mod updates;
@@ -319,6 +320,8 @@ pub struct Run {
     pub(crate) limit: limit::LimitState,
     pub(crate) open_thought: Option<String>,
     pub(crate) table_sorts: HashMap<String, (usize, bool)>,
+    pub(crate) thermal: opt::ThermalController,
+    pub(crate) ctx_cache: opt::ContextCache,
 }
 
 static RUN_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -384,6 +387,8 @@ impl Run {
         times: Default::default(),
         open_thought: None,
         table_sorts: HashMap::new(),
+        thermal: Default::default(),
+        ctx_cache: Default::default(),
         ask: None,
         }
     }
@@ -706,6 +711,9 @@ impl Workbench {
             next.can_image = r.can_image;
             next.commands = r.commands.clone();
             next.config = r.config.clone();
+            next.thermal = std::mem::take(&mut r.thermal);
+            next.ctx_cache.clear();
+            r.ctx_cache.clear();
             next.folder = Some(next_cwd);
             if r.can_load {
                 r.resume_id = r.session.take();
@@ -747,7 +755,7 @@ impl Workbench {
                 let cwd = self.agent_cwd();
                 self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
             }
-            self.agent_schedule_idle(cx);
+            self.agent_schedule_idle(false, cx);
         }
         self.agent.follow = true;
         self.agent_to_end();
@@ -757,7 +765,19 @@ impl Workbench {
 
     pub(crate) fn agent_write(&mut self, msg: Value) {
         if let Some(id) = self.agent.proc_id {
+            if self.agent.thermal.eco_active {
+                self.procs.wake_job(id);
+                self.agent.thermal.eco_active = false;
+            }
             self.procs.write_stdin(id, &format!("{msg}\n"));
+        }
+    }
+
+    fn agent_wake_thermal(&mut self) {
+        self.agent.last_active = None;
+        self.agent.thermal.on_turn_start(std::time::Instant::now());
+        if let Some(id) = self.agent.proc_id {
+            self.procs.wake_job(id);
         }
     }
 
@@ -1006,6 +1026,7 @@ impl Workbench {
         self.agent.resume_id = None;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
+        self.agent.ctx_cache.clear();
         match self.agent.status {
             Status::Busy | Status::Ready if self.agent.proc_id.is_some() => {
                 if self.agent.status == Status::Busy {
@@ -1075,6 +1096,13 @@ impl Workbench {
         };
         cmd.args(self.agent_flag_args());
         cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+        if crate::acp::is_opencode(&agent_id()) {
+            // Keep all ACP tools, FFF search, and models intact; disable only redundant watcher/update/debug overhead.
+            cmd.env("OPENCODE_DISABLE_FILEWATCHER", "1")
+                .env("OPENCODE_FILEWATCHER_DISABLE", "1")
+                .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+                .env("OPENCODE_LOG_LEVEL", "error");
+        }
         crate::github::apply_env(&mut cmd);
         if let Some(a) = self.agent_account() {
             let (k, v) = worktree::account_env(&a);
@@ -1116,6 +1144,8 @@ impl Workbench {
         self.agent.queue_paused = false;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
+        self.agent.ctx_cache.clear();
+        self.agent.thermal = Default::default();
         self.agent.loading_id = None;
         self.sync_tray_agent_state();
         cx.notify();
@@ -1376,6 +1406,7 @@ impl Workbench {
 
     fn agent_prompt(&mut self, text: String, context_text: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         let Some(session) = self.agent.session.clone() else { return };
+        self.agent_wake_thermal();
         let mut prompt = Vec::new();
         if let Some(earlier) = self.agent.carry.take() {
             prompt.push(json!({ "type": "text", "text": format!("Earlier messages of this conversation, for context:\n\n{earlier}\n\n---\n") }));
@@ -1442,9 +1473,19 @@ impl Workbench {
             return;
         }
         self.agent.buf.push_str(text);
-        while let Some(nl) = self.agent.buf.find('\n') {
-            let line: String = self.agent.buf.drain(..=nl).collect();
-            if let Ok(msg) = serde_json::from_str::<Value>(line.trim()) {
+        if let Some(end) = self.agent.buf.rfind('\n') {
+            let msgs: Vec<Value> = self.agent.buf[..end]
+                .split('\n')
+                .filter_map(|line| {
+                    let trimmed = line.trim();
+                    (!trimmed.is_empty()).then(|| serde_json::from_str::<Value>(trimmed).ok()).flatten()
+                })
+                .collect();
+            self.agent.buf.drain(..=end);
+            if self.agent.buf.is_empty() && self.agent.buf.capacity() > 65_536 {
+                self.agent.buf.shrink_to(4096);
+            }
+            for msg in msgs {
                 self.agent_on_message(msg, cx);
             }
         }
@@ -1545,14 +1586,16 @@ impl Workbench {
                 self.agent.session = self.agent.loading_id.take();
                 self.agent.status = Status::Ready;
                 self.agent.silent_load = false;
-                self.agent_schedule_idle(cx);
                 self.agent.hinted = false;
                 self.agent.ws_sig = 0;
+                self.agent.ctx_cache.clear();
+                self.agent_schedule_idle(true, cx);
                 self.agent_save();
                 self.agent_flush_queue(cx);
             }
             Req::NewSession => {
                 self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
+                self.agent.ctx_cache.clear();
                 self.agent_take_config(&result);
                 let harness = self.agent.agent.clone();
                 let mut model_opt: Option<(String, String)> = None;
@@ -1582,7 +1625,7 @@ impl Workbench {
                     self.agent_apply_effort_option(cx);
                 }
                 self.agent.status = Status::Ready;
-                self.agent_schedule_idle(cx);
+                self.agent_schedule_idle(true, cx);
                 self.agent_flush_queue(cx);
                 self.agent_probe_next(cx);
             }
@@ -1595,6 +1638,7 @@ impl Workbench {
             Req::Probe => {
                 self.agent.status = Status::Ready;
                 if std::mem::take(&mut self.agent.compacting) {
+                    self.agent.ctx_cache.clear();
                     self.agent_compact_done(true);
                 }
                 self.agent_probe_done(None, cx);
@@ -1621,7 +1665,7 @@ impl Workbench {
                 if self.agent.bg && self.agent.queue.is_empty() && self.agent.pending_steer.is_none() {
                     self.status = crate::trf!("{name} finished in “{chat}”."; name => agent_name(), chat => self.agent_chat_title()).into();
                 }
-                self.agent_schedule_idle(cx);
+                self.agent_schedule_idle(false, cx);
                 self.refresh_tree(cx);
                 if std::mem::take(&mut self.agent.relaunch) {
                     return self.agent_relaunch(cx);
@@ -2779,14 +2823,93 @@ impl Workbench {
         }
     }
 
-    fn agent_schedule_idle(&mut self, cx: &mut Context<Self>) {
+    fn agent_schedule_idle(&mut self, post_boot: bool, cx: &mut Context<Self>) {
+        let stamp = std::time::Instant::now();
+        self.agent.last_active = Some(stamp);
+        let key = self.agent.key;
+        let boot_d = self.agent.thermal.boot_settle_delay();
+        let s1_d = self.agent.thermal.stage1_delay();
+        let s2_d = self.agent.thermal.stage2_delay();
+
+        // Non-destructive thermodynamic + critically damped memory cooling (always active, keeps agent 100% live).
+        cx.spawn(async move |this, cx| {
+            let mut elapsed = std::time::Duration::ZERO;
+            if post_boot {
+                cx.background_executor().timer(boot_d).await;
+                elapsed += boot_d;
+                let mut keep = false;
+                _ = this.update(cx, |this, cx| {
+                    this.agent_with_run(key, cx, |this, _| {
+                        if this.agent.last_active == Some(stamp)
+                            && this.agent.status == Status::Ready
+                            && this.agent.permission.is_none()
+                            && this.agent.ask.is_none()
+                        {
+                            keep = true;
+                            if let Some(id) = this.agent.proc_id {
+                                let ws = this.procs.job_working_set_mb(id);
+                                if this.agent.thermal.should_trim(ws, std::time::Instant::now(), true) {
+                                    this.procs.cool_job(id, true, None);
+                                }
+                            }
+                        }
+                    });
+                });
+                if !keep {
+                    return;
+                }
+            }
+            let wait1 = s1_d.saturating_sub(elapsed).max(std::time::Duration::from_secs(1));
+            cx.background_executor().timer(wait1).await;
+            elapsed += wait1;
+            let mut keep = false;
+            _ = this.update(cx, |this, cx| {
+                this.agent_with_run(key, cx, |this, _| {
+                    if this.agent.last_active == Some(stamp)
+                        && this.agent.status == Status::Ready
+                        && this.agent.permission.is_none()
+                        && this.agent.ask.is_none()
+                    {
+                        keep = true;
+                        if let Some(id) = this.agent.proc_id {
+                            let ws = this.procs.job_working_set_mb(id);
+                            if this.agent.thermal.should_trim(ws, std::time::Instant::now(), false) {
+                                this.procs.cool_job(id, true, None);
+                                this.agent.thermal.stage = 1;
+                            }
+                        }
+                    }
+                });
+            });
+            if !keep {
+                return;
+            }
+            let wait2 = s2_d.saturating_sub(elapsed).max(std::time::Duration::from_secs(5));
+            cx.background_executor().timer(wait2).await;
+            _ = this.update(cx, |this, cx| {
+                this.agent_with_run(key, cx, |this, _| {
+                    if this.agent.last_active == Some(stamp)
+                        && this.agent.status == Status::Ready
+                        && this.agent.permission.is_none()
+                        && this.agent.ask.is_none()
+                    {
+                        if let Some(id) = this.agent.proc_id {
+                            let ws = this.procs.job_working_set_mb(id);
+                            let trim = this.agent.thermal.should_trim(ws, std::time::Instant::now(), true);
+                            this.procs.cool_job(id, trim, Some(true));
+                            this.agent.thermal.stage = 2;
+                            this.agent.thermal.eco_active = true;
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+
         let mins = self.settings.agent_idle_min;
         if mins == 0 {
             return;
         }
-        let stamp = std::time::Instant::now();
-        self.agent.last_active = Some(stamp);
-        let key = self.agent.key;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_secs(mins as u64 * 60)).await;
             _ = this.update(cx, |this, cx| {
@@ -2941,6 +3064,8 @@ impl Workbench {
     fn agent_context_blocks(&mut self, user_text: &str, cx: &mut Context<Self>) -> Vec<Value> {
         let chips = self.agent_chips_for(user_text, cx);
         let mut blocks = Vec::new();
+        let mut ambient: Vec<(f64, usize, String)> = Vec::new();
+        let mut sent_ws = false;
         let resource = |path: &Path, body: String| json!({ "type": "resource", "resource": { "uri": crate::docs::file_uri(path), "text": body, "mimeType": "text/plain" } });
         for (key, _, _, on) in &chips {
             if !on {
@@ -2950,15 +3075,18 @@ impl Workbench {
                 "ws" => {
                     let (roots, tabs) = self.agent_ws_parts(cx);
                     let wiz = self.wiztree.tree.as_deref().filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
+                    let git = self.scm.repo.as_ref().map(|_| &self.scm.status);
                     let inputs = crate::ws_context::Inputs {
                         roots: &roots,
                         files: &self.all_files,
-                        git: self.scm.repo.as_ref().map(|_| &self.scm.status),
+                        git,
                         tabs,
                         python: self.python_version.as_deref(),
                         wiztree: wiz,
                     };
                     self.agent.ws_sig = crate::ws_context::signature(&inputs);
+                    self.agent.ctx_cache.git_sig = crate::ws_context::git_signature(git);
+                    sent_ws = true;
                     let mut text = crate::ws_context::overview(&inputs);
                     if let Some(w) = &self.agent.worktree {
                         text.push_str(&format!(
@@ -2971,13 +3099,24 @@ impl Workbench {
                     if let Some(notes) = self.ext_agent_notes() {
                         text.push_str(&notes);
                     }
-                    blocks.push(json!({ "type": "text", "text": text }));
+                    ambient.push((1.2, 3200, text));
                 }
                 "file" => {
-                    if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
+                    let active_info = self.active.map(|ix| {
+                        let d = &self.docs[ix];
                         let body = d.text(cx);
+                        let path = d.path.clone();
+                        let line = d.cursor_position(cx).line as usize + 1;
+                        (path, body, line)
+                    });
+                    if let Some((path, body, line)) = active_info {
                         if body.len() < 200_000 {
-                            blocks.push(resource(&d.path, body));
+                            let rel = self.rel_path(&path.to_string_lossy());
+                            match self.agent.ctx_cache.encode_file(&path, &rel, &body, Some(line)) {
+                                opt::FilePayload::Full => blocks.push(resource(&path, body)),
+                                opt::FilePayload::Unchanged(note) => blocks.push(json!({ "type": "text", "text": note })),
+                                opt::FilePayload::Delta(diff) => blocks.push(json!({ "type": "text", "text": diff })),
+                            }
                         }
                     }
                 }
@@ -3005,12 +3144,12 @@ impl Workbench {
                     if let Some(f) = self.agent_last_failure() {
                         t.push_str(&format!("```\n{f}\n```\n"));
                     }
-                    blocks.push(json!({ "type": "text", "text": t }));
+                    ambient.push((0.2, 2400, t));
                 }
                 "out" => {
                     let n = self.terms[self.term_ix].lines.len();
                     let tail: Vec<&str> = self.terms[self.term_ix].lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
-                    blocks.push(json!({ "type": "text", "text": format!("Recent terminal output:\n```\n{}\n```", tail.join("\n")) }));
+                    ambient.push((0.8, 1800, format!("Recent terminal output:\n```\n{}\n```", tail.join("\n"))));
                 }
                 "wiztree" => {
                     if self.wiztree.tree.is_none() {
@@ -3025,7 +3164,7 @@ impl Workbench {
                     if let Some(tree) = &self.wiztree.tree {
                         let summary = tree.ai_summary(self.wiztree.focus, 3600);
                         if !summary.is_empty() {
-                            blocks.push(json!({ "type": "text", "text": summary }));
+                            ambient.push((0.1, 2400, summary));
                         }
                     }
                     self.wiztree.pin_agent = false;
@@ -3034,13 +3173,18 @@ impl Workbench {
                     if let Some(root) = &self.root {
                         let p = root.join(&k[1..]);
                         if p.is_file() {
-                            if let Ok(f) = core::read_text(&p) {
-                                if f.text.len() < 200_000 {
-                                    blocks.push(resource(&p, f.text));
-                                }
-                            } else if let Some(dec) = crate::nbt::decode_path(&p) {
-                                if dec.snbt.len() < 200_000 {
-                                    blocks.push(resource(&p, dec.snbt));
+                            let body = core::read_text(&p)
+                                .ok()
+                                .map(|f| f.text)
+                                .or_else(|| crate::nbt::decode_path(&p).map(|d| d.snbt));
+                            if let Some(text) = body {
+                                if text.len() < 200_000 {
+                                    let rel = self.rel_path(&p.to_string_lossy());
+                                    match self.agent.ctx_cache.encode_file(&p, &rel, &text, None) {
+                                        opt::FilePayload::Full => blocks.push(resource(&p, text)),
+                                        opt::FilePayload::Unchanged(note) => blocks.push(json!({ "type": "text", "text": note })),
+                                        opt::FilePayload::Delta(diff) => blocks.push(json!({ "type": "text", "text": diff })),
+                                    }
                                 }
                             }
                         } else if p.is_dir() {
@@ -3052,6 +3196,32 @@ impl Workbench {
                     }
                 }
                 _ => {}
+            }
+        }
+        if !ambient.is_empty() {
+            let spec: Vec<(f64, usize, usize)> = ambient.iter().map(|(e, min_b, s)| (*e, *min_b, s.len())).collect();
+            let budgets = opt::boltzmann_allocate(&spec, 18_000, 1.6);
+            for ((_, _, text), budget) in ambient.into_iter().zip(budgets) {
+                let out = if text.len() > budget {
+                    let mut end = budget.min(text.len());
+                    while end > 0 && !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}\n... (trimmed to fit context budget; use your tools to read more if needed)", &text[..end])
+                } else {
+                    text
+                };
+                blocks.push(json!({ "type": "text", "text": out }));
+            }
+        }
+        if !sent_ws && self.agent.ws_sig != 0 {
+            let git = self.scm.repo.as_ref().map(|_| &self.scm.status);
+            let gsig = crate::ws_context::git_signature(git);
+            if gsig != self.agent.ctx_cache.git_sig {
+                self.agent.ctx_cache.git_sig = gsig;
+                if let Some(g) = git {
+                    blocks.push(json!({ "type": "text", "text": crate::ws_context::git_delta(g) }));
+                }
             }
         }
         if self.settings.access() == "read" {

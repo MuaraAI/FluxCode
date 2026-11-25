@@ -371,7 +371,7 @@ impl Workbench {
         });
         let chats = self.agent.history.len();
         v_flex()
-            .child(row(tr("Stop when idle").into(), Some(tr("Turns the agent off after 10 quiet minutes to free memory. Your next message starts it again in the same chat.").into()), idle.into_any_element(), false))
+            .child(row(tr("Stop when idle").into(), Some(tr("FluxCode already trims idle RAM and CPU automatically while keeping the agent live. Turn this on only if you want it fully stopped after 10 quiet minutes.").into()), idle.into_any_element(), false))
             .child(divider())
             .child(row(
                 tr("Saved chats").into(),
