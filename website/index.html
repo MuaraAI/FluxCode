@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FluxCode: a 16 MB native code editor with AI agents built in</title>
-<meta name="description" content="FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, Live share and no telemetry.">
+<meta name="description" content="FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, WizTree disk analyzer and no telemetry.">
 <meta name="theme-color" content="#0e0e10">
 <meta property="og:title" content="FluxCode: a 16 MB native code editor with AI agents built in">
 <meta property="og:description" content="Rust, drawn by the GPU, 1.4 MB RAM when idle, no telemetry. Open source, GPL-3.0.">
@@ -778,7 +778,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Windows, macOS, Linux",
   "license": "https://spdx.org/licenses/GPL-3.0-or-later.html",
-  "description": "FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, Live share and no telemetry.",
+  "description": "FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, WizTree disk analyzer and no telemetry.",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "author": { "@type": "Organization", "name": "MuaraAI", "url": "https://github.com/MuaraAI" },
   "downloadUrl": "https://github.com/MuaraAI/FluxCode/releases",
@@ -989,7 +989,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
           <h3 data-i18n="flag.title">An agent that asks first</h3>
           <p data-i18n-html="flag.sub">Any ACP agent, installed in one click. <kbd>Ctrl+L</kbd> opens it.</p>
           <ul class="agents" data-i18n-attr="aria-label:flag.agents" aria-label="Supported agents, for example">
-            <li>OpenCode 2</li><li>Claude Agent</li><li>Codex</li><li>Gemini CLI</li><li>GitHub Copilot</li><li>Mura</li>
+            <li>OpenCode 2</li><li>Claude Agent</li><li>Codex</li><li>Gemini CLI</li><li>GitHub Copilot</li><li>Command Code</li>
           </ul>
           <ul class="checks">
             <li data-i18n="flag.c1">Asks before commands and edits</li>
@@ -1001,10 +1001,10 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
           </ul>
         </article>
         <ul class="feature-list">
-          <li class="feature"><h3>Live share</h3><p data-i18n="f1">Code together through your own PC, encrypted.</p></li>
+          <li class="feature"><h3>WizTree disk map</h3><p data-i18n="f1">Instant Rust folder size analyzer with AI agent context.</p></li>
           <li class="feature"><h3>Source Control</h3><p data-i18n="f2">Commit, push, PRs and Actions built in.</p></li>
-          <li class="feature"><h3 data-i18n="f3t">Non-text files</h3><p data-i18n="f3">SQLite, PDF, Office, ZIP and hex, read-only.</p></li>
-          <li class="feature"><h3 data-i18n="f4t">Python errors</h3><p data-i18n="f4">A card with the line and a Fix button.</p></li>
+          <li class="feature"><h3 data-i18n="f3t">Non-text files</h3><p data-i18n="f3">Editable Bedrock NBT, plus SQLite, PDF, Office, ZIP and hex.</p></li>
+          <li class="feature"><h3 data-i18n="f4t">Multi-language terminal</h3><p data-i18n="f4">Clickable error cards and line jumps across languages.</p></li>
           <li class="feature"><h3>Copilot inline</h3><p data-i18n-html="f5">Ghost text. <kbd>Tab</kbd> accepts.</p></li>
           <li class="feature"><h3 data-i18n="f6t">VS Code Marketplace</h3><p data-i18n="f6">Search and install it all; 11 build kits built in.</p></li>
           <li class="feature"><h3 data-i18n="f7t">VS Code keys</h3><p data-i18n-html="f7"><kbd>Ctrl+P</kbd>, <kbd>Ctrl+Shift+P</kbd> and the rest.</p></li>
@@ -1034,7 +1034,6 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
             <tr><th scope="row" data-i18n="cmp.r2">Installed size</th><td class="me">16 MB</td><td>261 MB</td><td data-i18n="cmp.r2c">1,044 MB</td></tr>
             <tr><th scope="row" data-i18n="cmp.r3">Telemetry</th><td class="me" data-i18n="cmp.none">None</td><td data-i18n="cmp.optout">On, can be turned off</td><td data-i18n="cmp.optout">On, can be turned off</td></tr>
             <tr><th scope="row" data-i18n="cmp.r4">AI agents</th><td class="me" data-i18n="cmp.r4a">Any ACP agent, undo per turn</td><td data-i18n="cmp.r4b">Own agent and ACP</td><td data-i18n="cmp.r4c">Copilot, extensions</td></tr>
-            <tr><th scope="row" data-i18n="cmp.r5">Collaboration</th><td class="me" data-i18n="cmp.r5a">Through your PC, no account</td><td data-i18n="cmp.r5b">Through Zed's servers</td><td data-i18n="cmp.r5c">Live Share, Microsoft's servers</td></tr>
             <tr><th scope="row" data-i18n="cmp.r6">Language servers</th><td class="me" data-i18n="cmp.notyet">Not yet</td><td data-i18n="cmp.builtin">Built in</td><td data-i18n="cmp.ext">Extensions</td></tr>
             <tr><th scope="row" data-i18n="cmp.r9">Extensions</th><td class="me" data-i18n="cmp.r9a">VS Code Marketplace; their code doesn't run yet</td><td data-i18n="cmp.r9b">Its own catalog</td><td data-i18n="cmp.r9c">The largest catalog</td></tr>
             <tr><th scope="row">Debugger</th><td class="me" data-i18n="cmp.notyet">Not yet</td><td data-i18n="cmp.yes">Yes</td><td data-i18n="cmp.yes">Yes</td></tr>
@@ -1276,12 +1275,12 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     "flag.c4": "Browser sendiri, terpisah dari punyamu",
     "flag.c5": "Workspace layar penuh",
     "flag.c6": "Hemat token dan lanjut setelah limit",
-    "f1": "Ngoding bareng lewat PC sendiri, terenkripsi.",
+    "f1": "Analisis ukuran folder instan berbasis Rust dengan konteks agen AI.",
     "f2": "Commit, push, PR, dan Actions bawaan.",
     "f3t": "Berkas non-teks",
-    "f3": "SQLite, PDF, Office, ZIP, dan hex, baca-saja.",
-    "f4t": "Error Python",
-    "f4": "Kartu berisi baris dan tombol Fix.",
+    "f3": "Edit Bedrock NBT, plus SQLite, PDF, Office, ZIP, dan hex.",
+    "f4t": "Terminal multi-bahasa",
+    "f4": "Kartu error yang bisa diklik langsung ke baris kode.",
     "f5": "Saran abu-abu. <kbd>Tab</kbd> untuk terima.",
     "f6t": "VS Code Marketplace",
     "f6": "Cari dan pasang semuanya; 11 kit build bawaan.",
@@ -1311,10 +1310,6 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     "cmp.r4a": "Agen ACP apa pun, undo per giliran",
     "cmp.r4b": "Agen sendiri dan ACP",
     "cmp.r4c": "Copilot, ekstensi",
-    "cmp.r5": "Kolaborasi",
-    "cmp.r5a": "Lewat PC sendiri, tanpa akun",
-    "cmp.r5b": "Lewat server Zed",
-    "cmp.r5c": "Live Share, server Microsoft",
     "cmp.r6": "Language server",
     "cmp.notyet": "Belum",
     "cmp.builtin": "Bawaan",
@@ -1386,7 +1381,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       downloads: "downloads", downloadFor: "Download for ", pick: "Choose a system",
       metaFree: "GPL-3.0, free", metaPick: "For Windows, macOS and Linux computers", unknown: "unknown",
       title: "FluxCode: a 16 MB native code editor with AI agents built in",
-      desc: "FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, Live share and no telemetry.",
+      desc: "FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, WizTree disk analyzer and no telemetry.",
       better: "lower is better", byHand: "*"
     },
     id: {
@@ -1401,7 +1396,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       downloads: "unduhan", downloadFor: "Unduh untuk ", pick: "Pilih sistem untuk diunduh",
       metaFree: "GPL-3.0, gratis", metaPick: "Untuk komputer Windows, macOS, dan Linux", unknown: "tanpa nama",
       title: "FluxCode: editor kode native 16 MB dengan agen AI di dalamnya",
-      desc: "FluxCode adalah editor kode native untuk Windows, macOS, dan Linux. Satu program 16 MB yang ditulis dalam Rust dan digambar GPU, dengan panel agen ACP, Source Control, Live share, dan tanpa telemetri.",
+      desc: "FluxCode adalah editor kode native untuk Windows, macOS, dan Linux. Satu program 16 MB yang ditulis dalam Rust dan digambar GPU, dengan panel agen ACP, Source Control, analisis disk WizTree, dan tanpa telemetri.",
       better: "makin kecil makin baik", byHand: "*"
     }
   };

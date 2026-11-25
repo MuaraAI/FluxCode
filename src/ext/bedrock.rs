@@ -96,8 +96,17 @@ pub fn plain_name(s: &str) -> String {
 pub fn packs(dir: &Path) -> Vec<Pack> {
     let mut dirs = vec![dir.to_path_buf()];
     if !dir.join("manifest.json").is_file() {
-        dirs = std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.join("manifest.json").is_file()).collect()).unwrap_or_default();
-        dirs.sort();
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.join("manifest.json").is_file()).collect())
+            .unwrap_or_default();
+        for sub in ["behavior_packs", "resource_packs", "development_behavior_packs", "development_resource_packs"] {
+            if let Ok(rd) = std::fs::read_dir(dir.join(sub)) {
+                found.extend(rd.flatten().map(|e| e.path()).filter(|p| p.join("manifest.json").is_file()));
+            }
+        }
+        found.sort();
+        found.dedup();
+        dirs = found;
     }
     dirs.into_iter()
         .filter_map(|d| {
@@ -350,7 +359,8 @@ pub fn facts(p: &Project) -> String {
 
 
 pub fn uuid4() -> String {
-    let mut b: [u8; 16] = crate::collab::net::random();
+    let mut b = [0u8; 16];
+    let _ = getrandom::getrandom(&mut b);
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();

@@ -20,7 +20,7 @@ What is already live in `main` today:
 - [x] **VS Code layout & keybindings** (activity bar, dockable left/right sidebars, tabs, bottom panel, Command Palette, Go to File, Find in Files).
 - [x] **Agent Client Protocol (ACP) workspace** (full-screen & side-panel modes, 1-click installs from the ACP registry, per-turn file diffs & undo, git worktrees, token saver, usage-limit auto-resume).
 - [x] **GitHub Copilot inline ghost-text completions** via `@github/copilot-language-server` in a separate process.
-- [x] **Built-in Git Source Control**, Python-aware terminal (`F5` run + error cards), and **Live Share** (encrypted peer-to-peer / relay collaborative editing).
+- [x] **Built-in Git Source Control**, multi-language terminal (`F5` run + clickable error cards), **WizTree** disk analyzer with AI agent context, and **Minecraft Bedrock NBT** editing.
 - [x] **Native VS Code Marketplace browser** (themes & TextMate grammars loaded natively in Rust without running JS).
 - [x] **Read-only instant viewers** for SQLite, PDF, Word/Excel/PowerPoint, ZIP/archives, and images.
 - [x] **Interactive Markdown & `.flux` Preview** with vertical scrollbar, zoom (`50%` to `250%`), and freehand drawing annotations.

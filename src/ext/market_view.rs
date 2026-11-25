@@ -351,7 +351,6 @@ impl Workbench {
         self.ext.page = Some(format!("{PAGE}{id}"));
         self.settings_open = false;
         self.whats_new = None;
-        self.collab.page = false;
         if !self.ext.market.readme.contains_key(&id) && !loading {
             let folder = self.ext.market.installed(&id).map(|i| i.folder.clone());
             let it = item.clone();

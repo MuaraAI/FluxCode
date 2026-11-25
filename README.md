@@ -192,58 +192,6 @@ tells you honestly how light or heavy it runs.
   enough for a beginner with one-click setup and read-only safety modes, yet tunable down to
   every editor, font, keybinding, and per-agent instruction file for veterans.
 
-## Live share
-
-Code together in real time, with your PC as the server. The people icon in the activity
-bar opens the Live share page in the editor area: its cards sit two to a row on a wide
-window and one under the other on a narrow one.
-
-1. The host opens a folder, clicks **Start hosting** and sends the invite code
-   (`FLUX1-...`) to the others, in a chat or by mail.
-2. Each guest pastes it and clicks **Join**, either into their own clone of the same
-   repository or into a new folder that fills as they open files.
-3. Everyone types in the same files at once. The host's PC orders the edits
-   (operational transformation), so everyone ends with the same text.
-
-The panel lists who is in the session (by GitHub name when signed in) and which file and
-line each person is on. Its activity list shows each person's edits with lines added and
-removed and a diff; an edit made by an AI agent carries an **AI** label with the agent,
-model, effort and mode it ran with, so you can see which model wrote what.
-
-Edits go between the host's PC and each guest, encrypted with ChaCha20-Poly1305 under
-the secret in the invite code; no server of ours is involved, and nobody needs a VPN or a
-rented server. When hosting starts, FluxCode opens every way in it can and the panel
-shows each one, its address, or why it isn't open:
-
-| Way in | Who can use it | What it needs |
-| --- | --- | --- |
-| Same network | anyone on the host's Wi-Fi or LAN | nothing (Windows asks once to let FluxCode through its firewall) |
-| Router port (UPnP) | anyone on the internet | a router with UPnP on, like the ones game servers open ports on; not possible when the provider shares one public address between customers (carrier-grade NAT), which the panel detects and says |
-| Public IPv6 | guests with IPv6 | an IPv6 address from the provider, and a router that lets connections in |
-| Relay (MuaraAI) | anyone on the internet | nothing: it works behind any router and carrier-grade NAT. Shows as Relay (public) when the fallback below carries the session |
-
-The invite code carries every address that opened. The guest tries them all at once, the
-same network first, and uses the first host that proves it holds the code's secret.
-The relay is a TCP tunnel run by MuaraAI: it passes bytes that are already encrypted, so
-it can see that two PCs are talking, but not what they send. It costs a little speed (each
-keystroke travels to `live.muaraai.com` and back). When MuaraAI's relay cannot be reached,
-FluxCode falls back to the public [bore.pub](https://github.com/ekzhang/bore) tunnel and
-the panel relabels the row **Relay (public)**, so you can tell which one carries the session.
-Unticking **Let people join over the internet** before hosting keeps the session on the
-network only. The router's port is closed again when the session ends.
-
-Running your own relay is one command on a VPS: see [`relay/README.md`](relay/README.md).
-
-- Only files someone has open travel, so a large project (a game, a Laravel or Android
-  project) costs no more than the files being worked on. Files over 16 MB are not shared.
-  Environment files, private keys, and build folders like `node_modules` or `target` are
-  never shared, even if a guest asks for them by name.
-- A guest cannot flood the host: joins and opens are rate limited, an edit is charged by
-  how much it changes, and the number of guests is capped.
-- Not yet: other people's carets drawn inside the editor (the panel shows their line),
-  separate undo per person (`Ctrl+Z` can undo a change someone else made on your screen),
-  and syncing files an agent edits without them being open.
-
 ## Extensions and FluxCompile
 
 The Extensions view (`Ctrl+Shift+X`) is the VS Code Marketplace: all of it, loaded a page
@@ -311,7 +259,7 @@ FluxCode opens it drawn, with Preview and Source above it.
 - Syntax colors for about 200 languages, picked by file name, extension or `#!` line.
 - Multi-root workspaces: drag a folder onto the window to add it or switch to it.
 - The agent panel (`Ctrl+L`) runs any agent in the [ACP registry](https://agentclientprotocol.com),
-  such as OpenCode 2, Claude Agent, Codex, Gemini CLI, GitHub Copilot or MuaraAI's Mura. An
+  such as OpenCode 2, Claude Agent, Codex, Gemini CLI or GitHub Copilot. An
   agent that isn't on your PC has a download button in the agent menu (with the agent's own
   icon from the registry); FluxCode puts it in
   `~/.fluxcode/agents` (npm packages too, not in your global npm) and starts it only while
@@ -388,6 +336,16 @@ FluxCode opens it drawn, with Preview and Source above it.
 - **Usage limit reached.** A banner above the message box shows when the limit resets.
   Continue now sends the cut-off message again; Resume at reset does it by itself once the
   limit window has reset.
+- **Disk Usage (WizTree) for AI agents.** Built-in Rust disk tree and treemap analyzer
+  that feeds a compact folder hierarchy (largest, smallest, waste hotspots, extensions,
+  and largest files) directly to the agent via `@wiztree`, **Ask Agent**, or
+  `fluxcode --wiztree`, so agents inspect workspace storage without manual directory scans.
+- **Minecraft Bedrock data.** Open and edit binary `level.dat`, `level.dat_old`,
+  `.mcstructure`, and `.nbt` files as clean SNBT with lossless binary save, plus read-only
+  inspection of LevelDB `db/*.log` and `db/*.ldb` files.
+- **Multi-language terminal.** Parses errors and stack traces across Python, JavaScript,
+  TypeScript, Rust, Go, Java, Kotlin, C/C++, C#, Zig, PHP, Ruby, Lua, Dart, Swift, Shell,
+  and PowerShell with one-click file:line:col jump links and inline Tab cycling.
 - **Liquid glass and animated backgrounds.** Panels can turn translucent over the system's
   blur, with floating glass cards. Twelve animated backgrounds play behind them, drawn
   live in the theme's colors (no video and no download). They stand still by default;
@@ -417,8 +375,7 @@ and VS Code extensions install but their code doesn't run.
 | Debugger | not yet (Run only) | yes | yes |
 | Extensions | the VS Code Marketplace to browse and install (their code doesn't run), plus 11 built-in project manifests | yes | the largest catalog |
 | AI agent | any ACP agent, three access levels, per-turn changes with undo; GitHub Copilot inline completions | its own agent and ACP agents | GitHub Copilot and extensions |
-| Files that are not text | hex, PDF, Office, ZIP, SQLite (read-only) | images | images; more through extensions |
-| Real-time collaboration | built in, through the host's PC (no account or server) | built in, through Zed's servers | Live Share extension, through Microsoft's servers |
+| Files that are not text | hex, PDF, Office, ZIP, SQLite, LevelDB (read-only); Bedrock/Java NBT (editable) | images | images; more through extensions |
 | Remote development | WSL2 (Windows) | SSH | SSH, containers, WSL |
 | Interface languages | English, Bahasa Indonesia | English | many, through language packs |
 | Maturity | development builds | stable releases | stable, widely used |
@@ -457,11 +414,7 @@ cookie, at start and every 6 hours (Settings > Updates turns it off). Everything
 out only when you start it: the agent you run, `git`, GitHub when you sign in, and the new
 build's `changelog.flux` when you click What's new on the update card. The
 agent menu reads the public ACP agent list from cdn.agentclientprotocol.com, at most once
-a day and only when you open the menu. Hosting a Live share session asks your router to
-open its port (UPnP) and opens a tunnel at `live.muaraai.com`, unless you untick **Let
-people join over the internet**; the relay then sees your public IP address and encrypted
-bytes. If `live.muaraai.com` cannot be reached, FluxCode falls back to the public bore.pub
-tunnel, which sees the same two things.
+a day and only when you open the menu.
 The first time an agent starts, FluxCode installs the agents' browser tool
 (chrome-devtools-mcp) from the npm registry; Agent settings > Browser > Off skips it.
 Extensions download nothing by themselves: Add Gradle wrapper asks services.gradle.org for
@@ -556,7 +509,7 @@ in [ROADMAP.md](ROADMAP.md)):
 
 | Phase | Target | Focus |
 | --- | --- | --- |
-| **Foundation** | Shipped (2026) | Single-process Rust + GPUI editor (~50 ms startup, 1.4 MB idle RAM), ACP agent workspace, Copilot ghost text, Git, Live Share, WSL2 helper, Markdown/`.flux` preview with zoom & annotations |
+| **Foundation** | Shipped (2026) | Single-process Rust + GPUI editor (~50 ms startup, 1.4 MB idle RAM), ACP agent workspace, Copilot ghost text, Git, WizTree AI context, Bedrock NBT, multi-language terminal, WSL2 helper, Markdown/`.flux` preview with zoom & annotations |
 | **Phase 1: Hardening** | Late 2026 - Q1 2027 | Workspace trust model, SHA-256 verified self-updates, OS credential store for tokens, ACP path containment, dirty-tab close guards |
 | **Phase 2: Language Intelligence** | Q1 - Q2 2027 | Opt-in lightweight LSP client (`rust-analyzer`, `pyright`, `tsserver`, `gopls`), inline diagnostics & go-to-definition, multi-cursor & split editors, notarized macOS builds |
 | **Phase 3: FluxCode for Android** | 2027 | Native `aarch64-linux-android` Vulkan build (zero WebView), touch & Android IME ergonomics, remote desktop/SSH + ACP agent offload, signed APK / F-Droid / Play Store release ([#117](https://github.com/MuaraAI/FluxCode/discussions/117)) |

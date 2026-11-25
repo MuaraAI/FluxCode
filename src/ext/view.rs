@@ -272,7 +272,6 @@ impl Workbench {
         self.ext.page = Some(id.to_string());
         self.settings_open = false;
         self.whats_new = None;
-        self.collab.page = false;
         self.ext_check_needs(id, cx);
         cx.notify();
     }

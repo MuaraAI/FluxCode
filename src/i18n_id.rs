@@ -378,11 +378,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Always reject", "Selalu tolak"),
     ("1 file changed by the agent", "1 file diubah agent"),
     ("{n} files changed by the agent", "{n} file diubah agent"),
-    ("Mura, not installed", "Mura, belum terpasang"),
-    (
-        "Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick another agent in the menu above.",
-        "Mura belum terpasang di PC ini (FluxCode mencarinya di PATH dan ~/.local/bin). Build dari github.com/MuaraAI/Mura-Harness, atau pilih agent lain di menu atas.",
-    ),
     ("Queue it (Enter): sent when the answer ends · Shift+Enter new line", "Antrekan (Enter): dikirim setelah jawaban selesai · Shift+Enter baris baru"),
     ("Send (Enter) · Shift+Enter new line", "Kirim (Enter) · Shift+Enter baris baru"),
     ("Open the file", "Buka file-nya"),
@@ -390,9 +385,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Leave it out of the message", "Jangan ikut kirim"),
     ("Send again: {names}", "Kirim lagi: {names}"),
     ("Incoming", "Masuk"),
-    ("Allow joining over the internet", "Izinkan bergabung lewat internet"),
-    ("Code together in real time, from your own PC.", "Ngoding bareng secara langsung, dari PC kamu sendiri."),
-    ("Edits go straight between your PC and each guest, encrypted with the invite code. No account or server needed.", "Editan langsung lewat antara PC kamu dan tiap tamu, dienkripsi dengan kode undangan. Tanpa akun atau server."),
     ("Every way in that opened is in the code; a guest's FluxCode tries them all and keeps the first that answers. The relay only passes bytes encrypted with the code's secret. If someone can't connect, allow FluxCode through the firewall.", "Setiap jalan masuk yang terbuka ada di kode; FluxCode tamu mencoba semuanya dan memakai yang pertama menjawab. Relay hanya meneruskan data yang dienkripsi dengan rahasia kode. Kalau ada yang tidak bisa terhubung, izinkan FluxCode lewat firewall."),
     ("From the internet", "Dari internet"),
     ("Guests can join from anywhere.", "Tamu bisa bergabung dari mana saja."),
@@ -906,10 +898,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Word wrap on", "Word wrap nyala"),
     ("Agent instructions (soul files)", "Instruksi agent (file soul)"),
     ("Answer “{q}” first.", "Jawab “{q}” dulu."),
-    (
-        "Mura's character is built into the program. It follows these project files:",
-        "Karakter Mura sudah tertanam di programnya. Mura mengikuti file proyek ini:",
-    ),
     ("No", "Tidak"),
     ("Yes", "Ya"),
     (
@@ -959,7 +947,6 @@ pub const ID: &[(&str, &str)] = &[
     ("Invite code copied", "Kode undangan disalin"),
     ("Join", "Gabung"),
     ("Join a session", "Gabung ke sesi"),
-    ("LIVE SHARE", "LIVE SHARE"),
     ("Leave", "Keluar"),
     ("Open a folder first: the session shares it.", "Buka folder dulu: folder itulah yang dibagikan sesi."),
     ("Open your copy of the project first, or join into a new folder.", "Buka salinan proyekmu dulu, atau gabung ke folder baru."),
@@ -1124,7 +1111,6 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("Files on this PC", "File di PC ini"),
     ("Invite code", "Kode undangan"),
-    ("Live share", "Live share"),
     ("Live · hosting {folder}", "Live · host {folder}"),
     ("Nobody else yet. They show here as soon as they join.", "Belum ada orang lain. Mereka muncul di sini begitu bergabung."),
     ("Not in a session", "Tidak dalam sesi"),
@@ -1634,6 +1620,16 @@ pub const ID: &[(&str, &str)] = &[
     (
         "How far one notch of the mouse wheel scrolls (100%: the step the mouse sends).",
         "Sejauh apa satu klik roda mouse menggulir (100%: langkah bawaan dari mouse).",
+    ),
+    ("Ask Agent", "Tanya Agent"),
+    ("Attach this WizTree disk summary to the AI agent", "Lampirkan ringkasan disk WizTree ini ke agent AI"),
+    ("Copy compact WizTree summary for AI", "Salin ringkasan ringkas WizTree untuk AI"),
+    ("Copied WizTree summary for AI", "Ringkasan WizTree untuk AI disalin"),
+    ("Disk usage summary", "Ringkasan penggunaan disk"),
+    ("Type a command and press Enter to run it.", "Ketik perintah lalu tekan Enter untuk menjalankannya."),
+    (
+        "↑ ↓ history · Tab completes · Ctrl+C stops · Click any file:line error to jump to code",
+        "↑ ↓ riwayat · Tab melengkapi · Ctrl+C hentikan · Klik file:baris error untuk langsung ke kode",
     ),
 ];
 

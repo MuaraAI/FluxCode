@@ -521,7 +521,7 @@ gpui_kit::assets::icon_assets!(pub FileIcons, [
     GitBranch, GitCommitHorizontal, GitPullRequest, CloudUpload, RefreshCcw, Rocket, FileDiff, Undo2,
     TextCursorInput, Brain, Pencil, AtSign, Paperclip, ShieldAlert, PencilLine, MessageSquareCode, MessagesSquare,
     Download, LoaderCircle, CircleQuestionMark, ExternalLink, ScrollText, FilePlus,
-    Users, LogIn, House, Router, RadioTower, Link,
+    Link,
     Lightbulb, Image,
     Blocks, Pickaxe, Box, Coffee, Braces, Hexagon, Hammer, Upload, Server, FlaskConical, Trash, Package,
     Sparkles, FolderPlus,

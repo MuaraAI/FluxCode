@@ -295,6 +295,339 @@ impl DiskTree {
         chain.reverse();
         chain
     }
+
+    /// Compact, token-efficient summary of folder/file sizes and waste hotspots for AI agents.
+    pub fn ai_summary(&self, focus: u32, max_chars: usize) -> String {
+        use std::fmt::Write;
+        let fid = (focus as usize).min(self.nodes.len().saturating_sub(1)) as u32;
+        let Some(fnode) = self.nodes.get(fid as usize) else {
+            return String::new();
+        };
+        let total = fnode.size.max(1) as f64;
+        let focus_rel = if fid == 0 {
+            self.nodes[0].name.clone()
+        } else {
+            self.rel_path(fid)
+        };
+        let mut out = String::with_capacity(max_chars.min(4096));
+        let _ = writeln!(
+            out,
+            "WizTree disk map for {focus_rel} ({}): {} total, {} files, {} folders (scanned in {} ms):",
+            self.full_path(fid).display(),
+            format_bytes(fnode.size),
+            format_count(fnode.files),
+            format_count(fnode.folders),
+            self.elapsed_ms,
+        );
+        if fid != 0 {
+            let root_total = self.total_size().max(1) as f64;
+            let root_pct = (fnode.size as f64 / root_total * 100.).clamp(0., 100.);
+            let _ = writeln!(
+                out,
+                "Scope: focused subfolder ({root_pct:.1}% of workspace root {} = {})",
+                self.nodes[0].name,
+                format_bytes(self.total_size()),
+            );
+        }
+
+        // Single iterative walk over focused subtree for categories, extensions, largest files, waste and tiny files.
+        let mut cat_bytes = [0u64; 6];
+        let mut cat_files = [0u64; 6];
+        let mut ext_map: HashMap<u16, (u64, u64)> = HashMap::new();
+        let mut sub_largest: Vec<(u32, u64)> = Vec::new();
+        let mut waste_dirs: Vec<(u32, u64, &'static str)> = Vec::new();
+        let mut tiny_files = 0u64;
+        let mut tiny_bytes = 0u64;
+        let mut small_dirs: Vec<(u32, u64)> = Vec::new();
+
+        let mut stack = vec![(fid, 0u8)];
+        while let Some((nid, depth)) = stack.pop() {
+            let Some(n) = self.nodes.get(nid as usize) else {
+                continue;
+            };
+            if n.is_dir {
+                if nid != fid {
+                    let lower = n.name.to_ascii_lowercase();
+                    if CACHE_DIRS.iter().any(|&c| c == lower) && n.size > 0 {
+                        waste_dirs.push((nid, n.size, "build/cache folder"));
+                    } else if depth <= 2 && n.size > 0 && (n.size as f64 / total) >= 0.25 {
+                        waste_dirs.push((nid, n.size, "dominant folder"));
+                    }
+                    if depth == 1 {
+                        small_dirs.push((nid, n.size));
+                    }
+                }
+                for &cid in &n.children {
+                    stack.push((cid, depth.saturating_add(1)));
+                }
+            } else {
+                let ext = self.ext_str(n.ext_id);
+                let cat = FileCategory::from_ext(ext);
+                let cix = match cat {
+                    FileCategory::Code => 0,
+                    FileCategory::Media => 1,
+                    FileCategory::Build => 2,
+                    FileCategory::Data => 3,
+                    FileCategory::Temp => 4,
+                    FileCategory::Other => 5,
+                };
+                cat_bytes[cix] = cat_bytes[cix].saturating_add(n.size);
+                cat_files[cix] = cat_files[cix].saturating_add(1);
+                let slot = ext_map.entry(n.ext_id).or_insert((0, 0));
+                slot.0 = slot.0.saturating_add(n.size);
+                slot.1 = slot.1.saturating_add(1);
+                if n.size < 1024 {
+                    tiny_files += 1;
+                    tiny_bytes = tiny_bytes.saturating_add(n.size);
+                }
+                if n.size > 0 {
+                    sub_largest.push((nid, n.size));
+                }
+            }
+        }
+
+        // Category breakdown sorted largest first.
+        let cats = [
+            (FileCategory::Code, cat_bytes[0], cat_files[0]),
+            (FileCategory::Media, cat_bytes[1], cat_files[1]),
+            (FileCategory::Build, cat_bytes[2], cat_files[2]),
+            (FileCategory::Data, cat_bytes[3], cat_files[3]),
+            (FileCategory::Temp, cat_bytes[4], cat_files[4]),
+            (FileCategory::Other, cat_bytes[5], cat_files[5]),
+        ];
+        let mut cat_list: Vec<_> = cats.into_iter().filter(|(_, b, f)| *b > 0 || *f > 0).collect();
+        cat_list.sort_by_key(|(_, b, _)| std::cmp::Reverse(*b));
+        if !cat_list.is_empty() {
+            let parts: Vec<String> = cat_list
+                .into_iter()
+                .map(|(cat, b, f)| {
+                    let pct = (b as f64 / total * 100.).clamp(0., 100.);
+                    format!("{} {} ({pct:.1}%, {} files)", cat.label(), format_bytes(b), format_count(f))
+                })
+                .collect();
+            let _ = writeln!(out, "Categories: {}", parts.join(" | "));
+        }
+
+        // Folder hierarchy flow (largest to smallest, up to depth 3 for significant branches).
+        out.push_str("Folder hierarchy (largest -> smallest):\n");
+        let mut tree_lines = 0usize;
+        self.write_ai_branch(fid, 1, total, &mut out, &mut tree_lines, 32);
+
+        // Lightweight / smallest folders and tiny files summary so the agent sees both ends of the scale.
+        small_dirs.sort_by_key(|(_, s)| *s);
+        let light: Vec<String> = small_dirs
+            .iter()
+            .filter(|(_, s)| (*s as f64 / total) < 0.05)
+            .take(5)
+            .filter_map(|&(nid, s)| {
+                let n = self.nodes.get(nid as usize)?;
+                Some(format!("{}/ ({}, {} files)", n.name, format_bytes(s), format_count(n.files)))
+            })
+            .collect();
+        if !light.is_empty() || tiny_files > 0 {
+            let mut line = String::from("Smallest / lightweight: ");
+            if !light.is_empty() {
+                line.push_str(&light.join(", "));
+            }
+            if tiny_files > 0 {
+                if !light.is_empty() {
+                    line.push_str("; ");
+                }
+                let _ = write!(line, "{} tiny files <1 KB ({} total)", format_count(tiny_files), format_bytes(tiny_bytes));
+            }
+            let _ = writeln!(out, "{line}");
+        }
+
+        // Heaviest / waste hotspots (cache/build dirs, dominant dirs, large temp/log files, huge single files).
+        sub_largest.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
+        let mut hotspots: Vec<(u64, String)> = Vec::new();
+        waste_dirs.sort_by_key(|&(_, s, _)| std::cmp::Reverse(s));
+        let mut seen_hot: HashSet<u32> = HashSet::new();
+        for (nid, sz, why) in waste_dirs.into_iter().take(5) {
+            if seen_hot.insert(nid) {
+                let pct = (sz as f64 / total * 100.).clamp(0., 100.);
+                let rel = self.rel_path(nid);
+                hotspots.push((sz, format!("{rel}/: {} ({pct:.1}%, {why})", format_bytes(sz))));
+            }
+        }
+        for &(nid, sz) in sub_largest.iter().take(20) {
+            let n = &self.nodes[nid as usize];
+            let cat = FileCategory::from_ext(self.ext_str(n.ext_id));
+            let pct = (sz as f64 / total * 100.).clamp(0., 100.);
+            let why = if cat == FileCategory::Temp && (pct >= 1.0 || sz >= 256 * 1024) {
+                Some("log/temp file")
+            } else if pct >= 5.0 || sz >= 5 * 1024 * 1024 {
+                Some("large file")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                if seen_hot.insert(nid) {
+                    let rel = self.rel_path(nid);
+                    hotspots.push((sz, format!("{rel}: {} ({pct:.1}%, {why})", format_bytes(sz))));
+                }
+            }
+        }
+        hotspots.sort_by_key(|(sz, _)| std::cmp::Reverse(*sz));
+        if !hotspots.is_empty() {
+            out.push_str("Heaviest & potential waste hotspots:\n");
+            for (_, desc) in hotspots.into_iter().take(8) {
+                let _ = writeln!(out, "  - {desc}");
+            }
+        }
+
+        // Top extensions in scope.
+        let mut exts: Vec<(u16, u64, u64)> = ext_map.into_iter().map(|(id, (b, f))| (id, b, f)).collect();
+        exts.sort_by_key(|&(_, b, _)| std::cmp::Reverse(b));
+        if !exts.is_empty() {
+            let parts: Vec<String> = exts
+                .into_iter()
+                .take(10)
+                .map(|(id, b, f)| {
+                    let name = if id == 0 {
+                        "(no ext)".to_string()
+                    } else {
+                        format!(".{}", self.ext_str(id))
+                    };
+                    let pct = (b as f64 / total * 100.).clamp(0., 100.);
+                    format!("{name} {} ({pct:.1}%, {})", format_bytes(b), format_count(f))
+                })
+                .collect();
+            let _ = writeln!(out, "Top extensions: {}", parts.join(", "));
+        }
+
+        // Largest files in scope.
+        if !sub_largest.is_empty() {
+            out.push_str("Largest files:\n");
+            for (rank, &(nid, sz)) in sub_largest.iter().take(12).enumerate() {
+                let pct = (sz as f64 / total * 100.).clamp(0., 100.);
+                let _ = writeln!(out, "  {}. {} ({}, {pct:.1}%)", rank + 1, self.rel_path(nid), format_bytes(sz));
+            }
+        }
+
+        out.push_str(
+            "Note: Indexed natively by FluxCode WizTree. Use this summary directly for size, layout, and cleanup questions instead of running ripgrep, find, or du.",
+        );
+        if out.len() > max_chars && max_chars > 64 {
+            let cut = (0..=max_chars - 32).rev().find(|&i| out.is_char_boundary(i)).unwrap_or(0);
+            out.truncate(cut);
+            out.push_str("\n...(truncated WizTree summary)");
+        }
+        out
+    }
+
+    fn write_ai_branch(
+        &self,
+        parent: u32,
+        depth: usize,
+        root_total: f64,
+        out: &mut String,
+        lines: &mut usize,
+        max_lines: usize,
+    ) {
+        use std::fmt::Write;
+        if depth > 3 || *lines >= max_lines {
+            return;
+        }
+        let Some(pnode) = self.nodes.get(parent as usize) else {
+            return;
+        };
+        let mut dirs: Vec<u32> = Vec::new();
+        let mut files: Vec<u32> = Vec::new();
+        for &cid in &pnode.children {
+            if let Some(c) = self.nodes.get(cid as usize) {
+                if c.is_dir {
+                    dirs.push(cid);
+                } else {
+                    files.push(cid);
+                }
+            }
+        }
+        let indent = "  ".repeat(depth);
+        let max_dirs = match depth {
+            1 => 12,
+            2 => 6,
+            _ => 4,
+        };
+        let mut shown = 0usize;
+        for &did in &dirs {
+            if *lines >= max_lines || shown >= max_dirs {
+                break;
+            }
+            let d = &self.nodes[did as usize];
+            let pct = (d.size as f64 / root_total * 100.).clamp(0., 100.);
+            if depth > 1 && shown >= 2 && pct < 1.5 {
+                break;
+            }
+            let _ = writeln!(
+                out,
+                "{indent}{}/  {} ({pct:.1}%, {} files)",
+                d.name,
+                format_bytes(d.size),
+                format_count(d.files),
+            );
+            *lines += 1;
+            shown += 1;
+            if depth < 3 && pct >= 4.0 && !d.children.is_empty() {
+                self.write_ai_branch(did, depth + 1, root_total, out, lines, max_lines);
+            }
+        }
+        if dirs.len() > shown && *lines < max_lines {
+            let rest_bytes: u64 = dirs[shown..].iter().map(|&id| self.nodes[id as usize].size).sum();
+            let _ = writeln!(
+                out,
+                "{indent}(+{} smaller folders, {} total)",
+                dirs.len() - shown,
+                format_bytes(rest_bytes),
+            );
+            *lines += 1;
+        }
+        if depth == 1 && !files.is_empty() && *lines < max_lines {
+            let fbytes: u64 = files.iter().map(|&id| self.nodes[id as usize].size).sum();
+            let sample: Vec<String> = files
+                .iter()
+                .take(4)
+                .map(|&id| {
+                    let f = &self.nodes[id as usize];
+                    format!("{} ({})", f.name, format_bytes(f.size))
+                })
+                .collect();
+            let more = files.len().saturating_sub(sample.len());
+            let suffix = if more > 0 { format!(", +{more} more") } else { String::new() };
+            let _ = writeln!(
+                out,
+                "{indent}[direct files: {}, {} total: {}{suffix}]",
+                format_count(files.len() as u64),
+                format_bytes(fbytes),
+                sample.join(", "),
+            );
+            *lines += 1;
+        }
+    }
+}
+
+pub(crate) fn scan_quick(root: &Path) -> Result<DiskTree, String> {
+    scan_tree(root, ScanOpts::default(), &Arc::new(ScanProgress::new()))
+}
+
+pub(crate) fn cli(args: &[String]) -> i32 {
+    let dir = args
+        .first()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    match scan_quick(&dir) {
+        Ok(tree) => {
+            use std::io::Write;
+            let _ = writeln!(std::io::stdout(), "{}", tree.ai_summary(0, 6000));
+            0
+        }
+        Err(e) => {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "wiztree: {e}");
+            1
+        }
+    }
 }
 
 pub(crate) struct ScanProgress {
@@ -389,6 +722,7 @@ pub(crate) struct WizTreeState {
     pub tiles_cache: TilesCache,
     pub map_origin: std::rc::Rc<std::cell::Cell<Point<Pixels>>>,
     pub scan_gen: u64,
+    pub pin_agent: bool,
     _sub: Subscription,
 }
 
@@ -423,6 +757,7 @@ impl WizTreeState {
             tiles_cache: std::rc::Rc::new(std::cell::RefCell::new((0., 0., u32::MAX, Vec::new()))),
             map_origin: std::rc::Rc::new(std::cell::Cell::new(point(px(0.), px(0.)))),
             scan_gen: 0,
+            pin_agent: false,
             _sub,
         }
     }
@@ -1120,7 +1455,6 @@ impl Workbench {
             self.wiztree.open_seq = self.wiztree.open_seq.wrapping_add(1);
         }
         self.settings_open = false;
-        self.collab.page = false;
         self.ext.page = None;
         self.whats_new = None;
         self.agent_full = false;
@@ -1215,6 +1549,28 @@ impl Workbench {
         self.nav_replaying = true;
         self.jump_to_file_smooth(path, None, window, cx);
         self.nav_replaying = false;
+    }
+
+    pub(crate) fn wiztree_ask_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wiztree.tree.is_none() {
+            return;
+        }
+        self.wiztree.pin_agent = true;
+        self.agent.off_ctx.remove("wiztree");
+        self.on_show_agent(&crate::workbench::ShowAgent, window, cx);
+        let h = self.agent_input_focus(cx);
+        h.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn wiztree_copy_ai_summary(&mut self, cx: &mut Context<Self>) {
+        let Some(tree) = &self.wiztree.tree else {
+            return;
+        };
+        let summary = tree.ai_summary(self.wiztree.focus, 4000);
+        cx.write_to_clipboard(ClipboardItem::new_string(summary));
+        self.status = tr("Copied WizTree summary for AI").into();
+        cx.notify();
     }
 
     pub(crate) fn wiztree_pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1668,6 +2024,37 @@ impl Workbench {
                                     if let Some(root) = this.root.clone() {
                                         this.wiztree_scan(root, w, cx);
                                     }
+                                })),
+                        )
+                    })
+                    .when(tree.is_some() && scanning.is_none(), |h| {
+                        h.child(
+                            Button::new("wt-ask-agent")
+                                .icon(
+                                    Icon::new(gpui_kit::assets::IconName::MessageSquareCode)
+                                        .size(theme::u(13.)),
+                                )
+                                .label(tr("Ask Agent"))
+                                .xsmall()
+                                .outline()
+                                .tooltip(tr(
+                                    "Attach this WizTree disk summary to the AI agent",
+                                ))
+                                .on_click(cx.listener(|this, _, w, cx| {
+                                    this.wiztree_ask_agent(w, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("wt-copy-ai")
+                                .icon(
+                                    Icon::new(gpui_kit::assets::IconName::Copy)
+                                        .size(theme::u(13.)),
+                                )
+                                .xsmall()
+                                .ghost()
+                                .tooltip(tr("Copy compact WizTree summary for AI"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.wiztree_copy_ai_summary(cx);
                                 })),
                         )
                     })
@@ -3073,5 +3460,37 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
         assert_eq!(format_count(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn ai_summary_captures_hierarchy_hotspots_and_lightweight_items() {
+        let root = std::env::temp_dir().join(format!("fluxcode-wt-ai-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("node_modules").join("bigpkg")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(root.join("node_modules").join("bigpkg").join("bundle.js"), vec![b'a'; 80_000]).unwrap();
+        std::fs::write(root.join("logs").join("debug.log"), vec![b'b'; 12_000]).unwrap();
+        std::fs::write(root.join("src").join("main.rs"), vec![b'c'; 600]).unwrap();
+        std::fs::write(root.join("README.md"), vec![b'd'; 120]).unwrap();
+
+        let tree = scan_tree(&root, ScanOpts::default(), &Arc::new(ScanProgress::new())).unwrap();
+        let summary = tree.ai_summary(0, 4000);
+        assert!(summary.contains("WizTree disk map"), "{summary}");
+        assert!(summary.contains("node_modules/"), "{summary}");
+        assert!(summary.contains("build/cache folder"), "{summary}");
+        assert!(summary.contains("logs/debug.log"), "{summary}");
+        assert!(summary.contains("Smallest / lightweight:"), "{summary}");
+        assert!(summary.contains("Largest files:"), "{summary}");
+        assert!(!summary.contains('\u{2014}'), "no em dash in AI summary");
+
+        let tight = tree.ai_summary(0, 200);
+        assert!(tight.len() <= 200, "len {}", tight.len());
+
+        let nm_id = tree.nodes[0].children.iter().copied().find(|&id| tree.nodes[id as usize].name == "node_modules").unwrap();
+        let focused = tree.ai_summary(nm_id, 4000);
+        assert!(focused.contains("focused subfolder"), "{focused}");
+        assert!(focused.contains("bigpkg/"), "{focused}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

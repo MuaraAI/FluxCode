@@ -1,6 +1,6 @@
 # FluxCode
 
-> FluxCode is a 16 MB native code editor for Windows, macOS and Linux, written in Rust and drawn by the GPU. It has an ACP agent panel (Command Code, Copilot and more), Source Control, Live share, no telemetry, and is free and open source under GPL-3.0-or-later.
+> FluxCode is a 16 MB native code editor for Windows, macOS and Linux, written in Rust and drawn by the GPU. It has an ACP agent panel (Command Code, Copilot and more), Source Control, WizTree disk analyzer, no telemetry, and is free and open source under GPL-3.0-or-later.
 
 ## Pages
 

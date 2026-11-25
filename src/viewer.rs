@@ -73,6 +73,9 @@ pub fn view(path: &Path, bytes: &[u8]) -> Option<View> {
             return Some(v);
         }
     }
+    if let Some(v) = crate::nbt::leveldb_view(path, bytes) {
+        return Some(v);
+    }
     if looks_text(bytes) {
         return None;
     }

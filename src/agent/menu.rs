@@ -232,9 +232,6 @@ impl Workbench {
     fn agent_menu_pick(&mut self, act: Act, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.menu.open = None;
         match act {
-            Act::Use(id) | Act::Install(id) if crate::acp::experimental(&id) => {
-                self.status = crate::trf!("{name} is not available yet: it is still being built."; name => crate::acp::display_name(&id)).into();
-            }
             Act::Use(id) => self.agent_use(&id, window, cx),
             Act::Install(id) => self.agent_install(id, window, cx),
             Act::Opt(id, v) => self.agent_set_option(&id, v, true, cx),
@@ -494,7 +491,6 @@ impl Workbench {
             .cursor_pointer()
             .when(sel, |h| h.bg(c(theme::SELECT)))
             .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
-            .when(matches!(&r.lead, Lead::Agent(id) if crate::acp::experimental(id)), |h| h.opacity(0.6).cursor_default())
             .children(lead)
             .child({
                 let name = div().text_sm().text_color(c(if r.checked { theme::FG_STRONG } else { theme::FG })).when(r.checked, |d| d.font_weight(FontWeight::MEDIUM)).child(r.title.clone());
@@ -507,7 +503,6 @@ impl Workbench {
                 } else if matches!(r.trail, Trail::Cols(..)) {
                     h_flex().flex_1().min_w_0().child(name.flex_1().min_w_0().truncate())
                 } else {
-                    let exp = matches!(&r.lead, Lead::Agent(id) if crate::acp::experimental(id));
                     let rec = matches!(&r.lead, Lead::Agent(id) if crate::acp::recommended(id));
                     let w = self.agent.compose_w.get();
                     let fit = |at: f32| w <= 0. || w >= f32::from(theme::u(at));
@@ -519,7 +514,6 @@ impl Workbench {
                         .overflow_hidden()
                         .gap_2()
                         .child(name.flex_shrink(1.).min_w(theme::u(48.)).truncate())
-                        .when(exp, |h| h.child(if wide_badge { experimental_badge() } else { experimental_dot() }))
                         .when(rec, |h| h.child(if wide_badge { recommended_badge() } else { recommended_star() }))
                         .when(show_sub && !r.sub.is_empty(), |h| h.child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(r.sub.clone())));
                     v_flex()
@@ -899,24 +893,6 @@ pub(crate) fn recommended_badge() -> Div {
 
 fn recommended_star() -> Div {
     div().flex_none().child(Icon::new(gpui_kit::assets::IconName::Star).size(theme::u(11.)).text_color(c(theme::ACCENT_TEXT)))
-}
-
-fn experimental_dot() -> Div {
-    div().flex_none().size(theme::u(7.)).rounded_full().border_1().border_color(c(theme::FG_DIM))
-}
-
-pub(crate) fn experimental_badge() -> Div {
-    div()
-        .flex_none()
-        .px_1p5()
-        .rounded_full()
-        .border_1()
-        .border_color(c(theme::FG_DIM).opacity(0.4))
-        .bg(c(theme::FG_DIM).opacity(0.12))
-        .whitespace_nowrap()
-        .text_size(theme::u(10.5))
-        .text_color(c(theme::FG_MUTED))
-        .child(tr("Not available"))
 }
 
 fn first_sentence(s: &str) -> String {

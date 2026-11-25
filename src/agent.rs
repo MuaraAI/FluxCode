@@ -391,21 +391,6 @@ impl std::ops::DerefMut for AgentState {
     }
 }
 
-pub(crate) fn find_mura() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "mura.exe" } else { "mura" };
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.extend(std::env::split_paths(&crate::acp::fresh_path()).map(|d| d.join(exe)));
-    for var in ["USERPROFILE", "HOME"] {
-        if let Ok(base) = std::env::var(var) {
-            let b = Path::new(&base);
-            candidates.push(b.join(".local").join("bin").join(exe));
-            candidates.push(b.join(".fluxcode").join("bin").join(exe));
-            candidates.push(b.join(".cargo").join("bin").join(exe));
-        }
-    }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
 static CHOICE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 pub fn set_choice(cli: &str) {
@@ -420,10 +405,10 @@ pub(crate) fn full_bounds() -> (f32, f32) {
 
 pub fn agent_id() -> String {
     let c = CHOICE.lock().map(|g| g.clone()).unwrap_or_default();
-    if !c.is_empty() && c != "auto" {
+    if !c.is_empty() && c != "auto" && !crate::acp::hidden(&c) {
         return c;
     }
-    crate::acp::installed().into_iter().find(|id| !crate::acp::experimental(id)).unwrap_or_else(|| "opencode-v2".into())
+    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode-v2".into())
 }
 
 #[derive(Clone)]
@@ -490,7 +475,7 @@ fn agent_cmd() -> Option<std::process::Command> {
 
 fn sessions_cmd() -> Option<std::process::Command> {
     let id = agent_id();
-    if id != "mura" && !crate::acp::is_opencode(&id) {
+    if !crate::acp::is_opencode(&id) {
         return None;
     }
     let mut l = crate::acp::locate(&id)?;
@@ -1018,11 +1003,9 @@ impl Workbench {
             self.agent.folder = self.root.clone();
         }
         let Some(mut cmd) = agent_cmd() else {
-            self.agent.status = Status::Error(if agent_id() == "mura" {
-                crate::i18n::tr("Mura isn't installed on this PC (FluxCode looks on PATH and in ~/.local/bin). Build it from github.com/MuaraAI/Mura-Harness, or pick another agent in the menu above.").into()
-            } else {
-                crate::trf!("{name} isn't installed yet. Download it from the agent menu above, or pick another agent."; name => agent_name()).into()
-            });
+            self.agent.status = Status::Error(
+                crate::trf!("{name} isn't installed yet. Download it from the agent menu above, or pick another agent."; name => agent_name()),
+            );
             cx.notify();
             return;
         };
@@ -1858,10 +1841,6 @@ impl Workbench {
         self.agent_use("opencode-v2", w, cx);
     }
 
-    pub(crate) fn on_agent_use_mura(&mut self, _: &crate::workbench::AgentUseMura, w: &mut Window, cx: &mut Context<Self>) {
-        self.agent_use("mura", w, cx);
-    }
-
     pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = agent_id();
         let open = self.agent.menu.open == Some(Menu::Agent);
@@ -1877,10 +1856,6 @@ impl Workbench {
 
     pub(crate) fn agent_install(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.agent.installing.is_some() {
-            return;
-        }
-        if id == "mura" {
-            cx.open_url("https://github.com/MuaraAI/Mura-Harness");
             return;
         }
         crate::acp::rescan();
@@ -1933,12 +1908,6 @@ impl Workbench {
             });
         })
         .detach();
-    }
-
-    pub(crate) fn agent_attribution(&self) -> crate::collab::proto::AiInfo {
-        let view = self.agent_config_view();
-        let pick = |cat: &str| view.iter().find(|o| o.category == cat).map(|o| o.current_name().rsplit('/').next().unwrap_or("").to_string()).unwrap_or_default();
-        crate::collab::proto::AiInfo { agent: agent_name().to_string(), model: pick("model"), effort: pick("thought_level"), mode: pick("mode") }
     }
 
     pub(crate) fn agent_ask_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -2219,15 +2188,23 @@ impl Workbench {
 
     pub(crate) fn apply_agent_reloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for p in std::mem::take(&mut self.agent.reloads) {
-            self.collab_mark_ai(&p);
-            if let (Some(d), Ok(f)) = (self.docs.iter_mut().find(|d| d.path == p), core::read_text(&p)) {
-                d.crlf = f.crlf;
-                if let Some(ed) = &d.editor {
-                    ed.update(cx, |s, cx| s.set_value(f.text, window, cx));
+            if let Some(d) = self.docs.iter_mut().find(|d| d.path == p) {
+                if d.nbt_format.is_some() {
+                    if let Some(dec) = crate::nbt::decode_path(&p) {
+                        d.nbt_format = Some(dec.format);
+                        if let Some(ed) = &d.editor {
+                            ed.update(cx, |s, cx| s.set_value(dec.snbt, window, cx));
+                        }
+                        d.dirty = false;
+                    }
+                } else if let Ok(f) = core::read_text(&p) {
+                    d.crlf = f.crlf;
+                    if let Some(ed) = &d.editor {
+                        ed.update(cx, |s, cx| s.set_value(f.text, window, cx));
+                    }
+                    d.dirty = false;
                 }
-                d.dirty = false;
             }
-            self.collab_on_path(&p, cx);
         }
     }
 
@@ -2392,7 +2369,14 @@ impl Workbench {
             .filter_map(|(i, p)| crate::quick::fuzzy_lower(&qb, p.as_bytes()).map(|s| (s, i)))
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0));
-        let hits: Vec<usize> = scored.into_iter().take(8).map(|(_, i)| i).collect();
+        let mut hits: Vec<usize> = scored.into_iter().take(8).map(|(_, i)| i).collect();
+        let ql = q.to_lowercase();
+        if (ql.is_empty() || "wiztree".starts_with(&ql) || "disk".starts_with(&ql))
+            && (self.wiztree.tree.is_some() || self.root.is_some())
+        {
+            hits.insert(0, usize::MAX);
+            hits.truncate(8);
+        }
         self.agent.mention = Some((at, hits, 0));
         cx.notify();
     }
@@ -2403,7 +2387,11 @@ impl Workbench {
             cx.notify();
             return;
         };
-        let rel = self.rel_path(&self.all_files[ix]).replace('\\', "/");
+        let rel = if ix == usize::MAX {
+            "wiztree".to_string()
+        } else {
+            self.rel_path(&self.all_files[ix]).replace('\\', "/")
+        };
         let (text, cursor) = {
             let s = self.agent.input.read(cx);
             (s.value().to_string(), s.cursor().min(s.value().len()))
@@ -2568,10 +2556,25 @@ impl Workbench {
         if agent_ctx::wants_output(&text) && !self.terms[self.term_ix].lines.is_empty() {
             chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), Icon::new(IconName::SquareTerminal), !off("out")));
         }
+        let has_wiz_mention = agent_ctx::mentions(&text).iter().any(|m| m.eq_ignore_ascii_case("wiztree"));
+        let wants_wiz = self.wiztree.page || self.wiztree.pin_agent || has_wiz_mention || agent_ctx::wants_disk(&text);
+        if wants_wiz && (self.wiztree.tree.is_some() || self.root.is_some()) {
+            let label = match &self.wiztree.tree {
+                Some(t) if self.wiztree.focus != 0 => {
+                    let name = t.nodes.get(self.wiztree.focus as usize).map(|n| n.name.as_str()).unwrap_or("WizTree");
+                    format!("WizTree · {name}")
+                }
+                _ => "WizTree".to_string(),
+            };
+            chips.push(("wiztree".into(), label, Icon::new(gpui_kit::assets::IconName::HardDrive), !off("wiztree")));
+        }
         if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
             chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), Icon::new(IconName::FolderOpen), !off("ws")));
         }
         for m in agent_ctx::mentions(&text) {
+            if m.eq_ignore_ascii_case("wiztree") {
+                continue;
+            }
             if let Some(root) = &self.root {
                 if root.join(&m).exists() {
                     let name = Path::new(&m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(m.clone());
@@ -2600,12 +2603,14 @@ impl Workbench {
 
     fn agent_ws_signature(&self, cx: &App) -> u64 {
         let (roots, tabs) = self.agent_ws_parts(cx);
+        let wiz = self.wiztree.tree.as_deref().filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
         crate::ws_context::signature(&crate::ws_context::Inputs {
             roots: &roots,
             files: &self.all_files,
             git: self.scm.repo.as_ref().map(|_| &self.scm.status),
             tabs,
             python: None,
+            wiztree: wiz,
         })
     }
 
@@ -2631,12 +2636,14 @@ impl Workbench {
             match key.as_str() {
                 "ws" => {
                     let (roots, tabs) = self.agent_ws_parts(cx);
+                    let wiz = self.wiztree.tree.as_deref().filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
                     let inputs = crate::ws_context::Inputs {
                         roots: &roots,
                         files: &self.all_files,
                         git: self.scm.repo.as_ref().map(|_| &self.scm.status),
                         tabs,
                         python: self.python_version.as_deref(),
+                        wiztree: wiz,
                     };
                     self.agent.ws_sig = crate::ws_context::signature(&inputs);
                     let mut text = crate::ws_context::overview(&inputs);
@@ -2692,6 +2699,24 @@ impl Workbench {
                     let tail: Vec<&str> = self.terms[self.term_ix].lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
                     blocks.push(json!({ "type": "text", "text": format!("Recent terminal output:\n```\n{}\n```", tail.join("\n")) }));
                 }
+                "wiztree" => {
+                    if self.wiztree.tree.is_none() {
+                        if let Some(root) = self.root.clone() {
+                            if let Ok(tree) = crate::wiztree::scan_quick(&root) {
+                                self.wiztree.target = Some(root);
+                                self.wiztree.focus = 0;
+                                self.wiztree.tree = Some(std::sync::Arc::new(tree));
+                            }
+                        }
+                    }
+                    if let Some(tree) = &self.wiztree.tree {
+                        let summary = tree.ai_summary(self.wiztree.focus, 3600);
+                        if !summary.is_empty() {
+                            blocks.push(json!({ "type": "text", "text": summary }));
+                        }
+                    }
+                    self.wiztree.pin_agent = false;
+                }
                 k if k.starts_with('@') => {
                     if let Some(root) = &self.root {
                         let p = root.join(&k[1..]);
@@ -2699,6 +2724,10 @@ impl Workbench {
                             if let Ok(f) = core::read_text(&p) {
                                 if f.text.len() < 200_000 {
                                     blocks.push(resource(&p, f.text));
+                                }
+                            } else if let Some(dec) = crate::nbt::decode_path(&p) {
+                                if dec.snbt.len() < 200_000 {
+                                    blocks.push(resource(&p, dec.snbt));
                                 }
                             }
                         } else if p.is_dir() {
@@ -2928,6 +2957,11 @@ impl Workbench {
                 self.panel_open = true;
                 self.panel_tab = crate::workbench::PanelTab::Terminal;
             }
+            "wiztree" => {
+                self.agent_full = false;
+                self.open_wiztree(window, cx);
+                return;
+            }
             "ws" => {
                 self.agent_full = false;
                 self.view = crate::workbench::SideView::Explorer;
@@ -2998,6 +3032,9 @@ impl Workbench {
                         chip_x(SharedString::from(format!("ag-chip-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.agent.off_ctx.insert(close_key.clone());
+                            if close_key == "wiztree" {
+                                this.wiztree.pin_agent = false;
+                            }
                             cx.notify();
                         }))
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Leave it out of the message")).build(w, cx)),
@@ -3100,12 +3137,28 @@ impl Workbench {
             list = list.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No file matches")));
         }
         for (row, &ix) in hits.iter().enumerate() {
-            let rel = self.rel_path(&self.all_files[ix]);
-            let (dir, name) = match rel.rfind(['\\', '/']) {
-                Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
-                None => (String::new(), rel.clone()),
+            let (icon_el, name, dir): (AnyElement, String, String) = if ix == usize::MAX {
+                (
+                    Icon::new(gpui_kit::assets::IconName::HardDrive)
+                        .size(theme::u(13.))
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .into_any_element(),
+                    "wiztree".to_string(),
+                    tr("Disk usage summary").to_string(),
+                )
+            } else {
+                let rel = self.rel_path(&self.all_files[ix]);
+                let (dir, name) = match rel.rfind(['\\', '/']) {
+                    Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
+                    None => (String::new(), rel.clone()),
+                };
+                let (icon, tint) = crate::files::icon_for(&name);
+                (
+                    Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)).into_any_element(),
+                    name,
+                    dir,
+                )
             };
-            let (icon, tint) = crate::files::icon_for(&name);
             list = list.child(
                 h_flex()
                     .id(("ag-mention", row))
@@ -3117,7 +3170,7 @@ impl Workbench {
                     .cursor_pointer()
                     .when(row == *sel, |d| d.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)))
+                    .child(icon_el)
                     .child(div().flex_none().text_xs().text_color(c(theme::FG_STRONG)).child(name))
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir))
                     .on_click(cx.listener(move |this, _, w, cx| {
@@ -4452,7 +4505,7 @@ impl Workbench {
                         .text_xs()
                         .text_color(c(theme::FG_MUTED))
                         .child(Icon::new(gpui_kit::assets::IconName::Download).size(theme::u(14.)))
-                        .child(if k == "mura" || k == "commandcode" { tr("Get") } else { tr("Download") }),
+                        .child(if k == "commandcode" { tr("Get") } else { tr("Download") }),
                 )
                 .on_click(cx.listener(move |this, _, w, cx| this.agent_install(kid.clone(), w, cx)))
         }));

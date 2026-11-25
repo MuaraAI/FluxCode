@@ -120,8 +120,11 @@ pub fn is_python(token: &str) -> bool {
 
 const KNOWN: &[&str] = &[
     "python", "python3", "py", "pip", "pip3", "pipx", "uv", "node", "npm", "npx", "pnpm", "yarn", "bun",
-    "deno", "git", "cargo", "rustc", "code", "cd", "dir", "cls", "clear", "echo", "type", "where", "mkdir",
-    "rmdir", "copy", "move", "ren", "tree", "start", "exit", "pytest", "flask", "streamlit", "jupyter",
+    "deno", "tsc", "tsx", "git", "cargo", "rustc", "rustup", "go", "java", "javac", "mvn", "gradle",
+    "dotnet", "gcc", "g++", "clang", "clang++", "make", "cmake", "zig", "php", "composer", "ruby",
+    "bundle", "lua", "dart", "flutter", "swift", "kotlinc", "perl", "elixir", "mix", "docker", "kubectl",
+    "curl", "ssh", "code", "cd", "dir", "cls", "clear", "echo", "type", "where", "mkdir", "rmdir",
+    "copy", "move", "ren", "tree", "start", "exit", "pytest", "flask", "streamlit", "jupyter",
     "black", "ruff", "mypy", "django-admin", "uvicorn", "gunicorn", "pyinstaller",
 ];
 
@@ -310,7 +313,15 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     if let Some(from) = python_script_from {
         script(from, &["py", "pyw"], &mut edits);
     } else if program == "node" {
-        script(1, &["js", "mjs", "cjs"], &mut edits);
+        script(1, &["js", "mjs", "cjs", "jsx"], &mut edits);
+    } else if program == "tsx" {
+        script(1, &["ts", "tsx", "mts", "cts"], &mut edits);
+    } else if program == "php" {
+        script(1, &["php"], &mut edits);
+    } else if program == "ruby" {
+        script(1, &["rb"], &mut edits);
+    } else if program == "lua" {
+        script(1, &["lua"], &mut edits);
     } else if program == "type" && words.len() == 2 {
         script(1, &[], &mut edits);
     }
@@ -345,51 +356,63 @@ pub fn autocorrect(line: &str, cwd: &Path) -> Option<Correction> {
     Some(Correction { line: out, fixes })
 }
 
-pub fn complete(line: &str, cwd: &Path) -> (Option<String>, Vec<String>) {
+struct CompletionSet {
+    start: usize,
+    dir_part: String,
+    names: Vec<(String, bool)>,
+}
+
+fn completion_entries(line: &str, cwd: &Path) -> Option<CompletionSet> {
+    if line.trim().is_empty() {
+        return None;
+    }
     let start = line.rfind(' ').map_or(0, |i| i + 1);
     let word = line[start..].trim_start_matches('"');
     let (dir_part, prefix) = match word.rfind(['/', '\\']) {
         Some(i) => (&word[..=i], &word[i + 1..]),
         None => ("", word),
     };
+    let first_cmd = line[..start].split_whitespace().next().map(program_name).unwrap_or_default();
+    let dirs_only = start > 0 && matches!(first_cmd.as_str(), "cd" | "chdir");
     let lower = prefix.to_lowercase();
     let mut names: Vec<(String, bool)> = entries(&cwd.join(dir_part))
         .into_iter()
-        .filter(|(n, _)| n.to_lowercase().starts_with(&lower) && (lower.starts_with('.') || !n.starts_with('.')))
+        .filter(|(n, is_dir)| {
+            (!dirs_only || *is_dir)
+                && n.to_lowercase().starts_with(&lower)
+                && (lower.starts_with('.') || !n.starts_with('.'))
+        })
         .collect();
     if start == 0 && dir_part.is_empty() && !prefix.is_empty() {
         names.extend(KNOWN.iter().filter(|k| k.starts_with(&lower)).map(|k| (k.to_string(), false)));
     }
     names.sort_by_key(|a| a.0.to_lowercase());
     names.dedup_by(|a, b| a.0.eq_ignore_ascii_case(&b.0));
+    Some(CompletionSet { start, dir_part: dir_part.to_string(), names })
+}
+
+fn format_completion(dir_part: &str, name: &str, dir: bool, done: bool) -> String {
     let sep = if cfg!(windows) { "\\" } else { "/" };
-    let render = |name: &str, dir: bool, done: bool| {
-        let mut s = format!("{dir_part}{name}{}", if dir && done { sep } else { "" });
-        if s.contains(' ') {
-            s = format!("\"{s}{}", if done && !dir { "\"" } else { "" });
-        }
-        s
-    };
-    match names.len() {
-        0 => (None, Vec::new()),
-        1 => {
-            let (n, d) = &names[0];
-            let tail = if *d { "" } else { " " };
-            (Some(format!("{}{}{}", &line[..start], render(n, *d, true), tail)), Vec::new())
-        }
-        _ => {
-            let first = names[0].0.to_lowercase();
-            let mut common = first.len();
-            for (n, _) in &names[1..] {
-                let n = n.to_lowercase();
-                common = common.min(first.chars().zip(n.chars()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum());
-            }
-            let ext: String = names[0].0.chars().take(first[..common].chars().count()).collect();
-            let list = names.iter().map(|(n, d)| if *d { format!("{n}{sep}") } else { n.clone() }).collect();
-            let new = (ext.len() > prefix.len()).then(|| format!("{}{}", &line[..start], render(&ext, false, false)));
-            (new, list)
-        }
+    let mut s = format!("{dir_part}{name}{}", if dir && done { sep } else { "" });
+    if s.contains(' ') {
+        s = format!("\"{s}{}", if done && !dir { "\"" } else { "" });
     }
+    s
+}
+
+/// Full replacement lines for inline Tab cycling; empty when nothing should complete.
+pub fn complete_candidates(line: &str, cwd: &Path) -> Vec<String> {
+    let Some(set) = completion_entries(line, cwd) else {
+        return Vec::new();
+    };
+    let single = set.names.len() == 1;
+    set.names
+        .into_iter()
+        .map(|(n, d)| {
+            let tail = if single && !d { " " } else { "" };
+            format!("{}{}{}", &line[..set.start], format_completion(&set.dir_part, &n, d, true), tail)
+        })
+        .collect()
 }
 
 
@@ -423,48 +446,218 @@ pub fn parse_frame(text: &str) -> Option<(String, u32, Option<String>)> {
     Some((path, line, func))
 }
 
-pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
-    let mut t = text.trim_start();
+const CODE_EXTS: &[&str] = &[
+    ".py", ".pyw", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+    ".rs", ".go", ".java", ".kt", ".kts", ".scala", ".groovy", ".gradle",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".m", ".mm",
+    ".cs", ".fs", ".vb", ".zig", ".php", ".rb", ".lua", ".dart", ".swift",
+    ".pl", ".pm", ".ex", ".exs", ".erl", ".hs", ".ml", ".nim", ".r",
+    ".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd",
+    ".vue", ".svelte", ".astro", ".html", ".htm", ".css", ".scss", ".less",
+    ".json", ".jsonc", ".toml", ".yml", ".yaml", ".xml", ".sql", ".graphql",
+    ".mcfunction", ".molang", ".glsl", ".wgsl", ".hlsl", ".proto", ".nix",
+];
+
+pub fn lang_from_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "py" | "pyw" => "python",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "ts" | "tsx" | "mts" | "cts" => "typescript",
+        "rs" => "rust",
+        "go" => "go",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "scala" => "scala",
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" => "c/c++",
+        "cs" | "fs" | "vb" => "csharp",
+        "zig" => "zig",
+        "php" => "php",
+        "rb" => "ruby",
+        "lua" => "lua",
+        "dart" => "dart",
+        "swift" => "swift",
+        "pl" | "pm" => "perl",
+        "ex" | "exs" => "elixir",
+        "sh" | "bash" | "zsh" => "shell",
+        "ps1" | "psm1" => "powershell",
+        "vue" => "vue",
+        "svelte" => "svelte",
+        "json" | "jsonc" => "json",
+        "toml" => "toml",
+        "yml" | "yaml" => "yaml",
+        "sql" => "sql",
+        "mcfunction" => "bedrock",
+        _ => "runtime",
+    }
+}
+
+fn parse_u32_prefix(s: &str) -> Option<(u32, &str)> {
+    let n = s.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if n == 0 {
+        return None;
+    }
+    let val = s[..n].parse::<u32>().ok()?;
+    (val > 0).then_some((val, &s[n..]))
+}
+
+fn parse_line_col_after(after: &str, delim: u8) -> Option<(u32, u32)> {
+    match delim {
+        b':' => {
+            if let Some(rest) = after.strip_prefix("line ") {
+                let (line, _) = parse_u32_prefix(rest)?;
+                return Some((line, 0));
+            }
+            if let Some(rest) = after.strip_prefix(" line ") {
+                let (line, _) = parse_u32_prefix(rest)?;
+                return Some((line, 0));
+            }
+            if let Some(rest) = after.strip_prefix('[') {
+                let (line, rest) = parse_u32_prefix(rest)?;
+                let col = rest.strip_prefix(',').and_then(parse_u32_prefix).map_or(0, |(c, _)| c);
+                return Some((line, col));
+            }
+            let (line, rest) = parse_u32_prefix(after)?;
+            if let Some(after_col) = rest.strip_prefix(':') {
+                if let Some((col, _)) = parse_u32_prefix(after_col) {
+                    return Some((line, col));
+                }
+            }
+            if let Some(after_char) = rest.strip_prefix(" char:") {
+                if let Some((col, _)) = parse_u32_prefix(after_char) {
+                    return Some((line, col));
+                }
+            }
+            Some((line, 0))
+        }
+        b'(' => {
+            let (line, rest) = parse_u32_prefix(after)?;
+            let col = rest.strip_prefix(',').and_then(parse_u32_prefix).map_or(0, |(c, _)| c);
+            Some((line, col))
+        }
+        b' ' => {
+            let rest = after.strip_prefix("on line ")?;
+            let (line, _) = parse_u32_prefix(rest)?;
+            Some((line, 0))
+        }
+        _ => None,
+    }
+}
+
+fn clean_extracted_path(raw: &str) -> Option<String> {
+    let mut s = raw.trim().trim_matches(|c| matches!(c, '"' | '\'' | '(' | '[' | '<'));
+    if let Some(rest) = s.strip_prefix("file:///") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("file://") {
+        if !rest.starts_with('/') {
+            return Some(format!("//{rest}"));
+        }
+        s = rest;
+    }
+    let lower = s.to_ascii_lowercase();
+    if s.is_empty()
+        || s.starts_with('<')
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ws://")
+        || lower.starts_with("wss://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("node:")
+    {
+        return None;
+    }
+    if s.len() > 3 && s.starts_with('/') && s.as_bytes()[2] == b':' {
+        s = &s[1..];
+    }
+    Some(s.to_string())
+}
+
+fn extract_path_before(t: &str, path_end: usize) -> Option<String> {
+    let prefix = &t[..path_end];
+    if let Some(i) = prefix.rfind("file://") {
+        return clean_extracted_path(&prefix[i..]);
+    }
+    // Check if enclosed in quotes or parens right before the path (e.g. `at fn (C:\a b\x.js:1:2)` or `(App.java:19)`).
+    if let Some(i) = prefix.rfind(['(', '"', '\'']) {
+        let opener = prefix.as_bytes()[i];
+        let prev_ok = opener == b'(' || i == 0 || !prefix.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let cand = &prefix[i + 1..];
+        if prev_ok && !cand.is_empty() && !cand.starts_with(char::is_whitespace) && !cand.contains([')', ']', '"', '\'']) {
+            return clean_extracted_path(cand);
+        }
+    }
+    // Windows drive letter (`C:\` or `C:/`) preserves paths with spaces.
+    let bytes = prefix.as_bytes();
+    for i in (0..bytes.len().saturating_sub(2)).rev() {
+        if bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'\\' | b'/')
+            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+        {
+            if i >= 1 && bytes[i - 1] == b'/' && (i == 1 || bytes[i - 2].is_ascii_whitespace()) {
+                return clean_extracted_path(&prefix[i - 1..]);
+            }
+            return clean_extracted_path(&prefix[i..]);
+        }
+    }
+    // Known labels that directly precede a relative or Unix path.
+    for marker in ["panicked at ", " in ", " at ", "At ", "from ", "--> ", "e: ", "w: ", "[ERROR] ", "[WARNING] ", "lua: ", "luajit: "] {
+        if let Some(i) = prefix.rfind(marker) {
+            let cand = prefix[i + marker.len()..].trim_start();
+            if !cand.is_empty() && !cand.contains("://") {
+                return clean_extracted_path(cand);
+            }
+        }
+    }
+    // Walk back to last whitespace or bracket delimiter.
+    let start = prefix.rfind(|c: char| c.is_whitespace() || matches!(c, '(' | '[' | '<' | '"' | '\'' | ',' | ';')).map_or(0, |i| i + 1);
+    let cand = &prefix[start..];
+    if cand.contains("://") {
+        return None;
+    }
+    clean_extracted_path(cand)
+}
+
+/// Extract `(path, line, col)` from any language's error or stack-trace line (`col` is 1-based, 0 if unknown).
+pub fn parse_path_loc(text: &str) -> Option<(String, u32, u32)> {
+    if let Some((p, l, _)) = parse_frame(text) {
+        if !p.starts_with('<') {
+            return Some((p, l, 0));
+        }
+    }
+    let mut t = text.trim();
     for prefix in ["--> ", "e: ", "w: ", "[ERROR] ", "[WARNING] "] {
         t = t.strip_prefix(prefix).unwrap_or(t).trim_start();
     }
-    let owned;
-    if let Some(rest) = t.strip_prefix("file:///") {
-        t = rest;
-    } else if let Some(rest) = t.strip_prefix("file://") {
-        if !rest.starts_with('/') {
-            owned = format!("//{rest}");
-            t = owned.as_str();
-        }
+    if t.is_empty() {
+        return None;
     }
     let lower = t.to_ascii_lowercase();
-    let exts = [
-        ".py:", ".pyw:", ".java:", ".kt:", ".kts:", ".rs:", ".go:", ".c:", ".h:", ".cc:", ".cpp:", ".cxx:", ".hpp:", ".cs:", ".fs:", ".ts:", ".tsx:", ".js:", ".jsx:", ".mjs:", ".cjs:",
-        ".vue:", ".svelte:", ".gradle:", ".json:", ".yml:", ".yaml:", ".cs(", ".fs(", ".vb(",
-    ];
-    let mut best: Option<(usize, usize)> = None;
-    for ext in exts {
+    let mut best: Option<(usize, usize, u32, u32)> = None;
+    for ext in CODE_EXTS {
         let mut from = 0;
         while let Some(k) = lower[from..].find(ext) {
             let i = from + k;
-            let after = &t[i + ext.len()..];
-            let after = after.strip_prefix('[').unwrap_or(after);
-            if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                if best.is_none_or(|(b, _)| i < b) {
-                    best = Some((i, ext.len()));
+            let end = i + ext.len();
+            if let Some(&delim) = t.as_bytes().get(end) {
+                if matches!(delim, b':' | b'(' | b' ') {
+                    if let Some((line, col)) = parse_line_col_after(&t[end + 1..], delim) {
+                        if best.is_none_or(|(b, _, _, _)| i < b) {
+                            best = Some((i, end, line, col));
+                        }
+                        break;
+                    }
                 }
-                break;
             }
             from = i + 1;
         }
     }
-    let (i, n) = best?;
-    let path = &t[..i + n - 1];
-    let after = &t[i + n..];
-    let digits: String = after.strip_prefix('[').unwrap_or(after).chars().take_while(char::is_ascii_digit).collect();
-    let line = digits.parse().ok()?;
-    let path = if path.len() > 3 && path.starts_with('/') && path.as_bytes()[2] == b':' { &path[1..] } else { path };
-    Some((path.to_string(), line))
+    let (_, path_end, line, col) = best?;
+    let path = extract_path_before(t, path_end)?;
+    Some((path, line, col))
+}
+
+pub fn parse_path_line(text: &str) -> Option<(String, u32)> {
+    parse_path_loc(text).map(|(p, l, _)| (p, l))
 }
 
 pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
@@ -490,6 +683,12 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
             return LineKind::Code;
         }
     }
+    if indented
+        && (t.starts_with("at ") || t.starts_with("from ") || t.contains(".go:"))
+        && parse_path_loc(t).is_some()
+    {
+        return LineKind::Frame;
+    }
     if python_error_line(text).is_some() {
         return LineKind::Err;
     }
@@ -514,29 +713,58 @@ pub fn classify(text: &str, stderr: bool, prev: Option<LineKind>) -> LineKind {
     if GRADLE_NOISE.iter().any(|p| t.starts_with(p)) || (t.contains(" actionable task") && t.contains(": ")) {
         return LineKind::Dim;
     }
-    if t.starts_with("--> ") && parse_path_line(t).is_some() {
-        return LineKind::Warn;
+    if t.starts_with("--> ") && parse_path_loc(t).is_some() {
+        return if prev == Some(LineKind::Warn) { LineKind::Warn } else { LineKind::Frame };
     }
-    if t.starts_with("BUILD SUCCESSFUL") || t.starts_with("[INFO] BUILD SUCCESS") || t.starts_with("Build succeeded") || t.starts_with("Finished `") {
+    if t.starts_with("BUILD SUCCESSFUL")
+        || t.starts_with("[INFO] BUILD SUCCESS")
+        || t.starts_with("Build succeeded")
+        || t.starts_with("Finished `")
+        || t.starts_with("test result: ok.")
+    {
         return LineKind::Success;
     }
+    let has_loc = parse_path_loc(t).is_some();
     if t.starts_with("FAILURE:")
         || t.starts_with("BUILD FAILED")
         || t.starts_with("[ERROR]")
         || t.starts_with("[INFO] BUILD FAILURE")
         || t.starts_with("e: ")
+        || t.starts_with("Uncaught ")
+        || t.starts_with("Exception in thread ")
+        || t.starts_with("Caused by: ")
+        || t.starts_with("Unhandled exception")
+        || t.starts_with("panic:")
+        || t.starts_with("PHP Fatal error:")
+        || t.starts_with("PHP Parse error:")
+        || (t.starts_with("thread '") && t.contains("panicked at"))
         || lower.starts_with("error[e")
-        || (lower.contains(": error") && parse_path_line(t).is_some())
+        || (has_loc
+            && (lower.contains(": error")
+                || lower.contains(": fatal error")
+                || lower.contains("): error ")
+                || lower.contains(" - error ts")
+                || lower.starts_with("lua:")
+                || lower.starts_with("luajit:")
+                || (!indented && (t.contains(":in `") || t.contains(":in '") || t.contains(": line ")))))
     {
         return LineKind::Err;
     }
-    if t.starts_with("[WARNING]") || t.starts_with("w: ") || (lower.contains(": warning") && parse_path_line(t).is_some()) {
+    if t.starts_with("[WARNING]")
+        || t.starts_with("w: ")
+        || t.starts_with("PHP Warning:")
+        || lower.starts_with("warning[")
+        || (has_loc && (lower.contains(": warning") || lower.contains("): warning ")))
+    {
         return LineKind::Warn;
     }
     if lower.starts_with("error:")
         || lower.starts_with("fatal:")
+        || lower.starts_with("fatal error:")
         || lower.starts_with("npm err!")
         || lower.contains("is not recognized as an internal or external command")
+        || lower.contains("is not recognized as the name of a cmdlet")
+        || lower.ends_with(": command not found")
         || (prev == Some(LineKind::Err) && lower.starts_with("operable program or batch file"))
         || lower.starts_with("the system cannot find")
         || lower.contains(": can't open file '")
@@ -570,6 +798,8 @@ pub struct PyError {
     pub message: String,
     pub file: Option<PathBuf>,
     pub line: Option<u32>,
+    pub col: Option<u32>,
+    pub source: &'static str,
     pub caret: Option<(usize, usize)>,
     pub code: Option<String>,
     pub hint: Option<String>,
@@ -579,7 +809,20 @@ pub struct PyError {
 fn is_user_frame(path: &str) -> bool {
     let p = path.to_ascii_lowercase().replace('/', "\\");
     let stdlib = p.contains("\\lib\\") && p.split('\\').any(|c| c.starts_with("python"));
-    !(p.starts_with('<') || p.contains("site-packages") || p.contains("dist-packages") || stdlib)
+    !(p.starts_with('<')
+        || p.starts_with("node:")
+        || p.contains("site-packages")
+        || p.contains("dist-packages")
+        || p.contains("\\node_modules\\")
+        || p.contains("\\.cargo\\registry\\")
+        || p.contains("\\rustc\\")
+        || p.contains("\\go\\src\\")
+        || stdlib)
+}
+
+fn resolve_err_path(raw: &str, cwd: &Path) -> PathBuf {
+    let p = PathBuf::from(raw);
+    if p.is_absolute() { p } else { cwd.join(p) }
 }
 
 pub fn pip_package(module: &str) -> Option<&'static str> {
@@ -758,11 +1001,10 @@ pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) 
     Some(PyError {
         kind: kind.to_string(),
         message: message.to_string(),
-        file: pick.map(|f| {
-            let p = PathBuf::from(&f.0);
-            if p.is_absolute() { p } else { cwd.join(p) }
-        }),
+        file: pick.map(|f| resolve_err_path(&f.0, cwd)),
         line: pick.map(|f| f.1),
+        col: None,
+        source: "python",
         caret: pick.and_then(|f| f.3),
         code: pick.and_then(|f| f.2.clone()),
         hint,
@@ -770,7 +1012,432 @@ pub fn parse_python_error(lines: &[(&str, LineKind)], python: &str, cwd: &Path) 
     })
 }
 
+fn parse_js_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    let err_ix = lines.iter().position(|(t, _)| {
+        let s = t.trim_start();
+        let s = s.strip_prefix("Uncaught ").unwrap_or(s);
+        python_error_line(s).is_some()
+    })?;
+    let raw_err = lines[err_ix].0.trim_start();
+    let stripped = raw_err.strip_prefix("Uncaught ").unwrap_or(raw_err);
+    let (kind, message) = python_error_line(stripped)?;
+
+    let mut frames: Vec<(String, u32, u32)> = Vec::new();
+    for (t, _) in &lines[err_ix + 1..] {
+        let s = t.trim_start();
+        if !s.starts_with("at ") {
+            if !s.is_empty() && !frames.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if let Some(loc) = parse_path_loc(s) {
+            frames.push(loc);
+        }
+    }
+    let mut header_loc: Option<(String, u32, u32)> = None;
+    let mut code: Option<String> = None;
+    let mut caret: Option<(usize, usize)> = None;
+    for i in (0..err_ix).rev() {
+        let t = lines[i].0;
+        if let Some((p, l, c)) = parse_path_loc(t) {
+            let lang = lang_from_path(Path::new(&p));
+            if matches!(lang, "javascript" | "typescript") {
+                header_loc = Some((p, l, c));
+                if let Some((code_line, _)) = lines.get(i + 1) {
+                    if !code_line.trim().is_empty() && !code_line.trim_start().starts_with("at ") && i + 1 < err_ix {
+                        code = Some(code_line.trim().to_string());
+                        if let Some((mark, _)) = lines.get(i + 2) {
+                            let m = mark.trim();
+                            if !m.is_empty() && m.chars().all(|ch| matches!(ch, '^' | '~' | ' ')) {
+                                let indent = code_line.len() - code_line.trim_start().len();
+                                if let (Some(a), Some(b)) = (mark.find(['^', '~']), mark.rfind(['^', '~'])) {
+                                    caret = Some((a.saturating_sub(indent), (b + 1).saturating_sub(indent)));
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    let has_js_evidence = header_loc.is_some()
+        || frames.iter().any(|(p, _, _)| matches!(lang_from_path(Path::new(p)), "javascript" | "typescript"))
+        || lines.iter().any(|(t, _)| t.contains("node:internal/") || t.contains("Cannot find module '") || t.contains("Cannot find package '"));
+    if !has_js_evidence {
+        return None;
+    }
+
+    let pick = frames.iter().find(|(p, _, _)| is_user_frame(p)).cloned().or(header_loc).or_else(|| frames.first().cloned());
+    let file = pick.as_ref().map(|(p, _, _)| resolve_err_path(p, cwd));
+    let source = file.as_deref().map(lang_from_path).filter(|&s| s == "typescript").unwrap_or("javascript");
+    let (hint, fix) = js_advise(kind, message);
+    Some(PyError {
+        kind: kind.to_string(),
+        message: message.to_string(),
+        file,
+        line: pick.as_ref().map(|(_, l, _)| *l),
+        col: pick.as_ref().and_then(|(_, _, c)| (*c > 0).then_some(*c)),
+        source,
+        caret,
+        code,
+        hint,
+        fix,
+    })
+}
+
+fn js_advise(kind: &str, msg: &str) -> (Option<String>, Option<String>) {
+    if msg.contains("Cannot find module '") || msg.contains("Cannot find package '") {
+        if let Some(pkg) = msg.split('\'').nth(1) {
+            if !pkg.starts_with('.') && !pkg.starts_with('/') && !pkg.contains('\\') {
+                let root = if pkg.starts_with('@') {
+                    pkg.splitn(3, '/').take(2).collect::<Vec<_>>().join("/")
+                } else {
+                    pkg.split('/').next().unwrap_or(pkg).to_string()
+                };
+                return (
+                    Some(format!("Package '{root}' is not installed in node_modules.")),
+                    Some(format!("npm install {root}")),
+                );
+            }
+            return (Some("Check the relative import path and file extension.".into()), None);
+        }
+    }
+    let hint = match kind {
+        "ReferenceError" => Some("This name is not defined in the current scope. Check spelling or add an import.".into()),
+        "TypeError" if msg.contains("Cannot read properties of undefined") || msg.contains("Cannot read properties of null") => {
+            Some("Value is null or undefined before accessing the property. Guard it or use optional chaining (?.)".into())
+        }
+        "TypeError" if msg.contains("is not a function") => {
+            Some("Called value is not a function. Check the export/import name or variable type.".into())
+        }
+        "SyntaxError" => Some("Syntax error on this line. Check brackets, quotes, commas, or module type (ESM vs CommonJS).".into()),
+        _ => None,
+    };
+    (hint, None)
+}
+
+fn parse_rust_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    for (i, (t, _)) in lines.iter().enumerate() {
+        let s = t.trim_start();
+        if s.starts_with("thread '") && s.contains("panicked at") {
+            let loc = parse_path_loc(s);
+            let msg = if let Some(after) = s.split("panicked at '").nth(1) {
+                after.split('\'').next().unwrap_or("").to_string()
+            } else {
+                lines.get(i + 1).map(|(m, _)| m.trim().to_string()).unwrap_or_default()
+            };
+            let (file, line, col) = match loc {
+                Some((p, l, c)) => (Some(resolve_err_path(&p, cwd)), Some(l), (c > 0).then_some(c)),
+                None => (None, None, None),
+            };
+            return Some(PyError {
+                kind: "Rust panic".into(),
+                message: if msg.is_empty() { s.to_string() } else { msg },
+                file,
+                line,
+                col,
+                source: "rust",
+                caret: None,
+                code: None,
+                hint: None,
+                fix: None,
+            });
+        }
+        let lower = s.to_ascii_lowercase();
+        if lower.starts_with("error[e") || (lower.starts_with("error:") && lines.get(i + 1).is_some_and(|(n, _)| n.trim_start().starts_with("--> "))) {
+            let (kind, msg) = match s.find(':') {
+                Some(c) => {
+                    let head = &s[..c];
+                    let code_id = head.strip_prefix("error[").and_then(|r| r.strip_suffix(']')).unwrap_or("Rust error");
+                    (code_id.to_string(), s[c + 1..].trim().to_string())
+                }
+                None => ("Rust error".into(), s.to_string()),
+            };
+            let mut loc = None;
+            let mut code = None;
+            for (next, _) in lines[i + 1..].iter().take(6) {
+                let ns = next.trim_start();
+                if loc.is_none() && ns.starts_with("--> ") {
+                    loc = parse_path_loc(ns);
+                } else if code.is_none() && ns.contains(" | ") {
+                    if let Some((num, src)) = ns.split_once(" | ") {
+                        if !num.trim().is_empty() && num.trim().chars().all(|c| c.is_ascii_digit()) {
+                            code = Some(src.trim().to_string());
+                        }
+                    }
+                }
+            }
+            if let Some((p, l, c)) = loc {
+                return Some(PyError {
+                    kind,
+                    message: msg,
+                    file: Some(resolve_err_path(&p, cwd)),
+                    line: Some(l),
+                    col: (c > 0).then_some(c),
+                    source: "rust",
+                    caret: None,
+                    code,
+                    hint: None,
+                    fix: None,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn parse_go_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    if let Some(i) = lines.iter().position(|(t, _)| t.trim_start().starts_with("panic:")) {
+        let msg = lines[i].0.trim_start().strip_prefix("panic:").unwrap_or("").trim().to_string();
+        let frame = lines[i + 1..]
+            .iter()
+            .filter_map(|(t, _)| parse_path_loc(t))
+            .filter(|(p, _, _)| p.to_ascii_lowercase().ends_with(".go"))
+            .find(|(p, _, _)| is_user_frame(p));
+        let (file, line, col) = match frame {
+            Some((p, l, c)) => (Some(resolve_err_path(&p, cwd)), Some(l), (c > 0).then_some(c)),
+            None => (None, None, None),
+        };
+        return Some(PyError {
+            kind: "Go panic".into(),
+            message: msg,
+            file,
+            line,
+            col,
+            source: "go",
+            caret: None,
+            code: None,
+            hint: None,
+            fix: None,
+        });
+    }
+    for (t, _) in lines {
+        let s = t.trim_start();
+        if s.len() != t.len() {
+            continue;
+        }
+        if let Some((p, l, c)) = parse_path_loc(s) {
+            if p.to_ascii_lowercase().ends_with(".go") {
+                if let Some(idx) = s.find(&format!(":{l}")) {
+                    let after = &s[idx + 1 + l.to_string().len()..];
+                    let msg = after.trim_start_matches(|ch: char| ch == ':' || ch.is_ascii_digit()).trim();
+                    if !msg.is_empty() && !msg.starts_with("+0x") {
+                        return Some(PyError {
+                            kind: "Go error".into(),
+                            message: msg.to_string(),
+                            file: Some(resolve_err_path(&p, cwd)),
+                            line: Some(l),
+                            col: (c > 0).then_some(c),
+                            source: "go",
+                            caret: None,
+                            code: None,
+                            hint: None,
+                            fix: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_jvm_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    let err_ix = lines.iter().rposition(|(t, _)| {
+        let s = t.trim_start();
+        s.starts_with("Exception in thread ") || s.starts_with("Caused by: ")
+    })?;
+    let raw = lines[err_ix].0.trim_start();
+    let rest = if let Some(r) = raw.strip_prefix("Caused by: ") {
+        r
+    } else if let Some(i) = raw.find("\" ") {
+        &raw[i + 2..]
+    } else {
+        raw
+    };
+    let (kind_full, msg) = match rest.find(':') {
+        Some(i) => (rest[..i].trim(), rest[i + 1..].trim()),
+        None => (rest.trim(), ""),
+    };
+    let kind = kind_full.rsplit('.').next().unwrap_or(kind_full);
+    let frames: Vec<(String, u32, u32)> = lines[err_ix + 1..]
+        .iter()
+        .take_while(|(t, _)| t.trim_start().starts_with("at "))
+        .filter_map(|(t, _)| parse_path_loc(t))
+        .collect();
+    let pick = frames.iter().find(|(p, _, _)| is_user_frame(p)).or(frames.first());
+    let file = pick.map(|(p, _, _)| resolve_err_path(p, cwd));
+    let source = file.as_deref().map(lang_from_path).unwrap_or("java");
+    Some(PyError {
+        kind: kind.to_string(),
+        message: msg.to_string(),
+        file,
+        line: pick.map(|(_, l, _)| *l),
+        col: pick.and_then(|(_, _, c)| (*c > 0).then_some(*c)),
+        source,
+        caret: None,
+        code: None,
+        hint: None,
+        fix: None,
+    })
+}
+
+fn parse_dotnet_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    let err_ix = lines.iter().position(|(t, _)| t.trim_start().starts_with("Unhandled exception"))?;
+    let raw = lines[err_ix].0.trim_start();
+    let rest = raw.strip_prefix("Unhandled exception.").or_else(|| raw.strip_prefix("Unhandled exception:")).unwrap_or(raw).trim();
+    let (kind_full, msg) = match rest.find(':') {
+        Some(i) => (rest[..i].trim(), rest[i + 1..].trim()),
+        None => (rest, ""),
+    };
+    let kind = kind_full.rsplit('.').next().unwrap_or(kind_full);
+    let pick = lines[err_ix + 1..].iter().filter_map(|(t, _)| parse_path_loc(t)).find(|(p, _, _)| is_user_frame(p));
+    Some(PyError {
+        kind: kind.to_string(),
+        message: msg.to_string(),
+        file: pick.as_ref().map(|(p, _, _)| resolve_err_path(p, cwd)),
+        line: pick.as_ref().map(|(_, l, _)| *l),
+        col: pick.as_ref().and_then(|(_, _, c)| (*c > 0).then_some(*c)),
+        source: "csharp",
+        caret: None,
+        code: None,
+        hint: None,
+        fix: None,
+    })
+}
+
+fn parse_generic_compiler_error(lines: &[(&str, LineKind)], cwd: &Path) -> Option<PyError> {
+    // PowerShell: message line followed by `At path.ps1:N char:C`
+    for (i, (t, _)) in lines.iter().enumerate() {
+        let s = t.trim_start();
+        if s.starts_with("At ") && s.contains(" char:") {
+            if let Some((p, l, c)) = parse_path_loc(s) {
+                let msg = lines[..i].iter().rev().map(|(x, _)| x.trim()).find(|x| !x.is_empty()).unwrap_or("").to_string();
+                return Some(PyError {
+                    kind: "PowerShell error".into(),
+                    message: msg,
+                    file: Some(resolve_err_path(&p, cwd)),
+                    line: Some(l),
+                    col: (c > 0).then_some(c),
+                    source: "powershell",
+                    caret: None,
+                    code: None,
+                    hint: None,
+                    fix: None,
+                });
+            }
+        }
+    }
+    // Single-line compiler or scripting errors across C/C++, C#, TS (tsc), Java, Kotlin, Zig, Dart, Swift, PHP, Ruby, Lua, Shell.
+    for (t, k) in lines {
+        let s = t.trim();
+        let Some((p, l, c)) = parse_path_loc(s) else { continue };
+        let lower = s.to_ascii_lowercase();
+        let is_err = *k == LineKind::Err
+            || lower.contains(": error")
+            || lower.contains(": fatal error")
+            || lower.contains("): error ")
+            || lower.contains(" - error ts")
+            || s.starts_with("PHP Fatal error:")
+            || s.starts_with("PHP Parse error:")
+            || s.starts_with("e: ")
+            || s.starts_with("[ERROR]");
+        if !is_err {
+            continue;
+        }
+        let file = resolve_err_path(&p, cwd);
+        let source = lang_from_path(&file);
+        let (kind, msg) = extract_compiler_kind_msg(s, source);
+        return Some(PyError {
+            kind,
+            message: msg,
+            file: Some(file),
+            line: Some(l),
+            col: (c > 0).then_some(c),
+            source,
+            caret: None,
+            code: None,
+            hint: None,
+            fix: None,
+        });
+    }
+    None
+}
+
+fn extract_compiler_kind_msg(line: &str, source: &str) -> (String, String) {
+    let lower = line.to_ascii_lowercase();
+    for marker in ["): error ", " - error ", ": fatal error:", ": error:", ": error "] {
+        if let Some(i) = lower.find(marker) {
+            let after = line[i + marker.len()..].trim();
+            // Extract compiler code like `TS2304:`, `CS1002:`, `C2065:` when present.
+            if let Some((code, rest)) = after.split_once(':') {
+                let code_t = code.trim();
+                if !code_t.is_empty() && code_t.len() <= 12 && code_t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && code_t.chars().any(|c| c.is_ascii_digit()) {
+                    return (code_t.to_string(), rest.trim().to_string());
+                }
+            }
+            return (lang_error_label(source), after.to_string());
+        }
+    }
+    if let Some(rest) = line.strip_prefix("PHP Fatal error:").or_else(|| line.strip_prefix("PHP Parse error:")) {
+        let msg = rest.split(" in ").next().unwrap_or(rest).trim();
+        return ("PHP error".into(), msg.to_string());
+    }
+    if let Some(i) = line.find(":in `").or_else(|| line.find(":in '")) {
+        if let Some(after) = line[i..].split_once(": ") {
+            return ("Ruby error".into(), after.1.trim().to_string());
+        }
+    }
+    if let Some(i) = line.find(": line ") {
+        if let Some(after) = line[i + 7..].split_once(": ") {
+            return ("Shell error".into(), after.1.trim().to_string());
+        }
+    }
+    (lang_error_label(source), line.to_string())
+}
+
+fn lang_error_label(source: &str) -> String {
+    match source {
+        "typescript" => "TypeScript error",
+        "javascript" => "JavaScript error",
+        "rust" => "Rust error",
+        "go" => "Go error",
+        "java" => "Java error",
+        "kotlin" => "Kotlin error",
+        "c/c++" => "C/C++ error",
+        "csharp" => "C# error",
+        "zig" => "Zig error",
+        "php" => "PHP error",
+        "ruby" => "Ruby error",
+        "lua" => "Lua error",
+        "dart" => "Dart error",
+        "swift" => "Swift error",
+        "shell" => "Shell error",
+        "powershell" => "PowerShell error",
+        _ => "Error",
+    }
+    .to_string()
+}
+
 pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cwd: &Path) -> Option<PyError> {
+    let has_py_frame = lines.iter().any(|(t, _)| parse_frame(t).is_some() || t.trim_start().starts_with("Traceback (most recent call last)"));
+    let first_word = command.split_whitespace().next().unwrap_or("");
+    if has_py_frame || is_python(first_word) {
+        if let Some(e) = parse_python_error(lines, python, cwd) {
+            return Some(e);
+        }
+    }
+    if let Some(e) = parse_js_error(lines, cwd)
+        .or_else(|| parse_rust_error(lines, cwd))
+        .or_else(|| parse_jvm_error(lines, cwd))
+        .or_else(|| parse_dotnet_error(lines, cwd))
+        .or_else(|| parse_go_error(lines, cwd))
+        .or_else(|| parse_generic_compiler_error(lines, cwd))
+    {
+        return Some(e);
+    }
     if let Some(e) = parse_python_error(lines, python, cwd) {
         return Some(e);
     }
@@ -779,6 +1446,8 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
         message,
         file: None,
         line: None,
+        col: None,
+        source: "runtime",
         caret: None,
         code: None,
         hint,
@@ -791,12 +1460,21 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
         let fix = near.as_ref().map(|n| command.replacen(&name, unquote(n), 1)).filter(|f| f != command);
         let hint = match &near {
             Some(n) => format!("Did you mean {}?", unquote(n)),
-            None => "Check the name with  dir *.py  or open the folder that has the script.".into(),
+            None => "Check the file path or folder and try again.".into(),
         };
-        return Some(card("File not found", format!("Python can't find '{name}' in {}", cwd.display()), Some(hint), fix));
+        return Some(card("File not found", format!("Can't find '{name}' in {}", cwd.display()), Some(hint), fix));
     }
-    if let Some((t, _)) = lines.iter().find(|(t, _)| t.contains("is not recognized as an internal or external command")) {
-        let name = t.split('\'').nth(1).unwrap_or("").to_string();
+    if let Some((t, _)) = lines.iter().find(|(t, _)| {
+        let l = t.to_ascii_lowercase();
+        l.contains("is not recognized as an internal or external command")
+            || l.contains("is not recognized as the name of a cmdlet")
+            || l.ends_with(": command not found")
+    }) {
+        let name = if let Some(n) = t.split('\'').nth(1).filter(|s| !s.is_empty()) {
+            n.to_string()
+        } else {
+            t.trim().split(':').rev().nth(1).unwrap_or("").trim().to_string()
+        };
         let near = closest(&name, KNOWN.iter().copied()).filter(|k| on_path(k) || matches!(*k, "cd" | "dir" | "cls" | "type" | "echo"));
         let fix = near.map(|n| command.replacen(&name, n, 1));
         let hint = match near {
@@ -1133,7 +1811,93 @@ mod tests {
     #[test]
     fn tab_completion() {
         let d = tmp();
-        assert_eq!(complete("py ap", &d).0.as_deref(), Some("py app.py "));
-        assert_eq!(complete("cd ik", &d).0.as_deref(), Some(format!("cd ikon{}", if cfg!(windows) { "\\" } else { "/" }).as_str()));
+        assert!(complete_candidates("", &d).is_empty());
+        assert!(complete_candidates("   ", &d).is_empty());
+        assert_eq!(complete_candidates("py ap", &d), vec!["py app.py "]);
+        let sep = if cfg!(windows) { "\\" } else { "/" };
+        assert_eq!(complete_candidates("cd ik", &d), vec![format!("cd ikon{sep}")]);
+        assert_eq!(complete_candidates("cd ", &d), vec![format!("cd ikon{sep}")]);
+    }
+
+    #[test]
+    fn multilang_path_loc_and_errors() {
+        let d = tmp();
+        assert_eq!(parse_path_loc("    at loadUser (C:\\proj\\src\\auth.ts:42:13)"), Some(("C:\\proj\\src\\auth.ts".into(), 42, 13)));
+        assert_eq!(parse_path_loc("    at file:///C:/proj/index.mjs:18:7"), Some(("C:/proj/index.mjs".into(), 18, 7)));
+        assert_eq!(parse_path_loc("    at com.example.App.main(App.java:19)"), Some(("App.java".into(), 19, 0)));
+        assert_eq!(parse_path_loc("thread 'main' panicked at src/engine.rs:104:9:"), Some(("src/engine.rs".into(), 104, 9)));
+        assert_eq!(parse_path_loc("PHP Parse error: syntax error in C:\\site\\app.php on line 22"), Some(("C:\\site\\app.php".into(), 22, 0)));
+        assert_eq!(parse_path_loc("   at App.Program.Main() in C:\\app\\Program.cs:line 19"), Some(("C:\\app\\Program.cs".into(), 19, 0)));
+        assert_eq!(parse_path_loc("./deploy.sh: line 14: foo: command not found"), Some(("./deploy.sh".into(), 14, 0)));
+        assert_eq!(parse_path_loc("At C:\\scripts\\build.ps1:9 char:4"), Some(("C:\\scripts\\build.ps1".into(), 9, 4)));
+        assert_eq!(parse_path_loc("https://example.com:8080/api.json:10"), None);
+        assert_eq!(parse_path_loc("    at node:internal/modules/cjs/loader:1148:14"), None);
+
+        let js = [
+            ("C:\\proj\\app.js:12", LineKind::Normal),
+            ("console.log(foo);", LineKind::Normal),
+            ("            ^", LineKind::Normal),
+            ("ReferenceError: foo is not defined", LineKind::Err),
+            ("    at Object.<anonymous> (C:\\proj\\app.js:12:13)", LineKind::Frame),
+        ];
+        let e = parse_problem(&js, "node app.js", "py", &d).unwrap();
+        assert_eq!(e.kind, "ReferenceError");
+        assert_eq!(e.source, "javascript");
+        assert_eq!(e.line, Some(12));
+        assert_eq!(e.col, Some(13));
+        assert_eq!(e.code.as_deref(), Some("console.log(foo);"));
+
+        let js_mod = [
+            ("Error: Cannot find module 'express'", LineKind::Err),
+            ("    at Function.Module._resolveFilename (node:internal/modules/cjs/loader:1148:15)", LineKind::Frame),
+            ("    at Object.<anonymous> (C:\\proj\\server.js:1:17)", LineKind::Frame),
+        ];
+        let e = parse_problem(&js_mod, "node server.js", "py", &d).unwrap();
+        assert_eq!(e.fix.as_deref(), Some("npm install express"));
+        assert_eq!(e.line, Some(1));
+
+        let rust = [
+            ("error[E0308]: mismatched types", LineKind::Err),
+            (" --> src/main.rs:42:9", LineKind::Frame),
+            ("42 |     let x: u32 = \"hi\";", LineKind::Normal),
+        ];
+        let e = parse_problem(&rust, "cargo build", "py", &d).unwrap();
+        assert_eq!(e.kind, "E0308");
+        assert_eq!(e.source, "rust");
+        assert_eq!(e.line, Some(42));
+        assert_eq!(e.col, Some(9));
+
+        let go = [("./main.go:24:12: undefined: foo", LineKind::Err)];
+        let e = parse_problem(&go, "go run main.go", "py", &d).unwrap();
+        assert_eq!(e.source, "go");
+        assert_eq!(e.line, Some(24));
+        assert_eq!(e.col, Some(12));
+
+        let tsc = [("src/app.ts(15,8): error TS2304: Cannot find name 'bar'.", LineKind::Err)];
+        let e = parse_problem(&tsc, "npx tsc", "py", &d).unwrap();
+        assert_eq!(e.kind, "TS2304");
+        assert_eq!(e.source, "typescript");
+        assert_eq!(e.line, Some(15));
+        assert_eq!(e.col, Some(8));
+
+        let java = [
+            ("Exception in thread \"main\" java.lang.NullPointerException: boom", LineKind::Err),
+            ("    at com.example.App.main(App.java:19)", LineKind::Frame),
+        ];
+        let e = parse_problem(&java, "java App", "py", &d).unwrap();
+        assert_eq!(e.kind, "NullPointerException");
+        assert_eq!(e.source, "java");
+        assert_eq!(e.line, Some(19));
+
+        let php = [("PHP Parse error: syntax error in C:\\site\\app.php on line 22", LineKind::Err)];
+        let e = parse_problem(&php, "php app.php", "py", &d).unwrap();
+        assert_eq!(e.source, "php");
+        assert_eq!(e.line, Some(22));
+
+        let zig = [("src/main.zig:14:9: error: expected type 'u32'", LineKind::Err)];
+        let e = parse_problem(&zig, "zig build", "py", &d).unwrap();
+        assert_eq!(e.source, "zig");
+        assert_eq!(e.line, Some(14));
+        assert_eq!(e.col, Some(9));
     }
 }

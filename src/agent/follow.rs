@@ -38,7 +38,6 @@ impl Workbench {
         }
         self.agent_finish_replay(window, cx);
         let Ok(f) = core::read_text(&p) else { return };
-        self.collab_mark_ai(&p);
         let open = self.docs.iter().position(|d| d.path == p);
         let before = match open {
             Some(ix) if self.docs[ix].dirty || self.docs[ix].image.is_some() => return,
@@ -68,7 +67,6 @@ impl Workbench {
                 s.set_cursor_position(Position::new(line, 0), window, cx);
             });
             self.docs[ix].crlf = f.crlf;
-            self.collab_on_path(&p, cx);
             return;
         }
         self.docs[ix].crlf = f.crlf;
@@ -117,7 +115,6 @@ impl Workbench {
                 });
             }
         }
-        self.collab_on_path(&p, cx);
         cx.notify();
     }
 }

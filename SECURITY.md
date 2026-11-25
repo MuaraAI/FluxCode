@@ -40,8 +40,7 @@ people's machines, accounts, or data.
 
 ## Scope
 
-Reports in scope cover the FluxCode app, its updater, the live share relay
-code in `relay/`, and the build and packaging scripts. Dependency problems are
+Reports in scope cover the FluxCode app, its updater, and the build and packaging scripts. Dependency problems are
 already checked with cargo-deny against the RustSec advisory database, as
 described in [CONTRIBUTING.md](CONTRIBUTING.md), but a report about one is
 still welcome.

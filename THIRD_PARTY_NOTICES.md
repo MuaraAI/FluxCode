@@ -15,6 +15,6 @@ compatible with the GPL v3.
 | Microsoft Edge WebView2 Loader (only with the optional `embedded-preview` feature, off by default) | Microsoft WebView2 SDK license | In-window web preview |
 
 Not bundled, used when installed on the machine:
-[OpenCode](https://opencode.ai) (MIT) and Mura, over the
+[OpenCode](https://opencode.ai) (MIT) and other agents over the
 [Agent Client Protocol](https://agentclientprotocol.com); `git`; `curl` (update
 check, GitHub sign-in); the GitHub CLI `gh` (pull requests, Actions).

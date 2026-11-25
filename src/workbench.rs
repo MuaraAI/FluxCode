@@ -40,7 +40,7 @@ actions!(
         NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentUseMura, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
+        AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose,
         AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
@@ -178,7 +178,7 @@ pub(crate) struct Line {
     pub open: bool,
     pub err: bool,
     pub meta: SharedString,
-    pub link: Option<(SharedString, u32)>,
+    pub link: Option<(SharedString, u32, u32)>,
     pub run: Option<SharedString>,
 }
 
@@ -195,6 +195,7 @@ pub(crate) struct Doc {
     pub lang: &'static str,
     pub label: &'static str,
     pub read_only: bool,
+    pub nbt_format: Option<crate::nbt::NbtFormat>,
     pub banner: Option<SharedString>,
     pub crlf: bool,
     pub editor: Option<Entity<EditorState>>,
@@ -237,6 +238,7 @@ impl Doc {
             lang,
             label,
             read_only: is_img,
+            nbt_format: None,
             banner: None,
             crlf: false,
             editor: None,
@@ -271,7 +273,10 @@ impl Doc {
         match (&self.flux, self.flux_lazy, &self.editor) {
             (Some(v), true, _) => v.source(),
             (_, _, Some(ed)) => ed.read(cx).value().to_string(),
-            (_, _, None) => core::read_text(&self.path).map(|f| f.text).unwrap_or_default(),
+            (_, _, None) => core::read_text(&self.path)
+                .map(|f| f.text)
+                .or_else(|_| crate::nbt::decode_path(&self.path).map(|d| d.snbt).ok_or(()))
+                .unwrap_or_default(),
         }
     }
 
@@ -342,7 +347,6 @@ pub struct Workbench {
     pub(crate) nav_forward: Vec<NavTarget>,
     pub(crate) nav_replaying: bool,
     pub(crate) nav_suppress_path: Option<PathBuf>,
-    pub(crate) collab: crate::collab::Collab,
     pub(crate) wiztree: crate::wiztree::WizTreeState,
     pub(crate) ctx_target: Rc<RefCell<Option<PathBuf>>>,
     pub(crate) selected: Option<PathBuf>,
@@ -476,8 +480,14 @@ impl Workbench {
                 match ev {
                     InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
                     InputEvent::Change => {
-                        let typed = !this.term_input.read(cx).value().is_empty();
+                        let val = this.term_input.read(cx).value();
+                        let typed = !val.is_empty();
                         let ix = this.term_ix;
+                        if let Some(cycle) = &this.terms[ix].tab_cycle {
+                            if cycle.items.get(cycle.ix).map(String::as_str) != Some(val.as_ref()) {
+                                this.terms[ix].tab_cycle = None;
+                            }
+                        }
                         if typed != this.terms[ix].typed {
                             this.terms[ix].typed = typed;
                             cx.notify();
@@ -584,7 +594,6 @@ impl Workbench {
             last_switch: None,
             switch_fast: false,
             session_save_pending: false,
-            collab: crate::collab::Collab::new(window, cx),
             wiztree: crate::wiztree::WizTreeState::new(window, cx),
             ctx_target: Rc::new(RefCell::new(None)),
             selected: None,
@@ -902,7 +911,6 @@ impl Workbench {
         self.ext.page = None;
         self.settings_open = false;
         self.whats_new = None;
-        self.collab.page = false;
         self.wiztree.page = false;
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
@@ -959,7 +967,6 @@ impl Workbench {
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
-                this.collab_on_change(&editor, cx);
                 if let Some(d) = this.docs.iter_mut().find(|d| d.editor.as_ref() == Some(&editor) && !d.read_only) {
                     d.dirty = true;
                     d.gen += 1;
@@ -1069,6 +1076,7 @@ impl Workbench {
             lang: prep.lang,
             label: prep.label,
             read_only: prep.read_only,
+            nbt_format: prep.nbt_format,
             banner,
             crlf: prep.crlf,
             editor: Some(built.editor),
@@ -1174,6 +1182,7 @@ impl Workbench {
         d.lang = prep.lang;
         d.label = prep.label;
         d.read_only = prep.read_only;
+        d.nbt_format = prep.nbt_format;
         d.banner = prep.banner.map(SharedString::from);
         d.crlf = prep.crlf;
         d.editor = Some(built.editor);
@@ -1221,8 +1230,7 @@ impl Workbench {
                     || d.dirty
                     || d.image.is_some()
                     || d.loading
-                    || d.flux.as_ref().is_some_and(|f| f.pending)
-                    || self.collab.docs.values().any(|c| c.path == d.path);
+                    || d.flux.as_ref().is_some_and(|f| f.pending);
                 (i, pinned, d.last_used)
             })
             .collect();
@@ -1258,6 +1266,7 @@ impl Workbench {
             lang: "image",
             label: "Image",
             read_only: true,
+            nbt_format: None,
             banner: None,
             crlf: false,
             editor: None,
@@ -1563,7 +1572,6 @@ impl Workbench {
         self.settings_open = false;
         self.ext.page = None;
         self.whats_new = None;
-        self.collab.page = false;
         self.wiztree.page = false;
         if let Some(ln) = line {
             self.open_location(path.clone(), ln, 0, window, cx);
@@ -1635,7 +1643,6 @@ impl Workbench {
         match target {
             NavTarget::WizTree => {
                 self.settings_open = false;
-                self.collab.page = false;
                 self.ext.page = None;
                 self.whats_new = None;
                 self.agent_full = false;
@@ -1730,7 +1737,7 @@ impl Workbench {
         let Some(ed) = self.docs[ix].editor.as_ref() else {
             return true;
         };
-        let (text, path, crlf, gen, name) = {
+        let (text, path, crlf, gen, name, nbt_format) = {
             let doc = &self.docs[ix];
             (
                 ed.read(cx).value(),
@@ -1738,8 +1745,19 @@ impl Workbench {
                 doc.crlf,
                 doc.gen,
                 doc.name.clone(),
+                doc.nbt_format,
             )
         };
+        if let Some(fmt) = nbt_format {
+            let r = crate::nbt::encode_file(&text, fmt).and_then(|bytes| match &self.wsl {
+                Some(t) => match remote_write(t, &path, &bytes, false) {
+                    Some(()) => Ok(()),
+                    None => core::write_bytes(&path, &bytes),
+                },
+                None => core::write_bytes(&path, &bytes),
+            });
+            return self.finish_save(&path, gen, name, r, cx);
+        }
         if text.len() as u64 > SAVE_OFF_THREAD_BYTES {
             let wsl = self.wsl.clone();
             cx.spawn(async move |this, cx| {
@@ -2088,7 +2106,7 @@ impl Workbench {
         h.focus(window, cx);
     }
 
-    fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_right {
             self.right_view = SideView::Agent;
             self.settings_open = false;
@@ -2626,24 +2644,7 @@ impl Workbench {
             .child(view_item("ab-ext", Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
             .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .child({
-                let live = self.collab.active();
-                let active = self.collab.page && !self.settings_open;
-                div()
-                    .id("ab-collab-page")
-                    .relative()
-                    .child(item("ab-collab", Icon::new(gpui_kit::assets::IconName::Users), active, self, cx))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.collab.page = !(this.collab.page && !this.settings_open);
-                        this.settings_open = false;
-                        this.wiztree.page = false;
-                        cx.notify();
-                    }))
-                    .when(live, |d| {
-                    d.child(div().absolute().right(theme::u(9.)).bottom(theme::u(9.)).size(theme::u(7.)).rounded_full().bg(c(theme::GREEN)))
-                })
-            })
-            .child({
-                let active = self.wiztree.page && !self.settings_open && !self.collab.page;
+                let active = self.wiztree.page && !self.settings_open;
                 div()
                     .id("ab-wiztree-page")
                     .relative()
@@ -3275,9 +3276,6 @@ impl Workbench {
         if self.settings_open {
             return self.render_settings(window, cx);
         }
-        if self.collab.page {
-            return self.render_collab_page(cx);
-        }
         if self.wiztree.page {
             return self.render_wiztree(window, cx);
         }
@@ -3870,9 +3868,11 @@ pub(crate) fn push_text(lines: &mut Vec<Line>, text: &str, err: bool) {
         let l = &mut lines[n - 1];
         l.kind = crate::term::classify(&l.text, l.err, prev);
         l.link = match l.kind {
-            LineKind::Frame => crate::term::parse_frame(&l.text).map(|(p, n, _)| (p.into(), n)),
-            LineKind::Warn | LineKind::Err => crate::term::parse_path_line(&l.text).map(|(p, n)| (p.into(), n)),
-            _ => None,
+            LineKind::Frame => crate::term::parse_frame(&l.text)
+                .map(|(p, n, _)| (p.into(), n, 0))
+                .or_else(|| crate::term::parse_path_loc(&l.text).map(|(p, n, c)| (p.into(), n, c))),
+            LineKind::Blank | LineKind::Cmd | LineKind::Status | LineKind::Fixed => None,
+            _ => crate::term::parse_path_loc(&l.text).map(|(p, n, c)| (p.into(), n, c)),
         };
         if !last_piece {
             close_line(lines);
@@ -3931,7 +3931,6 @@ impl Render for Workbench {
         if !self.agent.ask_clear.is_empty() {
             self.apply_ask_clear(window, cx);
         }
-        self.collab_cursor(cx);
         if self.scm.clear_message {
             self.scm.clear_message = false;
             self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));
@@ -4231,7 +4230,6 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_quick_up))
             .on_action(cx.listener(Self::on_quick_down))
             .on_action(cx.listener(Self::on_agent_use_opencode))
-                        .on_action(cx.listener(Self::on_agent_use_mura))
             .on_action(cx.listener(Self::on_agent_mention_up))
             .on_action(cx.listener(Self::on_agent_mention_down))
             .on_action(cx.listener(Self::on_agent_mention_accept))
@@ -4388,6 +4386,7 @@ struct PreparedFile {
     label: &'static str,
     banner: Option<String>,
     read_only: bool,
+    nbt_format: Option<crate::nbt::NbtFormat>,
     large: bool,
     complex: bool,
     long_lines: bool,
@@ -4398,11 +4397,14 @@ struct PreparedFile {
 }
 
 fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
-    let view = crate::viewer::view(path, &bytes);
+    let nbt = crate::nbt::decode_file(path, &bytes);
+    let view = if nbt.is_none() { crate::viewer::view(path, &bytes) } else { None };
     let read_only = view.is_some();
-    let (text, crlf, mut lang, mut label, banner) = match view {
-        Some(v) => (v.text, false, v.lang, v.label, Some(v.banner)),
-        None => {
+    let nbt_format = nbt.as_ref().map(|d| d.format);
+    let (text, crlf, mut lang, mut label, banner) = match (nbt, view) {
+        (Some(d), _) => (d.snbt, false, "javascript", d.label, Some(d.banner)),
+        (None, Some(v)) => (v.text, false, v.lang, v.label, Some(v.banner)),
+        (None, None) => {
             let file = core::decode_text(&bytes);
             let first = file.text.lines().next().unwrap_or("");
             let (lang, label) = files::language_for(path, first);
@@ -4411,13 +4413,13 @@ fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
     };
     let stats = crate::accel::scan_file_stats(text.as_bytes(), 300);
     let large = text.len() > LARGE_FILE_BYTES;
-    let very_complex = !read_only && stats.max_line > MAX_COMPLEX_LINE_BYTES;
+    let very_complex = !read_only && nbt_format.is_none() && stats.max_line > MAX_COMPLEX_LINE_BYTES;
     let complex = !read_only && (large || very_complex);
     if complex {
         lang = "text";
         label = "Plain Text";
     }
-    let drawable = if read_only { None } else { crate::fluxdoc::view::drawable_kind(path) };
+    let drawable = if read_only || nbt_format.is_some() { None } else { crate::fluxdoc::view::drawable_kind(path) };
     let is_markdown = drawable == Some(true);
     let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
     let (file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
@@ -4435,6 +4437,7 @@ fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
         label,
         banner,
         read_only,
+        nbt_format,
         large,
         complex,
         long_lines,

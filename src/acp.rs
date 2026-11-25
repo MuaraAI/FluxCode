@@ -17,7 +17,6 @@ pub struct Known {
 }
 
 pub const KNOWN: &[Known] = &[
-    Known { id: "mura", name: "Mura", by: "MuaraAI", path: &[("mura", &["acp"])] },
     Known { id: "opencode-v2", name: "OpenCode 2", by: "Anomaly · open source", path: &[] },
     Known { id: "claude-acp", name: "Claude Agent", by: "Anthropic", path: &[("claude-agent-acp", &[]), ("claude-code-acp", &[])] },
     Known { id: "codex-acp", name: "Codex", by: "OpenAI", path: &[("codex-acp", &[])] },
@@ -50,7 +49,6 @@ pub enum Place {
 pub fn instruction_files(id: &str) -> &'static [Place] {
     use Place::*;
     match id {
-        "mura" => &[Project("MURA.md"), Project("AGENTS.md")],
         "opencode" | "opencode-v2" => &[Home(".config/opencode/AGENTS.md"), Project("AGENTS.md")],
         "claude-acp" => &[Home(".claude/CLAUDE.md"), Project("CLAUDE.md")],
         "codex-acp" => &[Home(".codex/AGENTS.md"), Project("AGENTS.md")],
@@ -69,10 +67,6 @@ pub fn known(id: &str) -> Option<&'static Known> {
 
 pub fn recommended(id: &str) -> bool {
     matches!(id, "opencode-v2" | "opencode" | "commandcode" | "claude-acp")
-}
-
-pub fn experimental(id: &str) -> bool {
-    id == "mura"
 }
 
 pub struct FlagOpt {
@@ -369,7 +363,7 @@ pub fn installed() -> Vec<String> {
         let mut extra: Vec<String> = rd
             .flatten()
             .filter_map(|e| e.file_name().to_str().map(String::from))
-            .filter(|id| known(id).is_none() && locate(id).is_some())
+            .filter(|id| !hidden(id) && known(id).is_none() && locate(id).is_some())
             .collect();
         extra.sort();
         ids.extend(extra);
@@ -392,9 +386,6 @@ fn find(id: &str) -> Option<Launch> {
         }
     }
     let k = known(id)?;
-    if id == "mura" {
-        return crate::agent::find_mura().map(|cmd| Launch { cmd, args: vec!["acp".into()], ..Default::default() });
-    }
     if id == "opencode" {
         return crate::agent::find_opencode().map(|cmd| Launch { cmd, args: vec!["acp".into()], ..Default::default() });
     }
@@ -634,7 +625,7 @@ pub fn is_opencode(id: &str) -> bool {
 }
 
 pub fn hidden(id: &str) -> bool {
-    id == "opencode"
+    matches!(id, "opencode" | "mura")
 }
 
 pub fn display_name(id: &str) -> String {

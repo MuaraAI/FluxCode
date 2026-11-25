@@ -1987,7 +1987,7 @@ impl Workbench {
             if sec == SettingsSection::Appearance && matches_query(query, &["theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky", tr("Theme"), tr("Color theme")]) {
                 rows.insert(0, self.theme_setting_entry(compact, cx).render(compact));
             }
-            if sec == SettingsSection::SoulFiles && matches_query(query, &[sec.title(), tr(sec.title()), sec.description(), tr(sec.description()), "claude codex mura opencode gemini soul"]) {
+            if sec == SettingsSection::SoulFiles && matches_query(query, &[sec.title(), tr(sec.title()), sec.description(), tr(sec.description()), "claude codex opencode gemini soul"]) {
                 rows.push(div().p_4().child(self.render_soul_files(cx)).into_any_element());
             }
             if sec == SettingsSection::About && matches_query(query, &[sec.title(), tr(sec.title()), "version license github engine rust zig simd", crate::update::BUILD]) {
@@ -2077,9 +2077,6 @@ impl Workbench {
         let mut list = v_flex().w_full().max_w(theme::u(760.));
         for id in installed {
             let mut files = v_flex().gap_1();
-            if id == "mura" {
-                files = files.child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Mura's character is built into the program. It follows these project files:")));
-            }
             for (k, place) in crate::acp::instruction_files(&id).iter().enumerate() {
                 let (label, path) = match *place {
                     crate::acp::Place::Home(rel) => (format!("~/{rel}"), home.as_ref().map(|h| rel.split('/').fold(h.clone(), |p, s| p.join(s)))),

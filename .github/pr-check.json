@@ -33,10 +33,8 @@
     "vendor/",
     "packaging/",
     "tools/",
-    "relay/",
     "src/update.rs",
     "src/proc.rs",
-    "src/collab/",
     "extensions/",
     ".gitattributes"
   ],
@@ -47,8 +45,7 @@
     "build.rs",
     "rust-toolchain",
     "rust-toolchain.toml",
-    "packaging/",
-    "relay/"
+    "packaging/"
   ],
 
   "known_domains": [

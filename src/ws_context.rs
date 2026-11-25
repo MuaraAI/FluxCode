@@ -176,6 +176,9 @@ pub fn project_kinds(root: &Path) -> Vec<String> {
     if has("server.properties") {
         out.push("Minecraft server folder (server.properties)".into());
     }
+    if let Some(world) = crate::nbt::bedrock_world_summary(root) {
+        out.push(world);
+    }
     if let Some(t) = read_small(&root.join("Makefile")) {
         let targets: Vec<String> = t
             .lines()
@@ -316,6 +319,7 @@ pub struct Inputs<'a> {
     pub git: Option<&'a RepoStatus>,
     pub tabs: Vec<String>,
     pub python: Option<&'a str>,
+    pub wiztree: Option<&'a crate::wiztree::DiskTree>,
 }
 
 pub fn overview(i: &Inputs) -> String {
@@ -357,6 +361,9 @@ pub fn overview(i: &Inputs) -> String {
     if !i.tabs.is_empty() {
         let _ = writeln!(s, "Open in the editor: {}", first_n(i.tabs.clone(), 12));
     }
+    if let Some(wt) = i.wiztree {
+        let _ = writeln!(s, "\n{}", wt.ai_summary(0, 1500));
+    }
     if s.len() > MAX_CHARS {
         let cut = (0..=MAX_CHARS).rev().find(|&c| s.is_char_boundary(c)).unwrap_or(0);
         s.truncate(cut);
@@ -373,6 +380,10 @@ pub fn signature(i: &Inputs) -> u64 {
     if let Some(g) = i.git {
         g.branch.hash(&mut h);
         g.count().hash(&mut h);
+    }
+    if let Some(wt) = i.wiztree {
+        wt.total_size().hash(&mut h);
+        wt.total_files().hash(&mut h);
     }
     h.finish()
 }
@@ -394,7 +405,7 @@ mod tests {
         assert!(kinds.iter().any(|k| k == "Python requirements.txt: flask, requests"), "{kinds:?}");
         let files = vec![dir.join("src").join("app.py").to_string_lossy().into_owned(), dir.join("package.json").to_string_lossy().into_owned()];
         let roots = vec![dir.clone()];
-        let o = overview(&Inputs { roots: &roots, files: &files, git: None, tabs: vec!["src\\app.py (active, line 3)".into()], python: None });
+        let o = overview(&Inputs { roots: &roots, files: &files, git: None, tabs: vec!["src\\app.py (active, line 3)".into()], python: None, wiztree: None });
         assert!(o.contains("README: Kopi Aplikasi kasir kopi."), "{o}");
         assert!(o.contains("folders: src/ (1)"), "{o}");
         assert!(o.contains("    src/: app.py\n"), "{o}");

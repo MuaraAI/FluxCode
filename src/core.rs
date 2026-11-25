@@ -49,11 +49,15 @@ pub fn dominated_by_long_lines(text: &str) -> bool {
 
 pub fn write_text(path: &Path, text: &str, crlf: bool) -> Result<(), String> {
     let data = if crlf { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
+    write_bytes(path, data.as_bytes())
+}
+
+pub fn write_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
     let tmp = path.with_file_name(format!(
         ".{}.fluxcode-tmp",
         path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
     ));
-    fs::write(&tmp, data.as_bytes()).map_err(|e| e.to_string())?;
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()

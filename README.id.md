@@ -196,62 +196,6 @@ dan memberi tahu apakah animasinya ringan atau berat untuk perangkatmu.
   sekarang: ramah bagi pemula lewat setup satu klik dan mode aman baca-saja, sekaligus
   lengkap bagi engineer senior dengan kustomisasi penuh.
 
-## Live share
-
-Ngoding bersama secara real time, dengan PC-mu sebagai servernya. Ikon orang di activity
-bar membuka halaman Live share di area editor: kartunya tersusun dua per baris di jendela
-lebar dan bertumpuk satu per satu di jendela sempit.
-
-1. Host membuka folder, menekan **Start hosting**, lalu mengirim kode undangan
-   (`FLUX1-...`) ke yang lain, lewat chat atau email.
-2. Tiap tamu menempelkan kodenya dan menekan **Join**, entah ke klon repositori yang sama
-   miliknya sendiri atau ke folder baru yang terisi saat file dibuka.
-3. Semua orang mengetik di file yang sama sekaligus. PC host yang menentukan urutan
-   perubahan (operational transformation), jadi teks di semua sisi berakhir sama.
-
-Panel mendaftar siapa saja yang ada di sesi (dengan nama GitHub kalau sudah masuk) beserta
-file dan baris tempat masing-masing berada. Daftar aktivitasnya menampilkan perubahan tiap
-orang dengan jumlah baris yang ditambah dan dihapus serta diff-nya; perubahan dari agent AI
-membawa label **AI** berisi agent, model, effort, dan mode yang dipakai, jadi kelihatan
-model mana yang menulis apa.
-
-Perubahan mengalir antara PC host dan tiap tamu, dienkripsi ChaCha20-Poly1305 dengan
-rahasia dari kode undangan; tidak ada server kami yang terlibat, dan tidak ada yang perlu
-VPN atau server sewaan. Saat hosting dimulai, FluxCode membuka setiap jalur masuk yang
-bisa, dan panel menampilkan tiap jalur, alamatnya, atau alasan kenapa tidak terbuka:
-
-| Jalur masuk | Siapa yang bisa memakai | Syaratnya |
-| --- | --- | --- |
-| Jaringan yang sama | siapa pun di Wi-Fi atau LAN host | tidak ada (Windows sekali bertanya untuk mengizinkan FluxCode lewat firewall) |
-| Port router (UPnP) | siapa pun di internet | router dengan UPnP aktif, seperti yang dipakai server game; tidak mungkin kalau provider membagi satu alamat publik ke banyak pelanggan (carrier-grade NAT), dan panel mendeteksi serta menjelaskannya |
-| IPv6 publik | tamu yang punya IPv6 | alamat IPv6 dari provider, dan router yang mengizinkan koneksi masuk |
-| Relay MuaraAI | siapa pun di internet | tidak ada: jalan di balik router apa pun dan carrier-grade NAT. Berubah jadi Relay publik kalau cadangan di bawah yang membawa sesi |
-
-Kode undangan memuat semua alamat yang terbuka. Tamu mencobanya sekaligus, jaringan yang
-sama lebih dulu, dan memakai host pertama yang membuktikan bahwa ia memegang rahasia kode
-tersebut.
-Relay-nya adalah tunnel TCP yang dijalankan MuaraAI: yang lewat sudah terenkripsi, jadi
-relay tahu ada dua PC yang sedang bicara, tapi tidak tahu isinya. Sedikit mengurangi
-kecepatan (tiap ketikan menempuh perjalanan ke `live.muaraai.com` dan kembali). Kalau
-relay MuaraAI tidak bisa dihubungi, FluxCode beralih ke tunnel publik
-[bore.pub](https://github.com/ekzhang/bore) dan panel mengubah barisnya menjadi
-**Relay publik**, jadi kelihatan mana yang membawa sesi. Menghapus centang **Let people
-join over the internet** sebelum hosting membuat sesi hanya di jaringan lokal. Port router
-ditutup kembali saat sesi berakhir.
-
-Menjalankan relay sendiri cukup satu perintah di VPS: lihat
-[`relay/README.md`](relay/README.md).
-
-- Hanya file yang sedang dibuka seseorang yang dikirim, jadi proyek besar (game, proyek
-  Laravel atau Android) hanya sebesar file yang sedang dikerjakan. File di atas 16 MB tidak
-  dibagikan. File environment, kunci privat, dan folder build seperti `node_modules` atau
-  `target` tidak pernah dibagikan, walau tamu memintanya dengan nama yang tepat.
-- Tamu tidak bisa membanjiri host: join dan open dibatasi lajunya, perubahan dihitung
-  sebesar yang diubah, dan jumlah tamu dibatasi.
-- Belum ada: kursor orang lain yang digambar di dalam editor (panel hanya menunjukkan
-  barisnya), undo terpisah per orang (`Ctrl+Z` bisa membatalkan perubahan orang lain di
-  layarmu), dan sinkronisasi file yang diubah agent tanpa file itu dibuka.
-
 ## Extension dan FluxCompile
 
 Tampilan Extensions (`Ctrl+Shift+X`) adalah VS Code Marketplace: seluruhnya, dimuat per
@@ -324,8 +268,7 @@ di atasnya.
 - Workspace multi-root: tarik folder ke jendela untuk menambahkannya atau berpindah ke
   situ.
 - Panel agent (`Ctrl+L`) menjalankan agent apa pun di [registri ACP](https://agentclientprotocol.com),
-  seperti OpenCode 2, Claude Agent, Codex, Gemini CLI, GitHub Copilot, atau Mura dari
-  MuaraAI. Agent yang belum ada di PC-mu punya tombol unduh di menu agent (lengkap dengan
+  seperti OpenCode 2, Claude Agent, Codex, Gemini CLI, atau GitHub Copilot. Agent yang belum ada di PC-mu punya tombol unduh di menu agent (lengkap dengan
   ikonnya sendiri dari registri); FluxCode menaruhnya di `~/.fluxcode/agents` (termasuk
   paket npm, tidak ke npm global-mu) dan hanya menjalankannya selama panel dipakai. Model,
   effort, mode, dan izin berupa tombol di bawah kotak pesan; masing-masing membuka daftar
@@ -406,6 +349,16 @@ di atasnya.
 - **Limit pemakaian tercapai.** Banner di atas kotak pesan menunjukkan kapan limit reset.
   Continue now mengirim ulang pesan yang terpotong; Resume at reset melakukannya sendiri
   setelah jendela limitnya reset.
+- **Penggunaan Disk (WizTree) untuk agent AI.** Penganalisis pohon disk dan treemap
+  bawaan berbasis Rust yang menyuplai ringkasan struktur folder (terbesar, terkecil, titik
+  boros, ekstensi, dan file terbesar) langsung ke agent lewat `@wiztree`, **Tanya Agent**,
+  atau `fluxcode --wiztree`, sehingga agent paham kondisi penyimpanan tanpa memindai manual.
+- **Data Minecraft Bedrock.** Buka dan edit file biner `level.dat`, `level.dat_old`,
+  `.mcstructure`, dan `.nbt` sebagai SNBT bersih dengan penyimpanan biner lossless, plus
+  inspeksi baca-saja untuk LevelDB `db/*.log` dan `db/*.ldb`.
+- **Terminal multibahasa.** Membaca error dan stack trace lintas Python, JavaScript,
+  TypeScript, Rust, Go, Java, Kotlin, C/C++, C#, Zig, PHP, Ruby, Lua, Dart, Swift, Shell,
+  dan PowerShell dengan klik langsung ke file:baris:kolom dan cycling Tab inline.
 - **Liquid glass dan latar beranimasi.** Panel bisa menjadi tembus pandang di atas blur
   sistem, dengan kartu kaca yang melayang. Dua belas latar beranimasi bergerak di
   belakangnya, digambar langsung dengan warna tema (tanpa video dan tanpa unduhan). Secara
@@ -438,8 +391,7 @@ bisa dipasang tetapi kodenya tidak berjalan.
 | Debugger | belum ada (hanya Run) | ada | ada |
 | Extension | VS Code Marketplace untuk dijelajah dan dipasang (kodenya tidak berjalan), plus 11 manifest proyek bawaan | ada | katalog terbesar |
 | Agent AI | agent ACP apa pun, tiga tingkat akses, perubahan per giliran dengan undo | agent sendiri dan agent ACP | GitHub Copilot dan extension |
-| File yang bukan teks | hex, PDF, Office, ZIP, SQLite (baca-saja) | gambar | gambar; lebih banyak lewat extension |
-| Kolaborasi real-time | bawaan, lewat PC host (tanpa akun atau server) | bawaan, lewat server Zed | extension Live Share, lewat server Microsoft |
+| File yang bukan teks | hex, PDF, Office, ZIP, SQLite, LevelDB (baca-saja); NBT Bedrock/Java (bisa diedit) | gambar | gambar; lebih banyak lewat extension |
 | Pengembangan jarak jauh | WSL2 (Windows) | SSH | SSH, container, WSL |
 | Bahasa antarmuka | Inggris, Bahasa Indonesia | Inggris | banyak, lewat language pack |
 | Kematangan | build pengembangan | rilis stabil | stabil, dipakai luas |
@@ -479,11 +431,7 @@ machine ID, atau cookie, saat start dan tiap 6 jam (Settings > Updates mematikan
 Sisanya keluar hanya saat kamu memulainya: agent yang kamu jalankan, `git`, GitHub saat
 kamu masuk, dan `changelog.flux` build baru saat kamu menekan What's new di kartu update.
 Menu agent membaca daftar agent ACP publik dari cdn.agentclientprotocol.com, paling banyak
-sekali sehari dan hanya saat menu itu dibuka. Menjalankan sesi Live share meminta routermu
-membuka portnya (UPnP) dan membuka tunnel di `live.muaraai.com`, kecuali kamu menghapus
-centang **Let people join over the internet**; relay lalu melihat alamat IP publikmu dan
-byte terenkripsi. Kalau `live.muaraai.com` tidak bisa dihubungi, FluxCode beralih ke tunnel
-publik bore.pub, yang melihat dua hal yang sama.
+sekali sehari dan hanya saat menu itu dibuka.
 Saat agent pertama kali dijalankan, FluxCode memasang alat browser untuk agent
 (chrome-devtools-mcp) dari registri npm; Agent settings > Browser > Off melewatinya.
 Extension tidak mengunduh apa pun sendiri: Add Gradle wrapper menanyakan versi terbaru ke
@@ -580,7 +528,7 @@ lengkap dan detail teknisnya ada di [ROADMAP.md](ROADMAP.md)):
 
 | Fase | Target | Fokus |
 | --- | --- | --- |
-| **Fondasi** | Rilis (2026) | Editor satu proses Rust + GPUI (~50 ms startup, 1,4 MB RAM idle), workspace agent ACP, inline Copilot, Git, Live Share, helper WSL2, pratinjau Markdown/`.flux` dengan zoom & corat-coret |
+| **Fondasi** | Rilis (2026) | Editor satu proses Rust + GPUI (~50 ms startup, 1,4 MB RAM idle), workspace agent ACP, inline Copilot, Git, konteks AI WizTree, NBT Bedrock, terminal multibahasa, helper WSL2, pratinjau Markdown/`.flux` dengan zoom & corat-coret |
 | **Fase 1: Pengamanan** | Akhir 2026 - Q1 2027 | Model workspace trust, verifikasi SHA-256 untuk auto-update, penyimpanan token di credential store OS, isolasi path ACP, pengaman tab belum tersimpan |
 | **Fase 2: LSP & Editor Pro** | Q1 - Q2 2027 | Klien LSP ringan opt-in (`rust-analyzer`, `pyright`, `tsserver`, `gopls`), diagnostik & go-to-definition, multi-cursor & split editor, notarisasi macOS |
 | **Fase 3: FluxCode untuk Android** | 2027 | Build native `aarch64-linux-android` Vulkan (tanpa WebView), ergonomi layar sentuh & IME Android, koneksi remote desktop/SSH + AI agent ACP, rilis APK / F-Droid / Play Store ([#117](https://github.com/MuaraAI/FluxCode/discussions/117)) |

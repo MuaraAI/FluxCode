@@ -8,7 +8,6 @@ mod accel;
 mod acp;
 mod boot;
 mod browser;
-mod collab;
 mod commands;
 mod copilot;
 mod editor_cmds;
@@ -29,6 +28,7 @@ mod flux_anim;
 mod fluxdoc;
 mod github;
 mod instance;
+mod nbt;
 mod panel;
 mod memtrim;
 mod preview;
@@ -79,6 +79,7 @@ fn main() {
     match argv.get(1).map(String::as_str) {
         Some("--register-shell") => std::process::exit(shell::cli(true)),
         Some("--unregister-shell") => std::process::exit(shell::cli(false)),
+        Some("--wiztree") => std::process::exit(wiztree::cli(&argv[2..])),
         _ => {}
     }
     boot::start();

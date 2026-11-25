@@ -487,6 +487,7 @@ fn by_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
         "authors" => (CONTRIBUTING, Some(0x8FB8FF)),
         "codeowners" => (CONTRIBUTING, Some(0x8FB8FF)),
         "conftest.py" => (TEST_PY, Some(0x4F9FD8)),
+        "level.dat" | "level.dat_old" => (DB_FILE, Some(0x5FB56B)),
         _ => {
             if name.ends_with(".config.mjs") { return Some((TOOL_CONFIG, Some(0x9AA5B1))); }
             if name.ends_with(".config.cjs") { return Some((TOOL_CONFIG, Some(0x9AA5B1))); }
@@ -651,7 +652,7 @@ fn by_ext(ext: &str) -> Option<(FluxIcon, Option<u32>)> {
         "json" | "jsonc" | "json5" | "jsonl" | "ndjson" | "geojson" | "topojson" | "har" | "webmanifest" | "map" | "babelrc" | "eslintrc" | "prettierrc" | "stylelintrc" => (JSON, Some(0xD9A74A)),
         "yaml" | "yml" => (YAML, Some(0xE0646E)),
         "toml" => (TOML, Some(0xC88B5A)),
-        "ini" | "cfg" | "conf" | "config" | "properties" | "prefs" | "reg" | "inf" | "desktop" | "service" => (INI, Some(0x9AA5B1)),
+        "ini" | "cfg" | "conf" | "config" | "properties" | "prefs" | "reg" | "inf" | "desktop" | "service" | "lang" => (INI, Some(0x9AA5B1)),
         "xml" | "xsd" | "xsl" | "xslt" | "xaml" | "plist" | "resx" | "svgz" | "rss" | "atom" | "wsdl" | "xib" | "storyboard" | "manifest" => (XML, Some(0xE8A04A)),
         "csv" | "tsv" | "psv" | "tab" => (CSV, Some(0x5FD38D)),
         "parquet" | "avro" | "orc" | "arrow" | "feather" => (COLUMNAR, Some(0x5AA7E8)),
@@ -662,7 +663,7 @@ fn by_ext(ext: &str) -> Option<(FluxIcon, Option<u32>)> {
         "env" => (ENV, Some(0xE8C547)),
         "sql" | "psql" | "pgsql" | "plsql" | "mysql" | "tsql" | "ddl" | "dml" | "dbml" | "cql" | "cypher" | "hql" | "prql" => (SQL, Some(0xE8A04A)),
         "sqlite" | "sqlite3" | "db" | "db3" | "s3db" | "sl3" | "duckdb" => (SQLITE, Some(0x4F9FD8)),
-        "mdb" | "accdb" | "frm" | "ibd" | "myd" | "dbf" | "realm" | "rdb" | "ldb" | "kdbx" | "dump" => (DB_FILE, Some(0xA48ADB)),
+        "mdb" | "accdb" | "frm" | "ibd" | "myd" | "dbf" | "realm" | "rdb" | "ldb" | "kdbx" | "dump" | "nbt" | "mcstructure" | "dat_old" => (DB_FILE, Some(0x5FB56B)),
         "prisma" => (PRISMA, Some(0x8C98E8)),
         "bson" => (MONGO, Some(0x5FB56B)),
         "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "bmp" | "ico" | "icns" | "avif" | "tif" | "tiff" | "heic" | "heif" | "tga" | "dds" | "raw" | "cr2" | "nef" | "psd" | "xcf" | "kra" => (IMAGE, Some(0xC792EA)),
@@ -672,7 +673,7 @@ fn by_ext(ext: &str) -> Option<(FluxIcon, Option<u32>)> {
         "ttf" | "otf" | "woff" | "woff2" | "eot" | "fon" | "fnt" | "pfb" => (FONT, Some(0x9AA5B1)),
         "fbx" | "gltf" | "glb" | "stl" | "blend" | "dae" | "3ds" | "ply" | "usd" | "usda" | "usdz" | "abc" => (MODEL3D, Some(0x6CB3D8)),
         "exe" | "dll" | "so" | "dylib" | "o" | "obj" | "a" | "lib" | "bin" | "dat" | "pdb" | "elf" | "ko" | "sys" | "msi" => (BINARY, Some(0x9AA5B1)),
-        "zip" | "7z" | "rar" | "gz" | "tgz" | "tar" | "bz2" | "xz" | "zst" | "lz" | "lzma" | "cab" | "iso" | "dmg" | "img" | "whl" | "jar" | "war" | "ear" | "apk" | "aab" | "ipa" | "deb" | "rpm" | "nupkg" | "crate" | "gem" | "vsix" | "snap" | "appimage" => (ARCHIVE, Some(0xC88B5A)),
+        "zip" | "7z" | "rar" | "gz" | "tgz" | "tar" | "bz2" | "xz" | "zst" | "lz" | "lzma" | "cab" | "iso" | "dmg" | "img" | "whl" | "jar" | "war" | "ear" | "apk" | "aab" | "ipa" | "deb" | "rpm" | "nupkg" | "crate" | "gem" | "vsix" | "snap" | "appimage" | "mcpack" | "mcaddon" | "mcworld" | "mctemplate" => (ARCHIVE, Some(0xC88B5A)),
         "lock" | "lockb" => (LOCK, Some(0x9AA5B1)),
         "pem" | "crt" | "cer" | "der" | "csr" | "p7b" | "p7c" => (CERT, Some(0x5FD38D)),
         "key" | "pub" | "p12" | "pfx" | "jks" | "keystore" | "gpg" | "asc" | "sig" => (KEY, Some(0xD9A74A)),

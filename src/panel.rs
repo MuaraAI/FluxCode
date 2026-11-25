@@ -40,11 +40,15 @@ fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
             let len = src.trim_end().chars().count() as u32;
             let (a, b) = match p.caret {
                 Some((s, e)) if (indent + e as u32) <= len.max(1) && e > s => (indent + s as u32, indent + e as u32),
+                _ if p.col > 0 => {
+                    let c0 = p.col.saturating_sub(1).min(len);
+                    (c0, len.max(c0 + 1))
+                }
                 _ => (indent, len.max(indent + 1)),
             };
             Diagnostic::new(Position::new(row, a)..Position::new(row, b), p.message.clone())
                 .with_severity(DiagnosticSeverity::Error)
-                .with_source("python")
+                .with_source(p.source)
         })
         .collect()
 }
@@ -143,11 +147,17 @@ pub(crate) struct RunInfo {
     pub command: String,
 }
 
+pub(crate) struct TabCycle {
+    pub items: Vec<String>,
+    pub ix: usize,
+}
+
 pub(crate) struct TermTab {
     pub lines: Vec<Line>,
     pub cwd: PathBuf,
     pub history: Vec<String>,
     pub hist_ix: Option<usize>,
+    pub tab_cycle: Option<TabCycle>,
     pub proc: Option<u32>,
     pub run: Option<RunInfo>,
     pub typed: bool,
@@ -164,6 +174,7 @@ impl TermTab {
             cwd,
             history: Vec::new(),
             hist_ix: None,
+            tab_cycle: None,
             proc: None,
             run: None,
             typed: false,
@@ -232,6 +243,8 @@ pub(crate) struct Problem {
     pub from_terminal: bool,
     pub path: PathBuf,
     pub line: u32,
+    pub col: u32,
+    pub source: &'static str,
     pub caret: Option<(usize, usize)>,
     pub message: String,
 }
@@ -281,6 +294,7 @@ impl Workbench {
             self.set_term_input(&draft, window, cx);
         }
         self.terms[ix].hist_ix = None;
+        self.terms[ix].tab_cycle = None;
         self.panel_tab = PanelTab::Terminal;
         self.set_panel_open(true, cx);
         self.terms[ix].scroll.scroll_to_bottom();
@@ -341,6 +355,7 @@ impl Workbench {
         self.term_input.update(cx, |s, cx| s.set_value("", window, cx));
         self.terms[self.term_ix].typed = false;
         self.terms[self.term_ix].hist_ix = None;
+        self.terms[self.term_ix].tab_cycle = None;
         if let Some(id) = self.terms[self.term_ix].proc.filter(|id| self.procs.is_running(*id)) {
             push_text(&mut self.terms[self.term_ix].lines, &format!("{line}\n"), false);
             self.procs.write_stdin(id, &format!("{line}\n"));
@@ -492,6 +507,7 @@ impl Workbench {
         if self.terms[self.term_ix].history.is_empty() || self.term_running() {
             return;
         }
+        self.terms[self.term_ix].tab_cycle = None;
         let ix = match self.terms[self.term_ix].hist_ix {
             None => self.terms[self.term_ix].history.len() - 1,
             Some(i) => i.saturating_sub(1),
@@ -503,6 +519,7 @@ impl Workbench {
 
     pub(crate) fn on_term_history_next(&mut self, _: &TermHistoryNext, window: &mut Window, cx: &mut Context<Self>) {
         let Some(i) = self.terms[self.term_ix].hist_ix else { return };
+        self.terms[self.term_ix].tab_cycle = None;
         if i + 1 < self.terms[self.term_ix].history.len() {
             self.terms[self.term_ix].hist_ix = Some(i + 1);
             let text = self.terms[self.term_ix].history[i + 1].clone();
@@ -517,17 +534,34 @@ impl Workbench {
         if self.term_running() {
             return;
         }
+        let ix = self.term_ix;
         let value = self.term_input.read(cx).value().to_string();
-        let (new, choices) = term::complete(&value, &self.terms[self.term_ix].cwd);
-        if let Some(new) = new {
-            self.set_term_input(&new, window, cx);
+        if value.trim().is_empty() {
+            self.terms[ix].tab_cycle = None;
+            return;
         }
-        if choices.len() > 1 {
-            let shown: Vec<String> = choices.iter().take(40).cloned().collect();
-            let more = choices.len().saturating_sub(40);
-            let text = if more > 0 { crate::trf!("{0}   … {more} more"; 0 => shown.join("   "), more => more) } else { shown.join("   ") };
-            push_line(&mut self.terms[self.term_ix].lines, &text, LineKind::Dim);
-            self.terms[self.term_ix].scroll.scroll_to_bottom();
+        if let Some(cycle) = self.terms[ix].tab_cycle.as_mut() {
+            if cycle.items.get(cycle.ix).map(String::as_str) == Some(value.as_str()) && cycle.items.len() > 1 {
+                cycle.ix = (cycle.ix + 1) % cycle.items.len();
+                let next = cycle.items[cycle.ix].clone();
+                let pos = cycle.ix + 1;
+                let total = cycle.items.len();
+                self.set_term_input(&next, window, cx);
+                self.status = format!("Tab {pos}/{total}").into();
+                cx.notify();
+                return;
+            }
+        }
+        let items = term::complete_candidates(&value, &self.terms[ix].cwd);
+        let Some(first) = items.first().cloned() else {
+            self.terms[ix].tab_cycle = None;
+            return;
+        };
+        let total = items.len();
+        self.terms[ix].tab_cycle = (total > 1).then_some(TabCycle { items, ix: 0 });
+        self.set_term_input(&first, window, cx);
+        if total > 1 {
+            self.status = format!("Tab 1/{total}").into();
             cx.notify();
         }
     }
@@ -554,6 +588,7 @@ impl Workbench {
     pub(crate) fn on_term_escape(&mut self, _: &TermEscape, window: &mut Window, cx: &mut Context<Self>) {
         self.panel_sel = None;
         self.terms[self.term_ix].hist_ix = None;
+        self.terms[self.term_ix].tab_cycle = None;
         self.set_term_input("", window, cx);
     }
 
@@ -694,9 +729,9 @@ impl Workbench {
             lines.push(status);
         }
         if let Some(r) = reason {
-            let link = term::parse_path_line(&r);
+            let link = term::parse_path_loc(&r);
             let shown = match &link {
-                Some((p, _)) => match (r.find(p.as_str()), Path::new(p).file_name()) {
+                Some((p, _, _)) => match (r.find(p.as_str()), Path::new(p).file_name()) {
                     (Some(at), Some(name)) => format!("{}{}", name.to_string_lossy(), &r[at + p.len()..]),
                     _ => r.clone(),
                 },
@@ -704,19 +739,25 @@ impl Workbench {
             };
             let mut l = Line::new(&shown, LineKind::Result);
             l.err = true;
-            l.link = link.map(|(p, n)| (p.into(), n));
+            l.link = link.map(|(p, n, col)| (p.into(), n, col));
             lines.push(l);
         }
 
         if let Some(e) = error {
             if let (Some(path), Some(line)) = (e.file.clone(), e.line) {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                self.status = format!("{}: {} ({name}:{line})", e.kind, e.message).into();
+                let loc = match e.col.filter(|&c| c > 0) {
+                    Some(c) => format!("{name}:{line}:{c}"),
+                    None => format!("{name}:{line}"),
+                };
+                self.status = format!("{}: {} ({loc})", e.kind, e.message).into();
                 self.problems.retain(|p| p.from_terminal != terminal);
                 self.problems.push(Problem {
                     from_terminal: terminal,
                     path,
                     line,
+                    col: e.col.unwrap_or(0),
+                    source: e.source,
                     caret: e.caret,
                     message: format!("{}: {}", e.kind, e.message),
                 });
@@ -748,14 +789,17 @@ impl Workbench {
         let diag_ruler = d.diag_ruler.clone();
         let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
         let lang = (!d.read_only).then_some(d.lang);
+        let is_nbt = d.nbt_format.is_some();
         let doc_path = d.path.clone();
         let doc_gen = d.gen;
         let rope_len = editor.read(cx).text().len();
 
         if rope_len <= MAX_SYNC_DIAG_BYTES {
-            let code_diags = lang
-                .map(|l| crate::diagnostics::analyze(&editor.read(cx).value(), l))
-                .unwrap_or_default();
+            let code_diags = if is_nbt {
+                crate::nbt::diagnose(&editor.read(cx).value())
+            } else {
+                lang.map(|l| crate::diagnostics::analyze(&editor.read(cx).value(), l)).unwrap_or_default()
+            };
             let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
             let warn_n = code_diags.len() - err_n;
             editor.update(cx, |ed, cx| {
@@ -794,7 +838,7 @@ impl Workbench {
                 let code_diags = cx
                     .background_spawn(async move {
                         let text = rope.to_string();
-                        crate::diagnostics::analyze(&text, l)
+                        if is_nbt { crate::nbt::diagnose(&text) } else { crate::diagnostics::analyze(&text, l) }
                     })
                     .await;
                 _ = this.update(cx, |this, cx| {
@@ -834,13 +878,15 @@ impl Workbench {
                 ed.update(cx, |ed, cx| {
                     ed.set_cursor_position(Position::new(line.saturating_sub(1), col), window, cx);
                 });
+                let h = ed.focus_handle(cx);
+                h.focus(window, cx);
             }
         }
     }
 
     pub(crate) fn on_go_to_problem(&mut self, _: &GoToProblem, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(p) = self.problems.first().cloned() {
-            let col = p.caret.map_or(0, |c| c.0 as u32);
+            let col = p.caret.map_or(p.col.saturating_sub(1), |c| c.0 as u32);
             self.open_location(p.path, p.line, col, window, cx);
             return;
         }
@@ -855,16 +901,43 @@ impl Workbench {
         }
     }
 
-    fn open_link(&mut self, path: &str, line: u32, terminal: bool, window: &mut Window, cx: &mut Context<Self>) {
-        cx.stop_propagation();
+    fn resolve_link_path(&self, path: &str, terminal: bool) -> PathBuf {
         let p = PathBuf::from(path);
+        if p.is_absolute() && p.is_file() {
+            return p;
+        }
         let base = if terminal {
             self.terms[self.term_ix].run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone())
         } else {
             self.out_run.as_ref().map(|r| r.cwd.clone()).or_else(|| self.ext.last_cwd.clone()).or_else(|| self.root.clone()).unwrap_or_default()
         };
-        let full = if p.is_absolute() { p } else { base.join(p) };
-        self.open_location(full, line, 0, window, cx);
+        let joined = base.join(&p);
+        if joined.is_file() {
+            return joined;
+        }
+        if let Some(root) = &self.root {
+            let from_root = root.join(&p);
+            if from_root.is_file() {
+                return from_root;
+            }
+            let needle = path.replace('\\', "/").trim_start_matches("./").to_ascii_lowercase();
+            let suffix = format!("/{needle}");
+            if let Some(found) = self.all_files.iter().find(|f| {
+                let fp = Path::new(f.as_str());
+                let rel = fp.strip_prefix(root).unwrap_or(fp).to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+                rel == needle || rel.ends_with(&suffix)
+            }) {
+                return PathBuf::from(found);
+            }
+        }
+        if p.is_absolute() { p } else { joined }
+    }
+
+    fn open_link(&mut self, path: &str, line: u32, col: u32, terminal: bool, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.panel_sel = None;
+        let full = self.resolve_link_path(path, terminal);
+        self.open_location(full, line, col.saturating_sub(1), window, cx);
     }
 
     fn run_fix(&mut self, command: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -931,14 +1004,14 @@ impl Workbench {
             )
             .into_any_element()
         };
-        let link = |label: SharedString, path: SharedString, line: u32, cx: &mut Context<Self>| {
+        let link = |label: SharedString, path: SharedString, line: u32, col: u32, cx: &mut Context<Self>| {
             div()
                 .id(("lk", i))
                 .text_color(c(theme::BLUE))
                 .cursor_pointer()
                 .hover(|s| s.underline())
                 .child(label)
-                .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx)))
+                .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx)))
         };
         let el = match l.kind {
             LineKind::Blank => base.into_any_element(),
@@ -1035,7 +1108,7 @@ impl Workbench {
             LineKind::Result if l.err => {
                 let row = base.pl(theme::u(34.)).font_family(UI_FONT);
                 match l.link.clone() {
-                    Some((path, line)) => row.child(
+                    Some((path, line, col)) => row.child(
                         div()
                             .id(("lk", i))
                             .min_w_0()
@@ -1043,7 +1116,7 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::BLUE)).underline())
                             .child(shown.clone())
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx))),
                     ),
                     None => row.child(text(shown, theme::FG_STRONG).min_w_0()),
                 }
@@ -1063,12 +1136,20 @@ impl Workbench {
                     _ => row.child(text(&l.text, theme::FG_STRONG).min_w_0().truncate()).into_any_element(),
                 }
             }
-            LineKind::Frame | LineKind::Warn | LineKind::Err if l.link.is_some() => {
-                let (path, line) = l.link.clone().unwrap_or_default();
+            LineKind::Frame | LineKind::Warn | LineKind::Err | LineKind::Normal | LineKind::Dim | LineKind::Code if l.link.is_some() => {
+                let (path, line, line_col) = l.link.clone().unwrap_or_default();
                 let col = match l.kind {
                     LineKind::Warn => theme::WARN,
                     LineKind::Err => theme::DANGER,
-                    _ => theme::FG_MUTED,
+                    LineKind::Frame => theme::FG_MUTED,
+                    LineKind::Dim => theme::FG_DIM,
+                    LineKind::Code => theme::FG_STRONG,
+                    _ => theme::FG,
+                };
+                let tip: SharedString = if line_col > 0 {
+                    format!("{path}:{line}:{line_col}").into()
+                } else {
+                    format!("{path}:{line}").into()
                 };
                 base.when(!first, |b| b.pl(hang))
                     .child(
@@ -1077,8 +1158,9 @@ impl Workbench {
                             .text_color(c(col))
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::BLUE)).underline())
+                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
                             .child(shown.clone())
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, terminal, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, line_col, terminal, w, cx))),
                     )
                     .into_any_element()
             }
@@ -1087,19 +1169,33 @@ impl Workbench {
                     .font_family(UI_FONT)
                     .child(Icon::new(IconName::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)))
                     .child(div().flex_none().text_color(c(theme::DANGER)).font_weight(FontWeight::SEMIBOLD).child(l.text.clone()));
-                if let Some((path, line)) = &l.link {
-                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, cx).min_w_0().truncate());
+                if let Some((path, line, col)) = &l.link {
+                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, *col, cx).min_w_0().truncate());
                 }
                 card(base, inner)
             }
             LineKind::CardMsg => card(base, h_flex().child(ui(shown, theme::FG_STRONG).pl(theme::u(22.)))),
-            LineKind::CardCode => card(
-                base,
-                h_flex()
+            LineKind::CardCode => {
+                let mut inner = h_flex()
                     .child(div().flex_none().pl(theme::u(22.)).text_color(c(theme::FG_DIM)).child(l.meta.clone()))
-                    .child(div().flex_none().text_color(c(theme::BORDER_STRONG)).child("│"))
-                    .child(text(&l.text, theme::FG).min_w_0().truncate()),
-            ),
+                    .child(div().flex_none().text_color(c(theme::BORDER_STRONG)).child("│"));
+                if let Some((path, line, col)) = l.link.clone() {
+                    inner = inner.child(
+                        div()
+                            .id(("lk", i))
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(c(theme::BLUE)).underline())
+                            .child(l.text.clone())
+                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx))),
+                    );
+                } else {
+                    inner = inner.child(text(&l.text, theme::FG).min_w_0().truncate());
+                }
+                card(base, inner)
+            }
             LineKind::CardHint => card(
                 base,
                 h_flex()
@@ -1302,9 +1398,9 @@ impl Workbench {
                 path: p.path.clone(),
                 file: file.into(),
                 line: p.line.max(1),
-                col: p.caret.map_or(0, |c| c.0 as u32),
+                col: p.caret.map_or(p.col.saturating_sub(1), |c| c.0 as u32),
                 message: p.message.clone().into(),
-                source: "runtime",
+                source: p.source,
             });
         }
         // Show active file's diagnostics first, then other open files.
@@ -1724,9 +1820,8 @@ impl Workbench {
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
                         .when(terminal, |v| {
-                            v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command after the ❯ and press Enter to run it.")))
-                                .child(hint(tr("For example:  dir  lists the files here,  cd folder  goes into a folder,  py app.py  runs a Python file.")))
-                                .when(!narrow, |v| v.child(hint(tr("↑ ↓ history  ·  Tab completes names  ·  Ctrl+C stops  ·  typos like  pip i  are fixed for you"))))
+                            v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command and press Enter to run it.")))
+                                .when(!narrow, |v| v.child(hint(tr("↑ ↓ history · Tab completes · Ctrl+C stops · Click any file:line error to jump to code"))))
                         })
                         .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
                 )
@@ -1863,13 +1958,23 @@ fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
 fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     push_line(lines, "", LineKind::Blank);
     let mut head = Line::new(&e.kind, LineKind::CardHead);
-    if let (Some(file), Some(line)) = (&e.file, e.line) {
-        let shown = file.strip_prefix(cwd).map(|p| p.display().to_string()).unwrap_or_else(|_| {
-            file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-        });
-        head.meta = crate::trf!("{shown}, line {line}"; shown => shown, line => line).into();
-        head.link = Some((file.display().to_string().into(), line));
-    }
+    let col = e.col.unwrap_or(0);
+    let link = match (&e.file, e.line) {
+        (Some(file), Some(line)) => {
+            let shown = file.strip_prefix(cwd).map(|p| p.display().to_string()).unwrap_or_else(|_| {
+                file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            });
+            head.meta = if col > 0 {
+                format!("{shown}:{line}:{col}").into()
+            } else {
+                format!("{shown}:{line}").into()
+            };
+            let lk = (SharedString::from(file.display().to_string()), line, col);
+            head.link = Some(lk.clone());
+            Some(lk)
+        }
+        _ => None,
+    };
     lines.push(head);
     if !e.message.is_empty() {
         lines.push(Line::new(&e.message, LineKind::CardMsg));
@@ -1877,6 +1982,7 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     if let (Some(code), Some(line)) = (&e.code, e.line) {
         let mut l = Line::new(code, LineKind::CardCode);
         l.meta = line.to_string().into();
+        l.link = link;
         lines.push(l);
     }
     if let Some(h) = &e.hint {
@@ -1889,7 +1995,11 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     }
 }
 
-const RUNNABLE: &[&str] = &["py", "pyw", "js", "mjs", "cjs", "ts", "mts", "ps1", "bat", "cmd", "sh", "rs", "go", "php", "lua", "rb"];
+const RUNNABLE: &[&str] = &[
+    "py", "pyw", "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts",
+    "ps1", "bat", "cmd", "sh", "rs", "go", "java", "dart", "zig", "swift",
+    "php", "lua", "rb", "pl", "exs",
+];
 
 pub(crate) fn can_run(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE.contains(&e.to_ascii_lowercase().as_str()))
@@ -1900,16 +2010,22 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
         "py" | "pyw" => (python(root), vec!["-u".into(), p]),
-        "js" | "mjs" | "cjs" => ("node".into(), vec![p]),
-        "ts" | "mts" => ("npx".into(), vec!["--yes".into(), "tsx".into(), p]),
+        "js" | "jsx" | "mjs" | "cjs" => ("node".into(), vec![p]),
+        "ts" | "tsx" | "mts" | "cts" => ("npx".into(), vec!["--yes".into(), "tsx".into(), p]),
         "ps1" => ("powershell".into(), vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), p]),
         "bat" | "cmd" => ("cmd.exe".into(), vec!["/d".into(), "/c".into(), p]),
         "sh" => ("bash".into(), vec![p]),
         "rs" => ("cargo".into(), vec!["run".into()]),
         "go" => ("go".into(), vec!["run".into(), p]),
+        "java" => ("java".into(), vec![p]),
+        "dart" => ("dart".into(), vec!["run".into(), p]),
+        "zig" => ("zig".into(), vec!["run".into(), p]),
+        "swift" => ("swift".into(), vec![p]),
         "php" => ("php".into(), vec![p]),
         "lua" => ("lua".into(), vec![p]),
         "rb" => ("ruby".into(), vec![p]),
+        "pl" => ("perl".into(), vec![p]),
+        "exs" => ("elixir".into(), vec![p]),
         _ => return None,
     })
 }
@@ -1961,7 +2077,11 @@ mod tests {
 
     #[test]
     fn can_run_matches_run_command_for() {
-        for name in ["a.py", "A.PY", "b.pyw", "c.js", "d.mjs", "e.cjs", "f.ts", "g.mts", "h.ps1", "i.bat", "j.cmd", "k.sh", "l.rs", "m.go", "n.php", "o.lua", "p.rb", "warps.yml", "x.txt", "y.json", "noext", "z.html"] {
+        for name in [
+            "a.py", "A.PY", "b.pyw", "c.js", "c2.jsx", "d.mjs", "e.cjs", "f.ts", "f2.tsx", "g.mts", "g2.cts",
+            "h.ps1", "i.bat", "j.cmd", "k.sh", "l.rs", "m.go", "m2.java", "m3.dart", "m4.zig", "m5.swift",
+            "n.php", "o.lua", "p.rb", "p2.pl", "p3.exs", "warps.yml", "x.txt", "y.json", "noext", "z.html",
+        ] {
             let p = Path::new(name);
             assert_eq!(can_run(p), run_command_for(p, None).is_some(), "{name}");
         }

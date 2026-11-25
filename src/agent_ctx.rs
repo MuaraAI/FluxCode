@@ -43,6 +43,19 @@ pub fn wants_output(text: &str) -> bool {
     ["terminal", "output", "log", "hasil", "console", "printed", "keluaran"].iter().any(|w| t.contains(w))
 }
 
+pub fn wants_disk(text: &str) -> bool {
+    let t = text.to_lowercase();
+    const WORDS: &[&str] = &[
+        "wiztree", "wizztree", "disk usage", "disk space", "folder size", "file size",
+        "ukuran folder", "ukuran file", "folder besar", "folder terbesar", "folder kecil",
+        "file besar", "file terbesar", "paling besar", "paling kecil", "paling boros",
+        "boros", "storage", "bloat", "heaviest", "largest", "biggest", "smallest",
+        "cleanup", "clean up", "bersih", "bersihin", "makan space", "makan ruang",
+        "makan tempat", "berapa mb", "berapa gb", "size breakdown", "treemap",
+    ];
+    WORDS.iter().any(|w| t.contains(w))
+}
+
 #[derive(Clone, Debug)]
 pub struct RemoteSession {
     pub id: String,
@@ -113,6 +126,10 @@ mod tests {
         assert!(wants_error("Why does it crash?"));
         assert!(!wants_error("tambahkan tombol login"));
         assert!(wants_output("lihat hasil di terminal"));
+        assert!(wants_disk("folder mana yang paling boros di project ini?"));
+        assert!(wants_disk("cek wiztree ukuran folder besar"));
+        assert!(wants_disk("what are the largest files taking disk space?"));
+        assert!(!wants_disk("rename function foo to bar"));
     }
 
     #[test]

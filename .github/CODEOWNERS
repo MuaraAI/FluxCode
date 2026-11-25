@@ -7,8 +7,6 @@
 /Cargo.lock          @MyKineID @Curzyori
 /vendor/             @MyKineID @Curzyori
 /packaging/          @MyKineID @Curzyori
-/relay/              @MyKineID @Curzyori
 /tools/              @MyKineID @Curzyori
 /src/update.rs       @MyKineID @Curzyori
 /src/proc.rs         @MyKineID @Curzyori
-/src/collab/         @MyKineID @Curzyori

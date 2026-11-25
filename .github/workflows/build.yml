@@ -40,11 +40,6 @@ jobs:
     runs-on: windows-latest
     env:
       FLUXCODE_BUILD: ${{ needs.stamp.outputs.build }}
-      # Baked into release binaries so they can talk to the MuaraAI relay.
-      # GitHub withholds secrets from forks, so a forked PR exposes nothing and
-      # falls back to bore.pub. A PR from a branch in this repo does get the
-      # secret: keep untrusted code off same-repo branches or rotate after.
-      FLUXCODE_RELAY_SECRET: ${{ secrets.FLUXCODE_RELAY_SECRET }}
     steps:
       # Full history and tags: build.rs names the build each release came in.
       - uses: actions/checkout@v4
@@ -135,8 +130,6 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       FLUXCODE_BUILD: ${{ needs.stamp.outputs.build }}
-      # Same reasoning as the windows job above.
-      FLUXCODE_RELAY_SECRET: ${{ secrets.FLUXCODE_RELAY_SECRET }}
     steps:
       # Full history and tags: build.rs names the build each release came in.
       - uses: actions/checkout@v4

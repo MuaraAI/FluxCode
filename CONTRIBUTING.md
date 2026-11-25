@@ -60,11 +60,11 @@ every added line and every added file for:
 | Hidden code | Trojan Source (invisible and right-to-left characters), look-alike Cyrillic/Greek letters, long encoded blobs, minified lines, URLs to raw IP addresses |
 | Committed executables | `.exe`, `.dll`, `.so`, archives, anything that starts like a program |
 | Supply chain | dependencies from outside crates.io, a changed checksum in `Cargo.lock` |
-| CI and build files from outside contributors | `.github/`, `build.rs`, `packaging/`, `relay/`, `.cargo/` |
+| CI and build files from outside contributors | `.github/`, `build.rs`, `packaging/`, `.cargo/` |
 
 | Asks a maintainer to read it (`needs-maintainer-review`) | |
 | --- | --- |
-| New processes, network connections, `unsafe`, FFI, recursive deletes, new web addresses, secret-looking environment variables, and any change to sensitive paths (dependencies, the updater, live share, `tools/`, `extensions/`) | |
+| New processes, network connections, `unsafe`, FFI, recursive deletes, new web addresses, secret-looking environment variables, and any change to sensitive paths (dependencies, the updater, `tools/`, `extensions/`) | |
 
 A maintainer who has read a blocked finding and found it harmless can add the
 `security-reviewed` label. Critical findings (malware patterns, secrets, executables)
