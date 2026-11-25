@@ -3,7 +3,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 use super::proto::{
-    read_frame, write_frame, DirEntry, FileHitsWire, GitWire, Hello, HitWire, Request, Response, SearchWire, Stat, FRAME_BYTES, FRAME_JSON,
+    read_frame, write_frame, DirEntry, FileHitsWire, GitWire, Hello, HitWire, Request, Response, SearchWire, FRAME_BYTES, FRAME_JSON,
     PROTOCOL_VERSION,
 };
 
@@ -66,7 +66,6 @@ fn handle(req: Request, body: Option<Vec<u8>>) -> Result<Answer, String> {
         Request::Ping => Answer::Json(Response::json(serde_json::json!({"pong": true}))),
         Request::List { path } => Answer::Json(Response::json(list(&path)?)),
         Request::Scan { root, max } => Answer::Json(Response::json(scan(&root, max))),
-        Request::Stat { path } => Answer::Json(Response::json(stat(&path))),
         Request::Read { path, limit } => {
             let bytes = read_file(&path, limit)?;
             Answer::Bytes(Response::bytes(), bytes)
@@ -127,12 +126,6 @@ fn scan(root: &str, max: usize) -> Vec<String> {
     }
     out.sort();
     out
-}
-
-fn stat(path: &str) -> Stat {    match std::fs::metadata(path) {
-        Ok(m) => Stat { exists: true, is_dir: m.is_dir(), is_file: m.is_file(), len: m.len() },
-        Err(_) => Stat { exists: false, is_dir: false, is_file: false, len: 0 },
-    }
 }
 
 fn read_file(path: &str, limit: u64) -> Result<Vec<u8>, String> {

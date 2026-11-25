@@ -105,12 +105,6 @@ fn a_helper_answers_over_a_pipe() {
         b"needle in a haystack\n"
     );
 
-    let stat = h.ask(&Request::Stat {
-        path: format!("{root}/sub"),
-    });
-    let stat: crate::remote::proto::Stat = serde_json::from_value(stat.json.unwrap()).unwrap();
-    assert!(stat.exists && stat.is_dir && !stat.is_file);
-
     let body = serde_json::to_vec(&Request::Write { path: format!("{root}/b.txt"), crlf: false }).unwrap();
     write_frame(&mut h.stdin, FRAME_JSON, &body).unwrap();
     write_frame(&mut h.stdin, FRAME_BYTES, b"written by the editor\n").unwrap();

@@ -912,7 +912,7 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        if self.wsl.is_some() || read_off_thread(&path) {
+        if self.wsl.is_some() || crate::remote::WslTarget::from_path(&path).is_some() || read_off_thread(&path) {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
@@ -1169,7 +1169,7 @@ impl Workbench {
         if doc.loading && !sync {
             return;
         }
-        if !sync && (self.wsl.is_some() || read_off_thread(&path)) {
+        if !sync && (self.wsl.is_some() || crate::remote::WslTarget::from_path(&path).is_some() || read_off_thread(&path)) {
             self.docs[ix].loading = true;
             cx.notify();
             let wsl = self.wsl.clone();
@@ -1791,30 +1791,15 @@ impl Workbench {
                 doc.nbt_format,
             )
         };
-        if let Some(fmt) = nbt_format {
-            let r = crate::nbt::encode_file(&text, fmt).and_then(|bytes| match &self.wsl {
-                Some(t) => match remote_write(t, &path, &bytes, false) {
-                    Some(()) => Ok(()),
-                    None => core::write_bytes(&path, &bytes),
-                },
-                None => core::write_bytes(&path, &bytes),
-            });
-            return self.finish_save(&path, gen, name, r, cx);
-        }
-        if text.len() as u64 > SAVE_OFF_THREAD_BYTES {
-            let wsl = self.wsl.clone();
+        let off_thread = self.wsl.is_some()
+            || crate::remote::WslTarget::from_path(&path).is_some()
+            || text.len() as u64 > SAVE_OFF_THREAD_BYTES;
+        if off_thread {
+            let wsl = self.wsl.clone().or_else(|| crate::remote::WslTarget::from_path(&path));
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let r = cx
-                    .background_spawn(async move {
-                        if let Some(t) = &wsl {
-                            let bytes = text.as_bytes();
-                            if let Some(()) = remote_write(t, &p, bytes, crlf) {
-                                return Ok(());
-                            }
-                        }
-                        core::write_text(&p, &text, crlf)
-                    })
+                    .background_spawn(async move { write_doc_to_disk(wsl.as_ref(), &p, &text, crlf, nbt_format) })
                     .await;
                 _ = this.update(cx, |this, cx| {
                     this.finish_save(&path, gen, name, r, cx);
@@ -1823,13 +1808,7 @@ impl Workbench {
             .detach();
             return true;
         }
-        let r = match &self.wsl {
-            Some(t) => match remote_write(t, &path, text.as_bytes(), crlf) {
-                Some(()) => Ok(()),
-                None => core::write_text(&path, &text, crlf),
-            },
-            None => core::write_text(&path, &text, crlf),
-        };
+        let r = write_doc_to_disk(None, &path, &text, crlf, nbt_format);
         self.finish_save(&path, gen, name, r, cx)
     }
 
@@ -1906,6 +1885,38 @@ impl Workbench {
 
     fn restore_session(&mut self, then: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
+        let has_wsl_root = s.root.as_ref().is_some_and(|r| crate::remote::WslTarget::from_path(r).is_some())
+            || s.extra.iter().any(|p| crate::remote::WslTarget::from_path(p).is_some());
+        if has_wsl_root {
+            // Validate WSL UNC roots off the UI thread too; a stopped distro can block `is_dir` for seconds.
+            if let Some(t) = s.root.as_ref().and_then(|r| crate::remote::WslTarget::from_path(r)) {
+                crate::remote::warm(&t.distro);
+            }
+            let raw_root = s.root;
+            let raw_extra = s.extra;
+            let raw_files = s.files;
+            let active = s.active;
+            cx.spawn_in(window, async move |this, cx| {
+                let (saved_root, extra, existing) = cx
+                    .background_spawn(async move {
+                        let saved_root = raw_root.filter(|r| r.is_dir());
+                        let extra: Vec<PathBuf> = raw_extra.into_iter().filter(|p| p.is_dir()).collect();
+                        let existing: Vec<PathBuf> = raw_files.into_iter().filter(|f| f.is_file()).collect();
+                        (saved_root, extra, existing)
+                    })
+                    .await;
+                this.update_in(cx, |this, window, cx| {
+                    this.workspace.extra = extra;
+                    if let Some(root) = saved_root {
+                        this.open_folder(root, cx);
+                    }
+                    this.finish_restore_files(existing, active, then, window, cx);
+                })
+                .ok()
+            })
+            .detach();
+            return;
+        }
         self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
         let saved_root = s.root.filter(|r| r.is_dir());
         if let Some(root) = saved_root {
@@ -1922,29 +1933,38 @@ impl Workbench {
         // Only check existence off-thread; background tabs stay dormant until clicked.
         cx.spawn_in(window, async move |this, cx| {
             let existing: Vec<PathBuf> = cx
-                .background_spawn(async move {
-                    raw_files.into_iter().filter(|f| f.is_file()).collect()
-                })
+                .background_spawn(async move { raw_files.into_iter().filter(|f| f.is_file()).collect() })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                for p in existing {
-                    if !this.docs.iter().any(|d| d.path == p) {
-                        this.docs.push(Doc::dormant(p));
-                    }
-                }
-                if then.is_empty() {
-                    if let Some(a) = active.filter(|a| *a < this.docs.len()).or((!this.docs.is_empty()).then_some(0)) {
-                        this.activate(a, window, cx);
-                    }
-                }
-                for p in then {
-                    this.open_file(p, window, cx);
-                }
-                cx.notify();
+                this.finish_restore_files(existing, active, then, window, cx);
             })
             .ok()
         })
         .detach();
+    }
+
+    fn finish_restore_files(
+        &mut self,
+        existing: Vec<PathBuf>,
+        active: Option<usize>,
+        then: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for p in existing {
+            if !self.docs.iter().any(|d| d.path == p) {
+                self.docs.push(Doc::dormant(p));
+            }
+        }
+        if then.is_empty() {
+            if let Some(a) = active.filter(|a| *a < self.docs.len()).or((!self.docs.is_empty()).then_some(0)) {
+                self.activate(a, window, cx);
+            }
+        }
+        for p in then {
+            self.open_file(p, window, cx);
+        }
+        cx.notify();
     }
 
 
@@ -4601,6 +4621,30 @@ fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
+}
+
+pub(crate) fn write_doc_to_disk(
+    wsl: Option<&crate::remote::WslTarget>,
+    path: &Path,
+    text: &str,
+    crlf: bool,
+    nbt_format: Option<crate::nbt::NbtFormat>,
+) -> Result<(), String> {
+    if let Some(fmt) = nbt_format {
+        let bytes = crate::nbt::encode_file(text, fmt)?;
+        if let Some(t) = wsl {
+            if remote_write(t, path, &bytes, false).is_some() {
+                return Ok(());
+            }
+        }
+        return core::write_bytes(path, &bytes);
+    }
+    if let Some(t) = wsl {
+        if remote_write(t, path, text.as_bytes(), crlf).is_some() {
+            return Ok(());
+        }
+    }
+    core::write_text(path, text, crlf)
 }
 
 fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {

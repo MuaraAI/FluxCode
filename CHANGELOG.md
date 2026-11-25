@@ -10,8 +10,8 @@ page, and installed copies offer it on their own. Newest first.
 - With the WSL helper on, the first launch after an update installed the Linux helper on
   the window's own thread: the window stopped responding until the ~13 MB download
   finished, and a slow connection kept it there. The helper now installs in the
-  background while the folder is read over the shared path, both downloads have a
-  connect and total timeout, and a failed install is not retried on every call.
+  background per distro with bounded curl and RPC timeouts, per-distro backoff,
+  generation-safe non-blocking drops, and off-thread WSL session restore and file saves.
 
 ## WizTree AI & Disk Analyzer, Smart Agent Queue, Interactive Tables, Editable Bedrock NBT, Multi-Terminal, and Native UI Precision (24-25 November 2026)
 

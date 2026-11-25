@@ -82,7 +82,6 @@ fn main() {
         Some("--wiztree") => std::process::exit(wiztree::cli(&argv[2..])),
         _ => {}
     }
-    crate::remote::note_main_thread();
     boot::start();
     let paths: Vec<PathBuf> = std::env::args_os()
         .skip(1)
@@ -115,6 +114,7 @@ fn main() {
     let app = gpui_kit::application();
     boot::mark("platform created");
     app.with_assets(AppAssets).run(move |cx| {
+        crate::remote::note_ui_thread();
         boot::mark("app running");
         gpui_kit::init(cx);
         cx.set_cursor_hide_mode(CursorHideMode::Never);

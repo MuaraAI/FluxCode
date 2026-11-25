@@ -1,23 +1,78 @@
-
+use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
-use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 use super::proto::{
     read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, FRAME_BYTES, FRAME_JSON, PROTOCOL_VERSION,
 };
 use super::WslTarget;
 
+type FrameMsg = Result<Option<(u8, Vec<u8>)>, String>;
+
+const UI_RPC_TIMEOUT: Duration = Duration::from_secs(2);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+const IO_RPC_TIMEOUT: Duration = Duration::from_secs(20);
+const HEAVY_RPC_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_BACKOFF_SECS: u64 = 60;
+
 fn helper_dir() -> String {
     format!(".fluxcode/helper/{}", crate::update::BUILD)
+}
+
+fn spawn_frame_reader(mut stdout: impl Read + Send + 'static) -> mpsc::Receiver<FrameMsg> {
+    let (tx, rx) = mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("wsl-helper-rx".into())
+        .spawn(move || loop {
+            match read_frame(&mut stdout) {
+                Ok(Some(frame)) => {
+                    if tx.send(Ok(Some(frame))).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tx.send(Ok(None));
+                    break;
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string()));
+                    break;
+                }
+            }
+        });
+    rx
+}
+
+fn recv_frame_from(rx: &mpsc::Receiver<FrameMsg>, timeout: Duration) -> Result<(u8, Vec<u8>), String> {
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(Some(frame))) => Ok(frame),
+        Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => Err("the helper closed the connection".into()),
+        Ok(Err(e)) => Err(e),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err("the helper timed out".into()),
+    }
+}
+
+fn timeout_for(req: &Request, on_ui: bool) -> Duration {
+    if on_ui {
+        return UI_RPC_TIMEOUT;
+    }
+    match req {
+        Request::Hello | Request::Ping => HELLO_TIMEOUT,
+        Request::List { .. } | Request::Read { .. } | Request::Write { .. } => IO_RPC_TIMEOUT,
+        Request::Scan { .. } | Request::Search { .. } | Request::Git { .. } => HEAVY_RPC_TIMEOUT,
+    }
 }
 
 pub struct RemoteClient {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    rx: mpsc::Receiver<FrameMsg>,
+    broken: bool,
     pub build: String,
     pub platform: String,
     pub home: String,
@@ -35,10 +90,12 @@ impl RemoteClient {
         let mut child = cmd.spawn().map_err(|e| format!("the helper could not start: {e}"))?;
         let stdin = child.stdin.take().ok_or("the helper has no stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("the helper has no stdout")?);
+        let rx = spawn_frame_reader(stdout);
         let mut client = Self {
             child,
             stdin,
-            stdout,
+            rx,
+            broken: false,
             build: String::new(),
             platform: String::new(),
             home: String::new(),
@@ -57,32 +114,60 @@ impl RemoteClient {
         Ok(client)
     }
 
+    fn send_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), String> {
+        write_frame(&mut self.stdin, kind, payload).map_err(|e| {
+            self.broken = true;
+            e.to_string()
+        })
+    }
+
+    fn recv_frame(&mut self, timeout: Duration) -> Result<(u8, Vec<u8>), String> {
+        recv_frame_from(&self.rx, timeout).inspect_err(|_| {
+            self.broken = true;
+        })
+    }
+
+    fn read_json_timeout(&mut self, timeout: Duration) -> Result<serde_json::Value, String> {
+        let (kind, payload) = self.recv_frame(timeout)?;
+        if kind != FRAME_JSON {
+            self.broken = true;
+            return Err("the helper sent something other than JSON".into());
+        }
+        let r: Response = serde_json::from_slice(&payload).map_err(|e| {
+            self.broken = true;
+            e.to_string()
+        })?;
+        if !r.ok {
+            return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
+        }
+        Ok(r.json.unwrap_or(serde_json::Value::Null))
+    }
+
     pub fn json<T: serde::de::DeserializeOwned>(&mut self, req: Request) -> Result<T, String> {
+        let timeout = timeout_for(&req, on_ui_thread());
         let body = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
-        write_frame(&mut self.stdin, FRAME_JSON, &body).map_err(|e| e.to_string())?;
-        let value = self.read_json()?;
+        self.send_frame(FRAME_JSON, &body)?;
+        let value = self.read_json_timeout(timeout)?;
         serde_json::from_value(value).map_err(|e| e.to_string())
     }
 
     pub fn bytes(&mut self, req: Request, body: Option<&[u8]>) -> Result<Vec<u8>, String> {
         read_path_accepts(&req)?;
+        let timeout = timeout_for(&req, on_ui_thread());
         let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
-        write_frame(&mut self.stdin, FRAME_JSON, &payload).map_err(|e| e.to_string())?;
+        self.send_frame(FRAME_JSON, &payload)?;
         if let Some(b) = body {
-            write_frame(&mut self.stdin, FRAME_BYTES, b).map_err(|e| e.to_string())?;
+            self.send_frame(FRAME_BYTES, b)?;
         }
-        let _header = self.read_json()?;
-        match read_frame(&mut self.stdout).map_err(|e| e.to_string())? {
-            Some((FRAME_BYTES, bytes)) => Ok(bytes),
-            Some(_) => Err("the helper sent something other than bytes".into()),
-            None => Err("the helper closed the connection".into()),
+        let _header = self.read_json_timeout(timeout)?;
+        match self.recv_frame(timeout)? {
+            (FRAME_BYTES, bytes) => Ok(bytes),
+            _ => {
+                self.broken = true;
+                Err("the helper sent something other than bytes".into())
+            }
         }
     }
-
-    fn read_json(&mut self) -> Result<serde_json::Value, String> {
-        read_json_from(&mut self.stdout)
-    }
-
 
     pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
         self.json(Request::List { path: path.to_string() })
@@ -97,7 +182,13 @@ impl RemoteClient {
             path: path.to_string(),
             crlf,
         };
-        write_request(&mut self.stdin, &mut self.stdout, &req, bytes)
+        write_path_accepts(&req)?;
+        let timeout = timeout_for(&req, on_ui_thread());
+        let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+        self.send_frame(FRAME_JSON, &payload)?;
+        self.send_frame(FRAME_BYTES, bytes)?;
+        self.read_json_timeout(timeout)?;
+        Ok(())
     }
 
     pub fn search(&mut self, root: &str, query: &str, match_case: bool, whole_word: bool) -> Result<SearchWire, String> {
@@ -113,7 +204,7 @@ impl RemoteClient {
     }
 
     pub fn exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+        self.broken || matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
     }
 }
 
@@ -124,6 +215,12 @@ impl Drop for RemoteClient {
     }
 }
 
+fn drop_in_background(client: RemoteClient) {
+    let _ = std::thread::Builder::new()
+        .name("wsl-helper-drop".into())
+        .spawn(move || drop(client));
+}
+
 fn read_path_accepts(req: &Request) -> Result<(), String> {
     if matches!(req, Request::Write { .. }) {
         return Err("a write is answered with one JSON frame; use write()".into());
@@ -131,6 +228,14 @@ fn read_path_accepts(req: &Request) -> Result<(), String> {
     Ok(())
 }
 
+fn write_path_accepts(req: &Request) -> Result<(), String> {
+    if !matches!(req, Request::Write { .. }) {
+        return Err("only a write sends a body frame; use write()".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
     let (kind, payload) = match read_frame(stdout).map_err(|e| e.to_string())? {
         Some(frame) => frame,
@@ -141,20 +246,12 @@ fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
     }
     let r: Response = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
     if !r.ok {
-        return Err(r
-            .error
-            .unwrap_or_else(|| "the helper refused the request".into()));
+        return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
     }
     Ok(r.json.unwrap_or(serde_json::Value::Null))
 }
 
-fn write_path_accepts(req: &Request) -> Result<(), String> {
-    if !matches!(req, Request::Write { .. }) {
-        return Err("only a write sends a body frame; use write()".into());
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn write_request(
     stdin: &mut impl Write,
     stdout: &mut impl Read,
@@ -195,6 +292,14 @@ fn runs(distro: &str, path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn curl_download_args() -> &'static [&'static str] {
+    &["-sSL", "--fail", "--connect-timeout", "8", "--max-time", "300", "-o"]
+}
+
+fn curl_digest_args() -> &'static [&'static str] {
+    &["-sSL", "--fail", "--connect-timeout", "8", "--max-time", "25", "-H", "Accept: application/vnd.github+json"]
+}
+
 fn fetch(distro: &str) -> Result<PathBuf, String> {
     let tmp = std::env::temp_dir().join(format!("fluxcode-helper-{}.tar.gz", crate::update::BUILD));
     if let Ok(local) = std::env::var("FLUXCODE_HELPER") {
@@ -211,17 +316,7 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
         build = crate::update::BUILD
     );
     let mut cmd = crate::proc::command("curl");
-    cmd.args([
-        "-sSL",
-        "--fail",
-        "--connect-timeout",
-        "8",
-        "--max-time",
-        "300",
-        "-o",
-    ])
-    .arg(&tmp)
-    .arg(&url);
+    cmd.args(curl_download_args()).arg(&tmp).arg(&url);
     let out = cmd.output().map_err(|e| format!("curl could not start ({e})"))?;
     if !out.status.success() || !tmp.is_file() {
         return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
@@ -239,17 +334,8 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
 fn release_digest(asset: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}", crate::update::BUILD);
     let out = crate::proc::command("curl")
-        .args([
-            "-sSL",
-            "--fail",
-            "--connect-timeout",
-            "8",
-            "--max-time",
-            "25",
-            "-H",
-            "Accept: application/vnd.github+json",
-            &url,
-        ])
+        .args(curl_digest_args())
+        .arg(&url)
         .output()
         .map_err(|e| format!("curl could not start ({e})"))?;
     if !out.status.success() {
@@ -331,138 +417,209 @@ fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String
     Ok(())
 }
 
-
-static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_helper_enabled(on: bool) {
-    ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+    ENABLED.store(on, Ordering::Relaxed);
 }
 
 pub fn helper_enabled() -> bool {
-    ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+    ENABLED.load(Ordering::Relaxed)
 }
 
-static MAIN: OnceLock<std::thread::ThreadId> = OnceLock::new();
+/// Recorded inside `Application::run` on GPUI's foreground UI thread so `with_client` never blocks UI frames.
+static UI_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
-pub fn note_main_thread() {
-    let _ = MAIN.set(std::thread::current().id());
+pub fn note_ui_thread() {
+    let _ = UI_THREAD.set(std::thread::current().id());
 }
 
-fn on_main_thread() -> bool {
-    MAIN.get() == Some(&std::thread::current().id())
+fn on_ui_thread() -> bool {
+    UI_THREAD.get() == Some(&std::thread::current().id())
 }
 
-static BACKOFF: Mutex<Option<(String, Instant)>> = Mutex::new(None);
-const CONNECT_BACKOFF_SECS: u64 = 60;
+#[derive(Default)]
+struct DistroState {
+    warming: bool,
+    backoff_until: Option<Instant>,
+}
+
+static STATES: OnceLock<Mutex<HashMap<String, DistroState>>> = OnceLock::new();
+
+fn states() -> &'static Mutex<HashMap<String, DistroState>> {
+    STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn cooling_down(distro: &str) -> bool {
-    let guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
-    matches!(
-        guard.as_ref(),
-        Some((failed, until)) if failed == distro && Instant::now() < *until
-    )
+    let guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    guard
+        .get(distro)
+        .and_then(|s| s.backoff_until)
+        .is_some_and(|until| Instant::now() < until)
 }
 
 fn record_connect_failure(distro: &str) {
-    let mut guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
-    *guard = Some((
-        distro.to_string(),
-        Instant::now() + std::time::Duration::from_secs(CONNECT_BACKOFF_SECS),
-    ));
+    let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    guard.entry(distro.to_string()).or_default().backoff_until =
+        Some(Instant::now() + Duration::from_secs(CONNECT_BACKOFF_SECS));
 }
 
-fn clear_connect_failure() {
-    let mut guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
-    *guard = None;
+fn clear_connect_failure(distro: &str) {
+    let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(s) = guard.get_mut(distro) {
+        s.backoff_until = None;
+    }
 }
 
-fn may_connect(on_main: bool, cooling: bool) -> bool {
-    !on_main && !cooling
+fn clear_all_backoffs() {
+    let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    for s in guard.values_mut() {
+        s.backoff_until = None;
+    }
 }
 
-static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn begin_warming(distro: &str) -> bool {
+    let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    let entry = guard.entry(distro.to_string()).or_default();
+    if entry.warming || entry.backoff_until.is_some_and(|until| Instant::now() < until) {
+        return false;
+    }
+    entry.warming = true;
+    true
+}
+
+fn finish_warming(distro: &str) {
+    let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(s) = guard.get_mut(distro) {
+        s.warming = false;
+    }
+}
+
+struct WarmGuard(String);
+
+impl Drop for WarmGuard {
+    fn drop(&mut self) {
+        finish_warming(&self.0);
+    }
+}
+
+/// Generation counter bumped by `drop_client()` so in-flight connects or contended drops never retain stale helpers.
+static CLIENT_GEN: AtomicU64 = AtomicU64::new(1);
+static CLIENT: OnceLock<Mutex<Option<(u64, RemoteClient)>>> = OnceLock::new();
+
+fn slot() -> &'static Mutex<Option<(u64, RemoteClient)>> {
+    CLIENT.get_or_init(|| Mutex::new(None))
+}
 
 pub fn warm(distro: &str) {
     if !helper_enabled() {
         return;
     }
-    // A live helper for this distro needs no warm-up.
+    let cur_gen = CLIENT_GEN.load(Ordering::SeqCst);
     if let Ok(mut guard) = slot().try_lock() {
-        if guard.as_mut().is_some_and(|c| c.distro == distro && !c.exited()) {
+        if guard
+            .as_mut()
+            .is_some_and(|(g, c)| *g == cur_gen && c.distro == distro && !c.exited())
+        {
             return;
         }
     }
-    // A failed install waits out the backoff instead of being hammered.
-    if cooling_down(distro) {
+    if !begin_warming(distro) {
         return;
     }
-    if WARMING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    let distro = distro.to_string();
+    let distro_name = distro.to_string();
     let spawned = std::thread::Builder::new()
         .name("wsl-helper".into())
         .spawn(move || {
-            with_client(&distro, |_| ());
-            WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+            let _guard = WarmGuard(distro_name.clone());
+            with_client(&distro_name, |_| ());
         });
     if spawned.is_err() {
-        WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+        finish_warming(distro);
     }
-}
-
-static CLIENT: OnceLock<Mutex<Option<RemoteClient>>> = OnceLock::new();
-
-fn slot() -> &'static Mutex<Option<RemoteClient>> {
-    CLIENT.get_or_init(|| Mutex::new(None))
 }
 
 pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> Option<T> {
     if !helper_enabled() {
         return None;
     }
-    let on_main = on_main_thread();
-    if on_main {
-        // The UI thread never connects or installs; it reuses a live helper or falls back.
+    let cur_gen = CLIENT_GEN.load(Ordering::SeqCst);
+    if on_ui_thread() {
+        // The UI thread never connects, installs, or blocks on a contended mutex.
         let mut guard = slot().try_lock().ok()?;
-        let stale = guard
+        let usable = guard
             .as_mut()
-            .map(|c| c.distro != *distro || c.exited())
-            .unwrap_or(true);
-        if stale {
+            .is_some_and(|(g, c)| *g == cur_gen && c.distro == distro && !c.exited());
+        if !usable {
+            if let Some((g, mut c)) = guard.take() {
+                if g != cur_gen || c.exited() {
+                    drop_in_background(c);
+                } else {
+                    *guard = Some((g, c));
+                }
+            }
             return None;
         }
-        let client = guard.as_mut()?;
-        return Some(f(client));
+        let out = {
+            let (_, client) = guard.as_mut()?;
+            f(client)
+        };
+        if guard.as_ref().is_some_and(|(_, c)| c.broken) {
+            if let Some((_, old)) = guard.take() {
+                drop_in_background(old);
+            }
+        }
+        return Some(out);
     }
-    if !may_connect(on_main, cooling_down(distro)) {
+
+    if cooling_down(distro) {
         return None;
     }
     let mut guard = slot().lock().ok()?;
+    let gen = CLIENT_GEN.load(Ordering::SeqCst);
     let stale = guard
         .as_mut()
-        .map(|c| c.distro != *distro || c.exited())
+        .map(|(g, c)| *g != gen || c.distro != distro || c.exited())
         .unwrap_or(true);
     if stale {
+        if cooling_down(distro) {
+            return None;
+        }
+        // Drop any old helper before starting a new connection (safe here on a background thread).
+        guard.take();
         match RemoteClient::connect(distro) {
             Ok(client) => {
-                clear_connect_failure();
-                *guard = Some(client);
+                clear_connect_failure(distro);
+                // If drop_client() raced with connect(), discard this helper instead of storing a stale one.
+                if CLIENT_GEN.load(Ordering::SeqCst) != gen {
+                    drop(client);
+                    return None;
+                }
+                *guard = Some((gen, client));
             }
             Err(_) => {
                 record_connect_failure(distro);
-                *guard = None;
+                return None;
             }
         }
     }
-    let client = guard.as_mut()?;
-    Some(f(client))
+    let out = {
+        let (_, client) = guard.as_mut()?;
+        f(client)
+    };
+    if guard.as_ref().is_some_and(|(_, c)| c.broken) {
+        guard.take();
+    }
+    Some(out)
 }
 
 pub fn drop_client() {
-    clear_connect_failure();
+    CLIENT_GEN.fetch_add(1, Ordering::SeqCst);
+    clear_all_backoffs();
     if let Ok(mut guard) = slot().try_lock() {
-        *guard = None;
+        if let Some((_, old)) = guard.take() {
+            drop_in_background(old);
+        }
     }
 }
 
@@ -471,11 +628,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn connect_is_allowed_only_off_the_main_thread_and_out_of_backoff() {
-        assert!(may_connect(false, false));
-        assert!(!may_connect(true, false));
-        assert!(!may_connect(false, true));
-        assert!(!may_connect(true, true));
+    fn ui_thread_detection_distinguishes_ui_and_worker_threads() {
+        note_ui_thread();
+        assert!(on_ui_thread());
+        let worker_saw_ui = std::thread::spawn(on_ui_thread).join().unwrap();
+        assert!(!worker_saw_ui);
+    }
+
+    #[test]
+    fn backoff_and_warming_are_tracked_per_distro() {
+        let a = "TestDistro-A-Backoff";
+        let b = "TestDistro-B-Backoff";
+        clear_connect_failure(a);
+        clear_connect_failure(b);
+
+        record_connect_failure(a);
+        assert!(cooling_down(a));
+        assert!(!cooling_down(b));
+
+        // Failing distro B must not erase distro A's backoff.
+        record_connect_failure(b);
+        assert!(cooling_down(a));
+        assert!(cooling_down(b));
+
+        clear_connect_failure(a);
+        assert!(!cooling_down(a));
+        assert!(cooling_down(b));
+
+        // Per-distro warming: warming A must not block warming B (when B is out of backoff).
+        clear_connect_failure(b);
+        assert!(begin_warming(a));
+        assert!(!begin_warming(a), "duplicate warm for same distro must be deduplicated");
+        assert!(begin_warming(b), "warming one distro must not block another distro");
+        finish_warming(a);
+        finish_warming(b);
+        assert!(begin_warming(a));
+        finish_warming(a);
+    }
+
+    #[test]
+    fn drop_client_bumps_generation_and_clears_backoffs_even_under_lock() {
+        let distro = "TestDistro-DropGen";
+        record_connect_failure(distro);
+        assert!(cooling_down(distro));
+
+        let gen_before = CLIENT_GEN.load(Ordering::SeqCst);
+        let held = slot().lock().unwrap();
+        // Calling drop_client while slot() is locked must never block, must bump gen, and must clear backoff.
+        let started = Instant::now();
+        drop_client();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(CLIENT_GEN.load(Ordering::SeqCst) > gen_before);
+        assert!(!cooling_down(distro));
+        drop(held);
+    }
+
+    #[test]
+    fn wedged_helper_times_out_instead_of_hanging_forever() {
+        let (client_in, _server_out) = std::io::pipe().unwrap();
+        let rx = spawn_frame_reader(client_in);
+        let started = Instant::now();
+        let err = recv_frame_from(&rx, Duration::from_millis(80)).unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(elapsed < Duration::from_secs(2), "timeout took {elapsed:?}");
+    }
+
+    #[test]
+    fn curl_commands_enforce_connect_and_total_timeouts() {
+        let dl = curl_download_args();
+        assert!(dl.windows(2).any(|w| w == ["--connect-timeout", "8"]), "{dl:?}");
+        assert!(dl.windows(2).any(|w| w == ["--max-time", "300"]), "{dl:?}");
+        let dg = curl_digest_args();
+        assert!(dg.windows(2).any(|w| w == ["--connect-timeout", "8"]), "{dg:?}");
+        assert!(dg.windows(2).any(|w| w == ["--max-time", "25"]), "{dg:?}");
     }
 
     #[test]
