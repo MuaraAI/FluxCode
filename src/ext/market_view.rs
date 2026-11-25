@@ -1084,6 +1084,8 @@ impl Workbench {
                 .text_color(c(theme::FG_STRONG))
                 .child(tr(t))
         };
+        let ext_id = format!("{}.{}", it.publisher, it.name);
+        let id_copied = self.ext.market.copied_id.as_deref() == Some(ext_id.as_str());
         let chip = |t: String| div().px_2().py(px(2.)).rounded(px(4.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::FG_MUTED)).child(t);
         let mut chips = h_flex().w_full().flex_wrap().gap_1p5();
         chips = chips.child(chip(format!("v{}", it.version)));
@@ -1093,7 +1095,47 @@ impl Workbench {
         for cat in &it.categories {
             chips = chips.child(chip(cat.clone()));
         }
-        chips = chips.child(chip(format!("{}.{}", it.publisher, it.name)));
+        let copy_id = ext_id.clone();
+        chips = chips.child(
+            h_flex()
+                .id("vsx-copy-id")
+                .gap_1()
+                .px_2()
+                .py(px(2.))
+                .rounded(px(4.))
+                .bg(c(theme::BG_ELEVATED))
+                .border_1()
+                .border_color(c(if id_copied { theme::GREEN } else { theme::BORDER }))
+                .text_xs()
+                .text_color(c(if id_copied { theme::FG_STRONG } else { theme::FG_MUTED }))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)).text_color(c(theme::FG_STRONG)))
+                .active(|s| s.opacity(0.8))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copy extension ID")).build(w, cx))
+                .child(ext_id)
+                .child(
+                    Icon::new(if id_copied { Ico::Check } else { Ico::Copy })
+                        .size(theme::u(11.))
+                        .text_color(c(if id_copied { theme::GREEN } else { theme::FG_DIM })),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copy_id.clone()));
+                    this.ext.market.copied_id = Some(copy_id.clone());
+                    this.status = crate::trf!("Copied {id}"; id => copy_id).into();
+                    let expect = copy_id.clone();
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(1600)).await;
+                        _ = this.update(cx, |this, cx| {
+                            if this.ext.market.copied_id.as_deref() == Some(expect.as_str()) {
+                                this.ext.market.copied_id = None;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
+                    cx.notify();
+                })),
+        );
         let body = v_flex()
             .w_full()
             .max_w(theme::u(820.))

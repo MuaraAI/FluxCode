@@ -1177,6 +1177,30 @@ impl PlatformWindow for WindowsWindow {
     fn a11y_update_window_bounds(&self) {
         // Windows UIA handles window bounds tracking automatically.
     }
+
+    fn start_window_move(&self) {
+        if !self.0.is_movable {
+            return;
+        }
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut pt).is_err() {
+                return;
+            }
+            let _ = ReleaseCapture();
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_GPUI_START_WINDOW_MOVE,
+                WPARAM(self.0.validation_number),
+                pack_cursor_lparam(pt.x, pt.y),
+            )
+            .log_err();
+        }
+    }
+}
+
+fn pack_cursor_lparam(x: i32, y: i32) -> LPARAM {
+    LPARAM((((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff)) as i32 as isize)
 }
 
 pub(crate) struct A11yState {
@@ -1840,5 +1864,15 @@ mod tests {
             state.update(MouseButton::Right, point(DevicePixels(10), DevicePixels(0))),
             1
         );
+    }
+
+    #[test]
+    fn test_pack_cursor_lparam() {
+        use crate::HiLoWord as _;
+        for (x, y) in [(0, 0), (640, 480), (-120, -45), (3840, -1080)] {
+            let lp = super::pack_cursor_lparam(x, y);
+            assert_eq!(lp.signed_loword(), x as i16);
+            assert_eq!(lp.signed_hiword(), y as i16);
+        }
     }
 }

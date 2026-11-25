@@ -550,6 +550,42 @@ fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
+const MAX_README_IMAGE_DIM: u32 = 6144;
+
+fn is_svg_path(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+}
+
+fn clamp_image_to(src: &Path, dst: &Path, max_dim: u32) -> Option<PathBuf> {
+    if is_svg_path(src) {
+        return Some(src.to_path_buf());
+    }
+    let (w, h) = image::image_dimensions(src).ok()?;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    if w <= max_dim && h <= max_dim {
+        return Some(src.to_path_buf());
+    }
+    // Downscale tall images (e.g. sprite sheets) under Direct3D's 16384px limit before GPUI uploads them.
+    let img = image::open(src).ok()?;
+    let scale = (max_dim as f64 / w as f64).min(max_dim as f64 / h as f64);
+    let nw = ((w as f64 * scale).round() as u32).max(1);
+    let nh = ((h as f64 * scale).round() as u32).max(1);
+    let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Triangle);
+    let png_dst = dst.with_extension("png");
+    let part = png_dst.with_extension("fit.part");
+    resized.save_with_format(&part, image::ImageFormat::Png).ok()?;
+    if png_dst.exists() {
+        let _ = std::fs::remove_file(&png_dst);
+    }
+    std::fs::rename(&part, &png_dst).ok()?;
+    if src == dst && src != png_dst {
+        let _ = std::fs::remove_file(src);
+    }
+    Some(png_dst)
+}
+
 pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String, PathBuf> {
     let cache = dir().join(".readme-images");
     let _ = std::fs::create_dir_all(&cache);
@@ -559,15 +595,22 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
             let key = sha1_smol::Sha1::from(url.as_bytes()).digest().to_string();
             let known = ["png", "jpg", "gif", "webp", "bmp", "svg"].iter().map(|e| cache.join(format!("{key}.{e}"))).find(|p| p.is_file());
             if let Some(p) = known {
-                out.insert(url, p);
+                if let Some(ready) = clamp_image_to(&p, &p, MAX_README_IMAGE_DIM) {
+                    out.insert(url, ready);
+                }
                 continue;
             }
             let part = cache.join(format!("{key}.part"));
             if download(&url, &part, 15, 6_000_000).is_ok() {
                 if let Some(ext) = std::fs::read(&part).ok().as_deref().and_then(sniff_image) {
                     let to = cache.join(format!("{key}.{ext}"));
+                    if to.exists() {
+                        let _ = std::fs::remove_file(&to);
+                    }
                     if std::fs::rename(&part, &to).is_ok() {
-                        out.insert(url, to);
+                        if let Some(ready) = clamp_image_to(&to, &to, MAX_README_IMAGE_DIM) {
+                            out.insert(url, ready);
+                        }
                         continue;
                     }
                 }
@@ -577,7 +620,16 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
             let rel = url.trim_start_matches("./").split(['?', '#']).next().unwrap_or("");
             let p = folder.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             if p.is_file() && p.starts_with(folder) {
-                out.insert(url, p);
+                let key = sha1_smol::Sha1::from(p.to_string_lossy().as_bytes()).digest().to_string();
+                let fit = cache.join(format!("{key}-local.png"));
+                let ready = if fit.is_file() {
+                    Some(fit)
+                } else {
+                    clamp_image_to(&p, &fit, MAX_README_IMAGE_DIM)
+                };
+                if let Some(ready) = ready {
+                    out.insert(url, ready);
+                }
             }
         }
     }
@@ -861,6 +913,7 @@ pub struct Market {
     pub installed: Vec<Installed>,
     pub busy: HashMap<String, Busy>,
     pub open: Option<Item>,
+    pub copied_id: Option<String>,
     pub readme: HashMap<String, Result<String, String>>,
     pub readme_images: HashMap<String, std::sync::Arc<HashMap<String, PathBuf>>>,
 }
@@ -1187,5 +1240,22 @@ mod tests {
         );
         assert_eq!(i.contributes, ["1 color theme"]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clamp_image_downscales_oversized_png_and_keeps_small() {
+        let dir = std::env::temp_dir().join(format!("fx-img-clamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.png");
+        image::RgbaImage::new(100, 200).save_with_format(&small, image::ImageFormat::Png).unwrap();
+        assert_eq!(clamp_image_to(&small, &small, 400).as_deref(), Some(small.as_path()));
+        assert_eq!(image::image_dimensions(&small).unwrap(), (100, 200));
+
+        let tall = dir.join("tall.png");
+        image::RgbaImage::new(80, 400).save_with_format(&tall, image::ImageFormat::Png).unwrap();
+        let out = clamp_image_to(&tall, &tall, 200).unwrap();
+        assert_eq!(out, tall);
+        assert_eq!(image::image_dimensions(&tall).unwrap(), (40, 200));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
