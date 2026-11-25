@@ -3,9 +3,10 @@ use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use super::proto::{
-    read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, Stat, FRAME_BYTES, FRAME_JSON, PROTOCOL_VERSION,
+    read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, FRAME_BYTES, FRAME_JSON, PROTOCOL_VERSION,
 };
 use super::WslTarget;
 
@@ -85,10 +86,6 @@ impl RemoteClient {
 
     pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
         self.json(Request::List { path: path.to_string() })
-    }
-
-    pub fn stat(&mut self, path: &str) -> Result<Stat, String> {
-        self.json(Request::Stat { path: path.to_string() })
     }
 
     pub fn read(&mut self, path: &str, limit: u64) -> Result<Vec<u8>, String> {
@@ -214,7 +211,17 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
         build = crate::update::BUILD
     );
     let mut cmd = crate::proc::command("curl");
-    cmd.args(["-sSL", "--fail", "-o"]).arg(&tmp).arg(&url);
+    cmd.args([
+        "-sSL",
+        "--fail",
+        "--connect-timeout",
+        "8",
+        "--max-time",
+        "300",
+        "-o",
+    ])
+    .arg(&tmp)
+    .arg(&url);
     let out = cmd.output().map_err(|e| format!("curl could not start ({e})"))?;
     if !out.status.success() || !tmp.is_file() {
         return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
@@ -232,7 +239,17 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
 fn release_digest(asset: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}", crate::update::BUILD);
     let out = crate::proc::command("curl")
-        .args(["-sSL", "--fail", "-H", "Accept: application/vnd.github+json", &url])
+        .args([
+            "-sSL",
+            "--fail",
+            "--connect-timeout",
+            "8",
+            "--max-time",
+            "25",
+            "-H",
+            "Accept: application/vnd.github+json",
+            &url,
+        ])
         .output()
         .map_err(|e| format!("curl could not start ({e})"))?;
     if !out.status.success() {
@@ -325,6 +342,75 @@ pub fn helper_enabled() -> bool {
     ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static MAIN: OnceLock<std::thread::ThreadId> = OnceLock::new();
+
+pub fn note_main_thread() {
+    let _ = MAIN.set(std::thread::current().id());
+}
+
+fn on_main_thread() -> bool {
+    MAIN.get() == Some(&std::thread::current().id())
+}
+
+static BACKOFF: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+const CONNECT_BACKOFF_SECS: u64 = 60;
+
+fn cooling_down(distro: &str) -> bool {
+    let guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
+    matches!(
+        guard.as_ref(),
+        Some((failed, until)) if failed == distro && Instant::now() < *until
+    )
+}
+
+fn record_connect_failure(distro: &str) {
+    let mut guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some((
+        distro.to_string(),
+        Instant::now() + std::time::Duration::from_secs(CONNECT_BACKOFF_SECS),
+    ));
+}
+
+fn clear_connect_failure() {
+    let mut guard = BACKOFF.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = None;
+}
+
+fn may_connect(on_main: bool, cooling: bool) -> bool {
+    !on_main && !cooling
+}
+
+static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn warm(distro: &str) {
+    if !helper_enabled() {
+        return;
+    }
+    // A live helper for this distro needs no warm-up.
+    if let Ok(mut guard) = slot().try_lock() {
+        if guard.as_mut().is_some_and(|c| c.distro == distro && !c.exited()) {
+            return;
+        }
+    }
+    // A failed install waits out the backoff instead of being hammered.
+    if cooling_down(distro) {
+        return;
+    }
+    if WARMING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let distro = distro.to_string();
+    let spawned = std::thread::Builder::new()
+        .name("wsl-helper".into())
+        .spawn(move || {
+            with_client(&distro, |_| ());
+            WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 static CLIENT: OnceLock<Mutex<Option<RemoteClient>>> = OnceLock::new();
 
 fn slot() -> &'static Mutex<Option<RemoteClient>> {
@@ -335,20 +421,47 @@ pub fn with_client<T>(distro: &str, f: impl FnOnce(&mut RemoteClient) -> T) -> O
     if !helper_enabled() {
         return None;
     }
+    let on_main = on_main_thread();
+    if on_main {
+        // The UI thread never connects or installs; it reuses a live helper or falls back.
+        let mut guard = slot().try_lock().ok()?;
+        let stale = guard
+            .as_mut()
+            .map(|c| c.distro != *distro || c.exited())
+            .unwrap_or(true);
+        if stale {
+            return None;
+        }
+        let client = guard.as_mut()?;
+        return Some(f(client));
+    }
+    if !may_connect(on_main, cooling_down(distro)) {
+        return None;
+    }
     let mut guard = slot().lock().ok()?;
     let stale = guard
         .as_mut()
         .map(|c| c.distro != *distro || c.exited())
         .unwrap_or(true);
     if stale {
-        *guard = RemoteClient::connect(distro).ok();
+        match RemoteClient::connect(distro) {
+            Ok(client) => {
+                clear_connect_failure();
+                *guard = Some(client);
+            }
+            Err(_) => {
+                record_connect_failure(distro);
+                *guard = None;
+            }
+        }
     }
     let client = guard.as_mut()?;
     Some(f(client))
 }
 
 pub fn drop_client() {
-    if let Ok(mut guard) = slot().lock() {
+    clear_connect_failure();
+    if let Ok(mut guard) = slot().try_lock() {
         *guard = None;
     }
 }
@@ -356,6 +469,14 @@ pub fn drop_client() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_is_allowed_only_off_the_main_thread_and_out_of_backoff() {
+        assert!(may_connect(false, false));
+        assert!(!may_connect(true, false));
+        assert!(!may_connect(false, true));
+        assert!(!may_connect(true, true));
+    }
 
     #[test]
     fn the_helper_is_off_until_it_is_turned_on() {

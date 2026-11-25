@@ -11,6 +11,14 @@
 // Lines starting with // before the first @release are comments.
 
 @release 2026-11-25
+@title en: A WSL folder no longer freezes the window at startup
+@title id: Folder WSL tidak lagi membekukan jendela saat mulai
+@en
+With **Read WSL folders through a helper in the distro** on, the first launch after an update installed the helper on the window's own thread: the window stopped responding until the ~13 MB download finished, and a slow connection could keep it there for minutes. FluxCode now opens at once, reading the folder through the shared path while the helper installs in the background. The download has a connect and a total timeout, and an install that fails is not retried on every call.
+@id
+Dengan **Baca folder WSL lewat helper di dalam distro** aktif, peluncuran pertama setelah pembaruan memasang helper di thread jendela: jendela berhenti merespons sampai unduhan ~13 MB selesai, dan koneksi lambat bisa menahannya bermenit-menit. Sekarang FluxCode langsung terbuka, membaca folder lewat jalur bersama sementara helper dipasang di latar belakang. Unduhan punya batas waktu koneksi dan total, dan pemasangan yang gagal tidak dicoba ulang di setiap pemanggilan.
+
+@release 2026-11-25
 @title en: WizTree AI & Disk Analyzer, Smart Agent Queue, Interactive Tables, Editable Bedrock NBT, Multi-Terminal, and Native UI Precision
 @title id: WizTree AI & Penganalisis Disk, Queue Agent Cerdas, Tabel Interaktif, Edit NBT Bedrock, Multi-Terminal, dan Presisi UI Native
 @en

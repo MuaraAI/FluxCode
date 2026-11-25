@@ -82,6 +82,7 @@ fn main() {
         Some("--wiztree") => std::process::exit(wiztree::cli(&argv[2..])),
         _ => {}
     }
+    crate::remote::note_main_thread();
     boot::start();
     let paths: Vec<PathBuf> = std::env::args_os()
         .skip(1)

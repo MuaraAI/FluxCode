@@ -759,6 +759,9 @@ impl Workbench {
         if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
             crate::remote::drop_client();
         }
+        if let Some(t) = &self.wsl {
+            crate::remote::warm(&t.distro);
+        }
         if !self.terms[self.term_ix].proc.is_some_and(|id| self.procs.is_running(id)) {
             self.terms[self.term_ix].cwd = root.clone();
         }
@@ -883,7 +886,7 @@ impl Workbench {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        if read_off_thread(&path) || self.wsl.is_some() {
+        if self.wsl.is_some() || read_off_thread(&path) {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
@@ -1140,7 +1143,7 @@ impl Workbench {
         if doc.loading && !sync {
             return;
         }
-        if !sync && (read_off_thread(&path) || self.wsl.is_some()) {
+        if !sync && (self.wsl.is_some() || read_off_thread(&path)) {
             self.docs[ix].loading = true;
             cx.notify();
             let wsl = self.wsl.clone();
@@ -1878,14 +1881,10 @@ impl Workbench {
     fn restore_session(&mut self, then: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
         self.workspace.extra = s.extra.into_iter().filter(|p| p.is_dir()).collect();
-        let saved_root = s.root.filter(|r| match crate::remote::WslTarget::from_path(r) {
-            Some(t) => remote_is_dir(&t, r).unwrap_or_else(|| r.is_dir()),
-            None => r.is_dir(),
-        });
+        let saved_root = s.root.filter(|r| r.is_dir());
         if let Some(root) = saved_root {
             self.open_folder(root, cx);
         }
-        let wsl = self.wsl.clone();
         let raw_files = s.files;
         let active = s.active;
         if raw_files.is_empty() {
@@ -1898,13 +1897,7 @@ impl Workbench {
         cx.spawn_in(window, async move |this, cx| {
             let existing: Vec<PathBuf> = cx
                 .background_spawn(async move {
-                    raw_files
-                        .into_iter()
-                        .filter(|f| match &wsl {
-                            Some(t) => remote_is_file(t, f).unwrap_or_else(|| f.is_file()),
-                            None => f.is_file(),
-                        })
-                        .collect()
+                    raw_files.into_iter().filter(|f| f.is_file()).collect()
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
@@ -4584,23 +4577,11 @@ fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes
     crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
 }
 
-fn remote_is_file(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
-    let distro = target.distro.clone();
-    let linux = target.linux_path(path)?;
-    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_file)
-}
-
 fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(root)?;
     let paths = crate::remote::with_client(&distro, |c| c.scan(&linux, max).ok()).flatten()?;
     Some(paths.into_iter().map(|p| target.unc_path(&p).to_string_lossy().into_owned()).collect())
-}
-
-fn remote_is_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<bool> {
-    let distro = target.distro.clone();
-    let linux = target.linux_path(path)?;
-    crate::remote::with_client(&distro, |c| c.stat(&linux).ok()).flatten().map(|s| s.is_dir)
 }
 
 static TAB_SCROLL_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
