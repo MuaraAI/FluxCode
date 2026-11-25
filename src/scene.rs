@@ -123,10 +123,13 @@ impl Render for Shell {
         style.size.height = Some(relative(1.).into());
         static SCENE_ONLY: OnceLock<bool> = OnceLock::new();
         let only = *SCENE_ONLY.get_or_init(|| std::env::var_os("FLUXCODE_SCENE_ONLY").is_some_and(|v| v == "1"));
+        let vp = window.viewport_size();
+        // Cull animated backdrop when viewport is minimized/zero-sized or no backdrop opacity is active.
+        let show_backdrop = active() && (only || crate::theme::has_scene_backdrop()) && vp.width > px(1.) && vp.height > px(1.);
         div()
             .size_full()
             .relative()
-            .when(active(), |d| d.child(div().absolute().inset_0().child(self.backdrop.clone())))
+            .when(show_backdrop, |d| d.child(div().absolute().inset_0().child(self.backdrop.clone())))
             .when(!only, |d| d.child(self.workbench.clone().cached(style)))
     }
 }
@@ -171,9 +174,10 @@ impl Backdrop {
 impl Render for Backdrop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.idle = !window.is_window_active();
-        let scene = current();
-        let animate = ANIMATE.load(Ordering::Relaxed) && !cx.reduce_motion();
-        if scene.is_some() && animate {
+        let vp = window.viewport_size();
+        let scene = if vp.width > px(1.) && vp.height > px(1.) { current() } else { None };
+        let animate = scene.is_some() && ANIMATE.load(Ordering::Relaxed) && !cx.reduce_motion();
+        if animate {
             self.tick(cx);
         }
         let t = if animate { clock() } else { 12. };

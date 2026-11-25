@@ -610,6 +610,18 @@ impl Workbench {
         }
         let path = self.docs[ix].path.clone();
         let wsl = self.wsl.clone();
+        let source = self.docs[ix].text(cx);
+        let runtimes = if wsl.is_some() {
+            if self.wsl_runtimes == 0 { u32::MAX } else { self.wsl_runtimes }
+        } else {
+            let mask = local_runtimes_mask();
+            if mask == 0 { probe_local_runtimes(self.root.as_deref()) } else { mask }
+        };
+        if let RunVerdict::NotRunnable(reason) = check_script_runnable(&path, &source, self.root.as_deref(), wsl.is_some(), runtimes) {
+            self.status = crate::trf!("{0} can't be run: {1}"; 0 => self.docs[ix].name, 1 => tr(reason)).into();
+            cx.notify();
+            return;
+        }
         let Some((mut program, mut args)) = run_command_for(&path, self.root.as_deref()) else {
             self.status = crate::trf!("Don't know how to run {0}"; 0 => self.docs[ix].name).into();
             cx.notify();
@@ -795,11 +807,13 @@ impl Workbench {
         let rope_len = editor.read(cx).text().len();
 
         if rope_len <= MAX_SYNC_DIAG_BYTES {
+            let source = editor.read(cx).value();
             let code_diags = if is_nbt {
-                crate::nbt::diagnose(&editor.read(cx).value())
+                crate::nbt::diagnose(&source)
             } else {
-                lang.map(|l| crate::diagnostics::analyze(&editor.read(cx).value(), l)).unwrap_or_default()
+                lang.map(|l| crate::diagnostics::analyze(&source, l)).unwrap_or_default()
             };
+            self.refresh_doc_runnability_with(ix, &source);
             let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
             let warn_n = code_diags.len() - err_n;
             editor.update(cx, |ed, cx| {
@@ -1707,23 +1721,11 @@ impl Workbench {
         let scroll = if terminal { self.terms[self.term_ix].scroll.clone() } else { self.out_scroll.clone() };
         let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
         let mono_font = theme::resolve_mono_font(&self.settings.font_family, cx);
-        let m = {
-            let ts = window.text_system();
-            let id = ts.resolve_font(&font(mono_font.clone()));
-            let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
-            Metrics { row: px((f32::from(font_size) * 1.6).round()), em }
-        };
+        let (m, avg) = panel_font_metrics(window, &mono_font, font_size);
         let (width, height) = self.panel_size.get();
         let cols = if width <= 0. {
             Cols { mono: 160, card: 160, result: 160 }
         } else {
-            let avg = {
-                let ts = window.text_system();
-                let id = ts.resolve_font(&font(UI_FONT));
-                let sample = "Python doesn't know this name, check the spelling: Main.java:12";
-                let w: f32 = sample.chars().map(|ch| ts.advance(id, font_size, ch).map(|s| f32::from(s.width)).unwrap_or(m.em)).sum();
-                (w / sample.chars().count() as f32).max(3.) * 1.08
-            };
             let fit = |indent: f32, per: f32| (((width - indent - f32::from(theme::u(12.)) - 6.) / per).floor() as usize).max(16);
             Cols { mono: fit(f32::from(theme::u(12.)), m.em).max(24), card: fit(f32::from(theme::u(46.)) + 2., avg), result: fit(f32::from(theme::u(34.)), avg) }
         };
@@ -1933,6 +1935,32 @@ struct Metrics {
     em: f32,
 }
 
+fn panel_font_metrics(window: &Window, mono_font: &SharedString, font_size: Pixels) -> (Metrics, f32) {
+    type Cached = (SharedString, u32, u32, Metrics, f32);
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<Cached>> = const { std::cell::RefCell::new(None) };
+    }
+    let fs_bits = f32::from(font_size).to_bits();
+    let sc_bits = theme::scale().to_bits();
+    CACHE.with(|cell| {
+        if let Some((f, fb, sb, m, avg)) = cell.borrow().as_ref() {
+            if f == mono_font && *fb == fs_bits && *sb == sc_bits {
+                return (*m, *avg);
+            }
+        }
+        let ts = window.text_system();
+        let id = ts.resolve_font(&font(mono_font.clone()));
+        let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
+        let m = Metrics { row: px((f32::from(font_size) * 1.6).round()), em };
+        let ui_id = ts.resolve_font(&font(UI_FONT));
+        let sample = "Python doesn't know this name, check the spelling: Main.java:12";
+        let w: f32 = sample.chars().map(|ch| ts.advance(ui_id, font_size, ch).map(|s| f32::from(s.width)).unwrap_or(em)).sum();
+        let avg = (w / sample.chars().count() as f32).max(3.) * 1.08;
+        *cell.borrow_mut() = Some((mono_font.clone(), fs_bits, sc_bits, m, avg));
+        (m, avg)
+    })
+}
+
 fn prompt_place(short: &str, width: f32) -> String {
     if width <= 0. {
         return term::fit_path_left(short, 40);
@@ -1995,14 +2023,505 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     }
 }
 
-const RUNNABLE: &[&str] = &[
-    "py", "pyw", "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts",
-    "ps1", "bat", "cmd", "sh", "rs", "go", "java", "dart", "zig", "swift",
-    "php", "lua", "rb", "pl", "exs",
-];
+pub(crate) const RT_PYTHON: u32 = 1 << 0;
+pub(crate) const RT_NODE: u32 = 1 << 1;
+pub(crate) const RT_NPX: u32 = 1 << 2;
+pub(crate) const RT_POWERSHELL: u32 = 1 << 3;
+pub(crate) const RT_CMD: u32 = 1 << 4;
+pub(crate) const RT_BASH: u32 = 1 << 5;
+pub(crate) const RT_CARGO: u32 = 1 << 6;
+pub(crate) const RT_GO: u32 = 1 << 7;
+pub(crate) const RT_JAVA: u32 = 1 << 8;
+pub(crate) const RT_DART: u32 = 1 << 9;
+pub(crate) const RT_ZIG: u32 = 1 << 10;
+pub(crate) const RT_SWIFT: u32 = 1 << 11;
+pub(crate) const RT_PHP: u32 = 1 << 12;
+pub(crate) const RT_LUA: u32 = 1 << 13;
+pub(crate) const RT_RUBY: u32 = 1 << 14;
+pub(crate) const RT_PERL: u32 = 1 << 15;
+pub(crate) const RT_ELIXIR: u32 = 1 << 16;
 
-pub(crate) fn can_run(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE.contains(&e.to_ascii_lowercase().as_str()))
+static LOCAL_RUNTIMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn local_runtimes_mask() -> u32 {
+    LOCAL_RUNTIMES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn runtime_bit_for_stem(stem_lower: &str) -> u32 {
+    match stem_lower {
+        "py" | "python" | "python3" => RT_PYTHON,
+        "node" => RT_NODE,
+        "npx" => RT_NPX,
+        "powershell" | "pwsh" => RT_POWERSHELL,
+        "cmd" => RT_CMD,
+        "bash" => RT_BASH,
+        "cargo" => RT_CARGO,
+        "go" => RT_GO,
+        "java" => RT_JAVA,
+        "dart" => RT_DART,
+        "zig" => RT_ZIG,
+        "swift" => RT_SWIFT,
+        "php" => RT_PHP,
+        "lua" => RT_LUA,
+        "ruby" => RT_RUBY,
+        "perl" => RT_PERL,
+        "elixir" => RT_ELIXIR,
+        _ => 0,
+    }
+}
+
+/// Scans PATH once per workspace off the UI thread so render() reads an atomic bitmask in O(1).
+pub(crate) fn probe_local_runtimes(workspace: Option<&Path>) -> u32 {
+    let mut mask = 0u32;
+    if let Some(ws) = workspace {
+        for venv in [".venv", "venv", "env"] {
+            let p = if cfg!(windows) {
+                ws.join(venv).join("Scripts").join("python.exe")
+            } else {
+                ws.join(venv).join("bin").join("python")
+            };
+            if p.is_file() {
+                mask |= RT_PYTHON;
+                break;
+            }
+        }
+    }
+    if let Some(path_env) = std::env::var_os("PATH") {
+        let exts: Vec<String> = if cfg!(windows) {
+            std::env::var("PATHEXT")
+                .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+                .split(';')
+                .filter(|e| !e.is_empty())
+                .map(|e| e.to_ascii_lowercase())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for dir in std::env::split_paths(&path_env) {
+            let Ok(entries) = std::fs::read_dir(dir) else { continue };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let s = name.to_string_lossy();
+                let lower = s.to_ascii_lowercase();
+                let (stem, valid_ext) = if cfg!(windows) {
+                    if let Some((st, ex)) = lower.rsplit_once('.') {
+                        let dot_ext = format!(".{ex}");
+                        (st, exts.iter().any(|allowed| allowed == &dot_ext))
+                    } else {
+                        ("", false)
+                    }
+                } else {
+                    (lower.as_str(), true)
+                };
+                if !valid_ext {
+                    continue;
+                }
+                let bit = runtime_bit_for_stem(stem);
+                if bit != 0 && (mask & bit) == 0 && entry.file_type().map(|t| !t.is_dir()).unwrap_or(false) {
+                    mask |= bit;
+                }
+            }
+        }
+    }
+    LOCAL_RUNTIMES.store(mask, std::sync::atomic::Ordering::Relaxed);
+    mask
+}
+
+pub(crate) fn probe_wsl_runtimes(target: &crate::remote::WslTarget) -> u32 {
+    let script = concat!(
+        "for c in python3 node npx bash cargo go java dart zig swift php lua ruby perl elixir; do ",
+        "command -v \"$c\" >/dev/null 2>&1 && printf '%s\\n' \"$c\"; ",
+        "done"
+    );
+    let Ok(out) = crate::remote::program_command(target, &target.linux_root, "sh", &["-c", script]).output() else {
+        return 0;
+    };
+    let mut mask = 0u32;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        mask |= runtime_bit_for_stem(line.trim());
+    }
+    mask
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RunVerdict {
+    Runnable(&'static str),
+    NotRunnable(&'static str),
+}
+
+fn runtime_spec_for_ext(ext: &str) -> Option<(u32, &'static str)> {
+    Some(match ext {
+        "py" | "pyw" => (RT_PYTHON, "Python"),
+        "js" | "jsx" | "mjs" | "cjs" => (RT_NODE, "Node.js"),
+        "ts" | "tsx" | "mts" | "cts" => (RT_NPX, "TypeScript"),
+        "ps1" => (RT_POWERSHELL, "PowerShell"),
+        "bat" | "cmd" => (RT_CMD, "Batch"),
+        "sh" => (RT_BASH, "Bash"),
+        "rs" => (RT_CARGO, "Cargo"),
+        "go" => (RT_GO, "Go"),
+        "java" => (RT_JAVA, "Java"),
+        "dart" => (RT_DART, "Dart"),
+        "zig" => (RT_ZIG, "Zig"),
+        "swift" => (RT_SWIFT, "Swift"),
+        "php" => (RT_PHP, "PHP"),
+        "lua" => (RT_LUA, "Lua"),
+        "rb" => (RT_RUBY, "Ruby"),
+        "pl" => (RT_PERL, "Perl"),
+        "exs" => (RT_ELIXIR, "Elixir"),
+        _ => return None,
+    })
+}
+
+fn find_ancestor_file(path: &Path, filename: &str, root: Option<&Path>, max_depth: usize) -> Option<PathBuf> {
+    let mut dir = path.parent()?;
+    for _ in 0..max_depth {
+        let cand = dir.join(filename);
+        if cand.is_file() {
+            return Some(cand);
+        }
+        if root.is_some_and(|r| dir == r) {
+            break;
+        }
+        dir = dir.parent()?;
+    }
+    None
+}
+
+fn is_bedrock_pack_script(path: &Path, head: &str, root: Option<&Path>) -> bool {
+    for comp in path.components() {
+        let s = comp.as_os_str().to_string_lossy();
+        if s.eq_ignore_ascii_case("behavior_packs")
+            || s.eq_ignore_ascii_case("development_behavior_packs")
+            || s.eq_ignore_ascii_case("resource_packs")
+            || s.eq_ignore_ascii_case("development_resource_packs")
+        {
+            return true;
+        }
+    }
+    if head.contains("@minecraft/") || head.contains("mojang-minecraft") {
+        return true;
+    }
+    if let Some(manifest) = find_ancestor_file(path, "manifest.json", root, 6) {
+        if let Ok(raw) = std::fs::read_to_string(manifest) {
+            if raw.contains("\"format_version\"")
+                && raw.contains("\"modules\"")
+                && (raw.contains("\"script\"") || raw.contains("\"data\"") || raw.contains("\"resources\""))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_non_empty_code(source: &str, ext: &str) -> bool {
+    let mut in_block = false;
+    for raw in source.lines().take(512) {
+        let mut s = raw.trim();
+        if in_block {
+            if let Some((_, after)) = s.split_once("*/") {
+                in_block = false;
+                s = after.trim();
+            } else {
+                continue;
+            }
+        }
+        if s.is_empty() {
+            continue;
+        }
+        match ext {
+            "py" | "pyw" | "sh" | "rb" | "pl" | "exs" => {
+                if s.starts_with('#') {
+                    continue;
+                }
+            }
+            "bat" | "cmd" => {
+                let low = s.to_ascii_lowercase();
+                if low.starts_with("rem ") || low == "rem" || low.starts_with("::") || low == "@echo off" {
+                    continue;
+                }
+            }
+            "ps1" => {
+                if s.starts_with('#') {
+                    continue;
+                }
+            }
+            "lua" => {
+                if s.starts_with("--") {
+                    continue;
+                }
+            }
+            _ => {
+                if s.starts_with("//") {
+                    continue;
+                }
+                if s.starts_with("/*") {
+                    if let Some((_, after)) = s.split_once("*/") {
+                        if after.trim().is_empty() {
+                            continue;
+                        }
+                    } else {
+                        in_block = true;
+                        continue;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    false
+}
+
+fn is_host_framework_import(head: &str) -> bool {
+    const HOSTS: &[&str] = &[
+        "'react'", "\"react\"", "'react-dom", "\"react-dom", "'vue'", "\"vue\"",
+        "'svelte'", "\"svelte\"", "'next/", "\"next/", "'@angular/", "\"@angular/",
+        "'electron'", "\"electron\"", "'vscode'", "\"vscode\"", "'obsidian'", "\"obsidian\"",
+        "'three'", "\"three\"",
+    ];
+    HOSTS.iter().any(|p| head.contains(p))
+}
+
+fn starts_with_kw(stmt: &str, kw: &str) -> bool {
+    stmt.strip_prefix(kw).is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == '{' || c == '*' || c == '('))
+}
+
+fn js_has_top_level_execution(source: &str) -> bool {
+    let mut depth = 0i32;
+    let mut in_block = false;
+    let mut stmt = String::new();
+    let mut saw_export = false;
+
+    let check_stmt = |raw: &str, saw_export: &mut bool| -> bool {
+        let s = raw.trim().trim_start_matches(';').trim();
+        if s.is_empty() || s == "'use strict'" || s == "\"use strict\"" {
+            return false;
+        }
+        if starts_with_kw(s, "export") {
+            *saw_export = true;
+            return false;
+        }
+        if s.starts_with("module.exports") || s.starts_with("exports.") {
+            *saw_export = true;
+            return false;
+        }
+        !(starts_with_kw(s, "import")
+            || starts_with_kw(s, "function")
+            || starts_with_kw(s, "async function")
+            || starts_with_kw(s, "class")
+            || starts_with_kw(s, "abstract")
+            || starts_with_kw(s, "interface")
+            || starts_with_kw(s, "type")
+            || starts_with_kw(s, "enum")
+            || starts_with_kw(s, "declare")
+            || starts_with_kw(s, "namespace")
+            || starts_with_kw(s, "const")
+            || starts_with_kw(s, "let")
+            || starts_with_kw(s, "var"))
+    };
+
+    for raw_line in source.lines().take(2048) {
+        let mut line = raw_line;
+        loop {
+            if in_block {
+                if let Some((_, after)) = line.split_once("*/") {
+                    in_block = false;
+                    line = after;
+                } else {
+                    line = "";
+                    break;
+                }
+            }
+            if let Some(pos) = line.find("/*") {
+                let before = &line[..pos];
+                let rest = &line[pos + 2..];
+                if !before.is_empty() && depth == 0 {
+                    stmt.push_str(before);
+                    stmt.push(' ');
+                }
+                for ch in before.chars() {
+                    match ch {
+                        '{' | '(' | '[' => depth += 1,
+                        '}' | ')' | ']' => depth = (depth - 1).max(0),
+                        ';' if depth == 0 => {
+                            if check_stmt(&stmt, &mut saw_export) {
+                                return true;
+                            }
+                            stmt.clear();
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some((_, after)) = rest.split_once("*/") {
+                    line = after;
+                } else {
+                    in_block = true;
+                    line = "";
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let code = line.split("//").next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+        if depth == 0 && !stmt.is_empty() && !stmt.ends_with(' ') {
+            stmt.push(' ');
+        }
+        for ch in code.chars() {
+            if depth == 0 {
+                stmt.push(ch);
+            }
+            match ch {
+                '{' | '(' | '[' => depth += 1,
+                '}' | ')' | ']' => {
+                    depth = (depth - 1).max(0);
+                    if depth == 0 && ch == '}' {
+                        if check_stmt(&stmt, &mut saw_export) {
+                            return true;
+                        }
+                        stmt.clear();
+                    }
+                }
+                ';' if depth == 0 => {
+                    if check_stmt(&stmt, &mut saw_export) {
+                        return true;
+                    }
+                    stmt.clear();
+                }
+                _ => {}
+            }
+        }
+        if depth == 0 && !stmt.trim().is_empty() && !stmt.trim_end().ends_with(['=', ',', '+', '-', '*', '/', ':', '?', '&', '|']) {
+            // Handle ASI single-line calls like `main()` without trailing semicolon.
+            let candidate = stmt.trim();
+            if !starts_with_kw(candidate, "import") && !starts_with_kw(candidate, "export") {
+                if check_stmt(candidate, &mut saw_export) {
+                    return true;
+                }
+                stmt.clear();
+            }
+        }
+    }
+    if !stmt.trim().is_empty() && check_stmt(&stmt, &mut saw_export) {
+        return true;
+    }
+    !saw_export && (source.contains("console.") || source.contains("process."))
+}
+
+pub(crate) fn check_script_runnable(
+    path: &Path,
+    source: &str,
+    root: Option<&Path>,
+    wsl: bool,
+    runtimes: u32,
+) -> RunVerdict {
+    let Some(ext_raw) = path.extension().and_then(|e| e.to_str()) else {
+        return RunVerdict::NotRunnable("Not a runnable script");
+    };
+    let ext = ext_raw.to_ascii_lowercase();
+    let Some((bit, label)) = runtime_spec_for_ext(&ext) else {
+        return RunVerdict::NotRunnable("Not a runnable script");
+    };
+    if (wsl || !cfg!(windows)) && matches!(ext.as_str(), "ps1" | "bat" | "cmd") {
+        return RunVerdict::NotRunnable("Windows script not runnable here");
+    }
+    if (runtimes & bit) == 0 {
+        return RunVerdict::NotRunnable("Runtime not installed");
+    }
+    let head = if source.len() > 16_384 {
+        let mut end = 16_384;
+        while !source.is_char_boundary(end) {
+            end -= 1;
+        }
+        &source[..end]
+    } else {
+        source
+    };
+    if !has_non_empty_code(head, &ext) {
+        return RunVerdict::NotRunnable("File has no executable code");
+    }
+    let name_lower = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts" => {
+            if matches!(ext.as_str(), "jsx" | "tsx") {
+                return RunVerdict::NotRunnable("UI component module is not directly runnable");
+            }
+            if name_lower.ends_with(".d.ts")
+                || name_lower.ends_with(".d.mts")
+                || name_lower.ends_with(".d.cts")
+                || name_lower.ends_with(".min.js")
+                || name_lower.contains(".config.")
+                || name_lower.contains(".test.")
+                || name_lower.contains(".spec.")
+            {
+                return RunVerdict::NotRunnable("Module, config, or type declaration is not standalone");
+            }
+            if is_bedrock_pack_script(path, head, root) {
+                return RunVerdict::NotRunnable("Minecraft Bedrock script requires the game runtime");
+            }
+            if is_host_framework_import(head) {
+                return RunVerdict::NotRunnable("Browser or host-app module cannot run standalone");
+            }
+            if !js_has_top_level_execution(source) {
+                return RunVerdict::NotRunnable("Library module has no top-level entrypoint");
+            }
+        }
+        "py" | "pyw" => {
+            if name_lower == "__init__.py" && !source.contains("__main__") {
+                return RunVerdict::NotRunnable("Package initializer is not a standalone script");
+            }
+        }
+        "rs" => {
+            if !source.contains("fn main(") {
+                return RunVerdict::NotRunnable("Rust file has no fn main()");
+            }
+            if find_ancestor_file(path, "Cargo.toml", root, 6).is_none() {
+                return RunVerdict::NotRunnable("No Cargo.toml found for this Rust file");
+            }
+        }
+        "go" => {
+            if name_lower.ends_with("_test.go") {
+                return RunVerdict::NotRunnable("Go test files require go test");
+            }
+            if !head.contains("package main") || !source.contains("func main(") {
+                return RunVerdict::NotRunnable("Go file has no package main / func main()");
+            }
+        }
+        "java" => {
+            if !source.contains("void main(") {
+                return RunVerdict::NotRunnable("Java file has no main method");
+            }
+        }
+        "dart" => {
+            if !source.contains("main(") {
+                return RunVerdict::NotRunnable("Dart file has no main()");
+            }
+        }
+        "zig" => {
+            if !source.contains("pub fn main(") {
+                return RunVerdict::NotRunnable("Zig file has no pub fn main()");
+            }
+        }
+        "lua" if head.contains("game:GetService") || head.contains("RegisterNetEvent") || head.contains("minetest.") => {
+            return RunVerdict::NotRunnable("Embedded engine Lua script cannot run standalone");
+        }
+        _ => {}
+    }
+    RunVerdict::Runnable(label)
+}
+
+#[cfg(test)]
+fn can_run(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| runtime_spec_for_ext(&e.to_ascii_lowercase()).is_some())
 }
 
 fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<String>)> {
@@ -2015,7 +2534,15 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
         "ps1" => ("powershell".into(), vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), p]),
         "bat" | "cmd" => ("cmd.exe".into(), vec!["/d".into(), "/c".into(), p]),
         "sh" => ("bash".into(), vec![p]),
-        "rs" => ("cargo".into(), vec!["run".into()]),
+        "rs" => {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+            let parent = path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_ascii_lowercase());
+            match (parent.as_deref(), stem) {
+                (Some("bin"), Some(s)) => ("cargo".into(), vec!["run".into(), "--bin".into(), s]),
+                (Some("examples"), Some(s)) => ("cargo".into(), vec!["run".into(), "--example".into(), s]),
+                _ => ("cargo".into(), vec!["run".into()]),
+            }
+        }
         "go" => ("go".into(), vec!["run".into(), p]),
         "java" => ("java".into(), vec![p]),
         "dart" => ("dart".into(), vec!["run".into(), p]),
@@ -2051,7 +2578,10 @@ pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::
 
 #[cfg(test)]
 mod tests {
-    use super::{can_run, close_index, run_command_for, PanelSel};
+    use super::{
+        can_run, check_script_runnable, close_index, run_command_for, PanelSel, RunVerdict,
+        RT_BASH, RT_CARGO, RT_CMD, RT_GO, RT_JAVA, RT_NODE, RT_NPX, RT_POWERSHELL, RT_PYTHON,
+    };
     use std::path::Path;
 
     #[test]
@@ -2085,5 +2615,60 @@ mod tests {
             let p = Path::new(name);
             assert_eq!(can_run(p), run_command_for(p, None).is_some(), "{name}");
         }
+    }
+
+    #[test]
+    fn check_script_runnable_rejects_bedrock_libraries_and_missing_runtimes() {
+        let all = RT_PYTHON | RT_NODE | RT_NPX | RT_POWERSHELL | RT_CMD | RT_BASH | RT_CARGO | RT_GO | RT_JAVA;
+        let bedrock = Path::new("behavior_packs/KiwEssentialsVIP_BP/scripts/menu_member/functions/shop/index.js");
+        assert!(matches!(
+            check_script_runnable(bedrock, "import { world } from '@minecraft/server';\nworld.afterEvents.worldInitialize.subscribe(() => {});", None, false, all),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(Path::new("src/shop/index.js"), "import { world } from '@minecraft/server';\nconsole.log(world);", None, false, all),
+            RunVerdict::NotRunnable(_)
+        ));
+        let pure_lib = "export function add(a, b) {\n  return a + b;\n}\nexport const VERSION = '1.0';";
+        assert!(matches!(check_script_runnable(Path::new("src/math.js"), pure_lib, None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("types.d.ts"), "export type Id = string;", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("App.tsx"), "export function App() { return null; }", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("vite.config.ts"), "export default { base: '/' };", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("math.test.js"), "test('ok', () => {});", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("Component.js"), "import React from 'react';\nconsole.log(React);", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("pkg/__init__.py"), "VERSION = '1.0'", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("empty.py"), "# just a comment\n   \n", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("README.md"), "# Hello", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("data.json"), "{\"ok\":true}", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("main_test.go"), "package main\nfunc TestX(t *testing.T) {}", None, false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(check_script_runnable(Path::new("Helper.java"), "class Helper { int x() { return 1; } }", None, false, all), RunVerdict::NotRunnable(_)));
+
+        // Standalone runnable scripts pass when runtime is present and fail when missing.
+        assert_eq!(check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, all), RunVerdict::Runnable("Python"));
+        assert!(matches!(check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, 0), RunVerdict::NotRunnable(_)));
+        assert_eq!(
+            check_script_runnable(Path::new("index.js"), "import { x } from './x.js';\nconsole.log(x);", None, false, all),
+            RunVerdict::Runnable("Node.js")
+        );
+        assert_eq!(check_script_runnable(Path::new("cli.ts"), "async function main() { console.log(1); }\nmain();", None, false, all), RunVerdict::Runnable("TypeScript"));
+        assert_eq!(check_script_runnable(Path::new("main.go"), "package main\nimport \"fmt\"\nfunc main() { fmt.Println(1) }", None, false, all), RunVerdict::Runnable("Go"));
+        assert_eq!(check_script_runnable(Path::new("Main.java"), "class Main { public static void main(String[] a) {} }", None, false, all), RunVerdict::Runnable("Java"));
+        assert_eq!(check_script_runnable(Path::new("deploy.sh"), "echo ok", None, true, all), RunVerdict::Runnable("Bash"));
+        assert!(matches!(check_script_runnable(Path::new("build.ps1"), "Write-Host 'ok'", None, true, all), RunVerdict::NotRunnable(_)));
+
+        // Temp workspace tests: Bedrock manifest.json vs Cargo.toml main.rs.
+        let tmp = std::env::temp_dir().join(format!("fluxcode_panel_test_{}", std::process::id()));
+        let pack_scripts = tmp.join("my_pack").join("scripts");
+        let _ = std::fs::create_dir_all(&pack_scripts);
+        let _ = std::fs::write(tmp.join("my_pack").join("manifest.json"), "{\"format_version\":2,\"modules\":[{\"type\":\"script\"}]}");
+        let pack_js = pack_scripts.join("main.js");
+        assert!(matches!(check_script_runnable(&pack_js, "console.log('tick');", Some(&tmp), false, all), RunVerdict::NotRunnable(_)));
+
+        let crate_src = tmp.join("rust_app").join("src");
+        let _ = std::fs::create_dir_all(&crate_src);
+        let _ = std::fs::write(tmp.join("rust_app").join("Cargo.toml"), "[package]\nname=\"demo\"\nversion=\"0.1.0\"");
+        assert_eq!(check_script_runnable(&crate_src.join("main.rs"), "fn main() { println!(\"hi\"); }", Some(&tmp), false, all), RunVerdict::Runnable("Cargo"));
+        assert!(matches!(check_script_runnable(&crate_src.join("lib.rs"), "pub fn helper() -> i32 { 1 }", Some(&tmp), false, all), RunVerdict::NotRunnable(_)));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
