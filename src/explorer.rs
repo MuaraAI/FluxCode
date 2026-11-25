@@ -634,18 +634,19 @@ impl Workbench {
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                 let view = cx.entity();
                 let multi = !this.workspace.extra.is_empty();
-                let extra = this.workspace.extra.clone();
+                let extra = std::rc::Rc::new(this.workspace.extra.clone());
                 let pending = this.pending.clone();
                 let name_input = this.name_input.clone();
-                let marks = this.scm.marks.clone();
-                let dirty_dirs = this.scm.dirty_dirs.clone();
+                let has_scm = !this.scm.marks.is_empty() || !this.scm.dirty_dirs.is_empty();
+                let marks = &this.scm.marks;
+                let dirty_dirs = &this.scm.dirty_dirs;
                 let folder_anim = this.explorer.folder_anim.clone();
                 let jump_anim = this
                     .file_jump_anim
                     .as_ref()
                     .map(|(p, s)| (p.to_string_lossy().into_owned(), *s));
                 let ws_anim = this.explorer.workspace_anim;
-                let added_roots = this.explorer.added_roots.clone();
+                let added_roots = &this.explorer.added_roots;
 
                 range
                     .map(|ix| {
@@ -728,9 +729,14 @@ impl Workbench {
                             let (ic, tint) = files::icon_for(&row.label);
                             Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
                         };
-                        let key = id.replace('/', "\\").to_lowercase();
-                        let mark = if is_dir { None } else { marks.get(&key).copied() };
-                        let dir_dirty = is_dir && dirty_dirs.contains(&key);
+                        let (mark, dir_dirty) = if has_scm {
+                            let key = id.replace('/', "\\").to_lowercase();
+                            let mark = if is_dir { None } else { marks.get(&key).copied() };
+                            let dir_dirty = is_dir && dirty_dirs.contains(&key);
+                            (mark, dir_dirty)
+                        } else {
+                            (None, false)
+                        };
                         let label_color = match mark {
                             Some(m) => c(crate::scm::code_color(m)),
                             None if dir_dirty => c(theme::WARN),

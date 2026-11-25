@@ -220,6 +220,7 @@ pub(crate) struct Doc {
     pub warn_count: usize,
     pub diag_ranges: Option<gpui_kit::component::input::RangeDecorationCollection>,
     pub diag_ruler: Option<gpui_kit::component::input::OverviewRulerDecorationCollection>,
+    pub runnable_runtime: Option<&'static str>,
 }
 
 impl Doc {
@@ -263,6 +264,7 @@ impl Doc {
             warn_count: 0,
             diag_ranges: None,
             diag_ruler: None,
+            runnable_runtime: None,
         }
     }
 
@@ -400,6 +402,17 @@ pub struct Workbench {
     pub(crate) right_closing: Option<u64>,
     pub(crate) panel_closing: Option<u64>,
     pub(crate) anim_seq: u64,
+    pub(crate) ab_active_slot: Option<usize>,
+    pub(crate) ab_active_from: usize,
+    pub(crate) ab_active_seq: u64,
+    pub(crate) ab_hover_slot: Option<usize>,
+    pub(crate) ab_hover_from: usize,
+    pub(crate) ab_hover_seq: u64,
+    pub(crate) ab_hover_fade_in: bool,
+    pub(crate) ab_hover_leave: Option<(usize, u64)>,
+    pub(crate) ab_hover_last_at: Option<std::time::Instant>,
+    pub(crate) side_view_anim: std::cell::Cell<(SideView, i8, u64)>,
+    pub(crate) wsl_runtimes: u32,
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
     pub(crate) out_run: Option<crate::panel::RunInfo>,
     pub(crate) problems: Vec<crate::panel::Problem>,
@@ -684,6 +697,17 @@ impl Workbench {
             right_closing: None,
             panel_closing: None,
             anim_seq: 0,
+            ab_active_slot: Some(0),
+            ab_active_from: 0,
+            ab_active_seq: 0,
+            ab_hover_slot: None,
+            ab_hover_from: 0,
+            ab_hover_seq: 0,
+            ab_hover_fade_in: false,
+            ab_hover_leave: None,
+            ab_hover_last_at: None,
+            side_view_anim: std::cell::Cell::new((SideView::Explorer, 1, 0)),
+            wsl_runtimes: 0,
             wash: std::cell::Cell::new((false, 0)),
             out_run: None,
             problems: Vec::new(),
@@ -745,9 +769,72 @@ impl Workbench {
         this.start_agent_update_checks(cx);
         crate::boot::mark("  update check scheduled");
         this.start_copilot(cx);
+        this.probe_runtimes(cx);
         cx.background_spawn(async { crate::agent::shots::prune_cache() }).detach();
         crate::memtrim::watch(window, cx);
         this
+    }
+
+    pub(crate) fn probe_runtimes(&self, cx: &mut Context<Self>) {
+        let root = self.root.clone();
+        let wsl = self.wsl.clone();
+        cx.spawn(async move |this, cx| {
+            let wsl_mask = cx
+                .background_spawn(async move {
+                    let _ = crate::panel::probe_local_runtimes(root.as_deref());
+                    wsl.as_ref().map(crate::panel::probe_wsl_runtimes).unwrap_or(0)
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.wsl_runtimes = wsl_mask;
+                this.refresh_all_doc_runnability(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn effective_runtimes_mask(&self) -> u32 {
+        if self.wsl.is_some() {
+            self.wsl_runtimes
+        } else {
+            crate::panel::local_runtimes_mask()
+        }
+    }
+
+    pub(crate) fn refresh_doc_runnability_with(&mut self, ix: usize, source: &str) {
+        let root = self.root.as_deref();
+        let wsl = self.wsl.is_some();
+        let mask = self.effective_runtimes_mask();
+        let Some(d) = self.docs.get_mut(ix) else { return };
+        d.runnable_runtime = if d.read_only || d.image.is_some() || d.nbt_format.is_some() || d.diff.is_some() {
+            None
+        } else {
+            match crate::panel::check_script_runnable(&d.path, source, root, wsl, mask) {
+                crate::panel::RunVerdict::Runnable(rt) => Some(rt),
+                crate::panel::RunVerdict::NotRunnable(_) => None,
+            }
+        };
+    }
+
+    pub(crate) fn refresh_all_doc_runnability(&mut self, cx: &App) {
+        let mask = self.effective_runtimes_mask();
+        let wsl = self.wsl.is_some();
+        let root = self.root.clone();
+        for d in &mut self.docs {
+            if d.read_only || d.image.is_some() || d.nbt_format.is_some() || d.diff.is_some() {
+                d.runnable_runtime = None;
+                continue;
+            }
+            if d.editor.is_none() && d.flux.is_none() {
+                continue;
+            }
+            let src = d.text(cx);
+            d.runnable_runtime = match crate::panel::check_script_runnable(&d.path, &src, root.as_deref(), wsl, mask) {
+                crate::panel::RunVerdict::Runnable(rt) => Some(rt),
+                crate::panel::RunVerdict::NotRunnable(_) => None,
+            };
+        }
     }
 
     fn start_copilot(&mut self, cx: &mut Context<Self>) {
@@ -805,6 +892,7 @@ impl Workbench {
         self.refresh_tree(cx);
         self.save_session(cx);
         self.detect_python(cx);
+        self.probe_runtimes(cx);
         self.scm_refresh(cx);
         cx.notify();
     }
@@ -1143,8 +1231,11 @@ impl Workbench {
             warn_count: 0,
             diag_ranges: Some(built.diag_ranges),
             diag_ruler: Some(built.diag_ruler),
+            runnable_runtime: None,
         });
         let ix = self.docs.len() - 1;
+        let doc_text = self.docs[ix].text(cx);
+        self.refresh_doc_runnability_with(ix, &doc_text);
         self.apply_problems_to(ix, cx);
         self.activate(ix, window, cx);
         self.save_session(cx);
@@ -1238,6 +1329,8 @@ impl Workbench {
         d.complex = prep.complex;
         d.diag_ranges = Some(built.diag_ranges);
         d.diag_ruler = Some(built.diag_ruler);
+        let doc_text = d.text(cx);
+        self.refresh_doc_runnability_with(ix, &doc_text);
         self.apply_problems_to(ix, cx);
         if self.active == Some(ix) {
             let d = &self.docs[ix];
@@ -1333,6 +1426,7 @@ impl Workbench {
             warn_count: 0,
             diag_ranges: None,
             diag_ruler: None,
+            runnable_runtime: None,
         });
         self.activate(self.docs.len() - 1, window, cx);
         self.save_session(cx);
@@ -2535,17 +2629,44 @@ impl Workbench {
                     .child(Icon::new(IconName::ArrowDown).size(theme::u(12.)))
                     .child(tr("Update"))
             }));
+        let settings_w = theme::u(36.);
+        let settings_active = self.settings_open;
+        let settings_btn = h_flex()
+            .id("tb-settings")
+            .relative()
+            .w(settings_w)
+            .h_full()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .occlude()
+            .when(settings_active, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::ACCENT_TEXT)))
+            .when(!settings_active, |d| {
+                d.text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+            })
+            .active(|s| s.bg(c(theme::BG_ELEVATED)))
+            .when(settings_active, |d| {
+                d.child(div().absolute().bottom_0().left(px(6.)).right(px(6.)).h(px(2.)).rounded_t_full().bg(c(theme::ACCENT)))
+            })
+            .child(Icon::new(IconName::Settings).size(theme::u(14.)))
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Settings (Ctrl+,)")).build(w, cx))
+            .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx)));
+
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
-            return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1()))).into_any_element();
+            return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1())).child(settings_btn)).into_any_element();
         }
         let win_w = f32::from(window.viewport_size().width);
         let box_w = f32::from(theme::u(420.)).min(win_w * 0.3);
         let menus = self.title_menu_end.get() + 12.;
         let left = ((win_w - box_w) / 2.).max(menus);
         let ctl_w = theme::u(44.);
-        // Reserve space for Run + Min + Max + Close and optional Update badge.
-        let right_reserve = f32::from(ctl_w) * 4.
+        // Reserve space for Settings + separator + Min + Max + Close and optional Update badge.
+        let right_reserve = f32::from(ctl_w) * 3.
+            + f32::from(settings_w)
+            + 8.
             + if self.update_waiting().is_some() {
                 96.
             } else {
@@ -2582,18 +2703,6 @@ impl Workbench {
                 })
                 .child(icon)
         };
-        let start_btn = h_flex()
-            .id("tb-start")
-            .w(ctl_w)
-            .h_full()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .text_color(c(theme::FG_MUTED))
-            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-            .child(Icon::new(IconName::Play).size(theme::u(12.)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Run File (F5)")).build(w, cx))
-            .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)));
 
         h_flex()
             .id("title-bar")
@@ -2605,7 +2714,8 @@ impl Workbench {
             .border_b_1()
             .border_color(c(theme::BORDER))
             .child(row)
-            .child(start_btn)
+            .child(settings_btn)
+            .child(div().w(px(1.)).h(theme::u(14.)).my_auto().bg(c(theme::BORDER)))
             .child(ctl("tb-min", Icon::default().data(MINIMIZE_SVG).size(theme::u(14.)), false).on_click(|_, w, _| w.minimize_window()))
             .child(
                 ctl(
@@ -2691,27 +2801,242 @@ impl Workbench {
             )
     }
 
+    pub(crate) fn primary_ab_slot(&self) -> Option<usize> {
+        if self.settings_open {
+            None
+        } else if self.wiztree.page {
+            Some(6)
+        } else if self.sidebar_open && !self.on_right(self.view) {
+            Some(Self::side_view_slot(self.view))
+        } else if self.right_dock_on() {
+            Some(Self::side_view_slot(self.right_view))
+        } else {
+            None
+        }
+    }
+
+    fn side_view_slot(view: SideView) -> usize {
+        match view {
+            SideView::Explorer => 0,
+            SideView::Search => 1,
+            SideView::Scm => 2,
+            SideView::Run => 3,
+            SideView::Extensions => 4,
+            SideView::Agent => 5,
+        }
+    }
+
+    fn ab_hover_enter(&mut self, slot: usize, cx: &mut Context<Self>) {
+        if self.ab_hover_slot == Some(slot) {
+            return;
+        }
+        let gliding = self.ab_hover_slot.is_some()
+            || self.ab_hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
+        self.ab_hover_from = if gliding {
+            self.ab_hover_slot
+                .or_else(|| self.ab_hover_leave.map(|(s, _)| s))
+                .unwrap_or(slot)
+        } else {
+            slot
+        };
+        self.ab_hover_slot = Some(slot);
+        self.ab_hover_fade_in = !gliding;
+        self.ab_hover_leave = None;
+        self.ab_hover_last_at = Some(std::time::Instant::now());
+        self.ab_hover_seq = self.ab_hover_seq.wrapping_add(1);
+        cx.notify();
+    }
+
+    fn ab_hover_clear(&mut self, cx: &mut Context<Self>) {
+        let Some(prev) = self.ab_hover_slot.take() else {
+            return;
+        };
+        self.ab_hover_last_at = Some(std::time::Instant::now());
+        if cx.reduce_motion() {
+            self.ab_hover_leave = None;
+            cx.notify();
+            return;
+        }
+        self.ab_hover_seq = self.ab_hover_seq.wrapping_add(1);
+        let seq = self.ab_hover_seq;
+        self.ab_hover_leave = Some((prev, seq));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            _ = this.update(cx, |this, cx| {
+                if this.ab_hover_leave.is_some_and(|(_, s)| s == seq) {
+                    this.ab_hover_leave = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let item = |id: &'static str, icon: Icon, active: bool, _this: &Self, _cx: &mut Context<Self>| {
+        let bar_w = f32::from(theme::u(40.));
+        let slot_h = f32::from(theme::u(36.));
+        let pill_h = (slot_h - 6.).max(20.);
+        let pill_w = (bar_w - 8.).max(20.);
+        let rail_h = (slot_h * 0.52).round().max(14.);
+        let pill_top = |slot: usize| slot as f32 * slot_h + (slot_h - pill_h) * 0.5;
+        let rail_top = |slot: usize| slot as f32 * slot_h + (slot_h - rail_h) * 0.5;
+        let motion = !cx.reduce_motion();
+        let primary_slot = self.ab_active_slot;
+
+        let hover_layer: Option<AnyElement> = if !motion {
+            None
+        } else if let Some(hslot) = self.ab_hover_slot {
+            let from_y = pill_top(self.ab_hover_from);
+            let to_y = pill_top(hslot);
+            let seq = self.ab_hover_seq;
+            let fade_in = self.ab_hover_fade_in;
+            let bg_hov = c(theme::BG_HOVER).opacity(0.78);
+            let bd_hov = c(theme::BORDER_STRONG).opacity(0.65);
+            let pill = div()
+                .absolute()
+                .rounded(px(8.))
+                .bg(bg_hov)
+                .border_1()
+                .border_color(bd_hov);
+            Some(if self.ab_hover_from == hslot && !fade_in {
+                pill.left(px(4.)).top(px(to_y)).w(px(pill_w)).h(px(pill_h)).into_any_element()
+            } else {
+                let dur = Duration::from_millis(if fade_in { 110 } else { 165 });
+                pill.with_animation(
+                    SharedString::from(format!("ab-hov-{seq}")),
+                    Animation::new(dur),
+                    move |d, t| {
+                        let cap = crate::ui::liquid::capsule(from_y, to_y, pill_h, pill_w, t, true);
+                        let op = if fade_in { crate::ui::liquid::quintic_fade(t) } else { 1.0 };
+                        d.left(px(4. + cap.offset_x))
+                            .top(px(cap.top))
+                            .w(px(cap.width))
+                            .h(px(cap.height))
+                            .opacity(op)
+                    },
+                )
+                .into_any_element()
+            })
+        } else if let Some((lslot, seq)) = self.ab_hover_leave {
+            let y = pill_top(lslot);
+            Some(
+                div()
+                    .absolute()
+                    .left(px(4.))
+                    .top(px(y))
+                    .w(px(pill_w))
+                    .h(px(pill_h))
+                    .rounded(px(8.))
+                    .bg(c(theme::BG_HOVER).opacity(0.78))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG).opacity(0.65))
+                    .with_animation(
+                        SharedString::from(format!("ab-hov-out-{seq}")),
+                        Animation::new(Duration::from_millis(115)),
+                        |d, t| d.opacity(1.0 - crate::ui::liquid::quintic_fade(t)),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
+        let (active_halo, active_rail): (Option<AnyElement>, Option<AnyElement>) = if !motion {
+            (None, None)
+        } else if let Some(aslot) = primary_slot {
+            let from_slot = self.ab_active_from;
+            let seq = self.ab_active_seq;
+            let halo_from = pill_top(from_slot);
+            let halo_to = pill_top(aslot);
+            let rail_from = rail_top(from_slot);
+            let rail_to = rail_top(aslot);
+            let halo_bg = c(theme::ACCENT).opacity(0.14);
+            let halo_bd = c(theme::ACCENT).opacity(0.28);
+            let rail_bg = c(theme::ACCENT);
+            let animate = seq > 0 && from_slot != aslot;
+            let halo = div()
+                .absolute()
+                .rounded(px(8.))
+                .bg(halo_bg)
+                .border_1()
+                .border_color(halo_bd);
+            let rail = div().absolute().rounded_r_full().bg(rail_bg);
+            if animate {
+                let dur = Duration::from_millis(235);
+                let halo_el = halo
+                    .with_animation(
+                        SharedString::from(format!("ab-halo-{seq}")),
+                        Animation::new(dur),
+                        move |d, t| {
+                            let cap = crate::ui::liquid::capsule(halo_from, halo_to, pill_h, pill_w, t, false);
+                            d.left(px(4. + cap.offset_x))
+                                .top(px(cap.top))
+                                .w(px(cap.width))
+                                .h(px(cap.height))
+                        },
+                    )
+                    .into_any_element();
+                let rail_el = rail
+                    .with_animation(
+                        SharedString::from(format!("ab-rail-{seq}")),
+                        Animation::new(dur),
+                        move |d, t| {
+                            let cap = crate::ui::liquid::capsule(rail_from, rail_to, rail_h, 3.0, t, false);
+                            d.left(px(1.0))
+                                .top(px(cap.top))
+                                .w(px(cap.width.clamp(2.2, 3.2)))
+                                .h(px(cap.height))
+                        },
+                    )
+                    .into_any_element();
+                (Some(halo_el), Some(rail_el))
+            } else {
+                (
+                    Some(halo.left(px(4.)).top(px(halo_to)).w(px(pill_w)).h(px(pill_h)).into_any_element()),
+                    Some(rail.left(px(1.)).top(px(rail_to)).w(px(3.)).h(px(rail_h)).into_any_element()),
+                )
+            }
+        } else {
+            (None, None)
+        };
+
+        let slot_box = |id: &'static str, slot: usize, icon: Icon, active: bool, tip: &'static str, cx: &mut Context<Self>| {
+            let static_active = active && !motion;
+            let secondary_active = active && motion && primary_slot != Some(slot);
             div()
                 .id(id)
                 .relative()
-                .size(theme::u(40.))
+                .w(px(bar_w))
+                .h(px(slot_h))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
                 .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
                 .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
-                .when(active, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).bg(c(theme::ACCENT))))
+                .when(static_active, |d| {
+                    d.bg(c(theme::ACCENT).opacity(0.14))
+                        .child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.5)).rounded_r_full().bg(c(theme::ACCENT)))
+                })
+                .when(secondary_active, |d| {
+                    d.child(div().absolute().right(px(2.)).top(px(10.)).bottom(px(10.)).w(px(2.5)).rounded_l_full().bg(c(theme::ACCENT).opacity(0.78)))
+                })
+                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
+                .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
+                    if *entered {
+                        this.ab_hover_enter(slot, cx);
+                    }
+                }))
                 .child(icon.size(theme::u(17.)))
         };
-        let view_item = |id: &'static str, icon: Icon, view: SideView, this: &Self, cx: &mut Context<Self>| {
+
+        let view_item = |id: &'static str, slot: usize, icon: Icon, view: SideView, this: &Self, cx: &mut Context<Self>| {
             let active = this.view_shown(view);
             let weak = cx.entity().downgrade();
             div()
                 .id((id, 0usize))
-                .child(item(id, icon, active, this, cx))
+                .child(slot_box(id, slot, icon, active, view.label(), cx))
                 .on_click(cx.listener(move |this, _, w, cx| {
                     this.toggle_view(view, cx);
                     if view == SideView::Search && this.view_shown(view) {
@@ -2728,27 +3053,34 @@ impl Workbench {
                     None => menu,
                 })
         };
-        v_flex()
-            .w(theme::u(40.))
-            .h_full()
-            .items_center()
-            .bg(c(theme::BG_TITLE))
-            .border_r_1()
-            .border_color(c(theme::BORDER))
-            .child(view_item("ab-explorer", Icon::new(IconName::FolderOpen), SideView::Explorer, self, cx))
-            .child(view_item("ab-search", Icon::new(IconName::Search), SideView::Search, self, cx))
+
+        let wiztree_active = self.wiztree.page && !self.settings_open;
+        let slots = v_flex()
+            .id("ab-slots")
+            .relative()
+            .w_full()
+            .on_hover(cx.listener(|this, entered: &bool, _, cx| {
+                if !*entered {
+                    this.ab_hover_clear(cx);
+                }
+            }))
+            .children(hover_layer)
+            .children(active_halo)
+            .children(active_rail)
+            .child(view_item("ab-explorer", 0, Icon::new(IconName::FolderOpen), SideView::Explorer, self, cx))
+            .child(view_item("ab-search", 1, Icon::new(IconName::Search), SideView::Search, self, cx))
             .child({
                 let n = self.scm.status.count();
                 let incoming = self.scm_has_incoming();
                 div()
                     .relative()
-                    .child(view_item("ab-scm", Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
+                    .child(view_item("ab-scm", 2, Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
                     .when(incoming, |d| {
                         d.child(
                             div()
                                 .absolute()
                                 .right(theme::u(6.))
-                                .top(theme::u(6.))
+                                .top(theme::u(5.))
                                 .size(theme::u(7.))
                                 .rounded_full()
                                 .bg(c(theme::BLUE))
@@ -2761,7 +3093,7 @@ impl Workbench {
                             div()
                                 .absolute()
                                 .right(theme::u(4.))
-                                .bottom(theme::u(5.))
+                                .bottom(theme::u(4.))
                                 .min_w(theme::u(15.))
                                 .h(theme::u(15.))
                                 .px_1()
@@ -2777,26 +3109,27 @@ impl Workbench {
                         )
                     })
             })
-            .child(view_item("ab-run", Icon::new(IconName::Play), SideView::Run, self, cx))
-            .child(view_item("ab-ext", Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
-            .child(view_item("ab-agent", Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
-            .child({
-                let active = self.wiztree.page && !self.settings_open;
+            .child(view_item("ab-run", 3, Icon::new(IconName::Play), SideView::Run, self, cx))
+            .child(view_item("ab-ext", 4, Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
+            .child(view_item("ab-agent", 5, Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
+            .child(
                 div()
                     .id("ab-wiztree-page")
                     .relative()
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Disk Usage (WizTree)")).build(w, cx))
-                    .child(item("ab-wiztree", Icon::new(gpui_kit::assets::IconName::HardDrive), active, self, cx))
-                    .on_click(cx.listener(|this, _, w, cx| this.toggle_wiztree(w, cx)))
-            })
+                    .child(slot_box("ab-wiztree", 6, Icon::new(gpui_kit::assets::IconName::HardDrive), wiztree_active, "Disk Usage (WizTree)", cx))
+                    .on_click(cx.listener(|this, _, w, cx| this.toggle_wiztree(w, cx))),
+            );
+
+        v_flex()
+            .w(theme::u(40.))
+            .h_full()
+            .py_1()
+            .items_center()
+            .bg(c(theme::BG_TITLE))
+            .border_r_1()
+            .border_color(c(theme::BORDER))
+            .child(slots)
             .child(div().flex_1())
-            .child(
-                div()
-                    .id(("ab-settings", 0usize))
-                    .pb_1()
-                    .child(item("ab-settings", Icon::new(IconName::Settings), self.settings_open, self, cx))
-                    .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx))),
-            )
     }
 
     fn render_side_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2915,6 +3248,26 @@ impl Workbench {
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
         };
+        let (_, view_dir, view_seq) = self.side_view_anim.get();
+        let animated_body: AnyElement = if !right && view_seq > 0 && !cx.reduce_motion() {
+            div()
+                .flex_1()
+                .min_h_0()
+                .size_full()
+                .overflow_hidden()
+                .child(body)
+                .with_animation(
+                    SharedString::from(format!("side-tab-{view_seq}")),
+                    Animation::new(Duration::from_millis(180)),
+                    move |d, t| {
+                        let s = crate::ui::liquid::critically_damped(t, 9.5);
+                        d.opacity(0.28 + 0.72 * s).mt(px(view_dir as f32 * 9.0 * (1.0 - s)))
+                    },
+                )
+                .into_any_element()
+        } else {
+            div().flex_1().min_h_0().size_full().child(body).into_any_element()
+        };
         v_flex()
             .size_full()
             .bg(c(theme::BG_SIDE))
@@ -2922,13 +3275,13 @@ impl Workbench {
             .when(!right, |d| d.border_r_1())
             .border_color(c(theme::BORDER))
             .child(header)
-            .child(div().flex_1().min_h_0().size_full().child(body))
+            .child(animated_body)
             .into_any_element()
     }
 
     fn render_run_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let doc = self.active.map(|a| &self.docs[a]);
-        let runnable = doc.filter(|d| crate::panel::can_run(&d.path));
+        let runnable = doc.filter(|d| d.runnable_runtime.is_some());
         let (lead, holds_file) = self.ext_lead();
         let file_leads = runnable.is_some() && !holds_file;
         let projects = self.render_ext_run(if file_leads { None } else { lead }, cx);
@@ -3047,26 +3400,23 @@ impl Workbench {
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = f32::from(theme::u(1.));
-        let widths: Vec<f32> = self
-            .docs
-            .iter()
-            .map(|d| tab_width(&d.name, d.error_count > 0 || d.warn_count > 0, scale))
-            .collect();
-        let total_w: f32 = widths.iter().sum();
+        let mut widths: Vec<f32> = Vec::with_capacity(self.docs.len());
+        let mut tab_lefts: Vec<f32> = Vec::with_capacity(self.docs.len() + 1);
+        let mut total_w = 0.0f32;
+        tab_lefts.push(0.0);
+        for d in &self.docs {
+            let w = tab_width(&d.name, d.error_count > 0 || d.warn_count > 0, scale);
+            widths.push(w);
+            total_w += w;
+            tab_lefts.push(total_w);
+        }
         let scroll_x = (-f32::from(self.tabs_scroll.offset().x)).max(0.);
         self.tabs_scroll_x.set(scroll_x);
         let viewport_w = self.tabs_width.get().max(240.);
-        let (range, left_w, right_w) = visible_tab_window(&widths, scroll_x, viewport_w);
+        let (range, left_w, right_w) = visible_tab_window_from_offsets(&tab_lefts, scroll_x, viewport_w);
         let motion = !cx.reduce_motion();
         let opened_tab = self.opened_tab.clone();
         let switch_seq = self.tab_switch_seq;
-
-        let mut tab_lefts: Vec<f32> = Vec::with_capacity(widths.len());
-        let mut acc = 0.;
-        for &w in &widths {
-            tab_lefts.push(acc);
-            acc += w;
-        }
 
         let hover_pill: Option<AnyElement> = if !motion {
             None
@@ -3357,16 +3707,26 @@ impl Workbench {
 
     fn render_editor_header(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let d = &self.docs[ix];
+        let run_btn = self.render_editor_run_button(ix, cx);
         let tools: AnyElement = if d.image.is_some() {
             self.render_image_tools(ix, cx)
         } else if d.flux.is_some() {
             h_flex()
                 .gap_1()
+                .items_center()
+                .when_some(run_btn, |h, b| h.child(b))
                 .when(d.flux_source, |h| h.child(self.wrap_button(ix, cx)))
                 .child(self.render_flux_bar(ix, cx))
                 .into_any_element()
         } else if d.diff.as_ref().is_some_and(|x| !x.source) {
             div().into_any_element()
+        } else if let Some(b) = run_btn {
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(b)
+                .child(self.wrap_button(ix, cx))
+                .into_any_element()
         } else {
             self.wrap_button(ix, cx)
         };
@@ -3377,6 +3737,63 @@ impl Workbench {
             .gap_2()
             .child(div().flex_1().min_w_0().overflow_hidden().child(self.render_breadcrumbs(ix)))
             .child(tools)
+    }
+
+    fn render_editor_run_button(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let d = self.docs.get(ix)?;
+        d.runnable_runtime?;
+        if d.read_only || d.image.is_some() || d.nbt_format.is_some() || d.diff.is_some() {
+            return None;
+        }
+        let running = self.out_proc.is_some() && self.ext.running.is_none();
+        let name = d.name.clone();
+        if running {
+            let tip: SharedString = crate::trf!("Stop {f} (Shift+F5)"; f => name).into();
+            return Some(
+                h_flex()
+                    .id("hdr-run")
+                    .flex_none()
+                    .h(theme::u(22.))
+                    .px_1p5()
+                    .gap_1()
+                    .items_center()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .bg(c(theme::DANGER).opacity(0.14))
+                    .text_color(c(theme::DANGER))
+                    .hover(|s| s.bg(c(theme::DANGER).opacity(0.24)))
+                    .active(|s| s.opacity(0.85))
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .on_click(cx.listener(|this, _, w, cx| this.on_stop_run(&StopRun, w, cx)))
+                    .child(Icon::new(IconName::Square).size(theme::u(11.)))
+                    .child(tr("Stop"))
+                    .into_any_element(),
+            );
+        }
+        let tip: SharedString = crate::trf!("Run {f} (F5)"; f => name).into();
+        Some(
+            h_flex()
+                .id("hdr-run")
+                .flex_none()
+                .h(theme::u(22.))
+                .px_1p5()
+                .gap_1()
+                .items_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(c(theme::GREEN))
+                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                .active(|s| s.bg(c(theme::BG_ELEVATED)))
+                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)))
+                .child(Icon::new(IconName::Play).size(theme::u(12.)))
+                .child(tr("Run"))
+                .into_any_element(),
+        )
     }
 
     fn wrap_button(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -4074,14 +4491,6 @@ impl Render for Workbench {
         }
         window.set_rem_size(theme::rem());
         apply_glass(window);
-        let editor_view: AnyElement = match &self.preview {
-            Some(_) => h_resizable("editor-preview-split")
-                .child(resizable_panel().child(clip(self.render_editor_area(window, cx))))
-                .child(resizable_panel().size(px(520.)).size_range(px(240.)..px(1400.)).child(self.render_preview(cx)))
-                .into_any_element(),
-            None => self.render_editor_area(window, cx),
-        };
-        let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
         if self.sidebar_open {
             self.side_closing = None;
         }
@@ -4091,14 +4500,47 @@ impl Render for Workbench {
         if self.panel_open {
             self.panel_closing = None;
         }
+        let next_slot = self.primary_ab_slot();
+        if next_slot != self.ab_active_slot {
+            if let (Some(prev), Some(_)) = (self.ab_active_slot, next_slot) {
+                self.ab_active_from = prev;
+                self.ab_active_seq = self.ab_active_seq.wrapping_add(1);
+            } else if let Some(next) = next_slot {
+                self.ab_active_from = next;
+                self.ab_active_seq = self.ab_active_seq.wrapping_add(1);
+            }
+            self.ab_active_slot = next_slot;
+        }
+        let (prev_view, _, mut view_seq) = self.side_view_anim.get();
+        if prev_view != self.view {
+            let view_dir = if Self::side_view_slot(self.view) >= Self::side_view_slot(prev_view) { 1 } else { -1 };
+            view_seq = view_seq.wrapping_add(1);
+            self.side_view_anim.set((self.view, view_dir, view_seq));
+        }
+
+        let motion = !cx.reduce_motion();
+        let full = self.agent_docked_visible() && self.agent_full && !self.settings_open;
         let side_visible = self.sidebar_open || self.side_closing.is_some();
-        let right_visible = self.right_dock_on() || self.right_closing.is_some();
+        let right_on = self.right_dock_on() && !full && !self.settings_open;
+        let right_close = (!right_on && !full && !self.settings_open && motion).then_some(self.right_closing).flatten();
+        let right_visible = right_on || right_close.is_some();
+        let panel_visible = self.panel_open || (motion && self.panel_closing.is_some());
+        let editor_full_page = self.wiztree.page || self.ext.page.is_some() || self.whats_new.is_some();
+        let vis = compute_visible_regions(
+            self.settings_open,
+            full,
+            side_visible,
+            right_visible,
+            panel_visible,
+            self.preview.is_some(),
+            editor_full_page,
+        );
+
         let (side_w, agent_w) = fit_columns(
             f32::from(window.viewport_size().width),
-            side_visible.then_some(self.sidebar_width),
-            (right_visible && !self.agent_full).then_some(self.agent_width),
+            vis.sidebar.then_some(self.sidebar_width),
+            (vis.right_dock && !vis.agent_full).then_some(self.agent_width),
         );
-        let motion = !cx.reduce_motion();
         let (was_panel, mut panel_gen) = self.panel_anim.get();
         if was_panel != self.panel_open {
             if self.panel_open {
@@ -4106,42 +4548,57 @@ impl Render for Workbench {
             }
             self.panel_anim.set((self.panel_open, panel_gen));
         }
-        let editor_and_panel: AnyElement = if self.panel_open {
-            let panel_body: AnyElement = if panel_gen > 0 && motion {
-                div()
-                    .size_full()
-                    .child(self.render_panel(window, cx))
-                    .with_animation(
-                        SharedString::from(format!("panel-in-{panel_gen}")),
-                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
-                        |d, t| d.opacity(0.3 + 0.7 * t).mt(px((1. - t) * 10.)),
-                    )
+        let editor_and_panel: Option<AnyElement> = if !vis.editor_area {
+            None
+        } else {
+            let editor_view: AnyElement = if vis.preview {
+                h_resizable("editor-preview-split")
+                    .child(resizable_panel().child(clip(self.render_editor_area(window, cx))))
+                    .child(resizable_panel().size(px(520.)).size_range(px(240.)..px(1400.)).child(self.render_preview(cx)))
                     .into_any_element()
             } else {
-                self.render_panel(window, cx).into_any_element()
+                self.render_editor_area(window, cx)
             };
-            v_resizable("editor-panel-split")
-                .child(resizable_panel().child(clip(editor_view)))
-                .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(panel_body)))
-                .into_any_element()
-        } else if let Some(seq) = self.panel_closing.filter(|_| motion) {
-            let closing_panel = div()
-                .flex_none()
-                .w_full()
-                .overflow_hidden()
-                .child(self.render_panel(window, cx))
-                .with_animation(
-                    SharedString::from(format!("panel-out-{seq}")),
-                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
-                    |d, t| d.h(px((220. * (1. - t)).max(0.))).opacity(1. - t),
-                );
-            v_flex()
-                .size_full()
-                .child(div().flex_1().min_h_0().child(clip(editor_view)))
-                .child(closing_panel)
-                .into_any_element()
-        } else {
-            editor_view
+            let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
+            Some(if !vis.panel {
+                editor_view
+            } else if self.panel_open {
+                let panel_body: AnyElement = if panel_gen > 0 && motion {
+                    div()
+                        .size_full()
+                        .child(self.render_panel(window, cx))
+                        .with_animation(
+                            SharedString::from(format!("panel-in-{panel_gen}")),
+                            Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                            |d, t| d.opacity(0.3 + 0.7 * t).mt(px((1. - t) * 10.)),
+                        )
+                        .into_any_element()
+                } else {
+                    self.render_panel(window, cx).into_any_element()
+                };
+                v_resizable("editor-panel-split")
+                    .child(resizable_panel().child(clip(editor_view)))
+                    .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(panel_body)))
+                    .into_any_element()
+            } else if let Some(seq) = self.panel_closing.filter(|_| motion) {
+                let closing_panel = div()
+                    .flex_none()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(self.render_panel(window, cx))
+                    .with_animation(
+                        SharedString::from(format!("panel-out-{seq}")),
+                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| d.h(px((220. * (1. - t)).max(0.))).opacity(1. - t),
+                    );
+                v_flex()
+                    .size_full()
+                    .child(div().flex_1().min_h_0().child(clip(editor_view)))
+                    .child(closing_panel)
+                    .into_any_element()
+            } else {
+                editor_view
+            })
         };
         let handle = |id: &'static str, which: u8, this: &Self, cx: &mut Context<Self>| {
             div()
@@ -4186,18 +4643,17 @@ impl Render for Workbench {
             )
             .into_any_element()
         };
-        let full = self.agent_docked_visible() && self.agent_full && !self.settings_open;
         let (was_full, mut full_gen) = self.full_anim.get();
-        if was_full != full {
+        if was_full != vis.agent_full {
             full_gen += 1;
-            self.full_anim.set((full, full_gen));
+            self.full_anim.set((vis.agent_full, full_gen));
         }
         let (was_settings, mut settings_gen) = self.settings_anim.get();
-        if was_settings != self.settings_open {
+        if was_settings != vis.settings {
             settings_gen += 1;
-            self.settings_anim.set((self.settings_open, settings_gen));
+            self.settings_anim.set((vis.settings, settings_gen));
         }
-        let settings_open = self.settings_open;
+        let settings_open = vis.settings;
         let fade = move |el: Div, key: &'static str| -> AnyElement {
             if !motion {
                 return el.into_any_element();
@@ -4222,7 +4678,7 @@ impl Render for Workbench {
             }
             el.into_any_element()
         };
-        let center: AnyElement = if self.settings_open {
+        let center: AnyElement = if vis.settings {
             let box_el = div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx));
             if settings_gen > 0 && motion {
                 box_el
@@ -4235,9 +4691,9 @@ impl Render for Workbench {
             } else {
                 box_el.into_any_element()
             }
-        } else if full {
+        } else if vis.agent_full {
             let agent = fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_full(window, cx)), "full-in");
-            if side_visible {
+            if vis.sidebar {
                 h_flex()
                     .flex_1()
                     .min_w_0()
@@ -4249,20 +4705,21 @@ impl Render for Workbench {
             } else {
                 agent
             }
-        } else if side_visible {
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .child(side_column(self, window, cx))
-                .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
-                .child(fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in"))
-                .into_any_element()
         } else {
-            fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(editor_and_panel), "editor-in")
+            let ep = editor_and_panel.unwrap_or_else(|| div().into_any_element());
+            if vis.sidebar {
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(side_column(self, window, cx))
+                    .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
+                    .child(fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(ep), "editor-in"))
+                    .into_any_element()
+            } else {
+                fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(ep), "editor-in")
+            }
         };
-        let right_on = self.right_dock_on() && !full && !self.settings_open;
-        let right_close = (!right_on && !full && !self.settings_open && motion).then_some(self.right_closing).flatten();
         let (was_right, mut right_gen) = self.right_anim.get();
         if was_right != right_on {
             if right_on {
@@ -4270,7 +4727,7 @@ impl Render for Workbench {
             }
             self.right_anim.set((right_on, right_gen));
         }
-        let center: AnyElement = if !right_on && right_close.is_none() {
+        let center: AnyElement = if !vis.right_dock {
             center
         } else {
             let dock = div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx));
@@ -4722,40 +5179,73 @@ pub(crate) fn tab_width(name: &str, has_diag: bool, scale: f32) -> f32 {
     ((64. + chars * 7.6 + badge) * scale).clamp(96. * scale, 240. * scale).round()
 }
 
-pub(crate) fn visible_tab_window(widths: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
-    if widths.is_empty() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VisibleRegions {
+    pub settings: bool,
+    pub agent_full: bool,
+    pub editor_area: bool,
+    pub preview: bool,
+    pub panel: bool,
+    pub sidebar: bool,
+    pub right_dock: bool,
+}
+
+#[inline]
+pub(crate) fn compute_visible_regions(
+    settings_open: bool,
+    agent_full: bool,
+    sidebar_visible: bool,
+    right_dock_visible: bool,
+    panel_visible: bool,
+    preview_open: bool,
+    editor_full_page: bool,
+) -> VisibleRegions {
+    let settings = settings_open;
+    let agent_full = !settings && agent_full;
+    let editor_area = !settings && !agent_full;
+    VisibleRegions {
+        settings,
+        agent_full,
+        editor_area,
+        preview: editor_area && preview_open && !editor_full_page,
+        panel: editor_area && panel_visible,
+        sidebar: !settings && sidebar_visible,
+        right_dock: !settings && !agent_full && right_dock_visible,
+    }
+}
+
+pub(crate) fn visible_tab_window_from_offsets(offsets: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
+    let n = offsets.len().saturating_sub(1);
+    if n == 0 {
         return (0..0, 0., 0.);
     }
     const OVERSCAN_PX: f32 = 160.;
     let vis_start = (scroll_x - OVERSCAN_PX).max(0.);
     let vis_end = scroll_x + viewport_w.max(1.) + OVERSCAN_PX;
+    let start = offsets[1..].partition_point(|&right| right <= vis_start);
+    if start >= n {
+        let last = n - 1;
+        return (last..n, offsets[last], 0.);
+    }
+    let rel_end = offsets[start..n].partition_point(|&left| left < vis_end);
+    let end = (start + rel_end).clamp(start + 1, n);
+    let total = offsets[n];
+    (start..end, offsets[start], (total - offsets[end]).max(0.))
+}
 
-    let mut x = 0.;
-    let mut start = widths.len();
-    let mut left_w = 0.;
-    let mut end = widths.len();
-    let mut end_x = 0.;
-    for (i, &w) in widths.iter().enumerate() {
-        let next_x = x + w;
-        if start == widths.len() && next_x > vis_start {
-            start = i;
-            left_w = x;
-        }
-        if start != widths.len() && x >= vis_end {
-            end = i;
-            end_x = x;
-            break;
-        }
-        x = next_x;
+#[cfg(test)]
+pub(crate) fn visible_tab_window(widths: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
+    if widths.is_empty() {
+        return (0..0, 0., 0.);
     }
-    if start == widths.len() {
-        let last = widths.len() - 1;
-        let pre: f32 = widths[..last].iter().sum();
-        return (last..widths.len(), pre, 0.);
+    let mut offsets = Vec::with_capacity(widths.len() + 1);
+    let mut acc = 0.0f32;
+    offsets.push(0.0);
+    for &w in widths {
+        acc += w;
+        offsets.push(acc);
     }
-    let total: f32 = widths.iter().sum();
-    let right_w = if end < widths.len() { (total - end_x).max(0.) } else { 0. };
-    (start..end, left_w, right_w)
+    visible_tab_window_from_offsets(&offsets, scroll_x, viewport_w)
 }
 
 pub(crate) fn select_eviction_indices(entries: &[(usize, bool, u64)], max_warm: usize) -> Vec<usize> {
@@ -5045,8 +5535,8 @@ impl Workbench {
 #[cfg(test)]
 mod fit_tests {
     use super::{
-        fit_columns, push_nav_stack, select_eviction_indices, tab_scroll_target, tab_width,
-        visible_tab_window, NavTarget,
+        compute_visible_regions, fit_columns, push_nav_stack, select_eviction_indices, tab_scroll_target, tab_width,
+        visible_tab_window, visible_tab_window_from_offsets, NavTarget,
     };
     use std::path::PathBuf;
 
@@ -5115,6 +5605,44 @@ mod fit_tests {
         }
         assert_eq!(stack.len(), 60);
         assert_eq!(stack.last(), Some(&NavTarget::File(PathBuf::from("f69.rs"))));
+    }
+
+    #[test]
+    fn occlusion_culling_skips_hidden_subtrees() {
+        let settings = compute_visible_regions(true, true, true, true, true, true, true);
+        assert!(settings.settings);
+        assert!(!settings.editor_area && !settings.panel && !settings.preview && !settings.sidebar && !settings.right_dock && !settings.agent_full);
+
+        let full_agent = compute_visible_regions(false, true, true, true, true, true, false);
+        assert!(full_agent.agent_full && full_agent.sidebar);
+        assert!(!full_agent.editor_area && !full_agent.panel && !full_agent.preview && !full_agent.right_dock);
+
+        let normal = compute_visible_regions(false, false, true, true, true, true, false);
+        assert!(normal.editor_area && normal.panel && normal.preview && normal.sidebar && normal.right_dock);
+
+        let wiz = compute_visible_regions(false, false, true, false, false, true, true);
+        assert!(wiz.editor_area && !wiz.preview && !wiz.panel);
+    }
+
+    #[test]
+    fn binary_search_tab_window_handles_1000_tabs_in_microseconds() {
+        let mut offsets = Vec::with_capacity(1001);
+        offsets.push(0.0);
+        for i in 0..1000 {
+            let w = tab_width(&format!("module_{i}.ts"), (i % 7) == 0, 1.0);
+            offsets.push(offsets.last().copied().unwrap() + w);
+        }
+        let t0 = std::time::Instant::now();
+        let mut rendered = 0usize;
+        for step in 0..1000usize {
+            let scroll = (step as f32 * 97.0) % offsets[1000];
+            let (r, l, rw) = visible_tab_window_from_offsets(&offsets, scroll, 900.);
+            rendered += r.len();
+            assert!((l + (offsets[r.end] - offsets[r.start]) + rw - offsets[1000]).abs() < 0.5);
+        }
+        let elapsed = t0.elapsed();
+        eprintln!("1,000 O(log N) tab window queries over 1,000 tabs: {:?} (avg rendered tabs={:.1})", elapsed, rendered as f64 / 1000.0);
+        assert!(elapsed.as_millis() < 20);
     }
 }
 

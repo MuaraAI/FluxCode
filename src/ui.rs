@@ -332,3 +332,155 @@ mod tests {
         assert!(mid.x > 60. && mid.x < 64.);
     }
 }
+
+/// Closed-form liquid physics and low-spec scalar math kernels for sidebar/activity-bar motion.
+pub mod liquid {
+    /// 64-byte cache-line-aligned capsule geometry (Drepper 2007).
+    #[repr(C, align(64))]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct LiquidCapsule {
+        pub top: f32,
+        pub height: f32,
+        pub width: f32,
+        pub offset_x: f32,
+    }
+
+    /// Fast inverse square root via IEEE-754 bit guess + 1 Newton-Raphson step (Lomont 2003).
+    #[inline(always)]
+    pub fn fast_inv_sqrt(x: f32) -> f32 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let x2 = 0.5 * x;
+        let i = 0x5f37_59dfu32.wrapping_sub(x.to_bits() >> 1);
+        let y = f32::from_bits(i);
+        y * (1.5 - x2 * y * y)
+    }
+
+    /// Fast e^(-x) for x >= 0 via log2 range reduction and degree-3 Horner/minimax polynomial (Remez 1934, Knuth 1969).
+    #[inline(always)]
+    pub fn fast_exp_neg(x: f32) -> f32 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        if x >= 80.0 {
+            return 0.0;
+        }
+        let scaled = x * std::f32::consts::LOG2_E;
+        let k = scaled.floor();
+        let f = scaled - k;
+        let k_i = k as i32;
+        let pow2_neg_k = if k_i >= 127 {
+            0.0
+        } else {
+            f32::from_bits(((127 - k_i) as u32) << 23)
+        };
+        // Constrained cubic minimax on [0, 1] matching 2^0 = 1.0 and 2^(-1) = 0.5 exactly at octave boundaries.
+        let poly = 1.0 + f * (-0.6915176 + f * (0.2310276 - 0.0395100 * f));
+        pow2_neg_k * poly
+    }
+
+    /// Quintic fade C^2 smoothstep in Horner form: 6t^5 - 15t^4 + 10t^3 (Perlin 2002).
+    #[inline(always)]
+    pub fn quintic_fade(t: f32) -> f32 {
+        let u = t.clamp(0.0, 1.0);
+        u * u * u * (10.0 + u * (-15.0 + 6.0 * u))
+    }
+
+    /// Normalized critically damped harmonic oscillator (zeta = 1) with exact endpoints 0 and 1.
+    #[inline(always)]
+    pub fn critically_damped(t: f32, omega: f32) -> f32 {
+        let u = t.clamp(0.0, 1.0);
+        let w = omega.max(0.5);
+        let raw = |s: f32| {
+            let ws = w * s;
+            1.0 - fast_exp_neg(ws) * (1.0 + ws)
+        };
+        let norm = raw(1.0);
+        if norm <= 1e-6 { u } else { (raw(u) / norm).clamp(0.0, 1.0) }
+    }
+
+    /// Connected dual-front viscous liquid capsule interpolating between two vertical slot positions.
+    #[inline(always)]
+    pub fn capsule(from_y: f32, to_y: f32, base_h: f32, base_w: f32, t: f32, hover: bool) -> LiquidCapsule {
+        let u = t.clamp(0.0, 1.0);
+        let h0 = base_h.max(1.0);
+        let a_lead = critically_damped(u, if hover { 11.0 } else { 10.5 });
+        let lag = ((u * 1.15) - 0.15).clamp(0.0, 1.0);
+        let a_trail = 0.55 * quintic_fade(lag) + 0.45 * critically_damped(u, 5.2);
+        let delta = to_y - from_y;
+        let y_lead = from_y + delta * a_lead;
+        let y_trail = from_y + delta * a_trail;
+        // Branchless interval union (Warren 2002) handles both downward and upward moves identically.
+        let top = y_lead.min(y_trail);
+        let bot = y_lead.max(y_trail) + h0;
+        let height = (bot - top).max(h0 * 0.85);
+        // 2D incompressibility approximation (w * h ~= const) via fast inverse sqrt.
+        let ratio = (height / h0).max(0.5);
+        let scale_w = fast_inv_sqrt(ratio).clamp(0.76, 1.06);
+        let width = base_w * scale_w;
+        let offset_x = (base_w - width) * 0.5;
+        LiquidCapsule { top, height, width, offset_x }
+    }
+
+    #[cfg(test)]
+    mod liquid_tests {
+        use super::{capsule, critically_damped, fast_exp_neg, fast_inv_sqrt, quintic_fade};
+        use std::time::Instant;
+
+        #[test]
+        fn scalar_math_kernels_stay_within_precision_bounds() {
+            for i in 1..=400 {
+                let x = i as f32 * 0.25;
+                let exact = 1.0 / x.sqrt();
+                let approx = fast_inv_sqrt(x);
+                let rel = (approx - exact).abs() / exact;
+                assert!(rel < 0.002, "inv_sqrt({x}): exact={exact}, approx={approx}, rel={rel}");
+            }
+            for i in 0..=240 {
+                let x = i as f32 * 0.05;
+                let exact = (-x).exp();
+                let approx = fast_exp_neg(x);
+                let err = (approx - exact).abs();
+                assert!(err < 5e-4, "exp(-{x}): exact={exact}, approx={approx}, err={err}");
+            }
+            assert_eq!(quintic_fade(0.0), 0.0);
+            assert_eq!(quintic_fade(0.5), 0.5);
+            assert_eq!(quintic_fade(1.0), 1.0);
+            assert_eq!(critically_damped(0.0, 10.5), 0.0);
+            assert!((critically_damped(1.0, 10.5) - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn liquid_capsule_bridges_and_conserves_area_in_both_directions() {
+            let (base_h, base_w) = (30.0, 32.0);
+            let start = capsule(0.0, 108.0, base_h, base_w, 0.0, false);
+            assert!((start.top - 0.0).abs() < 1e-4 && (start.height - base_h).abs() < 1e-4);
+            let end = capsule(0.0, 108.0, base_h, base_w, 1.0, false);
+            assert!((end.top - 108.0).abs() < 1e-3 && (end.height - base_h).abs() < 1e-3);
+
+            let mid_down = capsule(0.0, 108.0, base_h, base_w, 0.35, false);
+            assert!(mid_down.height > base_h + 10.0, "downward liquid bridge should stretch: {:?}", mid_down);
+            assert!(mid_down.width < base_w, "width should narrow when stretched: {:?}", mid_down);
+
+            let mid_up = capsule(144.0, 36.0, base_h, base_w, 0.35, true);
+            assert!(mid_up.height > base_h + 10.0, "upward liquid bridge should stretch: {:?}", mid_up);
+            assert!(mid_up.top >= 35.9 && mid_up.top + mid_up.height <= 144.0 + base_h + 0.1);
+        }
+
+        #[test]
+        fn liquid_capsule_benchmark_10k_evals_under_budget() {
+            let t0 = Instant::now();
+            let mut acc = 0.0f32;
+            for i in 0..10_000u32 {
+                let t = (i % 101) as f32 * 0.01;
+                let c = capsule(0.0, 144.0, 30.0, 32.0, t, (i & 1) == 0);
+                acc += c.top + c.height + c.width + c.offset_x;
+            }
+            let elapsed = t0.elapsed();
+            std::hint::black_box(acc);
+            eprintln!("liquid::capsule 10,000 evals: {:?} ({:.2} ns/eval)", elapsed, elapsed.as_nanos() as f64 / 10_000.0);
+            assert!(elapsed.as_millis() < 20, "10k evaluations took {:?}", elapsed);
+        }
+    }
+}

@@ -2,32 +2,61 @@
 use gpui_kit::component::highlighter::HighlightThemeStyle;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{linear_color_stop, linear_gradient, rgb, App, Background, Hsla};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicU8, Ordering};
 use std::sync::RwLock;
 
+#[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tok {
-    BgTitle,
-    BgSide,
-    BgEditor,
-    BgElevated,
-    BgHover,
-    Border,
-    BorderStrong,
-    Fg,
-    FgStrong,
-    FgMuted,
-    FgDim,
-    Accent,
-    OnAccent,
-    AccentText,
-    Blue,
-    Green,
-    Warn,
-    Danger,
-    Folder,
-    Select,
-    Selection,
+    BgTitle = 0,
+    BgSide = 1,
+    BgEditor = 2,
+    BgElevated = 3,
+    BgHover = 4,
+    Border = 5,
+    BorderStrong = 6,
+    Fg = 7,
+    FgStrong = 8,
+    FgMuted = 9,
+    FgDim = 10,
+    Accent = 11,
+    OnAccent = 12,
+    AccentText = 13,
+    Blue = 14,
+    Green = 15,
+    Warn = 16,
+    Danger = 17,
+    Folder = 18,
+    Select = 19,
+    Selection = 20,
+}
+
+impl Tok {
+    pub const COUNT: usize = 21;
+    pub const ALL: [Tok; Self::COUNT] = [
+        Tok::BgTitle,
+        Tok::BgSide,
+        Tok::BgEditor,
+        Tok::BgElevated,
+        Tok::BgHover,
+        Tok::Border,
+        Tok::BorderStrong,
+        Tok::Fg,
+        Tok::FgStrong,
+        Tok::FgMuted,
+        Tok::FgDim,
+        Tok::Accent,
+        Tok::OnAccent,
+        Tok::AccentText,
+        Tok::Blue,
+        Tok::Green,
+        Tok::Warn,
+        Tok::Danger,
+        Tok::Folder,
+        Tok::Select,
+        Tok::Selection,
+    ];
 }
 
 pub const BG_TITLE: Tok = Tok::BgTitle;
@@ -327,8 +356,30 @@ struct FadeState {
 }
 
 static FADE_STATE: RwLock<Option<FadeState>> = RwLock::new(None);
+static FADING_ACTIVE: AtomicBool = AtomicBool::new(false);
+static THEME_EPOCH: AtomicU64 = AtomicU64::new(1);
 static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static LAST_CUSTOM_SYNTAX: AtomicBool = AtomicBool::new(false);
+
+fn bump_epoch() {
+    THEME_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+#[repr(C, align(64))]
+struct ColorLut {
+    epoch: u64,
+    colors: [Hsla; Tok::COUNT],
+}
+
+thread_local! {
+    static COLOR_LUT: RefCell<ColorLut> = const {
+        RefCell::new(ColorLut {
+            epoch: 0,
+            colors: [gpui_kit::transparent_black(); Tok::COUNT],
+        })
+    };
+    static MONO_FONT_CACHE: RefCell<Option<(String, gpui_kit::SharedString)>> = const { RefCell::new(None) };
+}
 
 fn now_ms() -> u64 {
     CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
@@ -342,6 +393,8 @@ pub fn fade_from_snapshot(from: Palette, duration: std::time::Duration, ease_out
         duration_ms,
         ease_out,
     });
+    FADING_ACTIVE.store(true, Ordering::Relaxed);
+    bump_epoch();
 }
 
 /// Captures the current on-screen interpolated colors so mid-fade theme changes glide without snapping.
@@ -373,10 +426,20 @@ pub fn snapshot_live() -> Palette {
 }
 
 fn fade() -> Option<(Palette, f32)> {
-    let state = (*FADE_STATE.read().unwrap_or_else(|e| e.into_inner()))?;
+    if !FADING_ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+    let state_opt = *FADE_STATE.read().unwrap_or_else(|e| e.into_inner());
+    let Some(state) = state_opt else {
+        FADING_ACTIVE.store(false, Ordering::Relaxed);
+        bump_epoch();
+        return None;
+    };
     let t = (now_ms().saturating_sub(state.started_ms)) as f32 / state.duration_ms as f32;
     if t >= 1. {
         *FADE_STATE.write().unwrap_or_else(|e| e.into_inner()) = None;
+        FADING_ACTIVE.store(false, Ordering::Relaxed);
+        bump_epoch();
         return None;
     }
     let e = if state.ease_out {
@@ -506,6 +569,11 @@ static SCENE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_scene_backdrop(on: bool) {
     SCENE.store(on, Ordering::Relaxed);
+    bump_epoch();
+}
+
+pub fn has_scene_backdrop() -> bool {
+    SCENE.load(Ordering::Relaxed)
 }
 
 fn strength(v: Visibility) -> f32 {
@@ -514,6 +582,7 @@ fn strength(v: Visibility) -> f32 {
 
 pub fn set_glass(on: bool) {
     GLASS.store(on, Ordering::Relaxed);
+    bump_epoch();
 }
 
 pub fn glass() -> bool {
@@ -557,6 +626,7 @@ pub fn set(id: &str, image: Option<Visibility>) {
     ACTIVE.store(p as *const Palette as *mut Palette, Ordering::Relaxed);
     let v = image.map_or(0, |v| Visibility::ALL.iter().position(|x| *x == v).unwrap_or(1) as u8 + 1);
     IMAGE.store(v, Ordering::Relaxed);
+    bump_epoch();
 }
 
 pub enum Paint {
@@ -574,22 +644,39 @@ impl From<u32> for Paint {
     }
 }
 
+fn c_uncached(t: Tok) -> Hsla {
+    let col: Hsla = now(t);
+    match (image(), t) {
+        (Some(v), Tok::BgTitle) => col.opacity(1. - strength(v) * 0.5),
+        (Some(v), Tok::BgSide) => col.opacity(1. - strength(v) * 0.8),
+        (Some(v), Tok::BgEditor) => col.opacity(1. - strength(v) * 0.6),
+        (Some(v), Tok::BgElevated) => col.opacity(1. - strength(v) * 0.3),
+        (None, Tok::BgTitle) if glass() => col.opacity(0.72),
+        (None, Tok::BgSide) if glass() => col.opacity(0.76),
+        (None, Tok::BgEditor) if glass() => col.opacity(0.88),
+        (None, Tok::BgElevated) if glass() => col.opacity(0.9),
+        _ => col,
+    }
+}
+
 pub fn c(p: impl Into<Paint>) -> Hsla {
     match p.into() {
         Paint::Hex(h) => rgb(h).into(),
         Paint::Tok(t) => {
-            let col: Hsla = now(t);
-            match (image(), t) {
-                (Some(v), Tok::BgTitle) => col.opacity(1. - strength(v) * 0.5),
-                (Some(v), Tok::BgSide) => col.opacity(1. - strength(v) * 0.8),
-                (Some(v), Tok::BgEditor) => col.opacity(1. - strength(v) * 0.6),
-                (Some(v), Tok::BgElevated) => col.opacity(1. - strength(v) * 0.3),
-                (None, Tok::BgTitle) if glass() => col.opacity(0.72),
-                (None, Tok::BgSide) if glass() => col.opacity(0.76),
-                (None, Tok::BgEditor) if glass() => col.opacity(0.88),
-                (None, Tok::BgElevated) if glass() => col.opacity(0.9),
-                _ => col,
+            if FADING_ACTIVE.load(Ordering::Relaxed) {
+                return c_uncached(t);
             }
+            let epoch = THEME_EPOCH.load(Ordering::Relaxed);
+            COLOR_LUT.with(|cell| {
+                let mut lut = cell.borrow_mut();
+                if lut.epoch != epoch {
+                    for tok in Tok::ALL {
+                        lut.colors[tok as usize] = c_uncached(tok);
+                    }
+                    lut.epoch = epoch;
+                }
+                lut.colors[t as usize]
+            })
         }
     }
 }
@@ -656,8 +743,18 @@ fn pick_mono_font(preferred: &str, available: &[String]) -> String {
 pub fn resolve_mono_font(preferred: &str, cx: &App) -> gpui_kit::SharedString {
     use std::sync::OnceLock;
     static FONTS: OnceLock<Vec<String>> = OnceLock::new();
-    let available = FONTS.get_or_init(|| cx.text_system().all_font_names());
-    pick_mono_font(preferred, available).into()
+    MONO_FONT_CACHE.with(|cache| {
+        let mut slot = cache.borrow_mut();
+        if let Some((prev, resolved)) = slot.as_ref() {
+            if prev == preferred {
+                return resolved.clone();
+            }
+        }
+        let available = FONTS.get_or_init(|| cx.text_system().all_font_names());
+        let picked: gpui_kit::SharedString = pick_mono_font(preferred, available).into();
+        *slot = Some((preferred.to_string(), picked.clone()));
+        picked
+    })
 }
 
 pub fn apply(cx: &mut App) {
@@ -831,6 +928,37 @@ mod tests {
         for id in ["flux-muara", "flux-muara-dark"] {
             assert!(PALETTES.iter().any(|p| p.id == id), "{id} palette is missing");
         }
+    }
+
+    #[test]
+    fn color_lut_matches_uncached_across_modes_and_is_fast() {
+        *FADE_STATE.write().unwrap_or_else(|e| e.into_inner()) = None;
+        FADING_ACTIVE.store(false, Ordering::Relaxed);
+        set_glass(false);
+        set_scene_backdrop(false);
+        for (id, vis) in [
+            ("flux-dark", None),
+            ("flux-cream", Some(Visibility::Balanced)),
+            ("flux-muara-dark", None),
+        ] {
+            set(id, vis);
+            set_glass(vis.is_none());
+            for tok in Tok::ALL {
+                assert_eq!(c(tok), c_uncached(tok), "LUT mismatch for {id} {tok:?}");
+            }
+        }
+        set("flux-dark", None);
+        set_glass(false);
+        let t0 = std::time::Instant::now();
+        let mut sum = 0.0f32;
+        for i in 0..2000usize {
+            let col = c(Tok::ALL[i % Tok::COUNT]);
+            sum += col.l + col.a;
+        }
+        let elapsed = t0.elapsed();
+        std::hint::black_box(sum);
+        eprintln!("theme::c LUT 2,000 lookups: {:?} ({:.2} ns/lookup)", elapsed, elapsed.as_nanos() as f64 / 2000.0);
+        assert!(elapsed.as_millis() < 10);
     }
 }
 
