@@ -328,10 +328,59 @@ fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget
 }
 
 const MAX_ROWS: usize = 200;
+pub(crate) const ROW_H: f32 = 24.;
+const LANE_MID: f32 = ROW_H * 0.5;
+const DOT_SIZE: f32 = 8.;
+const DOT_TOP: f32 = LANE_MID - DOT_SIZE * 0.5;
+
+// `.overflow_hidden()` drops Taffy's min-height to 0, so `.flex_none()` keeps rows from collapsing under scroll overflow.
+pub(crate) fn scm_row() -> Div {
+    h_flex()
+        .flex_none()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .h(theme::u(ROW_H))
+}
+
+pub(crate) fn graph_lane(
+    first: bool,
+    end: bool,
+    color: theme::Tok,
+    line_alpha: f32,
+    filled: bool,
+) -> Div {
+    div()
+        .relative()
+        .w(theme::u(14.))
+        .h_full()
+        .flex_none()
+        .child(
+            div()
+                .absolute()
+                .left(theme::u(6.))
+                .w(px(2.))
+                .top(if first { theme::u(LANE_MID) } else { px(0.) })
+                .bottom(if end { theme::u(LANE_MID) } else { px(0.) })
+                .bg(c(color).opacity(line_alpha)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(theme::u(3.))
+                .top(theme::u(DOT_TOP))
+                .size(theme::u(DOT_SIZE))
+                .rounded_full()
+                .border_2()
+                .border_color(c(color))
+                .bg(if filled { c(color) } else { c(theme::BG_SIDE) }),
+        )
+}
 
 fn more_rows(total: usize) -> Option<Div> {
     (total > MAX_ROWS).then(|| {
         div()
+            .flex_none()
             .px(theme::u(18.))
             .py_1()
             .text_xs()
@@ -814,6 +863,7 @@ impl Workbench {
             let folder = s.repo.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             body = body.child(
                 v_flex()
+                    .flex_none()
                     .mx_3()
                     .mb_2()
                     .p_2()
@@ -849,6 +899,7 @@ impl Workbench {
         }
         body = body.child(
             v_flex()
+                .flex_none()
                 .px_3()
                 .pb_2()
                 .gap_2()
@@ -892,12 +943,8 @@ impl Workbench {
         );
 
         let section = |id: &'static str, title: String, count: usize, open: bool| {
-            h_flex()
+            scm_row()
                 .id(id)
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .h(theme::u(22.))
                 .px_2()
                 .gap_1()
                 .text_xs()
@@ -945,13 +992,9 @@ impl Workbench {
                 let staged = kind == 1;
                 let confirm = this.scm.confirm_discard.as_deref() == Some(ch.path.as_str());
                 let (c1, c2, c3) = (ch.clone(), ch.clone(), ch.clone());
-                h_flex()
+                scm_row()
                     .id(("scm-f", i * 4 + kind as usize))
                     .group("scm-row")
-                    .w_full()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .h(theme::u(22.))
                     .pl(theme::u(18.))
                     .pr_2()
                     .gap_1p5()
@@ -1093,6 +1136,7 @@ impl Workbench {
             top.sort_by(|a, b| b.1.cmp(&a.1));
             body = body.child(
                 v_flex()
+                    .flex_none()
                     .mx_3()
                     .my_1()
                     .p_2()
@@ -1107,8 +1151,9 @@ impl Workbench {
                     .children(top.into_iter().take(6).enumerate().map(|(i, (dir, n))| {
                         let pattern = format!("{dir}/");
                         h_flex()
+                            .flex_none()
                             .gap_2()
-                            .h(theme::u(24.))
+                            .h(theme::u(ROW_H))
                             .child(Icon::new(IconName::Folder).size(theme::u(13.)).text_color(c(theme::FOLDER)))
                             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(pattern.clone()))
                             .child(div().flex_none().text_color(c(theme::FG_DIM)).child(n.to_string()))
@@ -1121,7 +1166,15 @@ impl Workbench {
         }
         body = body.children(more_rows(st.changes.len()));
         if st.count() == 0 {
-            body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No changes. The working tree matches the last commit.")));
+            body = body.child(
+                div()
+                    .flex_none()
+                    .px(theme::u(18.))
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("No changes. The working tree matches the last commit.")),
+            );
         }
 
         let sync_label = match (&st.upstream, st.ahead, st.behind) {
@@ -1131,6 +1184,7 @@ impl Workbench {
         };
         body = body.child(
             h_flex()
+                .flex_none()
                 .px_3()
                 .pt_2()
                 .gap_1()
@@ -1172,38 +1226,10 @@ impl Workbench {
             let n = s.log.len();
             for (i, cm) in s.log.iter().enumerate() {
                 let hash = cm.hash.clone();
-                let lane = div()
-                    .relative()
-                    .w(theme::u(14.))
-                    .h_full()
-                    .flex_none()
-                    .child(
-                        div()
-                            .absolute()
-                            .left(theme::u(6.))
-                            .w(px(2.))
-                            .top(if i == 0 { theme::u(11.) } else { px(0.) })
-                            .bottom(if i + 1 == n { theme::u(11.) } else { px(0.) })
-                            .bg(c(theme::ACCENT).opacity(0.55)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(theme::u(3.))
-                            .top(theme::u(7.))
-                            .size(theme::u(8.))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(c(theme::ACCENT))
-                            .bg(if cm.merge { c(theme::BG_SIDE) } else { c(theme::ACCENT) }),
-                    );
+                let lane = graph_lane(i == 0, i + 1 == n, theme::ACCENT, 0.55, !cm.merge);
                 body = body.child(
-                    h_flex()
+                    scm_row()
                         .id(("scm-c", i))
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .h(theme::u(22.))
                         .pl(theme::u(12.))
                         .pr_2()
                         .gap_1p5()
@@ -1255,16 +1281,24 @@ impl Workbench {
         );
         if s.show_actions {
             if s.workflows.is_empty() && s.runs.is_empty() {
-                body = body.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(if s.actions_loaded { "No active workflows in this repository." } else { "Loading workflows…" }));
+                body = body.child(
+                    div()
+                        .flex_none()
+                        .px(theme::u(18.))
+                        .py_1()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(if s.actions_loaded {
+                            "No active workflows in this repository."
+                        } else {
+                            "Loading workflows…"
+                        }),
+                );
             }
             for (i, wf) in s.workflows.iter().enumerate() {
                 let w = wf.clone();
                 body = body.child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .h(theme::u(22.))
+                    scm_row()
                         .pl(theme::u(18.))
                         .pr_2()
                         .gap_1p5()
@@ -1291,12 +1325,8 @@ impl Workbench {
                 };
                 let url = r.url.clone();
                 body = body.child(
-                    h_flex()
+                    scm_row()
                         .id(("scm-run", i))
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .h(theme::u(22.))
                         .pl(theme::u(18.))
                         .pr_2()
                         .gap_1p5()
@@ -1469,7 +1499,9 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_url, parse_log, parse_status};
+    use super::{find_url, parse_log, parse_status, scm_row, DOT_SIZE, DOT_TOP, LANE_MID, ROW_H};
+    use crate::theme;
+    use gpui_kit::{Length, Overflow, Styled as _};
 
     #[test]
     fn porcelain_v2() {
@@ -1508,5 +1540,37 @@ mod tests {
     #[test]
     fn urls() {
         assert_eq!(find_url("Creating pull request\nhttps://github.com/o/r/pull/7\n").as_deref(), Some("https://github.com/o/r/pull/7"));
+    }
+
+    #[test]
+    fn scm_row_is_non_shrinking_and_clipped() {
+        let mut row = scm_row();
+        let st = row.style();
+        assert_eq!(st.flex_shrink, Some(0.));
+        assert_eq!(st.overflow.x, Some(Overflow::Hidden));
+        assert_eq!(st.overflow.y, Some(Overflow::Hidden));
+        assert_eq!(
+            st.size.height,
+            Some(Length::Definite(theme::u(ROW_H).into()))
+        );
+    }
+
+    #[test]
+    fn scm_row_height_clears_xs_controls_and_centers_lane() {
+        assert_eq!(LANE_MID * 2., ROW_H);
+        assert_eq!(DOT_TOP + DOT_SIZE * 0.5, LANE_MID);
+        for scale in [1.0_f32, 1.15, 1.3] {
+            let row_px = (ROW_H * scale).round();
+            let xs_line_h = 0.75 * 16. * scale * 1.618_034;
+            let xsmall_btn_h = 1.25 * 16. * scale;
+            assert!(
+                row_px > xs_line_h,
+                "row_px {row_px} must exceed xs line_height {xs_line_h}"
+            );
+            assert!(
+                row_px > xsmall_btn_h,
+                "row_px {row_px} must exceed xsmall button {xsmall_btn_h}"
+            );
+        }
     }
 }
