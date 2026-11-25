@@ -224,6 +224,7 @@ fn find_url(s: &str) -> Option<String> {
 
 #[derive(Clone)]
 pub enum Step {
+    Save { path: PathBuf, gen: u64, text: String, crlf: bool, nbt: Option<crate::nbt::NbtFormat> },
     Git(Vec<String>, Option<String>),
     Gh(Vec<String>),
 }
@@ -235,6 +236,10 @@ fn git_step(args: &[&str]) -> Step {
 fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
     use std::io::Write;
     let (prog, args, input) = match step {
+        Step::Save { path, text, crlf, nbt, .. } => {
+            crate::workbench::write_doc_to_disk(target, path, text, *crlf, *nbt)?;
+            return Ok(String::new());
+        }
         Step::Git(a, i) => ("git", a, i.clone()),
         Step::Gh(a) => ("gh", a, None),
     };
@@ -410,16 +415,32 @@ impl Workbench {
         cx.notify();
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let res = cx
+            let (saved, res) = cx
                 .background_spawn(async move {
+                    let mut saved = Vec::new();
                     let mut last = String::new();
                     for s in &steps {
-                        last = run_step(&dir, s, wsl.as_ref())?;
+                        match run_step(&dir, s, wsl.as_ref()) {
+                            Ok(out) => {
+                                if let Step::Save { path, gen, .. } = s {
+                                    saved.push((path.clone(), *gen));
+                                }
+                                last = out;
+                            }
+                            Err(e) => return (saved, Err::<String, String>(e)),
+                        }
                     }
-                    Ok::<String, String>(last)
+                    (saved, Ok(last))
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
+                for (path, gen) in saved {
+                    if let Some(d) = this.docs.iter_mut().find(|d| d.path == path) {
+                        if d.gen == gen {
+                            d.dirty = false;
+                        }
+                    }
+                }
                 this.scm.busy = None;
                 match res {
                     Ok(out) => done(this, &out, cx),
@@ -470,12 +491,21 @@ impl Workbench {
             cx.notify();
             return;
         }
-        for ix in 0..self.docs.len() {
-            if self.docs[ix].dirty {
-                self.save_doc(ix, cx);
+        let mut steps = Vec::new();
+        for d in &self.docs {
+            if !d.dirty || d.image.is_some() || d.read_only || d.flux_lazy {
+                continue;
+            }
+            if let Some(ed) = d.editor.as_ref() {
+                steps.push(Step::Save {
+                    path: d.path.clone(),
+                    gen: d.gen,
+                    text: ed.read(cx).value().to_string(),
+                    crlf: d.crlf,
+                    nbt: d.nbt_format,
+                });
             }
         }
-        let mut steps = Vec::new();
         if st.staged.is_empty() && !amend {
             steps.push(git_step(&["add", "-A"])); // smart commit
         }

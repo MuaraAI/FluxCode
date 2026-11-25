@@ -14,7 +14,6 @@ pub enum Request {
     Scan { root: String, max: usize },
     Read { path: String, limit: u64 },
     Write { path: String, crlf: bool },
-    Stat { path: String },
     Search { root: String, query: String, match_case: bool, whole_word: bool },
     Git {
         cwd: String,
@@ -55,14 +54,6 @@ impl Response {
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
-    pub len: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct Stat {
-    pub exists: bool,
-    pub is_dir: bool,
-    pub is_file: bool,
     pub len: u64,
 }
 

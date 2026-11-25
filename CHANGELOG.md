@@ -5,6 +5,14 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## A WSL folder no longer freezes the window at startup (25 November 2026)
+
+- With the WSL helper on, the first launch after an update installed the Linux helper on
+  the window's own thread: the window stopped responding until the ~13 MB download
+  finished, and a slow connection kept it there. The helper now installs in the
+  background per distro with bounded curl and RPC timeouts, per-distro backoff,
+  generation-safe non-blocking drops, and off-thread WSL session restore and file saves.
+
 ## WizTree AI & Disk Analyzer, Smart Agent Queue, Interactive Tables, Editable Bedrock NBT, Multi-Terminal, and Native UI Precision (24-25 November 2026)
 
 - **Built-in Pure-Rust WizTree & Zero-Overhead AI Disk Context**:

@@ -774,6 +774,13 @@ impl Workbench {
         self.copilot.set_enabled(self.settings.copilot);
         self.kick_copilot(cx);
         crate::remote::set_helper_enabled(self.settings.wsl_helper);
+        if self.settings.wsl_helper {
+            if let Some(t) = &self.wsl {
+                crate::remote::warm(&t.distro);
+            }
+        } else {
+            crate::remote::drop_client();
+        }
         if self.settings.agent_right && self.view == crate::workbench::SideView::Agent {
             self.view = crate::workbench::SideView::Explorer;
             self.agent_open = true;
