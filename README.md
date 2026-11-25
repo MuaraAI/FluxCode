@@ -5,10 +5,11 @@
 **English** · [Bahasa Indonesia](README.id.md) · [Roadmap (2026-2027)](ROADMAP.md) · [Discussions](https://github.com/MuaraAI/FluxCode/discussions)
 
 FluxCode is a native, GPU-rendered code editor for Windows, macOS, and Linux written in
-Rust. It ships as a single 16 MB binary with an integrated AI agent workspace, a
-Python-aware terminal, built-in Git, and instant read-only views for binary, archive,
-database, and Office files. It opens a window in ~50 ms, idles at 1.4 MB of RAM in one
-process ([benchmark](#benchmark)), and sends zero telemetry.
+Rust. It ships as a single 16 MB binary with an integrated AI agent workspace, a built-in
+Rust WizTree disk analyzer wired into AI context, a multi-language error-aware terminal,
+built-in Git, editable Minecraft Bedrock/Java NBT support, and instant views for binary,
+archive, database, and Office files. It opens a window in ~50 ms, idles at 1.4 MB of RAM
+in one process ([benchmark](#benchmark)), and sends zero telemetry.
 
 Built at [MuaraAI](https://github.com/MuaraAI) by engineers with deep Rust systems
 experience and over six years of building and running production SaaS products. Open source
@@ -353,6 +354,82 @@ FluxCode opens it drawn, with Preview and Source above it.
   (about 10 to 15% of one CPU core) and a few behind other windows, and turning it on
   first measures what your PC can take.
 
+## What FluxCode includes out of the box (that VS Code and Zed don't)
+
+Standard VS Code and Zed are great editors, especially for deep LSP ecosystems and
+debugging. FluxCode focuses on a different set of capabilities shipped directly inside its
+single 16 MB native binary with zero extensions to configure:
+
+### 1. Extreme resource efficiency & zero telemetry
+
+- **~50 ms cold-to-screen launch, 1.4 MB idle RAM, 1 process, 16 MB binary.** VS Code runs
+  Chromium + Node.js across ~9 processes (~929 MB idle, ~1 GB on disk); Zed uses ~66 MB
+  idle and ~261 MB on disk. FluxCode actively trims unused pages back to Windows when idle.
+- **Zero telemetry by design.** No account login required, no analytics IDs, no hidden
+  background sync.
+
+### 2. Built-in Rust WizTree disk analyzer wired directly into AI agents
+
+- **Interactive treemap & disk tree (`Ctrl+Shift+Y`).** Scans an entire workspace or any
+  folder in milliseconds using a flat parallel Rust arena (zero background polling when
+  closed), with squarified treemap zoom, extension breakdown, and top 100 largest files.
+- **Direct AI agent storage context (`@wiztree`, Ask Agent, `fluxcode --wiztree`).**
+  Instead of burning tokens and CPU running manual `find`/`du`/`ripgrep` scans, agents
+  receive a single-pass compact map of largest folders, lightweight folders, tiny files,
+  and cache/bloat hotspots immediately. Neither VS Code nor Zed includes a native disk
+  analyzer connected to AI context.
+
+### 3. Production-grade ACP Agent Queue, Force Send, & Background Tray Execution
+
+- **Full FIFO Queue + Context-Aware Force Send (`Ctrl+Enter` / `Now`).** Queue multiple
+  tasks with Pause/Resume, reorder (Up/Down), Edit, Remove, and Clear. Force-sending a new
+  request while the agent is busy captures the paused task's progress (prompt, plan, tools,
+  modified files, partial output), handles your urgent request first, and resumes the
+  unfinished task automatically without redoing completed work.
+- **Isolated Windows Job Object + Close-to-Tray.** Each AI agent runs in an isolated
+  process group & Windows Job Object while retaining full access to your laptop's `PATH`,
+  SDKs, and files. Closing FluxCode while an agent is actively running minimizes cleanly to
+  the Windows System Tray (reopen from tray or by launching FluxCode again); closing once
+  stopped shuts down FluxCode and atomically terminates every agent subprocess with zero
+  zombie processes.
+- **Built-in Token Saver, Quota Auto-Resume, Per-Turn Undo, & Browser DevTools MCP.**
+  Cut agent output/tool bloat with Caveman / Lean code / Quiet tools, view live 5-hour and
+  weekly usage meters with automatic **Resume at reset**, review and 1-click undo every
+  file edited per turn, auto-discover existing local agents (`PATH`, npm, pnpm, bun, Scoop,
+  WinGet) or auto-install SHA-256-verified Node.js/`uv` runtimes into `~/.fluxcode/runtime/`,
+  and give every agent a dedicated isolated Chrome/Edge/Brave DevTools browser profile.
+
+### 4. Native binary, Office, database, archive, & Minecraft Bedrock/Java data tools
+
+- **Editable Minecraft Bedrock & Java NBT (zero plugins).** Open `level.dat`,
+  `level.dat_old` (old and modern formats), `.mcstructure`, and `.nbt` directly as clean
+  SNBT with live syntax diagnostics and lossless binary save, plus read-only **LevelDB**
+  (`db/*.log`, `db/*.ldb` with pure-Rust Snappy/Zlib decompression) inspection and built-in
+  Paper / Bedrock add-on project tasks.
+- **Instant viewers for everyday non-text files.** Read **SQLite** tables, **PDF**,
+  **Word (`.docx`)**, **Excel (`.xlsx`)**, **PowerPoint (`.pptx`)**, **ZIP/JAR** archives,
+  and raw **Hex** right beside your code without installing third-party extensions.
+
+### 5. Multi-language error-aware terminal with 1-click jump to code
+
+- **Understands 15+ languages out of the box.** Multi-tab shell with typo autocorrect,
+  inline directory-aware `Tab` completion cycling, structured error cards with 1-click
+  fixes (`pip install`, `npm install`), and clickable `file:line:col` links across Python,
+  JS/TS (`tsc`), Rust, Go, Java, Kotlin, C/C++ (GCC/Clang/MSVC), C#/.NET, Zig, PHP, Ruby,
+  Lua, Dart, Swift, Shell, and PowerShell that jump straight to the exact line and column.
+
+### 6. Native Markdown, interactive `.flux` docs, fast WSL2 helper, & adaptive UI
+
+- **GPU-rendered Markdown & `.flux` docs.** Preview GitHub Markdown natively without
+  Chromium, author bilingual `.flux` docs with flowcharts/annotations and compile to
+  Markdown via `--flux-to-md`, and preview live HTML side-by-side.
+- **Built-in WSL2 fast disk helper.** Avoids Windows `\\wsl.localhost` 9p bottlenecks by
+  reading/writing inside the distro through a tiny built-in Linux helper.
+- **Native VS Code theme import with contrast safety + dockable sidebars.** Import
+  Marketplace themes (Dracula, One Dark Pro, etc.) with automatic 4.5:1 contrast lifting,
+  dock any view to Left or Right sidebar, navigate globally with Mouse Back/Forward
+  buttons, and optionally render GPU-drawn theme-tinted live backgrounds (0% CPU when still).
+
 ## FluxCode, Zed and VS Code
 
 All three are good editors made for different people. This is where each stands today.
@@ -374,7 +451,8 @@ and VS Code extensions install but their code doesn't run.
 | Language smarts (go to definition, rename, diagnostics) | not yet: colors and word completion | built in, through language servers | through extensions |
 | Debugger | not yet (Run only) | yes | yes |
 | Extensions | the VS Code Marketplace to browse and install (their code doesn't run), plus 11 built-in project manifests | yes | the largest catalog |
-| AI agent | any ACP agent, three access levels, per-turn changes with undo; GitHub Copilot inline completions | its own agent and ACP agents | GitHub Copilot and extensions |
+| AI agent | any ACP agent, FIFO queue + context-aware force send, Job Object isolation, close-to-tray, Token Saver, quota auto-resume, Browser MCP, per-turn undo; Copilot ghost text | its own agent and ACP agents | GitHub Copilot and extensions |
+| Built-in disk analyzer (WizTree) | built in (Rust treemap + `@wiztree` AI context + CLI) | not built in | through extensions only |
 | Files that are not text | hex, PDF, Office, ZIP, SQLite, LevelDB (read-only); Bedrock/Java NBT (editable) | images | images; more through extensions |
 | Remote development | WSL2 (Windows) | SSH | SSH, containers, WSL |
 | Interface languages | English, Bahasa Indonesia | English | many, through language packs |

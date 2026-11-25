@@ -5,6 +5,29 @@ moment it was made, `BuildDev-YYYY-MM-DD-HH-MM-SS` (Asia/Jakarta time). Every ch
 merged into `main` becomes a build on the [Releases](https://github.com/MuaraAI/FluxCode/releases)
 page, and installed copies offer it on their own. Newest first.
 
+## Smart Agent Queue & Force Send, background close-to-tray, WizTree AI context, editable Bedrock NBT, and multi-language terminal (25 November 2026)
+
+- **Rebuilt Agent Queue & Context-Aware Force Send**:
+  - Executes queued messages one-by-one in FIFO order instead of merging them into a single prompt.
+  - Adds a structured Queue panel with **Pause / Resume**, **Clear**, and per-item **Send Now**, **Move Up / Down**, **Edit in input**, and **Remove**.
+  - **Force Send (`Ctrl+Enter` or `Now`)**: when the agent is mid-turn, snapshots the paused task's original prompt, plan state, completed tools, modified files, and partial output, interrupts cleanly, answers/handles the new urgent message first, and resumes the paused task until complete (skipping continuation when the prior task was already finished).
+- **Sharper Native IDE UI**:
+  - Replaces the oversized header pill switch with a compact `On`/`Off` status button and tightens heavy rounded radii (`8-14 px` / `rounded-full`) across context chips, composer, message bubbles, permission/changes cards, and glass overlays down to crisp `2-6 px` native editor geometry.
+- **Isolated Agent Process Environment & Close-to-Tray Lifecycle**:
+  - Spawns AI agents inside a dedicated Windows process group and **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) while preserving full access to the host laptop's `PATH`, SDKs, tools, and workspace.
+  - Closing FluxCode while an AI agent is actively running hides the window to the **Windows System Tray** (with FluxCode's icon, status & completion balloons, `Open FluxCode`, `Stop AI Agent & Exit`, and single-instance wake when relaunching `fluxcode.exe`). Closing when agents are stopped performs a full shutdown and terminates every agent process tree with zero zombie processes.
+- **WizTree AI Agent Context**:
+  - Adds single-pass `DiskTree::ai_summary` covering folder hierarchy (largest -> smallest), lightweight folders & tiny files, cache/waste hotspots, extensions, and top 12 largest files.
+  - Wired into `@wiztree`, **Ask Agent** / **Copy** header buttons, automatic disk-intent detection, workspace context, and CLI `fluxcode --wiztree`.
+- **Full Minecraft Bedrock Data Support**:
+  - Pure-Rust binary decoder/encoder (`src/nbt.rs`) opens `level.dat`, `level.dat_old` (old and modern headered formats), `.mcstructure`, `.nbt`, and Java NBT as editable SNBT with live syntax diagnostics and lossless binary save.
+  - Adds read-only **LevelDB** (`db/*.log` WAL and `db/*.ldb` SSTable with pure-Rust Snappy/Zlib decompression) viewer, Bedrock world summary in workspace context, and pack discovery inside world folders.
+- **Multi-Language Terminal & Tab Completion Fix**:
+  - Parses errors, compiler diagnostics, and stack frames across Python, JS/TS (`tsc`), Rust, Go, Java, Kotlin, C/C++ (GCC/Clang/MSVC), C#/.NET, Zig, PHP, Ruby, Lua, Dart, Swift, Shell, and PowerShell with clickable `file:line:col` links on any terminal/output line that open the exact file, line, and column and focus the editor.
+  - Fixes the empty-prompt `Tab` bug that spammed directory dumps into terminal scrollback; `Tab` now cycles completions inline (directory-only for `cd`) with quiet status feedback.
+- **Removed Discontinued Features**:
+  - Completely removes Live Share (`src/collab/`, `relay/`, and 4 unused dependencies) and Mura ACP agent entries/references.
+
 ## The terminal holds more than one shell (24 November 2026)
 
 - The panel header shows a tab per terminal, a **+** opens another one next to the

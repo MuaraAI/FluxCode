@@ -6,9 +6,11 @@
 
 FluxCode adalah editor kode native yang dirender GPU untuk Windows, macOS, dan Linux,
 ditulis dalam Rust. Dikemas sebagai satu binary 16 MB dengan workspace agent AI terintegrasi,
-terminal yang ramah Python, Git bawaan, dan tampilan baca-saja instan untuk file binary,
-arsip, database, maupun Office. Jendelanya terbuka dalam ~50 ms, hanya memakai 1,4 MB RAM
-saat idle dalam satu proses ([benchmark](#benchmark)), dan tanpa telemetri sama sekali.
+penganalisis disk WizTree Rust yang terhubung langsung ke konteks AI, terminal multibahasa
+dengan klik error langsung ke baris kode, Git bawaan, editor NBT Minecraft Bedrock/Java,
+serta tampilan instan untuk file binary, arsip, database, dan Office. Jendelanya terbuka
+dalam ~50 ms, hanya memakai 1,4 MB RAM saat idle dalam satu proses ([benchmark](#benchmark)),
+dan tanpa telemetri sama sekali.
 
 Dibangun di [MuaraAI](https://github.com/MuaraAI) oleh tim engineer berpengalaman di
 sistem Rust yang telah membangun dan menjalankan produk SaaS produksi sejak 6 tahun lalu
@@ -367,6 +369,85 @@ di atasnya.
   belakang jendela lain, dan saat dinyalakan FluxCode lebih dulu mengukur apakah PC kamu
   sanggup.
 
+## Keunggulan bawaan FluxCode (yang tidak ada di VS Code dan Zed standar)
+
+VS Code dan Zed standar tetap unggul untuk ekosistem LSP mendalam dan debugger penuh.
+FluxCode berfokus pada serangkaian kemampuan praktis yang langsung tertanam di satu file
+binary native 16 MB tanpa perlu memasang banyak extension:
+
+### 1. Sangat ringan & nol telemetri
+
+- **Terbuka ~50 ms, 1,4 MB RAM saat idle, 1 proses, ukuran 16 MB.** VS Code menjalankan
+  Chromium + Node.js di ~9 proses (~929 MB idle, ~1 GB di disk); Zed memakai ~66 MB idle
+  dan ~261 MB di disk. FluxCode otomatis mengembalikan memori tak terpakai ke Windows saat
+  diam.
+- **Tanpa telemetri sejak awal.** Tidak butuh login akun, tanpa ID analitik, dan tanpa
+  sinkronisasi tersembunyi di latar belakang.
+
+### 2. WizTree penganalisis disk Rust bawaan yang langsung dipahami AI agent
+
+- **Treemap & pohon disk interaktif (`Ctrl+Shift+Y`).** Memindai seluruh workspace atau
+  folder mana saja dalam hitungan milidetik memakai arena paralel Rust (nol beban latar
+  belakang saat ditutup), lengkap dengan zoom treemap, rincian ekstensi, dan 100 file
+  terbesar.
+- **Konteks penyimpanan langsung ke AI agent (`@wiztree`, Tanya Agent, `fluxcode --wiztree`).**
+  Agent tidak perlu boros token dan CPU menjalankan `find`/`du`/`ripgrep` manual, karena
+  langsung menerima peta ringkas folder terbesar, folder paling ringan, file mungil, serta
+  titik boros/cache dalam sekali baca. Baik VS Code maupun Zed standar tidak memiliki fitur
+  ini.
+
+### 3. Sistem Queue Agent ACP lengkap, Force Send ber-konteks, & Background Tray
+
+- **Antrean FIFO penuh + Force Send ber-konteks (`Ctrl+Enter` / `Sekarang`).** Antrekan
+  beberapa tugas sekaligus dengan tombol Jeda/Lanjut, ubah urutan (Naik/Turun), Edit,
+  Hapus, dan Hapus Semua. Saat memaksa kirim pesan baru di tengah pekerjaan agent, FluxCode
+  merekam progres tugas yang dijeda (prompt awal, plan, tool, file diubah, output terakhir),
+  mengerjakan permintaan baru lebih dulu, lalu otomatis melanjutkan tugas sebelumnya sampai
+  selesai tanpa mengulang pekerjaan yang sudah beres.
+- **Isolasi Windows Job Object + Close-to-Tray.** Setiap AI agent berjalan dalam process
+  group dan Windows Job Object tersendiri sambil tetap mendeteksi `PATH`, SDK, dan file
+  laptop. Menutup FluxCode saat agent masih bekerja akan menyembunyikan jendela ke Windows
+  System Tray (klik ikon tray atau buka ulang FluxCode untuk kembali); menutup saat agent
+  sudah berhenti akan menutup total FluxCode sekaligus mematikan seluruh subprocess agent
+  tanpa proses zombie.
+- **Hemat Token, Resume Otomatis saat Limit Reset, Undo per Giliran, & Browser DevTools MCP.**
+  Pangkas pemborosan token lewat Caveman / Lean code / Quiet tools, pantau kuota 5 jam dan
+  mingguan dengan **Lanjut saat reset** otomatis, tinjau diff dan undo satu klik per giliran,
+  deteksi otomatis agent lokal atau pasang runtime Node.js/`uv` berverifikasi SHA-256 ke
+  `~/.fluxcode/runtime/`, plus browser DevTools terisolasi untuk setiap agent.
+
+### 4. Pembaca file biner, Office, database, arsip, & data Minecraft Bedrock/Java bawaan
+
+- **Edit NBT Minecraft Bedrock & Java tanpa plugin.** Buka `level.dat`, `level.dat_old`
+  (format lama maupun baru), `.mcstructure`, dan `.nbt` langsung sebagai SNBT bersih lengkap
+  dengan diagnostik sintaks dan penyimpanan balik ke biner secara lossless, ditambah viewer
+  baca-saja **LevelDB** (`db/*.log`, `db/*.ldb` dengan dekompresi Snappy/Zlib pure Rust)
+  serta dukungan task proyek Paper dan Bedrock add-on bawaan.
+- **Viewer instan untuk file non-teks harian.** Baca tabel **SQLite**, **PDF**, **Word
+  (`.docx`)**, **Excel (`.xlsx`)**, **PowerPoint (`.pptx`)**, arsip **ZIP/JAR**, dan
+  **Hex** langsung di sebelah kode tanpa extension tambahan.
+
+### 5. Terminal multibahasa dengan pemahaman error & klik langsung ke baris kode
+
+- **Memahami 15+ bahasa pemrograman langsung dari awal.** Terminal multi-tab dengan koreksi
+  typo, cycling `Tab` inline (khusus folder untuk `cd`), kartu error terstruktur dengan
+  tombol perbaikan satu klik (`pip install`, `npm install`), serta tautan klik
+  `file:baris:kolom` lintas Python, JS/TS (`tsc`), Rust, Go, Java, Kotlin, C/C++
+  (GCC/Clang/MSVC), C#/.NET, Zig, PHP, Ruby, Lua, Dart, Swift, Shell, dan PowerShell yang
+  langsung melompat ke baris dan kolom kode.
+
+### 6. Pratinjau Markdown native, dokumen `.flux`, helper WSL2 cepat, & UI adaptif
+
+- **Render Markdown & dokumen `.flux` langsung di GPU.** Pratinjau Markdown GitHub tanpa
+  Chromium, tulis dokumen bilingual `.flux` lengkap dengan flowchart/anotasi dan ekspor ke
+  Markdown lewat `--flux-to-md`, plus pratinjau HTML langsung berdampingan.
+- **Helper disk WSL2 bawaan.** Menghindari lambatnya share 9p `\\wsl.localhost` dengan
+  baca/tulis langsung di dalam distro lewat helper Linux mini bawaan.
+- **Impor tema VS Code dengan jaminan kontras + side bar fleksibel.** Pasang tema
+  Marketplace (Dracula, One Dark Pro, dll.) dengan penyesuaian kontras otomatis minimal
+  4,5:1, pindah panel mana pun ke side bar kiri/kanan, navigasi global dengan tombol
+  Back/Forward mouse, serta pilihan latar hidup bertema di GPU (0% CPU saat diam).
+
 ## FluxCode, Zed, dan VS Code
 
 Ketiganya editor bagus yang dibuat untuk orang berbeda. Berikut posisi masing-masing hari
@@ -390,7 +471,8 @@ bisa dipasang tetapi kodenya tidak berjalan.
 | Kecerdasan bahasa (go to definition, rename, diagnostik) | belum ada: warna dan penyelesaian kata | bawaan, lewat language server | lewat extension |
 | Debugger | belum ada (hanya Run) | ada | ada |
 | Extension | VS Code Marketplace untuk dijelajah dan dipasang (kodenya tidak berjalan), plus 11 manifest proyek bawaan | ada | katalog terbesar |
-| Agent AI | agent ACP apa pun, tiga tingkat akses, perubahan per giliran dengan undo | agent sendiri dan agent ACP | GitHub Copilot dan extension |
+| Agent AI | agent ACP apa pun, antrean FIFO + force send ber-konteks, isolasi Job Object, close-to-tray, Hemat Token, auto-resume kuota, Browser MCP, undo per giliran; Copilot inline | agent sendiri dan agent ACP | GitHub Copilot dan extension |
+| Penganalisis disk bawaan (WizTree) | bawaan (treemap Rust + konteks AI `@wiztree` + CLI) | tidak bawaan | hanya lewat extension |
 | File yang bukan teks | hex, PDF, Office, ZIP, SQLite, LevelDB (baca-saja); NBT Bedrock/Java (bisa diedit) | gambar | gambar; lebih banyak lewat extension |
 | Pengembangan jarak jauh | WSL2 (Windows) | SSH | SSH, container, WSL |
 | Bahasa antarmuka | Inggris, Bahasa Indonesia | Inggris | banyak, lewat language pack |
