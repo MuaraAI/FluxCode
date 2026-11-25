@@ -5,7 +5,7 @@
 [English](README.md) · **Bahasa Indonesia** · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Diskusi](https://github.com/MuaraAI/FluxCode/discussions)
 
 Editor kode native berbasis Rust (GPUI) yang dirender GPU untuk Windows, macOS, dan Linux.
-Satu binary 16 MB, terbuka dalam ~50 ms, 1,4 MB RAM idle, workspace agent AI bawaan, penganalisis disk WizTree, dan tanpa telemetri.
+Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis disk WizTree, nol telemetri.
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
 [![Last commit](https://img.shields.io/github/last-commit/MuaraAI/FluxCode?label=last%20commit)](https://github.com/MuaraAI/FluxCode/commits/main)
@@ -16,16 +16,17 @@ Satu binary 16 MB, terbuka dalam ~50 ms, 1,4 MB RAM idle, workspace agent AI baw
 
 ## Keunggulan Utama
 
-| Area | Bawaan FluxCode | Manfaat |
-| --- | --- | --- |
-| **Ringan & Cepat** | Satu binary Rust + GPUI 16 MB, terbuka ~50 ms, 1,4 MB RAM idle dalam 1 proses. | Tanpa beban Electron/Chromium; tetap ringan saat dibiarkan terbuka. |
-| **Agent AI Bawaan (ACP)** | Menjalankan OpenCode 2, Claude Agent, Codex, Gemini CLI, Copilot, dan semua agent registri ACP dengan antrean FIFO, Force Send ber-konteks (`Ctrl+Enter`), diff/undo per giliran, Hemat Token, Browser DevTools MCP, dan auto-resume kuota. | Alur kerja agent lengkap di dalam editor dengan pasang 1-klik dan isolasi Job Object (tutup ke tray saat aktif, nol proses zombie saat keluar). |
-| **Optimasi Agent Live** | Pendinginan Newton + trim Working Set teredam kritis + Windows EcoQoS, ditambah deduplikasi konteks delta Shannon dan alokasi konteks Gibbs-Boltzmann. | Menjaga agent seperti OpenCode 2 tetap hidup tanpa auto-disable, memangkas RAM idle hingga ~94% (bangun ~25 ms), dan mencegah pengiriman ulang konteks file yang sama. |
-| **Penganalisis Disk WizTree** | Indekser disk paralel Rust murni (`Ctrl+Shift+Y`), treemap interaktif, rincian ekstensi, dan konteks AI `@wiztree` satu-pass. | Agent melihat ukuran folder dan titik boros dalam 0-1 tool call tanpa scan shell manual. |
-| **Terminal Multibahasa** | Terminal banyak tab dengan cycling `Tab` inline, koreksi typo, dan tautan klik error `file:baris:kolom` lintas 15+ bahasa (Python, JS/TS, Rust, Go, Java, C/C++, C#, Zig, PowerShell, dll.). | Klik error compiler atau runtime mana saja untuk langsung melompat ke baris dan kolom kode. |
-| **File Non-Teks & Game** | Editor SNBT untuk NBT Minecraft Bedrock & Java (`level.dat`, `level.dat_old`, `.mcstructure`, `.nbt`), viewer LevelDB, SQLite, PDF, Word/Excel/PowerPoint, ZIP/JAR, dan Hex. | Buka file biner, database, dan dokumen Office di sebelah kode tanpa extension tambahan. |
-| **Git, Proyek & WSL2** | Git bawaan (grafik commit, cek incoming otomatis, PR lewat `gh`), 11 manifest proyek bawaan (Paper, add-on Bedrock, Gradle/Maven via FluxCompile, Rust, Node, Python, Go, C/C++, .NET), helper disk WSL2 cepat, dan pratinjau GPU Markdown/`.flux`. | Langsung jalan di Windows, macOS, dan Linux tanpa konfigurasi plugin. |
-| **Tombol VS Code & Privasi** | Tata letak dan pintasan VS Code, impor tema VS Code Marketplace native (dengan penyesuaian kontras minimal 4,5:1), sidebar bisa dipindah kiri/kanan, dan nol telemetri. | Langsung terbiasa tanpa akun wajib dan tanpa pelacakan. |
+| Fitur | Ringkasan |
+| --- | --- |
+| **Cepat & Ringan** | Rust + GPUI, binary 16 MB, buka ~50 ms, 1,4 MB RAM idle (1 proses) |
+| **Agent AI (ACP)** | OpenCode 2, Claude, Codex, Gemini, Copilot; antrean FIFO, Force Send (`Ctrl+Enter`), diff/undo |
+| **Optimasi RAM Live** | Pangkas RAM idle agent hingga ~94% (bangun ~25 ms) lewat Windows EcoQoS dan konteks delta |
+| **Lifecycle Agent** | Isolasi Job Object, tutup ke tray saat aktif, nol proses zombie saat keluar |
+| **WizTree Disk Analyzer** | Treemap Rust bawaan (`Ctrl+Shift+Y`) + konteks AI `@wiztree` dalam 0-1 tool call |
+| **Terminal Multibahasa** | Multi-tab dengan klik error `file:baris:kolom` lintas 15+ bahasa |
+| **File Non-Teks & Game** | Edit NBT Bedrock/Java, LevelDB, SQLite, PDF, Office, ZIP, dan Hex |
+| **Git, Proyek & WSL2** | Grafik commit, cek incoming, 11 manifest proyek bawaan, helper disk cepat WSL2 |
+| **Privasi & Pintasan** | Tata letak dan shortcut VS Code, impor tema Marketplace, nol telemetri |
 
 ## Benchmark
 
@@ -38,49 +39,49 @@ Satu binary 16 MB, terbuka dalam ~50 ms, 1,4 MB RAM idle, workspace agent AI baw
 | --- | --- | --- | --- |
 | Jendela tampil | ~50 ms | 818 ms | ~3.000 ms |
 | RAM idle (Task Manager) | 1,4 MB | 66,2 MB | 929,2 MB |
-| Memori reservasi (commit) | 72 MB | 154 MB | 1.315 MB |
-| CPU saat idle (% dari 1 core) | 0,05% | 1,46% | 5,89% |
-| Jumlah proses | 1 | 2 | 9 |
+| Memori reservasi | 72 MB | 154 MB | 1.315 MB |
+| CPU idle (% dari 1 core) | 0,05% | 1,46% | 5,89% |
+| Proses | 1 | 2 | 9 |
 | Ukuran di disk | 16 MB | 261 MB | 1.044 MB |
 
-*Median 5 kali uji di Windows 11 (Ryzen 5 7535HS, 15 GB RAM, profil kosong, Nov 2026). Data mentah: [`tools/bench/results.json`](tools/bench/results.json) · Skrip: [`tools/bench/bench.ps1`](tools/bench/bench.ps1).*
+*Median 5 kali uji di Windows 11 (Ryzen 5 7535HS, 15 GB RAM, profil kosong, Nov 2026). Data: [`tools/bench/results.json`](tools/bench/results.json) · Skrip: [`tools/bench/bench.ps1`](tools/bench/bench.ps1).*
 
 ## FluxCode vs Zed vs VS Code
 
 | Fitur | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Teknologi | Rust + GPUI | Rust + GPUI | TypeScript + Electron |
-| RAM Idle / Disk | 1,4 MB / 16 MB (1 proses) | 66,2 MB / 261 MB (2 proses) | 929,2 MB / 1.044 MB (9 proses) |
-| Telemetri | Tidak ada | Aktif bawaan (bisa dimatikan) | Aktif bawaan (bisa dimatikan) |
-| Agent AI | Semua agent ACP, antrean FIFO + Force Send, optimasi RAM/EcoQoS live, Hemat Token, Browser MCP, inline Copilot | Agent sendiri + ACP | Copilot + extension |
-| Penganalisis Disk Bawaan | Ya (WizTree Rust + konteks AI `@wiztree`) | Tidak | Hanya lewat extension |
-| File Non-Teks & Game | Edit NBT Bedrock/Java, LevelDB, SQLite, PDF, Office, ZIP, Hex | Gambar | Gambar (+ extension) |
-| Language Server (LSP) | Terjadwal ([Roadmap](ROADMAP.md)) | Bawaan | Lewat extension |
-| Debugger | Hanya Run (belum ada debugger) | Ya | Ya |
-| Extension | Tema/grammar Marketplace + 11 manifest bawaan (tanpa host JS) | Ya | Katalog terbesar |
-| Remote | Helper disk cepat WSL2 | SSH | SSH, Container, WSL |
-| Lisensi | GPL-3.0-or-later | GPL-3.0 | MIT (OSS) / Microsoft |
+| Buka / RAM Idle | ~50 ms / 1,4 MB | 818 ms / 66,2 MB | ~3.000 ms / 929,2 MB |
+| Disk / Proses | 16 MB / 1 | 261 MB / 2 | 1.044 MB / 9 |
+| Telemetri | Tidak ada | Opt-out | Opt-out |
+| Agent AI | ACP, antrean, Force Send, EcoQoS, Hemat Token | Bawaan + ACP | Copilot + extension |
+| Penganalisis Disk | WizTree bawaan + `@wiztree` | Tidak | Hanya extension |
+| File Non-Teks & NBT | Edit NBT, LevelDB, SQLite, PDF, Office, Hex | Gambar | Gambar (+ extension) |
+| LSP / Debugger | Terjadwal / Run saja | Ya / Ya | Extension / Ya |
+| Extension | Tema & grammar + 11 manifest | Ya | Katalog terbesar |
+| Remote | Helper cepat WSL2 | SSH | SSH, Container, WSL |
+| Lisensi | GPL-3.0-or-later | GPL-3.0 | MIT / Microsoft |
 
 ## Unduh
 
-Ambil build terbaru di [Releases](https://github.com/MuaraAI/FluxCode/releases/latest) (rilis berkelanjutan dari `main`, pembaruan 1-klik di aplikasi).
+Build terbaru: [Releases](https://github.com/MuaraAI/FluxCode/releases/latest) (rilis berkelanjutan dari `main`, update 1-klik di aplikasi).
 
 | Platform | Paket | Pemasangan |
 | --- | --- | --- |
-| Windows 10/11 (x64) | `FluxCode-BuildDev-...-windows-x64-setup.exe` | Jalankan installer (per-user, tanpa hak admin). |
-| Windows Portable (x64) | `FluxCode-BuildDev-...-windows-x64.zip` | Ekstrak lalu jalankan `FluxCode.exe`. |
-| macOS 11+ (Universal, preview) | `FluxCode-BuildDev-...-macos-universal.dmg` | Tarik ke Applications (buka pertama: **Privacy & Security > Open Anyway**). |
-| Linux (x64, Vulkan) | `FluxCode-BuildDev-...-linux-x64.tar.gz` | Ekstrak lalu jalankan `./install.sh` (tanpa root). |
+| Windows (x64) | `...-windows-x64-setup.exe` | Jalankan installer (per-user, tanpa admin) |
+| Windows Portable | `...-windows-x64.zip` | Ekstrak lalu jalankan `FluxCode.exe` |
+| macOS (preview) | `...-macos-universal.dmg` | Tarik ke Applications (**Open Anyway** sekali) |
+| Linux (x64, Vulkan) | `...-linux-x64.tar.gz` | Ekstrak lalu jalankan `./install.sh` |
 
 ## Pintasan
 
 | Aksi | Tombol | Aksi | Tombol |
 | --- | --- | --- | --- |
 | Panel Agent AI | `Ctrl+L` | Command Palette | `Ctrl+Shift+P` / `F1` |
-| Force Send (Agent) | `Ctrl+Enter` | Cari File / Ke Baris | `Ctrl+P` / `Ctrl+G` |
+| Force Send (Agent) | `Ctrl+Enter` | Cari File / Baris | `Ctrl+P` / `Ctrl+G` |
 | Disk Usage (WizTree) | `Ctrl+Shift+Y` | Cari di Semua File | `Ctrl+Shift+F` |
 | Terminal / Tab Baru | ``Ctrl+` `` / ``Ctrl+Shift+` `` | Jalankan File / Stop | `F5` / `Shift+F5` |
-| Sidebar / Panel Bawah | `Ctrl+B` / `Ctrl+J` | Pengaturan / Tema Berikutnya | `Ctrl+,` / `Ctrl+K Ctrl+T` |
+| Sidebar / Panel | `Ctrl+B` / `Ctrl+J` | Pengaturan / Tema | `Ctrl+,` / `Ctrl+K Ctrl+T` |
 
 ## Build & Dokumen
 
@@ -93,6 +94,6 @@ cargo test --bin fluxcode
 | --- | --- |
 | Catatan Rilis | [CHANGELOG.md](CHANGELOG.md) |
 | Roadmap 2026-2027 | [ROADMAP.md](ROADMAP.md) |
-| Panduan Kontribusi & CI | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Format Dokumen Flux | [docs/flux.id.md](docs/flux.id.md) |
+| Kontribusi & CI | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Format Flux | [docs/flux.id.md](docs/flux.id.md) |
 | Lisensi | [GPL-3.0-or-later](LICENSE) · [Pemberitahuan Pihak Ketiga](THIRD_PARTY_NOTICES.md) |
