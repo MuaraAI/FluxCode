@@ -393,7 +393,7 @@ impl Run {
     }
 
     pub(crate) fn working(&self) -> bool {
-        self.status == Status::Busy || self.permission.is_some() || self.ask.is_some()
+        (self.status == Status::Busy && self.usage.probe.is_none()) || self.permission.is_some() || self.ask.is_some()
     }
 
     pub(crate) fn has_active_work(&self) -> bool {

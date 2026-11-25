@@ -128,6 +128,143 @@ pub struct Procs {
     running: HashMap<u32, ProcEntry>,
 }
 
+#[cfg(windows)]
+fn resume_process_threads(pid: u32) -> bool {
+    #[repr(C)]
+    struct ThreadEntry32 {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_thread_id: u32,
+        th32_owner_process_id: u32,
+        tp_base_pri: i32,
+        tp_delta_pri: i32,
+        dw_flags: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> isize;
+        fn Thread32First(snap: isize, entry: *mut ThreadEntry32) -> i32;
+        fn Thread32Next(snap: isize, entry: *mut ThreadEntry32) -> i32;
+        fn OpenThread(access: u32, inherit: i32, tid: u32) -> isize;
+        fn ResumeThread(thread: isize) -> u32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const THREAD_SUSPEND_RESUME: u32 = 0x0002;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snap == 0 || snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: ThreadEntry32 = std::mem::zeroed();
+        entry.dw_size = std::mem::size_of::<ThreadEntry32>() as u32;
+        let mut resumed = false;
+        if Thread32First(snap, &mut entry) != 0 {
+            loop {
+                if entry.th32_owner_process_id == pid {
+                    let th = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32_thread_id);
+                    if th != 0 {
+                        if ResumeThread(th) != u32::MAX {
+                            resumed = true;
+                        }
+                        CloseHandle(th);
+                    }
+                }
+                if Thread32Next(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+        resumed
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(root_pid: u32) {
+    #[repr(C)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: u32,
+        cnt_threads: u32,
+        th32_parent_process_id: u32,
+        pc_pri_class_base: i32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> isize;
+        fn Process32FirstW(snap: isize, entry: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(snap: isize, entry: *mut ProcessEntry32W) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn TerminateProcess(proc: isize, code: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut root_alive = false;
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap != 0 && snap != INVALID_HANDLE_VALUE {
+            let mut entry: ProcessEntry32W = std::mem::zeroed();
+            entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+            if Process32FirstW(snap, &mut entry) != 0 {
+                loop {
+                    if entry.th32_process_id == root_pid {
+                        root_alive = true;
+                    }
+                    children
+                        .entry(entry.th32_parent_process_id)
+                        .or_default()
+                        .push(entry.th32_process_id);
+                    if Process32NextW(snap, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snap);
+        }
+    }
+    let mut targets = Vec::new();
+    let mut stack = vec![root_pid];
+    let mut seen = std::collections::HashSet::from([root_pid]);
+    while let Some(pid) = stack.pop() {
+        if let Some(kids) = children.get(&pid) {
+            for &kid in kids {
+                if seen.insert(kid) {
+                    targets.push(kid);
+                    stack.push(kid);
+                }
+            }
+        }
+    }
+    if root_alive {
+        targets.push(root_pid);
+    }
+    for pid in targets {
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h != 0 {
+                TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
+    }
+}
+
+impl Drop for Procs {
+    fn drop(&mut self) {
+        self.kill_all();
+    }
+}
+
 pub fn command(program: &str) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
@@ -200,8 +337,9 @@ impl Procs {
         }
         #[cfg(windows)]
         if isolated {
-            // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP keeps the agent decoupled from host console signals.
-            cmd.creation_flags(0x0800_0000 | 0x0000_0200);
+            // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED lets us bind the
+            // Job Object before the agent executes a single instruction or spawns any child.
+            cmd.creation_flags(0x0800_0000 | 0x0000_0200 | 0x0000_0004);
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -219,7 +357,17 @@ impl Procs {
         }
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         #[cfg(windows)]
-        let job = if isolated { ProcessJob::for_child(&child) } else { None };
+        let job = if isolated {
+            let job = ProcessJob::for_child(&child);
+            if !resume_process_threads(child.id()) {
+                let _ = child.kill();
+                drop(job);
+                return Err("failed to resume isolated agent process".into());
+            }
+            job
+        } else {
+            None
+        };
         self.next += 1;
         let id = self.next;
         let readers: Vec<_> = [
@@ -276,9 +424,9 @@ impl Procs {
         {
             if let Some(job) = entry.job.take() {
                 job.terminate_and_close();
-                return;
             }
-            let _ = command("taskkill").args(["/T", "/F", "/PID", &entry.pid.to_string()]).status();
+            // Sweep any process or child still lingering under this PID (fast pure-Win32 snapshot).
+            terminate_process_tree(entry.pid);
         }
         #[cfg(not(windows))]
         let _ = command("kill").args(["-9", &entry.pid.to_string()]).status();
@@ -354,13 +502,37 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn isolated_job_terminates_spawned_process() {
+    fn isolated_job_terminates_spawned_process_and_children() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn GetExitCodeProcess(proc: isize, code: *mut u32) -> i32;
+            fn CloseHandle(handle: isize) -> i32;
+        }
+        let is_alive = |pid: u32| -> bool {
+            unsafe {
+                let h = OpenProcess(0x0400, 0, pid); // PROCESS_QUERY_INFORMATION
+                if h == 0 {
+                    return false;
+                }
+                let mut code = 0u32;
+                let ok = GetExitCodeProcess(h, &mut code) != 0;
+                CloseHandle(h);
+                ok && code == 259 // STILL_ACTIVE
+            }
+        };
         let (mut procs, _rx) = super::Procs::new();
         let mut cmd = super::command("cmd.exe");
         cmd.args(["/d", "/c", "ping -n 30 127.0.0.1 >nul"]);
         let id = procs.spawn_isolated(cmd, None, "test-agent").expect("spawn isolated");
-        assert!(procs.is_running(id));
+        let entry = procs.running.get(&id).expect("entry tracked");
+        assert!(entry.job.is_some(), "isolated agent must hold a Windows Job Object");
+        let pid = entry.pid;
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert!(is_alive(pid), "resumed process should be running");
         procs.kill(id);
         assert!(!procs.is_running(id));
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        assert!(!is_alive(pid), "terminated job process must not linger");
     }
 }

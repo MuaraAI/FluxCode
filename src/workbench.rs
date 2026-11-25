@@ -2578,7 +2578,11 @@ impl Workbench {
                 )
                 .on_click(|_, w, _| w.zoom_window()),
             )
-            .child(ctl("tb-close", Icon::new(IconName::WindowClose).size(theme::u(14.)), true).on_click(|_, w, cx| w.dispatch_action(Box::new(Quit), cx)))
+            .child(
+                ctl("tb-close", Icon::new(IconName::WindowClose).size(theme::u(14.)), true).on_click(cx.listener(|this, _, w, cx| {
+                    this.handle_close_request(w, cx);
+                })),
+            )
             .child(center_layer)
             .into_any_element()
     }
