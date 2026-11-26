@@ -15,7 +15,6 @@ pub enum LineKind {
     Fixed,
     Status,
     Result,
-    Hunk,
     CardHead,
     CardMsg,
     CardCode,
