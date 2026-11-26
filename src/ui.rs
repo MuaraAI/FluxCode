@@ -131,7 +131,8 @@ impl RenderOnce for SegmentedControl {
         let active_ix = self.items.iter().position(|it| it.active);
         let motion = !cx.reduce_motion();
         let count = self.items.len();
-        let (frame, has_active_liq) = liquid::keyed_sync_and_sample(&handle, false, count, active_ix, 24.0, 200, motion);
+        let cross = f32::from(theme::u(26.));
+        let (frame, has_active_liq) = liquid::keyed_sync_and_sample(&handle, false, count, active_ix, cross, 200, motion);
         let view_id = window.current_view();
         let origin_probe = liquid::keyed_origin_probe(handle.clone(), view_id);
 
@@ -139,7 +140,7 @@ impl RenderOnce for SegmentedControl {
             let style = liquid::LiquidStyle {
                 inset_a: 2.0,
                 inset_b: 2.0,
-                cross_base: 24.0,
+                cross_base: cross,
                 max_squeeze: 2.0,
                 radius: f32::from(theme::u(5.)),
                 capillary: 22.0,
@@ -167,8 +168,8 @@ impl RenderOnce for SegmentedControl {
                 .id(item.id)
                 .relative()
                 .flex_none()
-                .h(theme::u(24.))
-                .px_2()
+                .h(theme::u(26.))
+                .px_2p5()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -179,14 +180,14 @@ impl RenderOnce for SegmentedControl {
                 .track_focus(&fh)
                 .tab_stop(true)
                 .border_1()
-                .border_color(if focused { c(theme::ACCENT) } else { gpui::transparent_black() })
+                .border_color(if focused && !item.active { c(theme::ACCENT).opacity(0.55) } else { gpui::transparent_black() })
                 .when(item.active && !has_active_liq, |d| d.bg(c(theme::ACCENT)))
                 .text_color(if item.active { c(theme::ON_ACCENT) } else { c(theme::FG_MUTED) })
                 .when(!item.active && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))))
                 .when(!item.active && motion, |d| d.hover(|s| s.text_color(c(theme::FG_STRONG))))
                 .on_hover(move |entered: &bool, _, cx| {
                     if *entered && motion {
-                        liquid::keyed_hover_enter(&h_hov, i, false, 24.0, 155, view_id, cx);
+                        liquid::keyed_hover_enter(&h_hov, i, false, cross, 155, view_id, cx);
                     }
                 })
                 .on_click(move |ev, w, cx| (on_click)(ev, w, cx))
@@ -204,6 +205,7 @@ impl RenderOnce for SegmentedControl {
         gpui_kit::component::h_flex()
             .id(self.id)
             .relative()
+            .flex_none()
             .p(px(2.))
             .gap(px(2.))
             .flex_wrap()
@@ -326,15 +328,30 @@ impl RenderOnce for McToggle {
             let top = ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-2.0 * sc, h - th_h + 2.0 * sc);
             let split_x = (left + th_w * 0.5).clamp(0.0, w);
 
-            // Exact KiwEssentials toggle/{on,off,on_hover,off_hover}.png colors.
-            let green_body = rgb(0x3C8527);
-            let green_hi = rgb(0x639D52);
-            let gray_body = rgb(0x8C8D90);
-            let gray_hi = rgb(0xA3A4A6);
-            let thumb_face = if hovered { rgb(0xF4F6F9) } else { rgb(0xD0D1D4) };
-            let thumb_bevel = rgb(0xFFFFFF);
-            let thumb_lip = rgb(0x58585A);
-            let outline = if dark { rgb(0x000000) } else { rgb(0x18181B) };
+            // Theme-synced KiwEssentials Ore-UI block toggle with jelly bounce and I/O glyphs.
+            let accent_fill = c(theme::ACCENT);
+            let accent_hi = gpui::white().opacity(if dark { 0.22 } else { 0.30 });
+            let off_body = c(theme::BG_SIDE);
+            let off_shade = gpui::black().opacity(if dark { 0.20 } else { 0.08 });
+            let thumb_face = if dark {
+                c(theme::FG_STRONG).opacity(if hovered { 1.0 } else { 0.92 })
+            } else {
+                c(theme::BG_ELEVATED)
+            };
+            let thumb_bevel = gpui::white().opacity(if dark { 0.28 } else { 0.78 });
+            let thumb_lip = gpui::black().opacity(if dark { 0.24 } else { 0.14 });
+            let track_border = if focused {
+                c(theme::ACCENT)
+            } else if checked {
+                c(theme::ACCENT).opacity(0.85)
+            } else {
+                c(theme::BORDER_STRONG).opacity(0.72)
+            };
+            let thumb_border = if checked {
+                c(theme::ACCENT).opacity(0.45)
+            } else {
+                c(theme::BORDER_STRONG).opacity(0.78)
+            };
             let glyph_w = (2.0 * sc).max(1.5);
             let glyph_h = (8.0 * sc).max(6.0);
             let o_sz = (6.0 * sc).max(5.0);
@@ -345,25 +362,23 @@ impl RenderOnce for McToggle {
                 .top(px(track_top + tby))
                 .w(px(w))
                 .h(px(track_h))
-                .rounded(px(2.0 * sc))
-                .border_2()
-                .border_color(outline)
+                .rounded(px(4.5 * sc))
+                .border_1()
+                .border_color(track_border)
                 .overflow_hidden()
-                .bg(gray_body)
-                // OFF side top bevel + hollow square O mark on the right half
-                .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(gray_hi))
+                .bg(off_body)
+                .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(off_shade))
                 .child(
                     div()
                         .absolute()
-                        .right(px(thumb_w * 0.5 - o_sz * 0.5 - 2.0 * sc))
-                        .top(px((track_h - 4.0 * sc - o_sz) * 0.5))
+                        .right(px(thumb_w * 0.5 - o_sz * 0.5 - 1.5 * sc))
+                        .top(px((track_h - 2.0 * sc - o_sz) * 0.5))
                         .size(px(o_sz))
-                        .rounded(px(1.))
-                        .border(px(1.5 * sc))
-                        .border_color(rgb(0x141416))
+                        .rounded(px(1.5))
+                        .border(px(1.4 * sc))
+                        .border_color(c(theme::FG_MUTED).opacity(0.75))
                         .opacity((1.0 - j.fill).clamp(0.18, 1.0)),
                 )
-                // ON side green body + top bevel + white vertical I mark
                 .child(
                     div()
                         .absolute()
@@ -372,16 +387,17 @@ impl RenderOnce for McToggle {
                         .left_0()
                         .w(px(split_x))
                         .overflow_hidden()
-                        .bg(green_body)
-                        .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(green_hi))
+                        .bg(accent_fill)
+                        .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(accent_hi))
                         .child(
                             div()
                                 .absolute()
-                                .left(px(thumb_w * 0.5 - glyph_w * 0.5 - 2.0 * sc))
-                                .top(px((track_h - 4.0 * sc - glyph_h) * 0.5))
+                                .left(px(thumb_w * 0.5 - glyph_w * 0.5 - 1.5 * sc))
+                                .top(px((track_h - 2.0 * sc - glyph_h) * 0.5))
                                 .w(px(glyph_w))
                                 .h(px(glyph_h))
-                                .bg(rgb(0xFFFFFF))
+                                .rounded(px(1.))
+                                .bg(c(theme::ON_ACCENT))
                                 .opacity(j.fill.clamp(0.2, 1.0)),
                         ),
                 );
@@ -392,14 +408,13 @@ impl RenderOnce for McToggle {
                 .top(px(top))
                 .w(px(th_w))
                 .h(px(th_h))
-                .rounded(px(2.0 * sc))
-                .border_2()
-                .border_color(outline)
+                .rounded(px(3.5 * sc))
+                .border_1()
+                .border_color(thumb_border)
                 .overflow_hidden()
                 .bg(thumb_face)
-                .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(thumb_bevel))
-                .child(div().absolute().top_0().bottom_0().left_0().w(px(1.5 * sc)).bg(rgb(0xEAEAEC)))
-                .child(div().absolute().bottom_0().left_0().right_0().h(px(3.0 * sc)).bg(thumb_lip));
+                .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(thumb_bevel))
+                .child(div().absolute().bottom_0().left_0().right_0().h(px(2.0 * sc)).bg(thumb_lip));
 
             canvas_div.child(track).child(thumb)
         };
@@ -423,10 +438,6 @@ impl RenderOnce for McToggle {
         div()
             .id(SharedString::from(format!("mc-tgl-{id}")))
             .flex_none()
-            .p(px(2.))
-            .rounded(px(3.))
-            .border_1()
-            .border_color(if focused { c(theme::ACCENT) } else { gpui::transparent_black() })
             .when_some(self.accessibility_label, |d, lbl| d.aria_label(lbl))
             .when(disabled, |d| d.opacity(0.5).cursor_not_allowed())
             .when(!disabled, |d| d.cursor_pointer())
@@ -455,36 +466,24 @@ impl RenderOnce for McToggle {
     }
 }
 
-/// KiwEssentials recessed 3D Minecraft cavity frame matching `kiwui/edit_box.png`.
+/// Theme-synced recessed input cavity with subtle bevel depth.
 pub fn mc_box_frame(base: Div, focused: bool, dark: bool) -> Div {
     let sc = theme::scale();
-    let outer = if focused {
-        rgb(if dark { 0x639D52 } else { 0x3C8527 }).into()
-    } else if dark {
-        rgb(0x28282C).into()
-    } else {
-        c(theme::BORDER_STRONG)
-    };
-    let fill = if dark { rgb(0x121214).into() } else { c(theme::BG_EDITOR) };
-    let shadow = if dark { rgb(0x060608).into() } else { gpui::black().opacity(0.14) };
+    let outer = if focused { c(theme::ACCENT) } else { c(theme::BORDER) };
+    let shadow = gpui::black().opacity(if dark { 0.16 } else { 0.05 });
     let rim = if focused {
-        rgb(0x3C8527).into()
-    } else if dark {
-        Hsla::from(rgb(0x686A72)).opacity(0.65)
+        c(theme::ACCENT).opacity(0.35)
     } else {
-        gpui::white().opacity(0.9)
+        gpui::white().opacity(if dark { 0.04 } else { 0.35 })
     };
-    let bevel = (1.5 * sc).max(1.0);
     base.relative()
-        .rounded(px(2.0 * sc))
+        .rounded(px(6.0 * sc))
         .border_1()
         .border_color(outer)
-        .bg(fill)
+        .bg(c(theme::BG_EDITOR))
         .overflow_hidden()
-        .child(div().absolute().top_0().left_0().right_0().h(px(bevel)).bg(shadow))
-        .child(div().absolute().top_0().bottom_0().left_0().w(px(bevel)).bg(shadow))
+        .child(div().absolute().top_0().left_0().right_0().h(px(1.)).bg(shadow))
         .child(div().absolute().bottom_0().left_0().right_0().h(px(1.)).bg(rim))
-        .child(div().absolute().top_0().bottom_0().right_0().w(px(1.)).bg(rim))
 }
 
 struct McInputFocusMem {
@@ -590,7 +589,7 @@ impl RenderOnce for McInput {
                     Animation::new(Duration::from_millis(190)),
                     move |d, u| {
                         let pulse = 1.0 - (1.0 - u) * (1.0 - u);
-                        d.border_color(rgb(0x639D52).opacity(0.6 + 0.4 * pulse))
+                        d.border_color(c(theme::ACCENT).opacity(0.65 + 0.35 * pulse))
                     },
                 )
                 .into_any_element()

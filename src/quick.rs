@@ -44,6 +44,15 @@ pub enum Mode {
     Commands,
     Line,
     Wsl,
+    Themes,
+    IconThemes,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Picker {
+    Standard,
+    Themes,
+    IconThemes,
 }
 
 pub fn mode_of(q: &str) -> Mode {
@@ -71,6 +80,7 @@ pub fn placeholder() -> &'static str {
 
 pub struct QuickOpen {
     pub open: bool,
+    pub picker: Picker,
     pub input: Entity<InputState>,
     pub hits: Vec<usize>,
     pub sel: usize,
@@ -91,15 +101,89 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.quick_accept(window, cx),
             _ => {}
         });
-        (Self { open: false, input, hits: Vec::new(), sel: 0, mode: Mode::Files, wsl: Vec::new(), wsl_loading: false, wsl_browse: None, wsl_dirs: Vec::new(), wsl_home: String::new(), wsl_rows: Vec::new() }, sub)
+        (
+            Self {
+                open: false,
+                picker: Picker::Standard,
+                input,
+                hits: Vec::new(),
+                sel: 0,
+                mode: Mode::Files,
+                wsl: Vec::new(),
+                wsl_loading: false,
+                wsl_browse: None,
+                wsl_dirs: Vec::new(),
+                wsl_home: String::new(),
+                wsl_rows: Vec::new(),
+            },
+            sub,
+        )
     }
 }
 
 impl Workbench {
     pub(crate) fn quick_filter(&mut self, cx: &mut Context<Self>) {
         let q = self.quick.input.read(cx).value().to_string();
-        self.quick.mode = mode_of(&q);
+        self.quick.mode = match self.quick.picker {
+            Picker::Themes => Mode::Themes,
+            Picker::IconThemes => Mode::IconThemes,
+            Picker::Standard => mode_of(&q),
+        };
         match self.quick.mode {
+            Mode::Themes => {
+                let query: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+                let list = theme::all();
+                let mut scored: Vec<(i32, usize)> = list
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        let hay = format!("{} {}", p.name, tr(p.note)).to_lowercase();
+                        fuzzy_lower(&query, hay.as_bytes()).map(|s| (s, i))
+                    })
+                    .collect();
+                if !query.is_empty() {
+                    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
+                }
+                let hits: Vec<usize> = scored.into_iter().map(|(_, i)| i).collect();
+                let active_id = self.committed_theme_id();
+                self.quick.sel = if query.is_empty() {
+                    hits.iter().position(|&ix| list[ix].id == active_id).unwrap_or(0)
+                } else {
+                    0
+                };
+                self.quick.hits = hits;
+                cx.notify();
+                return;
+            }
+            Mode::IconThemes => {
+                let query: Vec<u8> = q.to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+                let list = crate::ext::vsx_icons::list();
+                let mut scored: Vec<(i32, usize)> = Vec::with_capacity(list.len() + 1);
+                let builtin_hay = format!("{} {}", tr("FluxCode (Built-in)"), tr("Built-in file and folder icons")).to_lowercase();
+                if let Some(s) = fuzzy_lower(&query, builtin_hay.as_bytes()) {
+                    scored.push((s, 0));
+                }
+                for (i, m) in list.iter().enumerate() {
+                    let hay = format!("{} {}", m.label, m.ext_display).to_lowercase();
+                    if let Some(s) = fuzzy_lower(&query, hay.as_bytes()) {
+                        scored.push((s, i + 1));
+                    }
+                }
+                if !query.is_empty() {
+                    scored.sort_by_key(|a| std::cmp::Reverse(a.0));
+                }
+                let hits: Vec<usize> = scored.into_iter().map(|(_, i)| i).collect();
+                let active = crate::ext::vsx_icons::active_id();
+                self.quick.sel = if query.is_empty() {
+                    let target = list.iter().position(|m| m.id == active).map_or(0, |i| i + 1);
+                    hits.iter().position(|&ix| ix == target).unwrap_or(0)
+                } else {
+                    0
+                };
+                self.quick.hits = hits;
+                cx.notify();
+                return;
+            }
             Mode::Commands => {
                 let query: Vec<u8> = q.trim_start_matches('>').to_lowercase().bytes().filter(|c| !c.is_ascii_whitespace()).collect();
                 let list = crate::commands::commands();
@@ -247,6 +331,7 @@ impl Workbench {
             return;
         }
         self.quick.open = true;
+        self.quick.picker = Picker::Standard;
         self.quick.input.update(cx, |s, cx| {
             s.set_value("", window, cx);
             s.set_placeholder(placeholder(), window, cx);
@@ -258,15 +343,50 @@ impl Workbench {
 
     pub(crate) fn quick_open_with(&mut self, prefix: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = true;
+        self.quick.picker = Picker::Standard;
         let p = prefix.to_string();
         self.quick.input.update(cx, |s, cx| {
             s.set_value(p.clone(), window, cx);
+            s.set_placeholder(placeholder(), window, cx);
             let end = p.len();
             s.set_selected_range(end..end, cx);
         });
         let h = self.quick.input.focus_handle(cx);
         h.focus(window, cx);
         self.quick_filter(cx);
+    }
+
+    pub(crate) fn open_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick.open = true;
+        self.quick.picker = Picker::Themes;
+        self.begin_theme_preview();
+        self.quick.input.update(cx, |s, cx| {
+            s.set_value("", window, cx);
+            s.set_placeholder(tr("Select Color Theme (type to filter)"), window, cx);
+        });
+        let h = self.quick.input.focus_handle(cx);
+        h.focus(window, cx);
+        self.quick_filter(cx);
+    }
+
+    pub(crate) fn open_icon_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick.open = true;
+        self.quick.picker = Picker::IconThemes;
+        self.quick.input.update(cx, |s, cx| {
+            s.set_value("", window, cx);
+            s.set_placeholder(tr("Select File Icon Theme (type to filter)"), window, cx);
+        });
+        let h = self.quick.input.focus_handle(cx);
+        h.focus(window, cx);
+        self.quick_filter(cx);
+    }
+
+    pub(crate) fn on_choose_theme(&mut self, _: &ChooseTheme, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_theme_picker(window, cx);
+    }
+
+    pub(crate) fn on_choose_icon_theme(&mut self, _: &ChooseIconTheme, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_icon_theme_picker(window, cx);
     }
 
     fn wsl_browse_to(&mut self, distro: String, path: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -302,6 +422,8 @@ impl Workbench {
 
     pub(crate) fn quick_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = false;
+        self.quick.picker = Picker::Standard;
+        self.cancel_theme_preview(window, cx);
         if let Some(ed) = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.as_ref()) {
             let h = ed.focus_handle(cx);
             h.focus(window, cx);
@@ -315,20 +437,61 @@ impl Workbench {
         self.quick_close(window, cx);
     }
 
-    pub(crate) fn on_quick_up(&mut self, _: &QuickUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_quick_up(&mut self, _: &QuickUp, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.sel = self.quick.sel.saturating_sub(1);
+        if self.quick.mode == Mode::Themes {
+            if let Some(&ix) = self.quick.hits.get(self.quick.sel) {
+                if let Some(p) = theme::all().get(ix) {
+                    self.preview_theme(p.id, window, cx);
+                }
+            }
+        }
         cx.notify();
     }
 
-    pub(crate) fn on_quick_down(&mut self, _: &QuickDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_quick_down(&mut self, _: &QuickDown, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick.sel + 1 < self.quick.hits.len() {
             self.quick.sel += 1;
+        }
+        if self.quick.mode == Mode::Themes {
+            if let Some(&ix) = self.quick.hits.get(self.quick.sel) {
+                if let Some(p) = theme::all().get(ix) {
+                    self.preview_theme(p.id, window, cx);
+                }
+            }
         }
         cx.notify();
     }
 
     pub(crate) fn quick_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.quick.mode {
+            Mode::Themes => {
+                let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
+                let list = theme::all();
+                self.quick.open = false;
+                self.quick.picker = Picker::Standard;
+                if let Some(p) = list.get(ix) {
+                    self.commit_theme(p.id, window, cx);
+                }
+                if let Some(ed) = self.active.and_then(|i| self.docs.get(i)).and_then(|d| d.editor.as_ref()) {
+                    ed.focus_handle(cx).focus(window, cx);
+                } else {
+                    self.focus.focus(window, cx);
+                }
+                return;
+            }
+            Mode::IconThemes => {
+                let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
+                let list = crate::ext::vsx_icons::list();
+                let tid = if ix == 0 {
+                    String::new()
+                } else {
+                    list.get(ix - 1).map(|m| m.id.clone()).unwrap_or_default()
+                };
+                self.quick_close(window, cx);
+                self.set_icon_theme(&tid, cx);
+                return;
+            }
             Mode::Commands => {
                 let Some(&ix) = self.quick.hits.get(self.quick.sel) else { return };
                 let list = crate::commands::commands();
@@ -479,6 +642,134 @@ impl Workbench {
 
         let mut rows_col = v_flex().w_full();
         match q.mode {
+            Mode::Themes => {
+                let all = theme::all();
+                let committed = self.committed_theme_id();
+                if q.hits.is_empty() {
+                    rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No matching color theme.")));
+                    return self.quick_frame(wrap_rows(rows_col, 0, None), cx).into_any_element();
+                }
+                for (row, &ix) in q.hits.iter().enumerate() {
+                    let Some(p) = all.get(ix) else { continue };
+                    let selected = row == q.sel;
+                    let on = p.id == committed;
+                    let id = p.id;
+                    let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+                    let h_hov = liq.clone();
+                    rows_col = rows_col.child(
+                        h_flex()
+                            .id(("quick-theme", row))
+                            .relative()
+                            .mx_1()
+                            .px_2()
+                            .h(theme::u(32.))
+                            .gap_2p5()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(selected && !motion, |d| d.bg(c(theme::SELECT)))
+                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                            .on_hover(cx.listener(move |this, entered: &bool, w, cx| {
+                                if *entered {
+                                    if motion {
+                                        crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                                    }
+                                    this.preview_theme(id, w, cx);
+                                }
+                            }))
+                            .child(probe)
+                            .child(crate::settings::theme_swatch(p))
+                            .child(div().flex_none().text_sm().font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).text_color(c(theme::FG_STRONG)).child(p.name))
+                            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(tr(p.note)))
+                            .when(on, |h| h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT))))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.quick.open = false;
+                                this.quick.picker = Picker::Standard;
+                                this.commit_theme(id, w, cx);
+                                if let Some(ed) = this.active.and_then(|i| this.docs.get(i)).and_then(|d| d.editor.as_ref()) {
+                                    ed.focus_handle(cx).focus(w, cx);
+                                } else {
+                                    this.focus.focus(w, cx);
+                                }
+                            })),
+                    );
+                }
+                return self.quick_frame(wrap_rows(rows_col, q.hits.len(), Some(q.sel)), cx).into_any_element();
+            }
+            Mode::IconThemes => {
+                let installed = crate::ext::vsx_icons::list();
+                let active = crate::ext::vsx_icons::active_id();
+                if q.hits.is_empty() {
+                    rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No matching file icon theme.")));
+                    return self.quick_frame(wrap_rows(rows_col, 0, None), cx).into_any_element();
+                }
+                for (row, &ix) in q.hits.iter().enumerate() {
+                    let selected = row == q.sel;
+                    let (label, sub, tid, on) = if ix == 0 {
+                        (tr("FluxCode (Built-in)").to_string(), tr("Built-in file and folder icons").to_string(), String::new(), active.is_empty())
+                    } else if let Some(m) = installed.get(ix - 1) {
+                        (m.label.clone(), m.ext_display.clone(), m.id.clone(), m.id == active)
+                    } else {
+                        continue;
+                    };
+                    let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+                    let h_hov = liq.clone();
+                    rows_col = rows_col.child(
+                        h_flex()
+                            .id(("quick-icon", row))
+                            .relative()
+                            .mx_1()
+                            .px_2()
+                            .h(theme::u(32.))
+                            .gap_2p5()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(selected && !motion, |d| d.bg(c(theme::SELECT)))
+                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                            .on_hover(move |entered: &bool, _, cx| {
+                                if *entered && motion {
+                                    crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                                }
+                            })
+                            .child(probe)
+                            .child(div().flex_none().text_sm().font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).text_color(c(theme::FG_STRONG)).child(label))
+                            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(sub))
+                            .when(on, |h| h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT))))
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.quick_close(w, cx);
+                                this.set_icon_theme(&tid, cx);
+                            })),
+                    );
+                }
+                if installed.is_empty() {
+                    rows_col = rows_col.child(
+                        h_flex()
+                            .id("quick-icon-browse")
+                            .mx_1()
+                            .mt_1()
+                            .px_2()
+                            .h(theme::u(28.))
+                            .gap_2()
+                            .rounded(px(6.))
+                            .border_t_1()
+                            .border_color(c(theme::BORDER))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                            .child(Icon::new(gpui_kit::assets::IconName::Search).size(theme::u(12.)))
+                            .child(tr("Browse icon themes in Extensions"))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.quick_close(w, cx);
+                                this.close_pages(w, cx);
+                                this.reveal_view(SideView::Extensions, cx);
+                                this.ext.filter = crate::ext::Filter::Market;
+                                this.ext.query.update(cx, |s, cx| s.set_value("icon theme", w, cx));
+                                this.market_search(0, cx);
+                            })),
+                    );
+                }
+                return self.quick_frame(wrap_rows(rows_col, q.hits.len(), Some(q.sel)), cx).into_any_element();
+            }
             Mode::Commands => {
                 let all = crate::commands::commands();
                 if q.hits.is_empty() {
@@ -781,5 +1072,12 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(&paths[hits[0]], "src/main.rs");
         assert_eq!(&paths[hits[1]], "docs/main_guide.md");
+    }
+
+    #[test]
+    fn command_palette_includes_theme_and_icon_theme_pickers() {
+        let cmds = crate::commands::commands();
+        assert!(cmds.iter().any(|c| c.label == "Preferences: Color Theme" && c.keys == "Ctrl+K Ctrl+T"));
+        assert!(cmds.iter().any(|c| c.label == "Preferences: File Icon Theme"));
     }
 }

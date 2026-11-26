@@ -86,6 +86,10 @@ impl Workbench {
 
     pub(crate) fn reveal_view(&mut self, view: SideView, cx: &mut Context<Self>) {
         self.settings_open = false;
+        self.settings_theme_open = false;
+        self.settings_icon_open = false;
+        self.settings_lang_open = false;
+        self.settings_font_open = false;
         if self.on_right(view) {
             self.right_view = view;
             self.set_right_open(true, cx);

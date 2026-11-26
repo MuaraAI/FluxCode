@@ -211,7 +211,8 @@ impl LoadedIconTheme {
             .ext_folder
             .canonicalize()
             .map_err(|e| e.to_string())?;
-        let json_dir = meta.path.parent().unwrap_or(&meta.ext_folder);
+        let canon_path = meta.path.canonicalize().map_err(|e| e.to_string())?;
+        let json_dir = canon_path.parent().unwrap_or(&canon_ext_folder);
 
         let mut shared_paths: HashMap<PathBuf, Arc<PathBuf>> = HashMap::new();
         let mut defs: HashMap<String, Arc<PathBuf>> = HashMap::new();
@@ -220,7 +221,7 @@ impl LoadedIconTheme {
                 let Some(raw_path) = def_val.get("iconPath").and_then(Value::as_str) else {
                     continue;
                 };
-                let Some(resolved) = clean_join(&meta.ext_folder, json_dir, raw_path) else {
+                let Some(resolved) = clean_join(&canon_ext_folder, json_dir, raw_path) else {
                     continue;
                 };
                 let arc = shared_paths
@@ -610,6 +611,48 @@ mod tests {
         assert!(loaded.resolve_folder("src", true, false, true).unwrap().ends_with("folder-src-open.svg"));
         assert!(loaded.resolve_folder("other", true, false, true).unwrap().ends_with("folder-open.svg"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loads_when_json_path_is_canonicalized_and_ext_folder_is_not() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-icons-win-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ext = dir.join("thang-nm.flow-icons-2.0.10");
+        let dawn_json = ext.join("dawn.json");
+        write_svg(&ext.join("dawn/file.svg"));
+        write_svg(&ext.join("dawn/folder_gray.svg"));
+        write_svg(&ext.join("dawn/folder_gray_open.svg"));
+        write_svg(&ext.join("dawn/javascript.svg"));
+        std::fs::write(
+            &dawn_json,
+            r#"{
+              "file": "file",
+              "folder": "folder_gray",
+              "folderExpanded": "folder_gray_open",
+              "iconDefinitions": {
+                "file": { "iconPath": "./dawn/file.svg" },
+                "folder_gray": { "iconPath": "./dawn/folder_gray.svg" },
+                "folder_gray_open": { "iconPath": "./dawn/folder_gray_open.svg" },
+                "javascript": { "iconPath": "./dawn/javascript.svg" }
+              },
+              "fileExtensions": { "js": "javascript" }
+            }"#,
+        )
+        .unwrap();
+
+        // Simulate Windows native.rs passing canonicalized `path` while `ext_folder` is plain.
+        let meta = IconThemeMeta {
+            id: "vsx:thang-nm.flow-icons:flow-dawn".into(),
+            label: "Flow Dawn".into(),
+            ext_id: "thang-nm.flow-icons".into(),
+            ext_display: "Flow Icons".into(),
+            ext_folder: ext,
+            path: dawn_json.canonicalize().unwrap(),
+        };
+        let loaded = LoadedIconTheme::load(&meta).unwrap();
+        assert!(loaded.resolve_file("index.js", true).unwrap().ends_with("javascript.svg"));
+        assert!(loaded.resolve_folder("scripts", false, false, true).unwrap().ends_with("folder_gray.svg"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -583,7 +583,7 @@ fn settings_row_stacked(title: &'static str, desc: SharedString, control: AnyEle
                 .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
                 .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(desc)),
         )
-        .child(div().w_full().child(control))
+        .child(h_flex().w_full().child(control))
         .into_any_element()
 }
 
@@ -652,34 +652,24 @@ fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Con
 }
 
 fn settings_stepper(id: &'static str, value: String, can_dec: bool, can_inc: bool, cx: &mut Context<Workbench>, step: fn(&mut Workbench, i32)) -> AnyElement {
-    let dark = theme::live_dark();
     let step_btn = |ix: usize, lbl: &'static str, enabled: bool, delta: i32| {
-        let face = if dark { rgb(0x2D2E34) } else { rgb(0xD0D1D4) };
-        let hi = if dark { rgb(0x474952) } else { rgb(0xFFFFFF) };
-        let lip = if dark { rgb(0x16171B) } else { rgb(0x58585A) };
-        let fg = if dark { c(theme::FG_STRONG) } else { rgb(0x141416).into() };
         div()
             .id((id, ix))
-            .relative()
             .flex_none()
-            .size(theme::u(22.))
+            .size(theme::u(24.))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(2.))
-            .border_1()
-            .border_color(if dark { rgb(0x0A0A0D) } else { rgb(0x18181B) })
-            .bg(face)
-            .overflow_hidden()
+            .rounded(theme::u(5.))
+            .bg(c(theme::BG_ELEVATED))
             .text_xs()
-            .font_weight(FontWeight::BOLD)
-            .text_color(fg)
-            .child(div().absolute().top_0().left_0().right_0().h(px(1.5)).bg(hi))
-            .child(div().absolute().bottom_0().left_0().right_0().h(px(2.)).bg(lip))
-            .when(!enabled, |d| d.opacity(0.45).cursor_not_allowed())
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(c(theme::FG_STRONG))
+            .when(!enabled, |d| d.opacity(0.4).cursor_not_allowed())
             .when(enabled, |d| {
                 d.cursor_pointer()
-                    .hover(|s| s.opacity(0.88))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .active(|s| s.opacity(0.8))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         step(this, delta);
                         this.apply_settings(w, cx);
@@ -687,11 +677,19 @@ fn settings_stepper(id: &'static str, value: String, can_dec: bool, can_inc: boo
             })
             .child(lbl)
     };
-    crate::ui::mc_box_frame(h_flex().items_center().p(px(2.)).gap(px(2.)), false, dark)
+    h_flex()
+        .flex_none()
+        .items_center()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded(theme::u(7.))
+        .border_1()
+        .border_color(c(theme::BORDER))
+        .bg(c(theme::BG_SIDE))
         .child(step_btn(0, "-", can_dec, -1))
         .child(
             div()
-                .min_w(px(52.))
+                .min_w(theme::u(48.))
                 .px_1p5()
                 .text_center()
                 .text_xs()
@@ -1568,9 +1566,11 @@ impl Workbench {
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
-                    if this.settings_theme_open || this.settings_icon_open {
+                    if this.settings_theme_open || this.settings_icon_open || this.settings_lang_open || this.settings_font_open {
                         this.settings_theme_open = false;
                         this.settings_icon_open = false;
+                        this.settings_lang_open = false;
+                        this.settings_font_open = false;
                         this.cancel_theme_preview(w, cx);
                     } else if !this.settings_search.read(cx).value().trim().is_empty() {
                         this.settings_search
@@ -1709,6 +1709,8 @@ impl Workbench {
             .on_click(cx.listener(|this, _, w, cx| {
                 this.settings_theme_open = false;
                 this.settings_icon_open = false;
+                this.settings_lang_open = false;
+                this.settings_font_open = false;
                 this.cancel_theme_preview(w, cx);
                 this.settings_open = false;
                 this.focus.focus(w, cx);
@@ -1872,6 +1874,8 @@ impl Workbench {
             .on_click(cx.listener(|this, _, w, cx| {
                 this.settings_theme_open = false;
                 this.settings_icon_open = false;
+                this.settings_lang_open = false;
+                this.settings_font_open = false;
                 this.cancel_theme_preview(w, cx);
                 this.settings_open = false;
                 this.focus.focus(w, cx);
@@ -1981,11 +1985,11 @@ impl Workbench {
         nav.into_any_element()
     }
 
-    fn settings_entries(&self, section: SettingsSection, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+    fn settings_entries(&self, section: SettingsSection, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
         let s = &self.settings;
         match section {
-            SettingsSection::Appearance => self.appearance_entries(s, cx),
-            SettingsSection::Editor => self.editor_entries(s, cx),
+            SettingsSection::Appearance => self.appearance_entries(s, compact, cx),
+            SettingsSection::Editor => self.editor_entries(s, compact, cx),
             SettingsSection::Agents => self.agent_entries(s, cx),
             SettingsSection::Wsl => vec![SettingEntry::inline(
                 "WSL",
@@ -2039,20 +2043,213 @@ impl Workbench {
         }
     }
 
-    fn appearance_entries(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<SettingEntry> {
-        let lang = s.language.clone();
-        let lang_controls = settings_segmented(
-            "seg-lang",
-            [("auto", tr("Automatic")), ("en", "English"), ("id", "Bahasa Indonesia"), ("fr", "Français"), ("ms", "Bahasa Melayu")]
-                .into_iter()
-                .map(|(id, name)| {
-            settings_pill(SharedString::from(format!("lang-{id}")), name, lang == id, cx.listener(move |this, _, w, cx| {
-                this.settings.language = id.into();
-                crate::i18n::set(id);
-                this.apply_language(w, cx);
-                this.apply_settings(w, cx);
-            }))
-        }));
+    fn render_language_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let langs: [(&'static str, SharedString); 5] = [
+            ("auto", tr("Automatic").into()),
+            ("en", "English".into()),
+            ("id", "Bahasa Indonesia".into()),
+            ("fr", "Français".into()),
+            ("ms", "Bahasa Melayu".into()),
+        ];
+        let active = self.settings.language.clone();
+        let display = langs
+            .iter()
+            .find(|(id, _)| *id == active)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| tr("Automatic").into());
+        let open = self.settings_lang_open;
+        let focus = self.settings_lang_focus.clone();
+        let weak_open = cx.entity().downgrade();
+        let weak_content = cx.entity().downgrade();
+        let trigger = Button::new("settings-lang-trigger")
+            .outline()
+            .small()
+            .dropdown_caret(true)
+            .selected(open)
+            .when(compact, |b| b.w_full())
+            .when(!compact, |b| b.w(theme::u(220.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(gpui_kit::component::IconName::Globe).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
+                    .child(div().flex_1().min_w_0().truncate().text_left().font_weight(FontWeight::MEDIUM).child(display)),
+            );
+        Popover::new("settings-lang-dd")
+            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .open(open)
+            .track_focus(&focus)
+            .appearance(false)
+            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .on_open_change(move |next_open, _, cx| {
+                _ = weak_open.update(cx, |this, cx| {
+                    this.settings_lang_open = *next_open;
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let pop_entity = cx.entity().downgrade();
+                let mut list = v_flex().id("settings-lang-list").gap_0p5();
+                for (i, (id, name)) in langs.iter().enumerate() {
+                    let on = *id == active;
+                    let lang_id = *id;
+                    let weak_clk = weak_content.clone();
+                    let pop_clk = pop_entity.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(("settings-lang-opt", i))
+                            .w_full()
+                            .min_w_0()
+                            .h(theme::u(30.))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|d| d.bg(c(theme::BG_HOVER)))
+                            .on_click(move |_, window, cx| {
+                                _ = weak_clk.update(cx, |this, cx| {
+                                    this.settings_lang_open = false;
+                                    this.settings.language = lang_id.into();
+                                    crate::i18n::set(lang_id);
+                                    this.apply_language(window, cx);
+                                    this.apply_settings(window, cx);
+                                });
+                                _ = pop_clk.update(cx, |st, cx| st.dismiss(window, cx));
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(name.clone()),
+                            )
+                            .when(on, |h| {
+                                h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))
+                            }),
+                    );
+                }
+                v_flex()
+                    .id("settings-lang-pop")
+                    .track_focus(&focus)
+                    .w(theme::u(220.))
+                    .max_w(relative(0.92))
+                    .p_1p5()
+                    .glass_pop()
+                    .occlude()
+                    .child(list)
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn render_font_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let fonts: &'static [&'static str] = if cfg!(windows) {
+            &["Cascadia Code", "Cascadia Mono", "Consolas", "Courier New"]
+        } else {
+            &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"]
+        };
+        let active = self.settings.font_family.clone();
+        let open = self.settings_font_open;
+        let focus = self.settings_font_focus.clone();
+        let weak_open = cx.entity().downgrade();
+        let weak_content = cx.entity().downgrade();
+        let trigger = Button::new("settings-font-trigger")
+            .outline()
+            .small()
+            .dropdown_caret(true)
+            .selected(open)
+            .when(compact, |b| b.w_full())
+            .when(!compact, |b| b.w(theme::u(220.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(gpui_kit::assets::IconName::FileType).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
+                    .child(div().flex_1().min_w_0().truncate().text_left().font_weight(FontWeight::MEDIUM).child(active.clone())),
+            );
+        Popover::new("settings-font-dd")
+            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .open(open)
+            .track_focus(&focus)
+            .appearance(false)
+            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .on_open_change(move |next_open, _, cx| {
+                _ = weak_open.update(cx, |this, cx| {
+                    this.settings_font_open = *next_open;
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let pop_entity = cx.entity().downgrade();
+                let mut list = v_flex().id("settings-font-list").gap_0p5();
+                for (i, &font) in fonts.iter().enumerate() {
+                    let on = active.as_ref() == font;
+                    let weak_clk = weak_content.clone();
+                    let pop_clk = pop_entity.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(("settings-font-opt", i))
+                            .w_full()
+                            .min_w_0()
+                            .h(theme::u(32.))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|d| d.bg(c(theme::BG_HOVER)))
+                            .on_click(move |_, window, cx| {
+                                _ = weak_clk.update(cx, |this, cx| {
+                                    this.settings_font_open = false;
+                                    this.settings.font_family = font.into();
+                                    this.apply_settings(window, cx);
+                                });
+                                _ = pop_clk.update(cx, |st, cx| st.dismiss(window, cx));
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(font)
+                                    .text_sm()
+                                    .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(font),
+                            )
+                            .when(on, |h| {
+                                h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))
+                            }),
+                    );
+                }
+                v_flex()
+                    .id("settings-font-pop")
+                    .track_focus(&focus)
+                    .w(theme::u(220.))
+                    .max_w(relative(0.92))
+                    .p_1p5()
+                    .glass_pop()
+                    .occlude()
+                    .child(list)
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn appearance_entries(&self, s: &Settings, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+        let lang_controls = self.render_language_dropdown(compact, cx);
         let size = s.ui_size;
         let size_controls = settings_segmented("seg-ui-size", UiSize::ALL.iter().map(|z| {
             let z = *z;
@@ -2105,7 +2302,13 @@ impl Workbench {
             tr("Twelve scenes drawn live in your theme's colors: change the theme and the scene changes with it. Nothing to download, and they fit any window size.").into()
         };
         let mut out = vec![
-            SettingEntry::stacked("Display & language", "Language", tr("Menus, panels and messages. Automatic follows Windows.").into(), "language locale indonesia english french malay", lang_controls),
+            SettingEntry::inline(
+                "Display & language",
+                "Language",
+                tr("Menus, panels and messages. Automatic follows Windows.").into(),
+                "language locale indonesia english french malay",
+                lang_controls,
+            ),
             SettingEntry::inline("Display & language", "Interface size", tr("Menus, tabs, the explorer, panels and icons. The editor font has its own size below.").into(), "ui scale zoom size compact comfortable", size_controls),
             SettingEntry::inline(
                 "Display & language",
@@ -2145,22 +2348,16 @@ impl Workbench {
         out
     }
 
-    fn editor_entries(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<SettingEntry> {
-        let fonts: &[&'static str] = if cfg!(windows) {
-            &["Cascadia Code", "Cascadia Mono", "Consolas", "Courier New"]
-        } else {
-            &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"]
-        };
-        let current_font = s.font_family.to_string();
-        let font_controls = settings_segmented("seg-font", fonts.iter().map(|f| {
-            let f = *f;
-            settings_pill(SharedString::from(format!("font-{f}")), f, current_font == f, cx.listener(move |this, _, w, cx| {
-                this.settings.font_family = f.into();
-                this.apply_settings(w, cx);
-            }))
-        }));
+    fn editor_entries(&self, s: &Settings, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+        let font_controls = self.render_font_dropdown(compact, cx);
         vec![
-            SettingEntry::stacked("Typography & layout", "Font", tr("The editor and terminal font. Fonts that are not installed fall back to the system's monospace font.").into(), "font family typeface monospace", font_controls),
+            SettingEntry::inline(
+                "Typography & layout",
+                "Font",
+                tr("The editor and terminal font. Fonts that are not installed fall back to the system's monospace font.").into(),
+                "font family typeface monospace",
+                font_controls,
+            ),
             SettingEntry::inline("Typography & layout", "Font size", tr("Font size of the editor and terminal, in pixels.").into(), "font size zoom px", settings_stepper("fs", format!("{} px", s.font_size), s.font_size > 8., s.font_size < 32., cx, |w, d| {
                 w.settings.font_size = (w.settings.font_size + d as f32).clamp(8., 32.)
             })),
@@ -2207,7 +2404,7 @@ impl Workbench {
         let s = &self.settings;
         match section {
             SettingsSection::Appearance => {
-                let mut entries = self.appearance_entries(s, cx);
+                let mut entries = self.appearance_entries(s, compact, cx);
                 let idx_scene = entries.iter().position(|e| e.title == "Animated background").unwrap_or(entries.len());
                 let display_rows: Vec<AnyElement> = entries.drain(..idx_scene).map(|e| e.render(compact)).collect();
                 let mut scene_rows: Vec<AnyElement> = Vec::new();
@@ -2238,9 +2435,9 @@ impl Workbench {
                     .child(settings_group("Backdrop & scenes", scene_rows))
                     .into_any_element()
             }
-            SettingsSection::Editor | SettingsSection::Agents => self.grouped_entries(self.settings_entries(section, cx), compact),
+            SettingsSection::Editor | SettingsSection::Agents => self.grouped_entries(self.settings_entries(section, compact, cx), compact),
             SettingsSection::Wsl | SettingsSection::Windows | SettingsSection::Updates => {
-                let rows = self.settings_entries(section, cx).into_iter().map(|e| e.render(compact)).collect();
+                let rows = self.settings_entries(section, compact, cx).into_iter().map(|e| e.render(compact)).collect();
                 settings_card(rows)
             }
             SettingsSection::SoulFiles => settings_card(vec![div().p_4().child(self.render_soul_files(cx)).into_any_element()]),
@@ -2373,7 +2570,7 @@ impl Workbench {
         };
         for &sec in sections {
             let mut rows: Vec<AnyElement> = Vec::new();
-            for entry in self.settings_entries(sec, cx) {
+            for entry in self.settings_entries(sec, compact, cx) {
                 if matches_query(query, &[sec.title(), tr(sec.title()), entry.group, tr(entry.group), entry.title, tr(entry.title), &entry.desc, entry.keywords]) {
                     rows.push(entry.render(compact));
                 }

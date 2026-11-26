@@ -269,10 +269,9 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn ext_open_page(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn ext_open_page(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_pages(window, cx);
         self.ext.page = Some(id.to_string());
-        self.settings_open = false;
-        self.whats_new = None;
         self.ext_check_needs(id, cx);
         cx.notify();
     }
@@ -903,8 +902,8 @@ impl Workbench {
             }
             if let Some((ext, name)) = &page {
                 let (w, ext) = (weak.clone(), ext.clone());
-                menu = menu.separator().item(PopupMenuItem::new(crate::trf!("About {ext}"; ext => name)).icon(Icon::new(Ico::Info)).on_click(move |_, _, cx| {
-                    _ = w.update(cx, |this, cx| this.ext_open_page(&ext, cx));
+                menu = menu.separator().item(PopupMenuItem::new(crate::trf!("About {ext}"; ext => name)).icon(Icon::new(Ico::Info)).on_click(move |_, win, cx| {
+                    _ = w.update(cx, |this, cx| this.ext_open_page(&ext, win, cx));
                 }));
             }
             menu
@@ -984,7 +983,7 @@ impl Workbench {
                         .child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(ext_name.clone())),
                 )
                 .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
-                .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&ext_id, cx)));
+                .on_click(cx.listener(move |this, _, w, cx| this.ext_open_page(&ext_id, w, cx)));
 
             let mut group = v_flex().w_full().gap_1().child(head);
             if let Some(mi) = main {
@@ -1059,7 +1058,7 @@ impl Workbench {
                         cx.stop_propagation();
                         this.ext_install(&id_a, cx);
                     })))
-                    .on_click(cx.listener(move |this, _, _, cx| this.ext_open_page(&id_b, cx))),
+                    .on_click(cx.listener(move |this, _, w, cx| this.ext_open_page(&id_b, w, cx))),
             );
         }
         if !offered.is_empty() {
