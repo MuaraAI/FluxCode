@@ -227,6 +227,7 @@ pub struct Scm {
     pub repo: Option<PathBuf>,
     pub status: RepoStatus,
     pub log: Vec<Commit>,
+    pub graph: crate::scm_graph::GraphLayout,
     pub commit_open: Option<String>,
     pub commit_files: HashMap<String, Vec<(char, String)>>,
     pub runs: Vec<Run>,
@@ -305,6 +306,7 @@ impl Scm {
                 repo: None,
                 status: RepoStatus::default(),
                 log: Vec::new(),
+                graph: Default::default(),
                 commit_open: None,
                 commit_files: HashMap::new(),
                 runs: Vec::new(),
@@ -442,6 +444,7 @@ impl Workbench {
         s.repo = None;
         s.status = RepoStatus::default();
         s.log.clear();
+        s.graph = Default::default();
         s.commit_open = None;
         s.commit_files.clear();
         s.incoming.clear();
@@ -536,6 +539,7 @@ impl Workbench {
                 s.dirty_dirs = Rc::new(dirty_dirs);
                 if s.repo != snap.repo {
                     s.log.clear();
+                    s.graph = Default::default();
                     s.commit_open = None;
                     s.commit_files.clear();
                     s.confirm_discard = None;
@@ -543,6 +547,7 @@ impl Workbench {
                 s.repo = snap.repo;
                 s.status = snap.status;
                 if let Some(log) = snap.log {
+                    s.graph = crate::scm_graph::compute_graph(&log);
                     s.log = log;
                 }
                 let (incoming, head) = snap.incoming;
@@ -1608,7 +1613,7 @@ impl Workbench {
         }
 
         let row_h = f32::from(theme::u(ROW_H));
-        let graph_h = row_h;
+        let graph_h = f32::from(theme::u(crate::scm_graph::GRAPH_ROW_H));
         let header_h = row_h;
         let flex_min = |natural: f32, unit: f32, min_rows: f32| {
             (header_h + min_rows * unit).min(natural).max(header_h)
@@ -1844,39 +1849,24 @@ impl Workbench {
                 for (i, cm) in s.log.iter().enumerate() {
                     let hash = cm.hash.clone();
                     let open = s.commit_open.as_deref() == Some(cm.hash.as_str());
-                    let (lane_top, lane_bottom, dot_top) = lane_geometry(i, n, open);
-                    let line_col = if cm.is_head { theme::BLUE } else { theme::ACCENT };
-                    let badge = cm.refs.first().cloned();
-                    let has_refs = badge.is_some();
-                    let lane = div()
-                        .relative()
-                        .w(theme::u(14.))
-                        .h_full()
-                        .flex_none()
-                        .child(
-                            div()
-                                .absolute()
-                                .left(theme::u(6.))
-                                .w(px(2.))
-                                .top(theme::u(lane_top))
-                                .bottom(theme::u(lane_bottom))
-                                .bg(c(line_col).opacity(0.6)),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left(theme::u(3.))
-                                .top(theme::u(dot_top))
-                                .size(theme::u(8.))
-                                .rounded_full()
-                                .border_2()
-                                .border_color(c(line_col))
-                                .bg(if cm.is_head || !cm.merge {
-                                    c(line_col)
-                                } else {
-                                    c(theme::BG_SIDE)
-                                }),
-                        );
+                    let grow = s.graph.rows.get(i).cloned().unwrap_or(crate::scm_graph::GraphRow {
+                        col: 0,
+                        color: 0,
+                        merge: cm.merge,
+                        is_head: cm.is_head,
+                        continues_up: i > 0,
+                        continues_down: i + 1 < n,
+                        row_lanes: 1,
+                        pass_lanes: Vec::new(),
+                        in_edges: Vec::new(),
+                        out_edges: Vec::new(),
+                        after_lanes: if i + 1 < n { vec![(0, 0)] } else { Vec::new() },
+                    });
+                    let after_lanes = grow.after_lanes.clone();
+                    let badges = crate::scm_graph::sort_ref_badges(&cm.refs, cm.is_head);
+                    let primary_badge = badges.first().cloned();
+                    let extra_badge = badges.get(1).cloned();
+                    let has_refs = !badges.is_empty();
                     col = col.child(
                         h_flex()
                             .id(("scm-c", i))
@@ -1884,8 +1874,7 @@ impl Workbench {
                             .min_w_0()
                             .flex_shrink_0()
                             .overflow_hidden()
-                            .h(theme::u(ROW_H))
-                            .pl_3()
+                            .h(theme::u(crate::scm_graph::GRAPH_ROW_H))
                             .pr(px(SCROLLBAR_PAD))
                             .gap_1()
                             .items_center()
@@ -1893,7 +1882,7 @@ impl Workbench {
                             .cursor_pointer()
                             .when(open, |h| h.bg(c(theme::SELECT)))
                             .hover(|s| s.bg(c(theme::BG_HOVER)))
-                            .child(lane)
+                            .child(crate::scm_graph::render_graph_cell(grow))
                             .child(
                                 h_flex()
                                     .flex_1()
@@ -1923,14 +1912,20 @@ impl Workbench {
                                         )
                                     }),
                             )
-                            .children(badge.map(|label| {
-                                let tint = if cm.is_head { theme::BLUE } else { theme::ACCENT };
+                            .children(primary_badge.map(|b| {
+                                let (ico, tint, text_tok) = match b.kind {
+                                    crate::scm_graph::RefKind::Head => (Ico::GitBranch, theme::BLUE, theme::BLUE),
+                                    crate::scm_graph::RefKind::Branch => (Ico::GitBranch, theme::ACCENT, theme::ACCENT_TEXT),
+                                    crate::scm_graph::RefKind::Remote => (Ico::Cloud, theme::WARN, theme::WARN),
+                                    crate::scm_graph::RefKind::Tag => (Ico::Tag, theme::WARN, theme::WARN),
+                                };
                                 h_flex()
                                     .flex_shrink(1.)
                                     .min_w_0()
                                     .max_w(theme::u(108.))
                                     .h(theme::u(17.))
                                     .px_1p5()
+                                    .gap_1()
                                     .items_center()
                                     .rounded_full()
                                     .border_1()
@@ -1938,11 +1933,32 @@ impl Workbench {
                                     .bg(c(tint).opacity(0.18))
                                     .text_size(theme::u(10.5))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(c(tint))
-                                    .child(div().min_w_0().truncate().child(label))
+                                    .text_color(c(text_tok))
+                                    .child(Icon::new(ico).flex_none().size(theme::u(10.)))
+                                    .child(div().min_w_0().truncate().child(b.label))
                             }))
-                            .when(cm.refs.len() > 1, |h| {
-                                h.child(div().flex_none().text_size(theme::u(10.)).text_color(c(theme::FG_DIM)).child(format!("+{}", cm.refs.len() - 1)))
+                            .children(extra_badge.map(|b| {
+                                let (ico, tint) = match b.kind {
+                                    crate::scm_graph::RefKind::Head => (Ico::GitBranch, theme::BLUE),
+                                    crate::scm_graph::RefKind::Branch => (Ico::GitBranch, theme::ACCENT),
+                                    crate::scm_graph::RefKind::Remote => (Ico::Cloud, theme::ACCENT),
+                                    crate::scm_graph::RefKind::Tag => (Ico::Tag, theme::WARN),
+                                };
+                                h_flex()
+                                    .flex_none()
+                                    .h(theme::u(17.))
+                                    .px_1()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(c(tint).opacity(0.45))
+                                    .bg(c(tint).opacity(0.18))
+                                    .text_color(c(tint))
+                                    .child(Icon::new(ico).size(theme::u(10.)))
+                            }))
+                            .when(badges.len() > 2, |h| {
+                                h.child(div().flex_none().text_size(theme::u(10.)).text_color(c(theme::FG_DIM)).child(format!("+{}", badges.len() - 2)))
                             })
                             .tooltip({
                                 let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
@@ -1962,13 +1978,13 @@ impl Workbench {
                             .flex_shrink_0()
                             .overflow_hidden()
                             .h(theme::u(ROW_H))
-                            .pl(theme::u(26.))
                             .pr(px(SCROLLBAR_PAD))
                             .gap_1p5()
                             .items_center()
                             .bg(c(theme::BG_ELEVATED).opacity(0.6))
                             .text_size(theme::u(10.5))
                             .text_color(c(theme::FG_DIM))
+                            .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
                             .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(theme::ACCENT_TEXT)).child(cm.short.clone()))
                             .child(div().flex_1().min_w_0().truncate().child(format!("{} · {}", cm.author, cm.when)))
                             .child(
@@ -1995,12 +2011,12 @@ impl Workbench {
                                     .min_w_0()
                                     .flex_shrink_0()
                                     .h(theme::u(ROW_H))
-                                    .pl(theme::u(26.))
                                     .pr(px(SCROLLBAR_PAD))
                                     .gap_1p5()
                                     .items_center()
                                     .text_xs()
                                     .text_color(c(theme::FG_DIM))
+                                    .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
                                     .child(tr("Reading the changed files…")),
                             );
                         }
@@ -2011,12 +2027,12 @@ impl Workbench {
                                     .min_w_0()
                                     .flex_shrink_0()
                                     .h(theme::u(ROW_H))
-                                    .pl(theme::u(26.))
                                     .pr(px(SCROLLBAR_PAD))
                                     .gap_1p5()
                                     .items_center()
                                     .text_xs()
                                     .text_color(c(theme::FG_DIM))
+                                    .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
                                     .child(tr("No changed files.")),
                             );
                         }
@@ -2036,7 +2052,6 @@ impl Workbench {
                                         .flex_none()
                                         .overflow_hidden()
                                         .h(theme::u(ROW_H))
-                                        .pl(theme::u(26.))
                                         .pr(px(SCROLLBAR_PAD))
                                         .gap_1p5()
                                         .items_center()
@@ -2044,6 +2059,7 @@ impl Workbench {
                                         .cursor_pointer()
                                         .when(is_active, |h| h.bg(c(theme::SELECT)))
                                         .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                        .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
                                         .child(crate::files::file_icon_el(&name, theme::u(13.)))
                                         .child(div().flex_shrink(1.).min_w_0().truncate().text_color(c(col_tok)).child(name))
                                         .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir))
@@ -2060,12 +2076,12 @@ impl Workbench {
                                         .min_w_0()
                                         .flex_shrink_0()
                                         .h(theme::u(ROW_H))
-                                        .pl(theme::u(26.))
                                         .pr(px(SCROLLBAR_PAD))
                                         .gap_1p5()
                                         .items_center()
                                         .text_xs()
                                         .text_color(c(theme::FG_DIM))
+                                        .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
                                         .child(crate::trf!("… and {n} more files"; n => files.len() - 60)),
                                 );
                             }
