@@ -40,6 +40,7 @@ mod scm;
 mod scm_git;
 mod scm_graph;
 mod scm_incoming;
+mod scm_refs;
 mod search;
 mod scene;
 mod scene_art;

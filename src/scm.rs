@@ -596,7 +596,9 @@ impl Workbench {
         let reload = steps.iter().any(|step| {
             matches!(
                 step,
-                Step::Remote(RemoteAction::Pull | RemoteAction::Sync) | Step::Resolve { .. }
+                Step::Remote(RemoteAction::Pull | RemoteAction::Sync)
+                    | Step::WorkspaceGit(_)
+                    | Step::Resolve { .. }
             )
         });
         let generation = self.scm.workspace_generation;
@@ -2427,6 +2429,9 @@ impl Workbench {
                                 .menu(tr("Push"), Box::new(ScmPush))
                                 .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
                                 .menu(tr("Fetch"), Box::new(ScmFetch))
+                                .menu(tr("Git: Checkout Branch or Tag"), Box::new(ScmCheckout))
+                                .menu(tr("Git: Branches, Tags, Remotes and Stashes"), Box::new(ScmManage))
+                                .menu(tr("Git: Show Current File History"), Box::new(ScmFileHistory))
                                 .separator()
                                 .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
                                 .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))

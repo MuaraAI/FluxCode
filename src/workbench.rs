@@ -39,6 +39,7 @@ actions!(
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, NextIconTheme, ChooseTheme, ChooseIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmCommitDefault, ScmCommitSignoff, ScmPull, ScmPush, ScmSync, ScmFetch,
+        ScmCheckout, ScmManage, ScmFileHistory,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
         AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
@@ -4140,7 +4141,7 @@ impl Workbench {
                             )
                             .child(div().min_w_0().truncate().child(format!("{b}{dirty}")))
                             .on_click(
-                                cx.listener(|this, _, w, cx| this.on_scm_show(&ScmShow, w, cx)),
+                                cx.listener(|this, _, w, cx| this.on_scm_checkout(&ScmCheckout, w, cx)),
                             ),
                     )
                     .when(st.branch.is_some() && st.head.is_some(), |h| {
@@ -4781,6 +4782,9 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_quick_open))
             .on_action(cx.listener(Self::on_scm_commit_default))
             .on_action(cx.listener(Self::on_scm_commit_signoff))
+            .on_action(cx.listener(Self::on_scm_checkout))
+            .on_action(cx.listener(Self::on_scm_manage))
+            .on_action(cx.listener(Self::on_scm_file_history))
             .on_action(cx.listener(Self::on_quick_close))
             .on_action(cx.listener(Self::on_quick_up))
             .on_action(cx.listener(Self::on_quick_down))

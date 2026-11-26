@@ -246,6 +246,7 @@ pub(crate) enum Step {
         nbt: Option<crate::nbt::NbtFormat>,
     },
     Git(Vec<String>, Option<String>),
+    WorkspaceGit(Vec<String>),
     Resolve {
         path: String,
         expected: String,
@@ -307,6 +308,7 @@ pub(crate) fn run_step(
             crate::workbench::write_doc_to_disk(target, path, text, *crlf, *nbt)?;
             return Ok(String::new());
         }
+        Step::WorkspaceGit(args) => return run_step(dir, &Step::Git(args.clone(), None), target),
         Step::Resolve {
             path,
             expected,
