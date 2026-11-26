@@ -38,7 +38,7 @@ actions!(
         ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, NextIconTheme, ChooseTheme, ChooseIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
-        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
+        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmCommitDefault, ScmCommitSignoff, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
         AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
@@ -70,6 +70,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
+        KeyBinding::new("ctrl-enter", ScmCommitDefault, Some("ScmMessage > Input")),
         KeyBinding::new("ctrl-p", QuickOpenFile, None),
         KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
         KeyBinding::new("down", QuickDown, Some("QuickOpen > Input")),
@@ -862,6 +863,9 @@ impl Workbench {
     }
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.root.as_ref() != Some(&root) {
+            self.scm_reset_workspace();
+        }
         self.root = Some(root.clone());
         let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
         if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
@@ -4115,7 +4119,8 @@ impl Workbench {
                     let st = &self.scm.status;
                     let dirty = if st.count() > 0 { "*" } else { "" };
                     let sync = match &st.upstream {
-                        None => "Publish".to_string(),
+                        None => tr("Publish Branch").to_string(),
+                        Some(_) if !st.upstream_available => tr("Upstream unavailable").to_string(),
                         Some(_) => format!("{}↓ {}↑", st.behind, st.ahead),
                     };
                     h.child(
@@ -4138,7 +4143,7 @@ impl Workbench {
                                 cx.listener(|this, _, w, cx| this.on_scm_show(&ScmShow, w, cx)),
                             ),
                     )
-                    .when(medium, |h| {
+                    .when(st.branch.is_some() && st.head.is_some(), |h| {
                         h.child(
                             h_flex()
                                 .id("sb-sync")
@@ -4147,8 +4152,9 @@ impl Workbench {
                                 .h_full()
                                 .px_2()
                                 .gap_1()
-                                .cursor_pointer()
-                                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                .when(!self.scm.is_busy(), |h| {
+                                    h.cursor_pointer().hover(|s| s.bg(c(theme::BG_HOVER)))
+                                })
                                 .child(
                                     Icon::new(if st.upstream.is_some() {
                                         gpui_kit::assets::IconName::RefreshCcw
@@ -4158,14 +4164,14 @@ impl Workbench {
                                     .flex_none()
                                     .size(theme::u(13.)),
                                 )
-                                .child(if self.scm.busy.is_some() {
+                                .child(if self.scm.is_busy() {
                                     "…".to_string()
                                 } else {
                                     sync
                                 })
-                                .on_click(
-                                    cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx)),
-                                ),
+                                .when(!self.scm.is_busy(), |h| {
+                                    h.on_click(cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx)))
+                                }),
                         )
                     })
                 },
@@ -4426,6 +4432,7 @@ impl Render for Workbench {
         }
         if self.scm.clear_message {
             self.scm.clear_message = false;
+            self.scm.msg_non_empty = false;
             self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));
         }
         window.set_rem_size(theme::rem());
@@ -4750,6 +4757,7 @@ impl Render for Workbench {
                             this.settings.full_right_w = w;
                         }
                     }
+                    5 => this.scm_drag_pane(f32::from(ev.position.y)),
                     6 => this.diff_drag_ruler(f32::from(ev.position.y), cx),
                     _ => return,
                 }
@@ -4762,6 +4770,7 @@ impl Render for Workbench {
                             this.agent.full.drag = None;
                             this.settings.save();
                         }
+                        5 => this.scm.pane_drag = None,
                         6 => this.diff_ruler_drag = None,
                         _ => {}
                     }
@@ -4770,6 +4779,8 @@ impl Render for Workbench {
                 }
             }))
             .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_scm_commit_default))
+            .on_action(cx.listener(Self::on_scm_commit_signoff))
             .on_action(cx.listener(Self::on_quick_close))
             .on_action(cx.listener(Self::on_quick_up))
             .on_action(cx.listener(Self::on_quick_down))
@@ -5026,6 +5037,34 @@ fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
+}
+
+pub(crate) fn read_file_bytes(
+    wsl: Option<&crate::remote::WslTarget>,
+    path: &Path,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    if let Some(t) = wsl {
+        if let Some(bytes) = remote_read(t, path, limit.saturating_add(1)) {
+            return Ok(bytes);
+        }
+    }
+    let mut bytes = Vec::new();
+    let meta = path.symlink_metadata().map_err(|e| e.to_string())?;
+    if meta.is_symlink() {
+        bytes = path
+            .read_link()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .as_bytes()
+            .to_vec();
+    } else if meta.is_file() {
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit.saturating_add(1)).read_to_end(&mut bytes))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn write_doc_to_disk(

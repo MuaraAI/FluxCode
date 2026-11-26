@@ -1,7 +1,8 @@
 use crate::files;
 use crate::i18n::tr;
+use crate::scm_git::Group;
 use crate::theme::{self, c};
-use crate::workbench::Workbench;
+use crate::workbench::{Doc, Workbench};
 use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     diff::{
@@ -39,6 +40,9 @@ pub struct DiffDoc {
     pub name: SharedString,
     pub badge: Option<SharedString>,
     pub target: Option<PathBuf>,
+    pub(crate) scm_stage: Option<(PathBuf, String, Group)>,
+    scm_patch: Option<std::sync::Arc<str>>,
+    conflict_original: Option<std::sync::Arc<str>>,
     pub state: Option<Entity<DiffState>>,
     pub multi_file: bool,
     pub empty_note: Option<SharedString>,
@@ -112,11 +116,50 @@ pub fn parse(text: &str) -> DiffDoc {
         name: name.into(),
         badge: None,
         target: None,
+        scm_stage: None,
+        scm_patch: None,
+        conflict_original: None,
         state: None,
         multi_file: false,
         empty_note: None,
         virtual_tab: false,
     }
+}
+
+pub fn untracked_patch(rel_path: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.iter().take(8192).any(|&b| b == 0) {
+        return None;
+    }
+    let content = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = content.lines().collect();
+    let path = |prefix: &str| {
+        if rel_path.contains(['\\', '"', '\n', '\t', '\r']) {
+            let escaped = rel_path
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+                .replace('\r', "\\r");
+            format!("\"{prefix}/{escaped}\"")
+        } else {
+            format!("{prefix}/{rel_path}")
+        }
+    };
+    let (old, new) = (path("a"), path("b"));
+    let mut out =
+        format!("diff --git {old} {new}\nnew file mode 100644\n--- /dev/null\n+++ {new}\n");
+    if !lines.is_empty() {
+        out.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
+        for line in lines {
+            out.push('+');
+            out.push_str(line);
+            out.push('\n');
+        }
+        if !content.ends_with('\n') {
+            out.push_str("\\ No newline at end of file\n");
+        }
+    }
+    Some(out)
 }
 
 pub fn parse_with_state(text: &str, cx: &mut Context<Workbench>) -> DiffDoc {
@@ -171,6 +214,18 @@ pub(crate) fn jump_row_for_y(y: f32, top: f32, height: f32, total: usize) -> usi
 
 pub(crate) type DiffRulerDrag = (Entity<DiffState>, Rc<Cell<(f32, f32)>>);
 
+pub struct ScmDiffSpec {
+    pub virtual_key: PathBuf,
+    pub tab_title: String,
+    pub display_name: String,
+    pub badge: String,
+    pub patch: String,
+    pub conflict_text: Option<String>,
+    pub target: Option<PathBuf>,
+    pub(crate) scm_stage: Option<(PathBuf, String, Group)>,
+    pub multi_file: bool,
+}
+
 impl Workbench {
     pub(crate) fn diff_drag_ruler(&mut self, y: f32, cx: &mut Context<Self>) {
         let Some((st, rect)) = self.diff_ruler_drag.as_ref() else {
@@ -185,13 +240,140 @@ impl Workbench {
         st.update(cx, |s, cx| s.scroll_to_row(row, cx));
     }
 
+    pub(crate) fn open_scm_diff_tab(
+        &mut self,
+        spec: ScmDiffSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let existing_ix = self.docs.iter().position(|d| d.path == spec.virtual_key);
+        let prev_mode = existing_ix
+            .and_then(|ix| self.docs[ix].diff.as_ref())
+            .and_then(|d| d.state.as_ref())
+            .map(|st| st.read(cx).mode())
+            .unwrap_or(DiffMode::Split);
+        let lang_hint = spec.target.as_deref().and_then(|p| {
+            let (l, _) = files::language_for(p, "");
+            (l != "text").then_some(l)
+        });
+        let files = if let Some(conflict_text) = &spec.conflict_text {
+            match DiffFile::parse_conflicts(spec.display_name.clone(), conflict_text) {
+                Ok(mut f) => {
+                    if let Some(l) = lang_hint {
+                        f = f.with_language(l);
+                    }
+                    vec![f]
+                }
+                Err(_) => parse_diff_files(&spec.patch, lang_hint),
+            }
+        } else {
+            parse_diff_files(&spec.patch, lang_hint)
+        };
+
+        let (added, removed, state, empty_note) = if !files.is_empty() {
+            let added = files.iter().map(DiffFile::additions).sum();
+            let removed = files.iter().map(DiffFile::deletions).sum();
+            let context = if spec.multi_file || spec.scm_stage.is_some() {
+                Some(3)
+            } else {
+                None
+            };
+            let st = cx.new(|cx| {
+                DiffState::new(files, cx)
+                    .with_mode(prev_mode)
+                    .with_context_lines(context)
+            });
+            if !spec.multi_file && spec.scm_stage.is_none() {
+                st.update(cx, |s, cx| s.next_change(cx));
+            }
+            (added, removed, Some(st), None)
+        } else {
+            (
+                0,
+                0,
+                None,
+                Some(
+                    tr("No textual changes to compare (binary file or unchanged content).").into(),
+                ),
+            )
+        };
+
+        let scm_patch = spec
+            .scm_stage
+            .as_ref()
+            .filter(|(_, _, group)| matches!(group, Group::Changes | Group::Staged))
+            .map(|_| std::sync::Arc::from(spec.patch.as_str()));
+        let diff_doc = DiffDoc {
+            lines: Rc::new(Vec::new()),
+            added,
+            removed,
+            source: false,
+            name: spec.display_name.into(),
+            badge: Some(spec.badge.into()),
+            target: spec.target,
+            scm_stage: spec.scm_stage,
+            scm_patch,
+            conflict_original: spec.conflict_text.as_deref().map(std::sync::Arc::from),
+            state,
+            multi_file: spec.multi_file,
+            empty_note,
+            virtual_tab: true,
+        };
+
+        if let Some(ix) = existing_ix {
+            self.docs[ix].name = spec.tab_title.into();
+            self.docs[ix].diff = Some(diff_doc);
+            self.activate(ix, window, cx);
+            return;
+        }
+
+        self.anim_seq = self.anim_seq.wrapping_add(1);
+        self.opened_tab = Some((spec.virtual_key.clone(), self.anim_seq));
+        self.docs.push(Doc {
+            path: spec.virtual_key,
+            name: spec.tab_title.into(),
+            lang: "diff",
+            label: "Diff",
+            read_only: true,
+            nbt_format: None,
+            banner: None,
+            crlf: false,
+            editor: None,
+            dirty: false,
+            gen: 0,
+            _sub: None,
+            image: None,
+            flux: None,
+            flux_source: false,
+            flux_lazy: false,
+            diff: Some(diff_doc),
+            long_lines: false,
+            complex: false,
+            wrap_override: None,
+            saved_cursor: Default::default(),
+            saved_scroll: Default::default(),
+            last_used: 0,
+            loading: false,
+            diagnostics: Vec::new(),
+            error_count: 0,
+            warn_count: 0,
+            diag_ranges: None,
+            diag_ruler: None,
+            runnable_runtime: None,
+        });
+        let ix = self.docs.len() - 1;
+        self.activate(ix, window, cx);
+    }
+
     pub(crate) fn render_diff_doc(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(d) = self.docs.get(ix).and_then(|d| d.diff.as_ref()) else {
             return div().into_any_element();
         };
         let (green, red) = (c(theme::GREEN), c(theme::DANGER));
         let target = d.target.clone();
+        let scm_stage = d.scm_stage.clone();
         let virtual_tab = d.virtual_tab;
+        let is_file_diff = scm_stage.is_some();
         let state = d.state.clone();
         let (is_split, is_full) = match &state {
             Some(st) => {
@@ -283,24 +465,60 @@ impl Workbench {
             .child(div().flex_1());
 
         if let Some(st) = &state {
+            if is_file_diff {
+                if let Some((hunk, count)) = st.read(cx).hunk_position() {
+                    bar = bar.child(
+                        div()
+                            .flex_none()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(crate::trf!("Hunk {n}/{total}"; n => hunk + 1, total => count)),
+                    );
+                }
+            }
             let st_prev = st.clone();
             let st_next = st.clone();
             let st_mode = st.clone();
             let st_ctx = st.clone();
             bar = bar
                 .child(
-                    icon_btn("diff-prev", Ico::ArrowUp, "Previous change").on_click(
-                        cx.listener(move |_, _, _, cx| {
-                            st_prev.update(cx, |s, cx| s.previous_change(cx));
-                        }),
-                    ),
+                    icon_btn(
+                        "diff-prev",
+                        Ico::ArrowUp,
+                        if is_file_diff {
+                            "Previous hunk"
+                        } else {
+                            "Previous change"
+                        },
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        st_prev.update(cx, |s, cx| {
+                            if is_file_diff {
+                                s.move_hunk(false, cx)
+                            } else {
+                                s.previous_change(cx)
+                            }
+                        });
+                    })),
                 )
                 .child(
-                    icon_btn("diff-next", Ico::ArrowDown, "Next change").on_click(
-                        cx.listener(move |_, _, _, cx| {
-                            st_next.update(cx, |s, cx| s.next_change(cx));
-                        }),
-                    ),
+                    icon_btn(
+                        "diff-next",
+                        Ico::ArrowDown,
+                        if is_file_diff {
+                            "Next hunk"
+                        } else {
+                            "Next change"
+                        },
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        st_next.update(cx, |s, cx| {
+                            if is_file_diff {
+                                s.move_hunk(true, cx)
+                            } else {
+                                s.next_change(cx)
+                            }
+                        });
+                    })),
                 )
                 .child(
                     btn("diff-mode", if is_split { "Inline" } else { "Side by side" }, false)
@@ -313,13 +531,127 @@ impl Workbench {
                             st_mode.update(cx, |s, cx| s.set_mode(next, cx));
                         })),
                 )
-                .child(
-                    btn("diff-ctx", if is_full { "Full file" } else { "Changes only" }, false)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let next = if is_full { Some(3) } else { None };
-                            st_ctx.update(cx, |s, cx| s.set_context_lines(next, cx));
-                        })),
+                .when(!is_file_diff, |h| {
+                    h.child(
+                        btn("diff-ctx", if is_full { "Full file" } else { "Changes only" }, false)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                let next = if is_full { Some(3) } else { None };
+                                st_ctx.update(cx, |s, cx| s.set_context_lines(next, cx));
+                            })),
+                    )
+                });
+        }
+
+        if let Some((repo, rel, group)) = scm_stage {
+            if self.scm.repo.as_ref() == Some(&repo)
+                && !self.scm.is_busy()
+                && self
+                    .scm
+                    .status
+                    .files(group)
+                    .iter()
+                    .any(|file| file.path == rel)
+            {
+                if let Some((original, conflict_state)) =
+                    d.conflict_original.clone().zip(state.clone())
+                {
+                    let path = rel.clone();
+                    let conflict_repo = repo.clone();
+                    bar = bar.child(btn("save-conflict-resolution", "Save Resolution", false).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if this.scm.repo.as_ref() != Some(&conflict_repo) {
+                                return;
+                            }
+                            let full = conflict_repo.join(&path);
+                            let unsaved = this
+                                .docs
+                                .iter()
+                                .any(|doc| doc.dirty && crate::panel::same_path(&doc.path, &full));
+                            let resolved = conflict_state.read(cx).resolved_text(&path);
+                            if unsaved || resolved.is_none() {
+                                let message = if unsaved {
+                                    tr("Save unsaved editors before changing Git branches or files.")
+                                } else {
+                                    tr("Choose a resolution for every conflict first.")
+                                };
+                                this.status = message.into();
+                                cx.notify();
+                                return;
+                            }
+                            if let Some(resolved) = resolved {
+                                let step = crate::scm_git::Step::Resolve {
+                                    path: path.clone(),
+                                    expected: original.to_string(),
+                                    resolved,
+                                };
+                                this.scm_run(tr("Running Git…"), vec![step], cx, |this, _, _| {
+                                    this.status = tr("Conflict resolution saved and staged.").into();
+                                });
+                            }
+                        }),
+                    ));
+                }
+                if let Some((patch, (index, _))) = d
+                    .scm_patch
+                    .clone()
+                    .zip(state.as_ref().and_then(|state| state.read(cx).hunk_position()))
+                {
+                    if self
+                        .scm
+                        .status
+                        .files(group)
+                        .iter()
+                        .any(|file| file.path == rel && file.code == 'M')
+                    {
+                        let path = rel.clone();
+                        let hunk_repo = repo.clone();
+                        bar = bar.child(
+                            btn(
+                                "diff-hunk-stage",
+                                if group == Group::Staged {
+                                    "Unstage Hunk"
+                                } else {
+                                    "Stage Hunk"
+                                },
+                                false,
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if this.scm.repo.as_ref() != Some(&hunk_repo) {
+                                    return;
+                                }
+                                this.scm_stage_hunk(
+                                    path.clone(),
+                                    group,
+                                    patch.to_string(),
+                                    index,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                        );
+                    }
+                }
+                bar = bar.child(
+                    icon_btn(
+                        "diff-stage",
+                        if group == Group::Staged {
+                            Ico::Minus
+                        } else {
+                            Ico::Plus
+                        },
+                        if group == Group::Staged {
+                            "Unstage"
+                        } else {
+                            "Stage"
+                        },
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.scm.repo.as_ref() == Some(&repo) {
+                            this.scm_paths(group, Some(rel.clone()), false, cx);
+                        }
+                    })),
                 );
+            }
         }
 
         if let Some(path) = target.clone() {
@@ -581,7 +913,7 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{jump_row_for_y, parse, parse_diff_files, Kind};
+    use super::{jump_row_for_y, parse, parse_diff_files, untracked_patch, Kind};
 
     #[test]
     fn numbers_follow_the_hunks() {
@@ -620,6 +952,17 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].additions(), 1);
         assert_eq!(files[0].deletions(), 0);
+    }
+
+    #[test]
+    fn untracked_patch_handles_text_and_skips_binary() {
+        let p = untracked_patch("src/new.kt", b"fun main() {}\n").unwrap();
+        assert!(p.contains("+++ b/src/new.kt\n@@ -0,0 +1,1 @@\n+fun main() {}\n"));
+        assert!(untracked_patch("img.png", b"\x89PNG\0\0").is_none());
+        let quoted = untracked_patch("tabs\tand\nlines.rs", b"content").unwrap();
+        let parsed = parse_diff_files(&quoted, None);
+        assert_eq!(parsed[0].path().as_ref(), "tabs\tand\nlines.rs");
+        assert_eq!(parsed[0].additions(), 1);
     }
 
     #[test]

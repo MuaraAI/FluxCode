@@ -37,6 +37,7 @@ mod proc;
 mod quick;
 mod remote;
 mod scm;
+mod scm_git;
 mod scm_incoming;
 mod search;
 mod scene;
