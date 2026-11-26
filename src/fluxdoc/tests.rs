@@ -97,6 +97,51 @@ fn inline_marks_and_links() {
 }
 
 #[test]
+fn credits_style_markdown_preserves_rules_bullets_and_lines() {
+    let raw = concat!(
+        "/*\n",
+        "==========================================\n",
+        "        KiwEssentialsVIP\n",
+        "==========================================\n\n",
+        "Author          : KiworaID\n",
+        "Discord         : https://discord.com/invite/abc\n\n",
+        "──────────────────────────────────────────\n",
+        "Special Thanks\n",
+        "──────────────────────────────────────────\n",
+        "• Nperma - UI & ClearChat\n",
+        "• Michael - Floating Items\n",
+        "• Sera (`sr:*` series)\n",
+        "*/\n",
+    );
+    let flux = super::gfm::to_flux(raw);
+    let doc = parse(&flux);
+    let rules = doc.blocks.iter().filter(|b| matches!(b, Block::Rule)).count();
+    let items = doc.blocks.iter().filter(|b| matches!(b, Block::Item { .. })).count();
+    assert_eq!(rules, 4, "=== and ─── dividers should become horizontal rules");
+    assert_eq!(items, 3, "Unicode • bullets should become distinct list items");
+
+    let meta_para = doc
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Para(s) if text(&flux, *s).contains("Author") => Some(super::join_lines(text(&flux, *s), false)),
+            _ => None,
+        })
+        .expect("metadata paragraph");
+    assert!(meta_para.contains('\n'), "metadata lines must keep line breaks: {meta_para:?}");
+    let inl = inline(&meta_para);
+    assert!(inl.text.contains('\n'), "inline() must preserve line breaks");
+    assert!(!inl.links.is_empty(), "bare URL must remain a clickable link");
+
+    // Long === strings must never trigger == highlight mode.
+    let eq = inline("==== KiwEssentialsVIP ====");
+    assert_eq!(eq.text, "==== KiwEssentialsVIP ====");
+    assert!(eq.runs.iter().all(|(_, m)| !m.mark));
+    let real_mark = inline("a ==hi== b");
+    assert!(real_mark.runs.iter().any(|(r, m)| &real_mark.text[r.clone()] == "hi" && m.mark));
+}
+
+#[test]
 fn flowchart_layers_and_loops() {
     let d = parse(SAMPLE);
     let f = &d.flows[0];

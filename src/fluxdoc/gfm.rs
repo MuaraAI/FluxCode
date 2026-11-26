@@ -197,8 +197,20 @@ fn strip_html(line: &str, in_comment: &mut bool) -> String {
             let opens_tag = chars.peek().is_some_and(|(_, n)| n.is_ascii_alphabetic() || *n == '/');
             if opens_tag {
                 if let Some(end) = line[i..].find('>') {
+                    let inner = line[i + 1..i + end].trim();
+                    let lower = inner.to_ascii_lowercase();
                     for _ in 0..end {
                         chars.next();
+                    }
+                    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:") {
+                        out.push_str(inner);
+                    } else if matches!(lower.as_str(), "br" | "br/" | "br /") {
+                        out.push('\n');
+                    } else if matches!(lower.as_str(), "hr" | "hr/" | "hr /") {
+                        if !out.trim().is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str("---");
                     }
                     continue;
                 }
@@ -315,6 +327,13 @@ mod tests {
         assert!(out.starts_with("→ forward\n"), "{out}");
         assert!(out.contains("Über all of it"), "{out}");
         assert!(out.contains("@image plan.png alt=\"Übersicht\""), "{out}");
+    }
+
+    #[test]
+    fn br_hr_and_autolinks_are_preserved() {
+        assert_eq!(to_flux("one<br>two<br/>three\n"), "one\ntwo\nthree\n");
+        assert_eq!(to_flux("see <https://example.com> now\n"), "see https://example.com now\n");
+        assert_eq!(to_flux("<hr>\n"), "---\n");
     }
 }
 

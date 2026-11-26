@@ -146,14 +146,28 @@ fn heading_level(t: &str) -> Option<u8> {
 
 fn is_rule(t: &str) -> bool {
     let t = t.trim_end();
-    t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*') || t.bytes().all(|b| b == b'_'))
+    let mut chars = t.chars().filter(|c| !c.is_ascii_whitespace());
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let ok_ascii = matches!(first, '-' | '*' | '_' | '=') && t.chars().all(|c| c == first || c == ' ');
+    let ok_unicode = matches!(first, '─' | '━' | '═' | '―') && t.chars().all(|c| c == first);
+    (ok_ascii || ok_unicode) && 1 + chars.count() >= 3
 }
 
 fn list_marker(line: &str) -> Option<(u8, u32, usize, u8)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     let t = &line[indent..];
     let depth = (indent / 2).min(8) as u8;
-    let (num, after) = if let Some(r) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).or_else(|| t.strip_prefix("+ ")) {
+    let (num, after) = if let Some(r) = t
+        .strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .or_else(|| t.strip_prefix("+ "))
+        .or_else(|| t.strip_prefix("• "))
+        .or_else(|| t.strip_prefix("◦ "))
+        .or_else(|| t.strip_prefix("▪ "))
+        .or_else(|| t.strip_prefix("▸ "))
+    {
         (0, r)
     } else {
         let d = t.bytes().take_while(|b| b.is_ascii_digit()).count();
@@ -638,7 +652,18 @@ pub fn inline(s: &str) -> Inline {
             }
         }
         let two = rest.get(..2).unwrap_or("");
-        if matches!(two, "**" | "~~" | "==") && (rest[2..].contains(two) || closes(m, two)) {
+        let valid_two = match two {
+            "**" | "~~" => rest[2..].contains(two) || closes(m, two),
+            "==" => {
+                !rest.starts_with("===")
+                    && (closes(m, two)
+                        || (!rest[2..].is_empty()
+                            && !rest[2..].starts_with([' ', '\t', '\n', '='])
+                            && has_closing_mark(&rest[2..])))
+            }
+            _ => false,
+        };
+        if valid_two {
             push_run(&mut out, run_start, m);
             toggle(&mut m, two);
             run_start = out.text.len();
@@ -708,11 +733,27 @@ pub fn inline(s: &str) -> Inline {
             continue;
         }
         let ch = rest.chars().next().unwrap();
-        out.text.push(if ch == '\n' { ' ' } else { ch });
+        out.text.push(ch);
         i += ch.len_utf8();
     }
     push_run(&mut out, run_start, m);
     out
+}
+
+fn has_closing_mark(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'=' && b[i + 1] == b'=' {
+            let prev_eq = i > 0 && b[i - 1] == b'=';
+            let next_eq = i + 2 < b.len() && b[i + 2] == b'=';
+            if !prev_eq && !next_eq && i > 0 && !b[i - 1].is_ascii_whitespace() {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 fn closes(m: Marks, two: &str) -> bool {
@@ -738,11 +779,27 @@ fn closes_italic(s: &str, i: usize) -> bool {
 pub fn join_lines(s: &str, quote: bool) -> String {
     let mut out = String::new();
     for l in s.lines() {
-        let l = if quote { l.trim_start().trim_start_matches('>').trim_start() } else { l.trim() };
+        let l = if quote { l.trim_start().trim_start_matches('>').trim_start() } else { l.trim_start() };
+        let l = l.trim_end().strip_suffix('\\').map(str::trim_end).unwrap_or(l.trim_end());
         if !out.is_empty() {
-            out.push(' ');
+            out.push('\n');
         }
         out.push_str(l);
+    }
+    out
+}
+
+pub fn join_item_lines(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_hard = false;
+    for l in s.lines() {
+        let hard = l.ends_with("  ") || l.trim_end().ends_with('\\');
+        let clean = l.trim().strip_suffix('\\').map(str::trim_end).unwrap_or(l.trim());
+        if !out.is_empty() {
+            out.push(if prev_hard { '\n' } else { ' ' });
+        }
+        out.push_str(clean);
+        prev_hard = hard;
     }
     out
 }

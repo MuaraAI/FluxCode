@@ -1,5 +1,5 @@
 
-use super::{arg, args, cells, flow, inline, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
+use super::{arg, args, cells, flow, inline, join_item_lines, join_lines, text, Align, Block, Doc, Kind, Marks, Span};
 use crate::theme::{self, c};
 use crate::ui;
 use gpui_kit::assets::IconName;
@@ -73,7 +73,6 @@ pub struct Stroke {
 
 #[derive(Clone, Default)]
 pub struct InkState {
-    pub zoom: f32,
     pub draw: bool,
     pub color: u32,
     pub tool: InkTool,
@@ -85,9 +84,8 @@ pub struct InkState {
 }
 
 impl InkState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            zoom: 1.,
             draw: false,
             color: DRAW_COLORS[0],
             tool: InkTool::Pen,
@@ -99,14 +97,14 @@ impl InkState {
         }
     }
 
-    fn push_stroke(&mut self, stroke: Stroke) {
+    pub(crate) fn push_stroke(&mut self, stroke: Stroke) {
         if !stroke.pts.is_empty() {
             self.strokes.push(stroke);
             self.redo.clear();
         }
     }
 
-    fn undo(&mut self) -> bool {
+    pub(crate) fn undo(&mut self) -> bool {
         let Some(last) = self.strokes.pop() else {
             return false;
         };
@@ -114,7 +112,7 @@ impl InkState {
         true
     }
 
-    fn redo(&mut self) -> bool {
+    pub(crate) fn redo(&mut self) -> bool {
         let Some(next) = self.redo.pop() else {
             return false;
         };
@@ -122,7 +120,7 @@ impl InkState {
         true
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.strokes.clear();
         self.redo.clear();
         self.active = None;
@@ -222,9 +220,7 @@ struct Shared {
     want: u8,
     base: PathBuf,
     open: Rc<RefCell<HashSet<u32>>>,
-    ink: Rc<RefCell<InkState>>,
-    scale: Cell<f32>,
-    last_bounds: Rc<Cell<Option<RectBox>>>,
+    zoom: Rc<Cell<f32>>,
 }
 
 impl Shared {
@@ -233,7 +229,7 @@ impl Shared {
     }
 
     fn u(&self, v: f32) -> Pixels {
-        theme::u(v * self.scale.get())
+        theme::u(v * self.zoom.get())
     }
 }
 
@@ -270,14 +266,14 @@ pub struct FluxView {
 }
 
 impl FluxView {
-    fn build(doc: Doc, text: Text, base: PathBuf, lang: &str, parsed_ms: f32, open: Rc<RefCell<HashSet<u32>>>, ink: Rc<RefCell<InkState>>) -> Self {
+    fn build(doc: Doc, text: Text, base: PathBuf, lang: &str, parsed_ms: f32, open: Rc<RefCell<HashSet<u32>>>, zoom: Rc<Cell<f32>>) -> Self {
         let want = if lang == "id" { 2 } else { 1 };
         let mut groups = groups(&doc, want);
         groups.shrink_to_fit();
         let list = ListState::new(groups.len(), ListAlignment::Top, px(600.));
-        let z = ink.borrow().zoom.max(0.5);
+        zoom.set(zoom.get().clamp(0.5, 2.5));
         Self {
-            shared: Rc::new(Shared { text, doc, groups, want, base, open, ink, scale: Cell::new(z), last_bounds: Rc::new(Cell::new(None)) }),
+            shared: Rc::new(Shared { text, doc, groups, want, base, open, zoom }),
             list,
             parsed_ms,
             pending: false,
@@ -285,15 +281,15 @@ impl FluxView {
     }
 
     pub fn new(src: String, base: PathBuf, lang: &str) -> Self {
-        Self::from_prepared(prepare(src), base, lang, Rc::default(), Rc::new(RefCell::new(InkState::new())))
+        Self::from_prepared(prepare(src), base, lang, Rc::default(), Rc::new(Cell::new(1.)))
     }
 
-    fn from_prepared(p: Prepared, base: PathBuf, lang: &str, open: Rc<RefCell<HashSet<u32>>>, ink: Rc<RefCell<InkState>>) -> Self {
+    fn from_prepared(p: Prepared, base: PathBuf, lang: &str, open: Rc<RefCell<HashSet<u32>>>, zoom: Rc<Cell<f32>>) -> Self {
         let text = match p.text {
             Ok(s) => Text::Plain(s.into()),
             Err((frames, len)) => Text::Packed { frames, len, cache: RefCell::new(Vec::new()) },
         };
-        Self::build(p.doc, text, base, lang, p.ms, open, ink)
+        Self::build(p.doc, text, base, lang, p.ms, open, zoom)
     }
 
     pub fn first_part(src: &str, base: PathBuf, lang: &str) -> Self {
@@ -311,7 +307,7 @@ impl FluxView {
 
     pub fn install(&mut self, p: Prepared, lang: &str) {
         let top = self.list.logical_scroll_top();
-        let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone(), self.shared.ink.clone());
+        let v = Self::from_prepared(p, self.shared.base.clone(), lang, self.shared.open.clone(), self.shared.zoom.clone());
         v.list.scroll_to(ListOffset { item_ix: top.item_ix.min(v.shared.groups.len().saturating_sub(1)), offset_in_item: top.offset_in_item });
         *self = v;
     }
@@ -333,14 +329,19 @@ impl FluxView {
     }
 
     pub fn zoom(&self) -> f32 {
-        self.shared.ink.borrow().zoom
+        self.shared.zoom.get()
     }
 
     pub fn set_zoom(&self, z: f32) {
-        let z = (z * 20.).round() / 20.;
-        let z = z.clamp(0.5, 2.5);
-        self.shared.ink.borrow_mut().zoom = z;
-        self.shared.scale.set(z);
+        let z = ((z * 20.).round() / 20.).clamp(0.5, 2.5);
+        let prev = self.shared.zoom.get();
+        self.shared.zoom.set(z);
+        if (prev - z).abs() > 1e-4 {
+            let top = self.list.logical_scroll_top();
+            let count = self.shared.groups.len();
+            self.list.splice(0..count, count);
+            self.list.scroll_to(top);
+        }
     }
 
     pub fn step_zoom(&self, dir: i32) {
@@ -354,12 +355,11 @@ impl FluxView {
         let state = self.list.clone();
         let scrollbar = self.list.clone();
         let notify = Rc::new(notify);
-        let zoom = sh.ink.borrow().zoom.clamp(0.5, 2.5);
-        sh.scale.set(zoom);
         let width = sh.doc.style.width.unwrap_or(WIDTH);
         let size = sh.doc.style.size.unwrap_or(15.);
         let font = sh.doc.style.font.clone();
         let sh_list = sh.clone();
+        let font_item = font.clone();
         let notify_list = notify.clone();
         let list_el = list(self.list.clone(), move |ix, _window, cx| {
             let Some(&(first, count)) = sh_list.groups.get(ix) else { return div().into_any_element() };
@@ -372,6 +372,8 @@ impl FluxView {
             h_flex()
                 .w_full()
                 .justify_center()
+                .text_size(sh_list.u(size))
+                .when_some(font_item.clone(), |d, f| d.font_family(f))
                 .child(div().w_full().max_w(sh_list.u(width)).px_8().when(ix == 0, |d| d.pt_8()).when(ix + 1 == sh_list.groups.len(), |d| d.pb_16()).child(col))
                 .into_any_element()
         })
@@ -379,33 +381,46 @@ impl FluxView {
         .text_size(sh.u(size))
         .when_some(font, |l, f| l.font_family(f));
 
-        let draw_on = sh.ink.borrow().draw;
-        let has_ink = draw_on || !sh.ink.borrow().strokes.is_empty() || sh.ink.borrow().active.is_some();
-        let ink_layer = has_ink.then(|| render_ink_layer(sh.ink.clone(), self.list.clone(), sh.last_bounds.clone(), notify.clone()));
-        let sh_wheel = sh.clone();
-        let notify_wheel = notify.clone();
+        let sh_wheel = sh;
+        let list_wheel = self.list.clone();
+        let notify_wheel = notify;
+        let zoom_capture = canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                let sh_ev = sh_wheel.clone();
+                let list_ev = list_wheel.clone();
+                let notify_ev = notify_wheel.clone();
+                window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture || !e.modifiers.control || !hitbox.is_hovered(window) {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
+                    if dy.abs() < 0.5 {
+                        return;
+                    }
+                    let cur = sh_ev.zoom.get();
+                    let next = (((cur + if dy > 0. { 0.1 } else { -0.1 }) * 20.).round() / 20.).clamp(0.5, 2.5);
+                    if (cur - next).abs() > 1e-4 {
+                        sh_ev.zoom.set(next);
+                        let top = list_ev.logical_scroll_top();
+                        let count = sh_ev.groups.len();
+                        list_ev.splice(0..count, count);
+                        list_ev.scroll_to(top);
+                        notify_ev(cx);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
 
         div()
             .id("fx-preview-wrap")
             .relative()
             .size_full()
-            .on_scroll(move |e: &ScrollEvent, _, cx| {
-                if !e.modifiers.control {
-                    return;
-                }
-                cx.stop_propagation();
-                let dy = f32::from(e.delta.pixel_delta(px(20.)).y);
-                if dy.abs() < 0.5 {
-                    return;
-                }
-                let cur = sh_wheel.ink.borrow().zoom;
-                let next = (cur + if dy > 0. { 0.1 } else { -0.1 }).clamp(0.5, 2.5);
-                sh_wheel.ink.borrow_mut().zoom = next;
-                sh_wheel.scale.set(next);
-                notify_wheel(cx);
-            })
             .child(list_el)
-            .children(ink_layer)
+            .child(zoom_capture)
             .child(div().absolute().inset_0().child(Scrollbar::vertical(&scrollbar).viewport_from_layout()))
             .into_any_element()
     }
@@ -542,7 +557,7 @@ impl Ctx<'_> {
                     .pb(self.sh.u(if last_in_run { 12. } else { 4. }))
                     .line_height(relative(1.6))
                     .child(mark)
-                    .child(div().flex_1().min_w_0().child(self.rich(id("li"), &join_lines(&self.t(s), false), c(if check == 2 { theme::FG_MUTED } else { theme::FG }))))
+                    .child(div().flex_1().min_w_0().child(self.rich(id("li"), &join_item_lines(&self.t(s)), c(if check == 2 { theme::FG_MUTED } else { theme::FG }))))
                     .into_any_element()
             }
             Block::Code(k) => {
@@ -662,7 +677,7 @@ impl Ctx<'_> {
         if share.is_some() {
             im = im.w_full();
         } else if let Some(px_) = pixels {
-            im = im.w(theme::u(px_));
+            im = im.w(self.sh.u(px_));
         }
         let base = self.sh.base.clone();
         div()
@@ -1062,16 +1077,13 @@ fn merge(mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)>) -> Vec<(std::ops
     out
 }
 
-fn render_ink_layer(
+fn render_global_ink_layer(
     ink: Rc<RefCell<InkState>>,
-    list: ListState,
     last_bounds: Rc<Cell<Option<RectBox>>>,
     notify: Rc<dyn Fn(&mut App)>,
 ) -> AnyElement {
     let ink_draw = ink.clone();
-    let list_draw = list.clone();
     let ink_ev = ink;
-    let list_ev = list;
     let draw_on = ink_ev.borrow().draw;
     canvas(
         move |bounds, window, _| draw_on.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
@@ -1082,7 +1094,6 @@ fn render_ink_layer(
                 f32::from(bounds.size.width),
                 f32::from(bounds.size.height),
             ]));
-            let scroll_y = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_draw).y);
             let origin = bounds.origin;
             {
                 let st = ink_draw.borrow();
@@ -1095,7 +1106,7 @@ fn render_ink_layer(
                     let width = s.width.max(1.0);
                     if s.pts.len() == 1 {
                         let (x, y) = s.pts[0];
-                        let p = origin + point(px(x), px(y - scroll_y));
+                        let p = origin + point(px(x), px(y));
                         let mut pb = PathBuilder::stroke(px(width.max(3.0)));
                         pb.move_to(p);
                         pb.line_to(p + point(px(0.5), px(0.5)));
@@ -1106,9 +1117,9 @@ fn render_ink_layer(
                     }
                     let mut pb = PathBuilder::stroke(px(width));
                     let (x0, y0) = s.pts[0];
-                    pb.move_to(origin + point(px(x0), px(y0 - scroll_y)));
+                    pb.move_to(origin + point(px(x0), px(y0)));
                     for &(x, y) in &s.pts[1..] {
-                        pb.line_to(origin + point(px(x), px(y - scroll_y)));
+                        pb.line_to(origin + point(px(x), px(y)));
                     }
                     if let Ok(path) = pb.build() {
                         window.paint_path(path, col);
@@ -1116,7 +1127,7 @@ fn render_ink_layer(
                 }
             }
             let Some(hitbox) = hitbox else { return };
-            let (ink_down, list_down, notify_down) = (ink_ev.clone(), list_ev.clone(), notify.clone());
+            let (ink_down, notify_down) = (ink_ev.clone(), notify.clone());
             let hb_down = hitbox.clone();
             window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !hb_down.is_hovered(window) {
@@ -1132,8 +1143,7 @@ fn render_ink_layer(
                 if ev.button != MouseButton::Left {
                     return;
                 }
-                let sy = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_down).y);
-                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y) + sy);
+                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
                 let mut st = ink_down.borrow_mut();
                 let (color, width, alpha) = (st.color, st.tool.width(), st.tool.alpha());
                 st.active = Some(Stroke { color, width, alpha, pts: vec![pt] });
@@ -1141,7 +1151,7 @@ fn render_ink_layer(
                 cx.stop_propagation();
                 notify_down(cx);
             });
-            let (ink_move, list_move, notify_move) = (ink_ev.clone(), list_ev.clone(), notify.clone());
+            let (ink_move, notify_move) = (ink_ev.clone(), notify.clone());
             window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
                 if phase != DispatchPhase::Bubble {
                     return;
@@ -1157,8 +1167,7 @@ fn render_ink_layer(
                 }
                 let mut st = ink_move.borrow_mut();
                 let Some(active) = st.active.as_mut() else { return };
-                let sy = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&list_move).y);
-                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y) + sy);
+                let pt = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
                 if active.pts.last().is_none_or(|&(lx, ly)| (lx - pt.0).hypot(ly - pt.1) >= 1.5) {
                     active.pts.push(pt);
                     drop(st);
@@ -1492,17 +1501,299 @@ fn encode_png(img: &image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 impl crate::workbench::Workbench {
+    pub(crate) fn title_ink_reserve(&self) -> f32 {
+        let st = self.ink.borrow();
+        let draw_on = st.draw;
+        let has_strokes = !st.strokes.is_empty();
+        let has_redo = !st.redo.is_empty();
+        drop(st);
+        let sc = theme::scale();
+        let mut w = 36. * sc;
+        if draw_on {
+            w += 156. * sc;
+        }
+        if has_strokes {
+            w += 120. * sc;
+        }
+        if has_redo {
+            w += 24. * sc;
+        }
+        w
+    }
+
+    pub(crate) fn render_title_ink_tools(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::i18n::tr;
+        let (draw_on, cur_color, cur_tool, stroke_count, has_redo, copied_ok) = {
+            let st = self.ink.borrow();
+            (st.draw, st.color, st.tool, st.strokes.len(), !st.redo.is_empty(), st.copied_ok)
+        };
+        let has_strokes = stroke_count > 0;
+        let tool_tip: SharedString = crate::trf!("Brush: {tool} (B, right-click to undo)"; tool => tr(cur_tool.label())).into();
+        let out_name = self
+            .ink_export_path()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "fluxcode-annotated.png".into());
+
+        let toggle_btn = h_flex()
+            .id("tb-draw-toggle")
+            .relative()
+            .w(theme::u(36.))
+            .h_full()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .occlude()
+            .when(draw_on, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::ACCENT_TEXT)))
+            .when(!draw_on, |d| {
+                d.text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+            })
+            .active(|s| s.bg(c(theme::BG_ELEVATED)))
+            .when(draw_on, |d| {
+                d.child(div().absolute().bottom_0().left(px(6.)).right(px(6.)).h(px(2.)).rounded_t_full().bg(c(theme::ACCENT)))
+            })
+            .when(!draw_on && has_strokes, |d| {
+                d.child(div().absolute().top(px(6.)).right(px(7.)).size(px(5.)).rounded_full().bg(c(theme::ACCENT)))
+            })
+            .child(Icon::new(IconName::Pencil).size(theme::u(14.)))
+            .tooltip(move |w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(if draw_on {
+                    tr("Exit annotation mode (Esc)")
+                } else {
+                    tr("Annotate over workspace")
+                })
+                .build(w, cx)
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.ink_toggle_draw(cx)));
+
+        h_flex()
+            .flex_none()
+            .h_full()
+            .items_center()
+            .occlude()
+            .when(draw_on || has_strokes || has_redo, |h| {
+                h.child(
+                    h_flex()
+                        .flex_none()
+                        .mr_1()
+                        .px_1p5()
+                        .h(theme::u(24.))
+                        .gap_1()
+                        .items_center()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .bg(c(theme::BG_SIDE))
+                        .when(draw_on, |bar| {
+                            bar.children(DRAW_COLORS.into_iter().enumerate().map(|(ci, col)| {
+                                let picked = cur_color == col;
+                                let tip = DRAW_COLOR_NAMES[ci];
+                                div()
+                                    .id(("tb-ink-col", ci))
+                                    .size(theme::u(14.))
+                                    .rounded_full()
+                                    .cursor_pointer()
+                                    .bg(rgb(col))
+                                    .border_2()
+                                    .border_color(if picked { c(theme::FG_STRONG) } else { gpui_kit::transparent_black() })
+                                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
+                                    .on_click(cx.listener(move |this, _, _, cx| this.ink_set_color(col, cx)))
+                            }))
+                            .child(
+                                h_flex()
+                                    .id("tb-ink-tool")
+                                    .h(theme::u(20.))
+                                    .px_1p5()
+                                    .gap_1()
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(c(theme::BORDER))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(c(theme::FG))
+                                    .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
+                                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tool_tip.clone()).build(w, cx))
+                                    .child(Icon::new(IconName::PencilLine).size(theme::u(11.)).text_color(c(theme::ACCENT_TEXT)))
+                                    .child(tr(cur_tool.label()))
+                                    .on_click(cx.listener(|this, _, _, cx| this.ink_cycle_tool(cx))),
+                            )
+                        })
+                        .when(has_strokes, |bar| {
+                            bar.child(div().px_0p5().text_xs().text_color(c(theme::FG_DIM)).child(format!("{stroke_count}")))
+                                .child(
+                                    ui::tool_button("tb-ink-undo", IconName::Undo, false)
+                                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Undo last stroke")).build(w, cx))
+                                        .on_click(cx.listener(|this, _, _, cx| this.ink_undo(cx))),
+                                )
+                        })
+                        .when(has_redo, |bar| {
+                            bar.child(
+                                ui::tool_button("tb-ink-redo", IconName::Redo, false)
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Redo last stroke")).build(w, cx))
+                                    .on_click(cx.listener(|this, _, _, cx| this.ink_redo(cx))),
+                            )
+                        })
+                        .when(has_strokes, |bar| {
+                            bar.child(
+                                ui::tool_button("tb-ink-clear", IconName::Delete, false)
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear annotations")).build(w, cx))
+                                    .on_click(cx.listener(|this, _, _, cx| this.ink_clear(cx))),
+                            )
+                            .child(
+                                ui::tool_button("tb-ink-copy", if copied_ok { IconName::Check } else { IconName::Copy }, copied_ok)
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copy annotated PNG to clipboard")).build(w, cx))
+                                    .on_click(cx.listener(|this, _, w, cx| this.ink_copy_png(w, cx))),
+                            )
+                            .child(
+                                ui::tool_button("tb-ink-export", IconName::ImageDown, false)
+                                    .tooltip(move |w, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Save annotated PNG ({name})"; name => out_name)).build(w, cx)
+                                    })
+                                    .on_click(cx.listener(|this, _, w, cx| this.ink_export_png(w, cx))),
+                            )
+                        }),
+                )
+            })
+            .child(toggle_btn)
+            .into_any_element()
+    }
+
+    pub(crate) fn render_global_ink_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let active = {
+            let st = self.ink.borrow();
+            st.draw || !st.strokes.is_empty() || st.active.is_some()
+        };
+        if !active {
+            return None;
+        }
+        let weak = cx.entity().downgrade();
+        let notify: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
+            _ = weak.update(cx, |_, cx| cx.notify());
+        });
+        Some(render_global_ink_layer(self.ink.clone(), self.ink_bounds.clone(), notify))
+    }
+
+    fn ink_export_path(&self) -> PathBuf {
+        if let Some(p) = self.active_doc_path() {
+            annotated_png_path(&p)
+        } else if let Some(root) = &self.root {
+            root.join("fluxcode-annotated.png")
+        } else {
+            PathBuf::from("fluxcode-annotated.png")
+        }
+    }
+
+    fn ink_toggle_draw(&mut self, cx: &mut Context<Self>) {
+        let mut st = self.ink.borrow_mut();
+        st.draw = !st.draw;
+        st.active = None;
+        drop(st);
+        cx.notify();
+    }
+
+    fn ink_set_color(&mut self, color: u32, cx: &mut Context<Self>) {
+        self.ink.borrow_mut().color = color;
+        cx.notify();
+    }
+
+    fn ink_cycle_tool(&mut self, cx: &mut Context<Self>) {
+        let next = {
+            let mut st = self.ink.borrow_mut();
+            st.tool = st.tool.next();
+            st.tool
+        };
+        self.status = crate::i18n::tr(next.label()).into();
+        cx.notify();
+    }
+
+    fn ink_undo(&mut self, cx: &mut Context<Self>) {
+        self.ink.borrow_mut().undo();
+        cx.notify();
+    }
+
+    fn ink_redo(&mut self, cx: &mut Context<Self>) {
+        self.ink.borrow_mut().redo();
+        cx.notify();
+    }
+
+    fn ink_clear(&mut self, cx: &mut Context<Self>) {
+        self.ink.borrow_mut().clear();
+        cx.notify();
+    }
+
+    fn ink_snapshot_png(&self, window: &Window) -> Result<(Vec<u8>, u32, u32), String> {
+        let bounds = self.ink_bounds.get().unwrap_or([0.0, 34.0, 1280.0, 720.0]);
+        let scale = window.scale_factor().max(1.0);
+        let strokes = self.ink.borrow().strokes.clone();
+        #[cfg(windows)]
+        let captured = capture_window_crop(crate::wintitle::capture_main_hwnd(), bounds, scale);
+        #[cfg(not(windows))]
+        let captured: Option<image::RgbaImage> = None;
+        let img = captured.unwrap_or_else(|| {
+            rasterize_ink_fallback(
+                bounds[2].round().max(1.0) as u32,
+                bounds[3].round().max(1.0) as u32,
+                theme::palette().editor,
+                0.0,
+                &strokes,
+            )
+        });
+        let (w, h) = img.dimensions();
+        let bytes = encode_png(&img)?;
+        Ok((bytes, w, h))
+    }
+
+    fn ink_copy_png(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.ink_snapshot_png(window) {
+            Ok((bytes, w, h)) => {
+                cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, bytes)));
+                let seq = {
+                    let mut st = self.ink.borrow_mut();
+                    st.copied_ok = true;
+                    st.copied_seq = st.copied_seq.wrapping_add(1);
+                    st.copied_seq
+                };
+                let ink = self.ink.clone();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+                    let mut st = ink.borrow_mut();
+                    if st.copied_seq == seq {
+                        st.copied_ok = false;
+                        drop(st);
+                        _ = this.update(cx, |_, cx| cx.notify());
+                    }
+                })
+                .detach();
+                self.status = crate::trf!("Copied annotated PNG ({w}x{h})"; w => w, h => h).into();
+            }
+            Err(e) => {
+                self.status = crate::trf!("Couldn't export PNG: {e}"; e => e).into();
+            }
+        }
+        cx.notify();
+    }
+
+    fn ink_export_png(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let out = self.ink_export_path();
+        match self.ink_snapshot_png(window).and_then(|(bytes, _, _)| std::fs::write(&out, bytes).map_err(|e| e.to_string())) {
+            Ok(()) => {
+                self.status = crate::trf!("Saved {name}"; name => out.display()).into();
+            }
+            Err(e) => {
+                self.status = crate::trf!("Couldn't save {name}: {e}"; name => out.display(), e => e).into();
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn render_flux_bar(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         use crate::i18n::tr;
         let d = &self.docs[ix];
         let Some(v) = d.flux.as_ref() else { return div().into_any_element() };
         let source = d.flux_source;
-        let (zoom, draw_on, cur_color, cur_tool, stroke_count, has_redo, copied_ok) = {
-            let st = v.shared.ink.borrow();
-            (st.zoom, st.draw, st.color, st.tool, st.strokes.len(), !st.redo.is_empty(), st.copied_ok)
-        };
-        let has_strokes = stroke_count > 0;
-        let zoom_label: SharedString = format!("{}%", (zoom * 100.).round()).into();
+        let zoom_label: SharedString = format!("{}%", (v.zoom() * 100.).round()).into();
         let tab = |id: &'static str, icon: IconName, label: &'static str, on: bool, want_source: bool, cx: &mut Context<Self>| {
             h_flex()
                 .id(id)
@@ -1524,8 +1815,6 @@ impl crate::workbench::Workbench {
             crate::trf!("{n} blocks · read in {ms} ms · text in {size}"; n => thousands(v.blocks()), ms => format!("{:.1}", v.parsed_ms), size => crate::viewer::human_size(v.kept_bytes() as u64)).into()
         };
         let md_name = d.path.with_extension("md").file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let png_name = annotated_png_path(&d.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let tool_tip: SharedString = crate::trf!("Brush: {tool} (B, right-click to undo)"; tool => tr(cur_tool.label())).into();
         h_flex()
             .flex_none()
             .gap_1()
@@ -1562,87 +1851,6 @@ impl crate::workbench::Workbench {
                                 .on_click(cx.listener(move |this, _, _, cx| this.flux_zoom_step(ix, 1, cx))),
                         ),
                 )
-                .child(
-                    ui::tool_button("fx-draw-toggle", IconName::Pencil, draw_on)
-                        .tooltip(move |w, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(if draw_on {
-                                tr("Exit annotation mode (Esc)")
-                            } else {
-                                tr("Annotate over preview")
-                            })
-                            .build(w, cx)
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| this.flux_toggle_draw(ix, cx))),
-                )
-                .when(draw_on, |h| {
-                    h.children(DRAW_COLORS.into_iter().enumerate().map(|(ci, col)| {
-                        let picked = cur_color == col;
-                        let tip = DRAW_COLOR_NAMES[ci];
-                        div()
-                            .id(("fx-ink-col", ci))
-                            .size(theme::u(16.))
-                            .rounded_full()
-                            .cursor_pointer()
-                            .bg(rgb(col))
-                            .border_2()
-                            .border_color(if picked { c(theme::FG_STRONG) } else { gpui_kit::transparent_black() })
-                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| this.flux_set_ink_color(ix, col, cx)))
-                    }))
-                    .child(
-                        h_flex()
-                            .id("fx-ink-tool")
-                            .h(theme::u(22.))
-                            .px_1p5()
-                            .gap_1()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(c(theme::BORDER))
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(c(theme::FG))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
-                            .active(|s| s.bg(c(theme::BG_ELEVATED)))
-                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tool_tip.clone()).build(w, cx))
-                            .child(Icon::new(IconName::PencilLine).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)))
-                            .child(tr(cur_tool.label()))
-                            .on_click(cx.listener(move |this, _, _, cx| this.flux_cycle_ink_tool(ix, cx))),
-                    )
-                })
-                .when(has_strokes, |h| {
-                    h.child(div().px_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{stroke_count}")))
-                        .child(
-                            ui::tool_button("fx-ink-undo", IconName::Undo, false)
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Undo last stroke")).build(w, cx))
-                                .on_click(cx.listener(move |this, _, _, cx| this.flux_undo_ink(ix, cx))),
-                        )
-                })
-                .when(has_redo, |h| {
-                    h.child(
-                        ui::tool_button("fx-ink-redo", IconName::Redo, false)
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Redo last stroke")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| this.flux_redo_ink(ix, cx))),
-                    )
-                })
-                .when(has_strokes, |h| {
-                    h.child(
-                        ui::tool_button("fx-ink-clear", IconName::Delete, false)
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear annotations")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, _, cx| this.flux_clear_ink(ix, cx))),
-                    )
-                    .child(
-                        ui::tool_button("fx-ink-copy", if copied_ok { IconName::Check } else { IconName::Copy }, copied_ok)
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copy annotated preview PNG to clipboard")).build(w, cx))
-                            .on_click(cx.listener(move |this, _, w, cx| this.flux_copy_annotated_png(ix, w, cx))),
-                    )
-                    .child(
-                        ui::tool_button("fx-ink-export", IconName::ImageDown, false)
-                            .tooltip(move |w, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Save annotated preview as PNG ({name})"; name => png_name)).build(w, cx)
-                            })
-                            .on_click(cx.listener(move |this, _, w, cx| this.flux_export_annotated_png(ix, w, cx))),
-                    )
-                })
             })
             .child(
                 h_flex()
@@ -1667,7 +1875,12 @@ impl crate::workbench::Workbench {
                         .cursor_pointer()
                         .text_color(c(theme::FG_MUTED))
                         .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Save as Markdown: writes {name} next to it, as GitHub Markdown (flowcharts become Mermaid)"; name => md_name)).build(w, cx))
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                crate::trf!("Save as Markdown: writes {name} next to it, as GitHub Markdown (flowcharts become Mermaid)"; name => md_name),
+                            )
+                            .build(w, cx)
+                        })
                         .child(Icon::new(IconName::Download).size(theme::u(14.)))
                         .on_click(cx.listener(move |this, _, _, cx| this.flux_save_markdown(ix, cx))),
                 )
@@ -1680,121 +1893,6 @@ impl crate::workbench::Workbench {
         v.step_zoom(dir);
         let pct = (v.zoom() * 100.).round() as i32;
         self.status = crate::trf!("Preview zoom: {n}%"; n => pct).into();
-        cx.notify();
-    }
-
-    fn flux_toggle_draw(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        let mut st = v.shared.ink.borrow_mut();
-        st.draw = !st.draw;
-        st.active = None;
-        cx.notify();
-    }
-
-    fn flux_set_ink_color(&mut self, ix: usize, color: u32, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        v.shared.ink.borrow_mut().color = color;
-        cx.notify();
-    }
-
-    fn flux_undo_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        v.shared.ink.borrow_mut().undo();
-        cx.notify();
-    }
-
-    fn flux_redo_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        v.shared.ink.borrow_mut().redo();
-        cx.notify();
-    }
-
-    fn flux_cycle_ink_tool(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        let next = {
-            let mut st = v.shared.ink.borrow_mut();
-            st.tool = st.tool.next();
-            st.tool
-        };
-        self.status = crate::i18n::tr(next.label()).into();
-        cx.notify();
-    }
-
-    fn flux_clear_ink(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else { return };
-        v.shared.ink.borrow_mut().clear();
-        cx.notify();
-    }
-
-    fn flux_snapshot_png(&self, ix: usize, window: &Window) -> Result<(Vec<u8>, u32, u32), String> {
-        let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) else {
-            return Err("no preview".into());
-        };
-        let bounds = v.shared.last_bounds.get().unwrap_or([0.0, 0.0, 960.0, 640.0]);
-        let scale = window.scale_factor().max(1.0);
-        let scroll_y = -f32::from(gpui_kit::base::ScrollbarHandle::offset(&v.list).y);
-        let strokes = v.shared.ink.borrow().strokes.clone();
-        #[cfg(windows)]
-        let captured = capture_window_crop(crate::wintitle::capture_main_hwnd(), bounds, scale);
-        #[cfg(not(windows))]
-        let captured: Option<image::RgbaImage> = None;
-        let img = captured.unwrap_or_else(|| {
-            rasterize_ink_fallback(
-                bounds[2].round().max(1.0) as u32,
-                bounds[3].round().max(1.0) as u32,
-                theme::palette().editor,
-                scroll_y,
-                &strokes,
-            )
-        });
-        let (w, h) = img.dimensions();
-        let bytes = encode_png(&img)?;
-        Ok((bytes, w, h))
-    }
-
-    fn flux_copy_annotated_png(&mut self, ix: usize, window: &Window, cx: &mut Context<Self>) {
-        match self.flux_snapshot_png(ix, window) {
-            Ok((bytes, w, h)) => {
-                cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, bytes)));
-                if let Some(v) = self.docs.get(ix).and_then(|d| d.flux.as_ref()) {
-                    let seq = {
-                        let mut st = v.shared.ink.borrow_mut();
-                        st.copied_ok = true;
-                        st.copied_seq = st.copied_seq.wrapping_add(1);
-                        st.copied_seq
-                    };
-                    let ink = v.shared.ink.clone();
-                    cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
-                        let mut st = ink.borrow_mut();
-                        if st.copied_seq == seq {
-                            st.copied_ok = false;
-                            drop(st);
-                            _ = this.update(cx, |_, cx| cx.notify());
-                        }
-                    })
-                    .detach();
-                }
-                self.status = crate::trf!("Copied annotated preview PNG ({w}x{h})"; w => w, h => h).into();
-            }
-            Err(e) => {
-                self.status = crate::trf!("Couldn't export preview PNG: {e}"; e => e).into();
-            }
-        }
-        cx.notify();
-    }
-
-    fn flux_export_annotated_png(&mut self, ix: usize, window: &Window, cx: &mut Context<Self>) {
-        let Some(d) = self.docs.get(ix) else { return };
-        let out = annotated_png_path(&d.path);
-        match self.flux_snapshot_png(ix, window).and_then(|(bytes, _, _)| std::fs::write(&out, bytes).map_err(|e| e.to_string())) {
-            Ok(()) => {
-                self.status = crate::trf!("Saved {name}"; name => out.display()).into();
-            }
-            Err(e) => {
-                self.status = crate::trf!("Couldn't save {name}: {e}"; name => out.display(), e => e).into();
-            }
-        }
         cx.notify();
     }
 
