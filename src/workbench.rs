@@ -334,6 +334,7 @@ pub struct Workbench {
     pub(crate) right_view: SideView,
     pub(crate) sidebar_width: f32,
     pub(crate) resizing: u8,
+    pub(crate) diff_ruler_drag: Option<crate::diff_view::DiffRulerDrag>,
     pub(crate) focus: FocusHandle,
     pub(crate) status: SharedString,
     pub(crate) settings: crate::settings::Settings,
@@ -623,6 +624,7 @@ impl Workbench {
             right_view: SideView::Agent,
             sidebar_width: 260.,
             resizing: 0,
+            diff_ruler_drag: None,
             focus,
             status: SharedString::default(),
             settings,
@@ -1073,7 +1075,9 @@ impl Workbench {
         let read_only = prep.read_only;
         let complex = prep.complex;
         let text = std::mem::take(&mut prep.text);
-        let diff = prep.is_diff.then(|| crate::diff_view::parse(&text));
+        let diff = prep
+            .is_diff
+            .then(|| crate::diff_view::parse_with_state(&text, cx));
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
@@ -1245,7 +1249,7 @@ impl Workbench {
 
     fn hydrate_doc(&mut self, ix: usize, sync: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get(ix) else { return };
-        if doc.editor.is_some() || doc.image.is_some() {
+        if doc.editor.is_some() || doc.image.is_some() || doc.diff.is_some() {
             return;
         }
         let path = doc.path.clone();
@@ -1348,7 +1352,10 @@ impl Workbench {
     }
 
     pub(crate) fn ensure_doc_editor(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<EditorState>> {
-        if ix >= self.docs.len() || self.docs[ix].image.is_some() {
+        if ix >= self.docs.len()
+            || self.docs[ix].image.is_some()
+            || (self.docs[ix].diff.is_some() && self.docs[ix].editor.is_none())
+        {
             return None;
         }
         if self.docs[ix].editor.is_none() {
@@ -1687,7 +1694,14 @@ impl Workbench {
             self.hydrate_doc(ix, false, window, cx);
         }
         let d = &self.docs[ix];
-        let handle = if d.image.is_some()
+        let handle = if let Some(st) = d
+            .diff
+            .as_ref()
+            .filter(|x| !x.source)
+            .and_then(|x| x.state.as_ref())
+        {
+            st.focus_handle(cx)
+        } else if d.image.is_some()
             || d.diff.as_ref().is_some_and(|x| !x.source)
             || (d.flux.is_some() && !d.flux_source)
         {
@@ -4736,15 +4750,20 @@ impl Render for Workbench {
                             this.settings.full_right_w = w;
                         }
                     }
+                    6 => this.diff_drag_ruler(f32::from(ev.position.y), cx),
                     _ => return,
                 }
                 cx.notify();
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 if this.resizing != 0 {
-                    if this.resizing >= 3 {
-                        this.agent.full.drag = None;
-                        this.settings.save();
+                    match this.resizing {
+                        3 | 4 => {
+                            this.agent.full.drag = None;
+                            this.settings.save();
+                        }
+                        6 => this.diff_ruler_drag = None,
+                        _ => {}
                     }
                     this.resizing = 0;
                     cx.notify();
