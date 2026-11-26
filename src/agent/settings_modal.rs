@@ -7,7 +7,6 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    switch::Switch,
     v_flex, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -289,7 +288,7 @@ impl Workbench {
         let full = s.access() == "full";
         let off = s.access_off();
         let weak = cx.entity().downgrade();
-        let full_switch = Switch::new("ag-set-full").checked(full).on_click({
+        let full_switch = crate::ui::McToggle::new("ag-set-full").checked(full).on_click({
             let weak = weak.clone();
             move |on: &bool, _, cx| {
                 let on = *on;
@@ -317,7 +316,7 @@ impl Workbench {
                     }
                 }))
         }));
-        let notify = Switch::new("ag-set-notify").checked(s.agent_notify).on_click(move |on: &bool, _, cx| {
+        let notify = crate::ui::McToggle::new("ag-set-notify").checked(s.agent_notify).on_click(move |on: &bool, _, cx| {
             let on = *on;
             _ = weak.update(cx, |this, cx| {
                 this.settings.agent_notify = on;
@@ -361,7 +360,7 @@ impl Workbench {
     fn settings_session(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.settings;
         let weak = cx.entity().downgrade();
-        let idle = Switch::new("ag-set-idle").checked(s.agent_idle_min > 0).on_click(move |on: &bool, _, cx| {
+        let idle = crate::ui::McToggle::new("ag-set-idle").checked(s.agent_idle_min > 0).on_click(move |on: &bool, _, cx| {
             let on = *on;
             _ = weak.update(cx, |this, cx| {
                 this.settings.agent_idle_min = if on { 10 } else { 0 };

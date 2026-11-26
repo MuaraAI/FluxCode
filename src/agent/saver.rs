@@ -3,10 +3,8 @@ use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
 use crate::workbench::Workbench;
 use gpui_kit::component::{
-
     h_flex,
-    switch::Switch,
-    v_flex, Icon, Sizable,
+    v_flex, Icon,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
@@ -221,7 +219,7 @@ impl Workbench {
                 .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
                 .child(Icon::new(icon).flex_none().size(theme::u(14.)).text_color(c(if checked { theme::FG_STRONG } else { theme::FG_DIM })))
                 .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(if checked { theme::FG_STRONG } else { theme::FG_MUTED })).child(tr(title)))
-                .child(Switch::new(SharedString::from(format!("sv-{key}"))).checked(checked).small().on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))))
+                .child(crate::ui::McToggle::new(SharedString::from(format!("sv-{key}"))).checked(checked).small().on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))))
         };
         let seg = |id: &'static str, opts: Vec<(SharedString, bool, Box<dyn Fn(&mut Workbench)>)>, cx: &mut Context<Self>| {
             let mut h = h_flex().flex_1().min_w_0().p(px(2.)).gap(px(2.)).rounded(px(4.)).bg(c(theme::FG_DIM).opacity(0.12));

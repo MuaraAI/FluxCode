@@ -26,7 +26,7 @@ const READ_OFF_THREAD_BYTES: u64 = 64 * 1024;
 const SAVE_OFF_THREAD_BYTES: u64 = 64 * 1024;
 const MAX_AUTO_WRAP_BYTES: usize = 512 * 1024;
 const MAX_COMPLEX_LINE_BYTES: usize = 8 * 1024;
-const MAX_WARM_EDITORS: usize = 8;
+const MAX_WARM_EDITORS: usize = 5;
 const PANE_ANIM_MS: u64 = 185;
 
 actions!(
@@ -37,7 +37,7 @@ actions!(
         RunFile, StopRun, NewTerminal, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
-        NextTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape,
+        NextTheme, NextIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
@@ -45,7 +45,7 @@ actions!(
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
         CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
         InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
-        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions, ShowWizTree, NavBack, NavForward
+        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions, ShowMcbe, ShowWizTree, NavBack, NavForward
     ]
 );
 
@@ -64,6 +64,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-x", ShowExtensions, None),
         KeyBinding::new("ctrl-shift-y", ShowWizTree, None),
+        KeyBinding::new("ctrl-space", gpui_kit::component::input::ShowCompletions, Some("Input && mode == editor")),
         KeyBinding::new("alt-left", NavBack, None),
         KeyBinding::new("alt-right", NavForward, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
@@ -113,6 +114,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", TermComplete, Some("Terminal > Input")),
         KeyBinding::new("ctrl-c", TermInterrupt, Some("Terminal > Input")),
         KeyBinding::new("escape", TermEscape, Some("Terminal > Input")),
+        KeyBinding::new("ctrl-l", TermClear, Some("Terminal > Input")),
         KeyBinding::new("ctrl-shift-p", CommandPalette, None),
         KeyBinding::new("f1", CommandPalette, None),
         KeyBinding::new("ctrl-g", GoToLine, None),
@@ -146,6 +148,7 @@ pub(crate) enum SideView {
     Scm,
     Agent,
     Extensions,
+    Mcbe,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -192,7 +195,6 @@ impl Line {
 pub(crate) struct Doc {
     pub path: PathBuf,
     pub name: SharedString,
-    pub icon: (crate::fluxicon::FluxIcon, Option<u32>),
     pub lang: &'static str,
     pub label: &'static str,
     pub read_only: bool,
@@ -230,13 +232,11 @@ impl Doc {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
             .into();
-        let icon = files::icon_for(&name);
         let is_img = files::is_image(&path);
         let (lang, label) = if is_img { ("image", "Image") } else { files::language_for(&path, "") };
         Self {
             path,
             name,
-            icon,
             lang,
             label,
             read_only: is_img,
@@ -407,16 +407,19 @@ pub struct Workbench {
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
     pub(crate) ext: crate::ext::Ext,
+    pub(crate) mcbe: crate::ext::mcbe_view::McbeState,
     pub(crate) theme_menu: bool,
     pub(crate) settings_theme_open: bool,
     pub(crate) settings_theme_focus: FocusHandle,
     pub(crate) settings_theme_sel: usize,
     pub(crate) settings_theme_anim: u64,
+    pub(crate) settings_icon_open: bool,
+    pub(crate) settings_icon_focus: FocusHandle,
     pub(crate) theme_preview_origin: Option<crate::settings::ThemeSnapshot>,
     pub(crate) motion_check: Option<crate::motion_check::Check>,
     pub(crate) quick: crate::quick::QuickOpen,
     pub(crate) all_files: Arc<Vec<String>>,
-    pub(crate) all_lower: Arc<Vec<String>>,
+    pub(crate) all_lower: Arc<crate::memtrim::FlatStrings>,
     pub(crate) preview_server: Option<crate::preview::PreviewServer>,
     pub(crate) github: Option<crate::github::Account>,
     pub(crate) github_input: Entity<InputState>,
@@ -577,6 +580,7 @@ impl Workbench {
         crate::boot::mark("  agent state");
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
         let ext = crate::ext::Ext::new(window, cx);
+        let mcbe = crate::ext::mcbe_view::McbeState::new(window, cx);
         subs.push(scm_sub);
         crate::boot::mark("  scm");
         let (quick, quick_sub) = crate::quick::QuickOpen::new(window, cx);
@@ -689,11 +693,14 @@ impl Workbench {
             agent,
             scm,
             ext,
+            mcbe,
             theme_menu: false,
             settings_theme_open: false,
             settings_theme_focus: cx.focus_handle(),
             settings_theme_sel: 0,
             settings_theme_anim: 0,
+            settings_icon_open: false,
+            settings_icon_focus: cx.focus_handle(),
             theme_preview_origin: None,
             motion_check: None,
             quick,
@@ -934,7 +941,7 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             let (all, lower) = cx
                 .background_spawn(async move {
-                    let all = if let Some(paths) = wsl_scan.as_ref().and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES)) {
+                    let mut all = if let Some(paths) = wsl_scan.as_ref().and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES)) {
                         paths
                     } else if multi {
                         let mut paths = Vec::new();
@@ -949,10 +956,10 @@ impl Workbench {
                     } else {
                         files::scan_paths(&root, files::MAX_ENTRIES)
                     };
-                    let lower: Vec<String> = all
-                        .iter()
-                        .map(|p| crate::workspace::rel_display_for(p, &roots, multi).to_lowercase())
-                        .collect();
+                    all.shrink_to_fit();
+                    let lower = crate::memtrim::FlatStrings::from_iter(
+                        all.iter().map(|p| crate::workspace::rel_display_for(p, &roots, multi).to_lowercase()),
+                    );
                     (all, lower)
                 })
                 .await;
@@ -1170,13 +1177,11 @@ impl Workbench {
             .unwrap_or_default()
             .into();
         let banner = prep.banner.map(SharedString::from);
-        let icon = files::icon_for(&name);
         self.anim_seq = self.anim_seq.wrapping_add(1);
         self.opened_tab = Some((path.clone(), self.anim_seq));
         self.docs.push(Doc {
             path,
             name,
-            icon,
             lang: prep.lang,
             label: prep.label,
             read_only: prep.read_only,
@@ -1343,7 +1348,9 @@ impl Workbench {
                 (i, pinned, d.last_used)
             })
             .collect();
-        for ix in select_eviction_indices(&entries, MAX_WARM_EDITORS) {
+        let evicted = select_eviction_indices(&entries, MAX_WARM_EDITORS);
+        let any_evicted = !evicted.is_empty();
+        for ix in evicted {
             if let Some(ed) = self.docs[ix].editor.take() {
                 let state = ed.read(cx);
                 self.docs[ix].saved_cursor = state.cursor_position();
@@ -1355,6 +1362,9 @@ impl Workbench {
             self.docs[ix].diag_ranges = None;
             self.docs[ix].diag_ruler = None;
         }
+        if any_evicted {
+            crate::memtrim::trim_if_needed(false, false);
+        }
     }
 
     fn open_image(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -1365,13 +1375,11 @@ impl Workbench {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
             .into();
-        let icon = files::icon_for(&name);
         self.anim_seq = self.anim_seq.wrapping_add(1);
         self.opened_tab = Some((path.clone(), self.anim_seq));
         self.docs.push(Doc {
             path,
             name,
-            icon,
             lang: "image",
             label: "Image",
             read_only: true,
@@ -1823,7 +1831,7 @@ impl Workbench {
             self.copilot.did_close(&closed.path);
             self.closed_tabs.retain(|p| *p != closed.path);
             self.closed_tabs.push(closed.path);
-            if self.closed_tabs.len() > 30 {
+            if self.closed_tabs.len() > 24 {
                 self.closed_tabs.remove(0);
             }
         }
@@ -2306,6 +2314,15 @@ impl Workbench {
         h.focus(window, cx);
     }
 
+    fn on_show_mcbe(&mut self, _: &ShowMcbe, _: &mut Window, cx: &mut Context<Self>) {
+        if self.has_mcbe_workspace() {
+            self.show_view(SideView::Mcbe, cx);
+        } else {
+            self.status = tr("No packs detected yet. Generate BP/RP below.").into();
+            cx.notify();
+        }
+    }
+
     pub(crate) fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.agent_right {
             self.right_view = SideView::Agent;
@@ -2343,6 +2360,7 @@ impl Workbench {
             self.settings_focus.focus(window, cx);
         } else {
             self.settings_theme_open = false;
+            self.settings_icon_open = false;
             self.cancel_theme_preview(window, cx);
             self.focus.focus(window, cx);
         }
@@ -2354,6 +2372,22 @@ impl Workbench {
         let ix = all.iter().position(|p| p.id == theme::palette().id).unwrap_or(0);
         let next = all[(ix + 1) % all.len()].id;
         self.set_theme(next, window, cx);
+    }
+
+    fn on_next_icon_theme(&mut self, _: &NextIconTheme, _: &mut Window, cx: &mut Context<Self>) {
+        let list = crate::ext::vsx_icons::list();
+        if list.is_empty() {
+            self.status = tr("No file icon themes installed (browse Extensions to add one)").into();
+            cx.notify();
+            return;
+        }
+        let mut ids: Vec<&str> = Vec::with_capacity(list.len() + 1);
+        ids.push("");
+        ids.extend(list.iter().map(|m| m.id.as_str()));
+        let cur = crate::ext::vsx_icons::active_id();
+        let ix = ids.iter().position(|&id| id == cur.as_str()).unwrap_or(0);
+        let next = ids[(ix + 1) % ids.len()].to_string();
+        self.set_icon_theme(&next, cx);
     }
 
     fn on_tab_accept(&mut self, _: &TabAccept, window: &mut Window, cx: &mut Context<Self>) {
@@ -2781,7 +2815,7 @@ impl Workbench {
         if self.settings_open {
             None
         } else if self.wiztree.page {
-            Some(6)
+            Some(if self.has_mcbe_workspace() { 7 } else { 6 })
         } else if self.sidebar_open && !self.on_right(self.view) {
             Some(Self::side_view_slot(self.view))
         } else if self.right_dock_on() {
@@ -2799,6 +2833,7 @@ impl Workbench {
             SideView::Run => 3,
             SideView::Extensions => 4,
             SideView::Agent => 5,
+            SideView::Mcbe => 6,
         }
     }
 
@@ -2932,6 +2967,7 @@ impl Workbench {
         };
 
         let wiztree_active = self.wiztree.page && !self.settings_open;
+        let mcbe_on = self.has_mcbe_workspace();
         let slots = v_flex()
             .id("ab-slots")
             .relative()
@@ -2987,11 +3023,14 @@ impl Workbench {
             .child(view_item("ab-run", 3, Icon::new(IconName::Play), SideView::Run, self, cx))
             .child(view_item("ab-ext", 4, Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
             .child(view_item("ab-agent", 5, Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
+            .when(mcbe_on, |d| {
+                d.child(view_item("ab-mcbe", 6, Icon::new(crate::fluxicon::MCBE), SideView::Mcbe, self, cx))
+            })
             .child(
                 div()
                     .id("ab-wiztree-page")
                     .relative()
-                    .child(slot_box("ab-wiztree", 6, Icon::new(gpui_kit::assets::IconName::HardDrive), wiztree_active, "Disk Usage (WizTree)", cx))
+                    .child(slot_box("ab-wiztree", if mcbe_on { 7 } else { 6 }, Icon::new(gpui_kit::assets::IconName::HardDrive), wiztree_active, "Disk Usage (WizTree)", cx))
                     .on_click(cx.listener(|this, _, w, cx| this.toggle_wiztree(w, cx))),
             );
 
@@ -3019,6 +3058,7 @@ impl Workbench {
             SideView::Extensions => tr("EXTENSIONS"),
             SideView::Scm => tr("SOURCE CONTROL"),
             SideView::Agent => crate::agent::agent_name(),
+            SideView::Mcbe => tr("MINECRAFT BEDROCK"),
         };
         let title: SharedString = match (view, self.root.as_deref().and_then(Path::file_name)) {
             (SideView::Explorer, Some(_)) if !self.workspace.extra.is_empty() => tr("WORKSPACE").into(),
@@ -3071,6 +3111,17 @@ impl Workbench {
             .when(view == SideView::Scm && self.scm.repo.is_some(), |h| {
                 h.child(div().flex_none().child(self.render_scm_header(cx)))
             })
+            .when(view == SideView::Mcbe, |h| {
+                h.child(
+                    div().flex_none().child(tool_button(
+                        "mcbe-refresh",
+                        IconName::RefreshCw,
+                        tr("Refresh"),
+                        cx,
+                        |this, _, cx| this.mcbe_refresh(cx),
+                    )),
+                )
+            })
             .when(view == SideView::Agent, |h| {
                 h.child(div().flex_none().child(self.render_agent_tools(cx)))
             })
@@ -3122,6 +3173,7 @@ impl Workbench {
             SideView::Extensions => self.render_ext_view(cx),
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
+            SideView::Mcbe => self.render_mcbe_view(cx),
         };
         let (_, view_dir, view_seq) = self.side_view_anim.get();
         let animated_body: AnyElement = if !right && view_seq > 0 && !cx.reduce_motion() {
@@ -3190,6 +3242,28 @@ impl Workbench {
                     })
                     .child(body),
             );
+        } else if !has_projects && self.has_mcbe_workspace() {
+            v = v.child(
+                v_flex()
+                    .w_full()
+                    .px_2()
+                    .pt_2()
+                    .gap_1()
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(tr("Minecraft Bedrock")))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(tr("This workspace is a Minecraft Bedrock add-on. Deploy, manifest sync, and Script API tools live in the Minecraft Bedrock sidebar.")),
+                    )
+                    .child(
+                        h_flex().pt_2().child(
+                            self.action_button("run-open-mcbe", tr("Open Minecraft Bedrock Tools"), ui::Kind::Primary, cx, |this, _, cx| {
+                                this.show_view(SideView::Mcbe, cx);
+                            }),
+                        ),
+                    ),
+            );
         } else if !has_projects {
             let (title, text): (SharedString, SharedString) = match (doc, &self.root) {
                 (Some(d), _) => (
@@ -3257,9 +3331,10 @@ impl Workbench {
             total_w += w;
             tab_lefts.push(total_w);
         }
-        let scroll_x = (-f32::from(self.tabs_scroll.offset().x)).max(0.);
-        self.tabs_scroll_x.set(scroll_x);
         let viewport_w = self.tabs_width.get().max(240.);
+        let max_scroll_x = (total_w - viewport_w).max(0.);
+        let scroll_x = (-f32::from(self.tabs_scroll.offset().x)).clamp(0., max_scroll_x);
+        self.tabs_scroll_x.set(scroll_x);
         let (range, left_w, right_w) = visible_tab_window_from_offsets(&tab_lefts, scroll_x, viewport_w);
         let motion = !cx.reduce_motion();
         let opened_tab = self.opened_tab.clone();
@@ -3342,7 +3417,6 @@ impl Workbench {
                 let w = widths[ix];
                 let left_in_view = tab_lefts[ix] - scroll_x;
                 let active = self.active == Some(ix);
-                let (icon, tint) = d.icon;
                 let errs = d.error_count;
                 let warns = d.warn_count;
                 let tab_id = SharedString::from(format!("tab-{}", d.path.display()));
@@ -3371,7 +3445,7 @@ impl Workbench {
                         }
                     }))
                     .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                    .child(Icon::new(icon).flex_none().size(theme::u(15.)).text_color(theme::tint(tint)))
+                    .child(files::file_icon_el(&d.name, theme::u(15.)))
                     .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(d.name.clone()))
                     .when(errs > 0 || warns > 0, |s| {
                         let (badge_icon, col, count) = if errs > 0 {
@@ -3512,8 +3586,8 @@ impl Workbench {
             }
         }
         let n = self.closed_tabs.len();
-        if n > 30 {
-            self.closed_tabs.drain(..n - 30);
+        if n > 24 {
+            self.closed_tabs.drain(..n - 24);
         }
         self.active = active.and_then(|p| self.docs.iter().position(|d| d.path == p)).or((!self.docs.is_empty()).then(|| self.docs.len() - 1));
         match self.active {
@@ -4598,12 +4672,14 @@ impl Render for Workbench {
             .text_color(c(theme::FG))
             .children(backdrop)
             .on_action(cx.listener(Self::on_next_theme))
+            .on_action(cx.listener(Self::on_next_icon_theme))
             .on_action(cx.listener(Self::on_tab_accept))
             .on_action(cx.listener(Self::on_term_history_prev))
             .on_action(cx.listener(Self::on_term_history_next))
             .on_action(cx.listener(Self::on_term_complete))
             .on_action(cx.listener(Self::on_term_interrupt))
             .on_action(cx.listener(Self::on_term_escape))
+            .on_action(cx.listener(Self::on_term_clear))
             .on_action(cx.listener(Self::on_go_to_problem))
             .on_action(cx.listener(Self::on_scm_show))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
@@ -4684,6 +4760,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_find_in_files))
             .on_action(cx.listener(Self::on_show_run))
             .on_action(cx.listener(Self::on_show_extensions))
+            .on_action(cx.listener(Self::on_show_mcbe))
             .on_action(cx.listener(Self::on_show_agent))
             .on_action(cx.listener(Self::on_show_settings))
             .on_action(cx.listener(Self::on_about))

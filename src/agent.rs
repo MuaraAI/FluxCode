@@ -7,7 +7,7 @@ use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    input::{InputEvent, InputState, Textarea, TextareaState},
     text::TextView,
     v_flex, Icon, IconName, Selectable, Sizable,
 };
@@ -2266,7 +2266,7 @@ impl Workbench {
                     .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Remove {name}?"; name => name))),
             )
             .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(crate::trf!("This deletes {path}: the program and its files. Your chats stay. To be sure it is the right agent, type {name} twice."; path => folder.display(), name => name)))
-            .child(v_flex().gap_2().children(self.agent.uninstall_inputs.iter().map(|i| Input::new(i).small())))
+            .child(v_flex().gap_2().children(self.agent.uninstall_inputs.iter().map(|i| crate::ui::McInput::new(i).small())))
             .when(mismatch, |v| v.child(div().text_xs().text_color(c(theme::WARN)).child(crate::trf!("That is not “{name}”. Check the spelling (capital letters count)."; name => name))))
             .child(
                 h_flex()
@@ -2946,24 +2946,26 @@ impl Workbench {
     }
 
 
-    fn agent_chips(&self, cx: &App) -> Vec<(String, String, Icon, bool)> {
+    fn agent_chips(&self, cx: &App) -> Vec<(String, String, AnyElement, bool)> {
         let text = self.agent.input.read(cx).value().to_string();
         self.agent_chips_for(&text, cx)
     }
 
-    fn agent_chips_for(&self, text: &str, cx: &App) -> Vec<(String, String, Icon, bool)> {
+    fn agent_chips_for(&self, text: &str, cx: &App) -> Vec<(String, String, AnyElement, bool)> {
         let off = |k: &str| self.agent.off_ctx.contains(k);
+        fn chip_ico(name: impl Into<Icon>) -> AnyElement {
+            name.into().size(theme::u(12.)).flex_none().into_any_element()
+        }
         let mut chips = Vec::new();
         if let Some(d) = self
             .active
             .map(|ix| &self.docs[ix])
             .filter(|d| d.image.is_none())
         {
-            let (ic, tint) = crate::files::icon_for(&d.name);
             chips.push((
                 "file".into(),
                 d.name.to_string(),
-                Icon::new(ic).text_color(theme::tint(tint)),
+                crate::files::file_icon_el(&d.name, theme::u(12.)),
                 !off("file"),
             ));
             if let Some(ed) = d.editor.as_ref() {
@@ -2973,7 +2975,7 @@ impl Workbench {
                     let v = ed.value();
                     let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
                     let label = if a == b { crate::trf!("Selection · line {a}"; a => a) } else { crate::trf!("Selection · lines {a}-{b}"; a => a, b => b) };
-                    chips.push(("sel".into(), label, Icon::new(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
+                    chips.push(("sel".into(), label, chip_ico(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
                 }
             }
         }
@@ -2981,13 +2983,13 @@ impl Workbench {
             if let Some(p) = self.problems.first() {
                 let name = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let kind = p.message.split(':').next().unwrap_or("Error").to_string();
-                chips.push(("err".into(), format!("{kind} · {name}:{}", p.line), Icon::new(IconName::CircleX), !off("err")));
+                chips.push(("err".into(), format!("{kind} · {name}:{}", p.line), chip_ico(IconName::CircleX), !off("err")));
             } else if self.agent_last_failure().is_some() {
-                chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), Icon::new(IconName::CircleX), !off("err")));
+                chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), chip_ico(IconName::CircleX), !off("err")));
             }
         }
         if agent_ctx::wants_output(text) && !self.terms[self.term_ix].lines.is_empty() {
-            chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), Icon::new(IconName::SquareTerminal), !off("out")));
+            chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), chip_ico(IconName::SquareTerminal), !off("out")));
         }
         let mentions = agent_ctx::mentions(text);
         let has_wiz_mention = mentions
@@ -3002,10 +3004,10 @@ impl Workbench {
                 }
                 _ => "WizTree".to_string(),
             };
-            chips.push(("wiztree".into(), label, Icon::new(gpui_kit::assets::IconName::HardDrive), !off("wiztree")));
+            chips.push(("wiztree".into(), label, chip_ico(gpui_kit::assets::IconName::HardDrive), !off("wiztree")));
         }
         if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
-            chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), Icon::new(IconName::FolderOpen), !off("ws")));
+            chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), chip_ico(IconName::FolderOpen), !off("ws")));
         }
         for m in mentions {
             if m.eq_ignore_ascii_case("wiztree") || m.eq_ignore_ascii_case("wizztree") {
@@ -3016,7 +3018,7 @@ impl Workbench {
                     let name = Path::new(&m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(m.clone());
                     let key = format!("@{m}");
                     let on = !off(&key);
-                    chips.push((key, name, Icon::new(gpui_kit::assets::IconName::AtSign), on));
+                    chips.push((key, name, chip_ico(gpui_kit::assets::IconName::AtSign), on));
                 }
             }
         }
@@ -3484,7 +3486,7 @@ impl Workbench {
                     .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg")));
                 let lead: AnyElement = match thumb {
                     Some(p) => img(p).flex_none().size(theme::u(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element(),
-                    None => icon.size(theme::u(12.)).flex_none().into_any_element(),
+                    None => icon,
                 };
                 let go_tip: SharedString =
                     crate::trf!("Go to {name}"; name => label.clone()).into();
@@ -3635,9 +3637,9 @@ impl Workbench {
                     Some(i) => (rel[..i].to_string(), rel[i + 1..].to_string()),
                     None => (String::new(), rel.clone()),
                 };
-                let (icon, tint) = crate::files::icon_for(&name);
+                let icon_el = crate::files::file_icon_el(&name, theme::u(13.));
                 (
-                    Icon::new(icon).size(theme::u(13.)).text_color(theme::tint(tint)).into_any_element(),
+                    icon_el,
                     name,
                     dir,
                 )
@@ -3771,7 +3773,7 @@ impl Workbench {
                 let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let rel = self.rel_display(&ch.path.to_string_lossy());
                 let dir = rel.rsplit_once(['\\', '/']).map(|(d, _)| d.to_string()).unwrap_or_default();
-                let (icon, tint) = crate::files::icon_for(&name);
+                let icon_el = crate::files::file_icon_el(&name, theme::u(13.));
                 h_flex()
                     .id(("ag-ch", i))
                     .px_2()
@@ -3789,7 +3791,7 @@ impl Workbench {
                                 this.agent.user_nav = Some(std::time::Instant::now());
                                 this.agent_show_diff(i, w, cx)
                             }))
-                            .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(theme::tint(tint)))
+                            .child(icon_el)
                             .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
                             .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
                             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
@@ -4494,7 +4496,6 @@ impl Workbench {
         let weak = cx.entity().downgrade();
         let attachments = a.attachments.iter().enumerate().map(|(i, p)| {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (icon, tint) = crate::files::icon_for(&name);
             let path = p.clone();
             let image = crate::files::is_image(p) && !name.to_lowercase().ends_with(".svg");
             let name_tip: SharedString = crate::trf!("{name} · click to open"; name => name.clone()).into();
@@ -4502,7 +4503,7 @@ impl Workbench {
             let lead = if image {
                 img(p.clone()).flex_none().size(theme::u(16.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element()
             } else {
-                Icon::new(icon).size(theme::u(12.)).text_color(theme::tint(tint)).flex_none().into_any_element()
+                crate::files::file_icon_el(&name, theme::u(12.))
             };
             chip_shell(SharedString::from(format!("ag-att-{i}")), true)
                 .child(

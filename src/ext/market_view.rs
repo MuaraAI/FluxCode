@@ -9,7 +9,6 @@ use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     spinner::Spinner,
     text::TextView,
@@ -335,13 +334,22 @@ impl Workbench {
     }
 
     fn vsx_applied_changed(&mut self, installed: &str, cx: &mut Context<Self>) {
+        if !self.settings.icon_theme.is_empty() && super::vsx_icons::active_id().is_empty() {
+            self.settings.icon_theme.clear();
+            self.settings.save();
+        }
         self.settings.apply_backdrop();
         theme::apply(cx);
         cx.refresh_windows();
-        let themes = super::native::applied(installed).themes;
-        if !installed.is_empty() && !themes.is_empty() {
-            let names: Vec<&str> = themes.iter().map(|(_, n)| n.as_str()).collect();
-            self.ext.note = Some(crate::trf!("Added to the color themes: {list}. Pick one below or from the theme menu in the status bar."; list => names.join(", ")));
+        let a = super::native::applied(installed);
+        if !installed.is_empty() && (!a.themes.is_empty() || !a.icon_themes.is_empty()) {
+            let themes: Vec<&str> = a.themes.iter().map(|(_, n)| n.as_str()).collect();
+            let icons: Vec<&str> = a.icon_themes.iter().map(|(_, n)| n.as_str()).collect();
+            self.ext.note = Some(match (themes.is_empty(), icons.is_empty()) {
+                (false, _) => crate::trf!("Added to the color themes: {list}. Pick one below or from the theme menu in the status bar."; list => themes.join(", ")),
+                (true, false) => crate::trf!("Added to file icon themes: {list}. Pick one below or from the theme menu in the status bar."; list => icons.join(", ")),
+                (true, true) => unreachable!(),
+            });
         }
     }
 
@@ -783,7 +791,7 @@ impl Workbench {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.ext.query).small().cleanable(true)),
+                            .child(crate::ui::McInput::new(&self.ext.query).small().cleanable(true)),
                     )
                     .child(
                         Button::new("ext-from-file")
@@ -1021,11 +1029,37 @@ impl Workbench {
                 .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
                 .on_click(cx.listener(move |this, _, w, cx| this.set_theme(&tid, w, cx)))
         }));
-        let applied_line: Option<SharedString> = match (&inst, applied.themes.is_empty(), applied.languages.is_empty()) {
+        let current_icon = super::vsx_icons::active_id();
+        let uses_this_icon = applied.icon_themes.iter().any(|(tid, _)| tid == &current_icon);
+        let icon_chips = h_flex()
+            .flex_wrap()
+            .gap_1()
+            .children(applied.icon_themes.iter().enumerate().map(|(i, (tid, name))| {
+                let tid = tid.clone();
+                let on = tid == current_icon;
+                chip(("vsx-icon-theme", i), name.clone().into(), on)
+                    .border_1()
+                    .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_icon_theme(&tid, cx)))
+            }))
+            .when(uses_this_icon, |h| {
+                h.child(
+                    chip("vsx-icon-theme-reset", tr("Use built-in").into(), false)
+                        .border_1()
+                        .border_color(c(theme::BORDER))
+                        .on_click(cx.listener(|this, _, _, cx| this.set_icon_theme("", cx))),
+                )
+            });
+        let applied_line: Option<SharedString> = match (
+            &inst,
+            applied.themes.is_empty(),
+            applied.icon_themes.is_empty(),
+            applied.languages.is_empty(),
+        ) {
             (None, ..) => None,
-            (Some(_), true, true) => Some(tr("Nothing it declares is applied: FluxCode applies color themes and the file types of languages.").into()),
-            (Some(_), _, false) => Some(crate::trf!("Files open as {list}."; list => applied.languages.join(", ")).into()),
-            (Some(_), false, true) => None,
+            (Some(_), true, true, true) => Some(tr("Nothing it declares is applied: FluxCode applies color themes, file icon themes and the file types of languages.").into()),
+            (Some(_), _, _, false) => Some(crate::trf!("Files open as {list}."; list => applied.languages.join(", ")).into()),
+            (Some(_), .., true) => None,
         };
         let here = v_flex()
             .gap_1()
@@ -1039,11 +1073,20 @@ impl Workbench {
                         .child(theme_chips),
                 )
             })
+            .when(!applied.icon_themes.is_empty(), |v| {
+                v.child(
+                    v_flex()
+                        .gap_1()
+                        .pt_1()
+                        .child(div().text_sm().text_color(c(theme::FG)).child(tr("Its file icon themes are ready; click one to use it:")))
+                        .child(icon_chips),
+                )
+            })
             .when_some(applied_line, |v, t| v.child(div().text_sm().text_color(c(theme::FG)).child(t)))
             .when(!applied.failed.is_empty(), |v| {
                 v.child(div().text_xs().text_color(c(theme::WARN)).child(crate::trf!("Couldn't read: {list}"; list => applied.failed.join("; "))))
             })
-            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Grammars, snippets and icon themes aren't applied yet.")))
+            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Grammars and snippets aren't applied yet.")))
             .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr(
                 "VS Code's JavaScript extension host isn't available in FluxCode, so code that runs inside VS Code (commands, debuggers, language servers started by the extension) doesn't run here.",
             )))

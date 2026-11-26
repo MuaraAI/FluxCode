@@ -4,8 +4,8 @@ use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::component::{
     h_flex,
-    input::{Input, InputEvent, InputState},
-    v_flex, Icon, Sizable,
+    input::{InputEvent, InputState},
+    v_flex, Icon,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ pub fn fuzzy_lower(q: &[u8], p: &[u8]) -> Option<i32> {
     crate::accel::fuzzy_score(q, p)
 }
 
-fn score_top_k(qb: &[u8], lower: &[String], k: usize) -> Vec<usize> {
+fn score_top_k(qb: &[u8], lower: &crate::memtrim::FlatStrings, k: usize) -> Vec<usize> {
     let mut scored: Vec<(i32, usize)> = lower
         .iter()
         .enumerate()
@@ -546,11 +546,12 @@ impl Workbench {
                     for (row, item) in q.wsl_rows.iter().enumerate() {
                         n += 1;
                         let selected = row == q.sel;
+                        let icon_sz = theme::u(14.);
                         let (label, icon) = match item {
-                            WslRow::Up => ("..".to_string(), Icon::new(gpui_kit::assets::IconName::ArrowUp)),
-                            WslRow::Open => (tr("Open this folder").to_string(), Icon::new(crate::files::folder_icon("", true))),
-                            WslRow::OpenPath(path) => (crate::trf!("Open {path}"; path => path), Icon::new(crate::files::folder_icon("", true))),
-                            WslRow::Dir(name) => (name.clone(), Icon::new(crate::files::folder_icon(name, false))),
+                            WslRow::Up => ("..".to_string(), Icon::new(gpui_kit::assets::IconName::ArrowUp).size(icon_sz).text_color(c(theme::FOLDER)).into_any_element()),
+                            WslRow::Open => (tr("Open this folder").to_string(), crate::files::folder_icon_el("", true, false, icon_sz)),
+                            WslRow::OpenPath(path) => (crate::trf!("Open {path}"; path => path), crate::files::folder_icon_el("", true, false, icon_sz)),
+                            WslRow::Dir(name) => (name.clone(), crate::files::folder_icon_el(name, false, false, icon_sz)),
                         };
                         let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
                         let h_hov = liq.clone();
@@ -572,7 +573,7 @@ impl Workbench {
                                     }
                                 })
                                 .child(probe)
-                                .child(icon.size(theme::u(14.)).text_color(c(theme::FOLDER)))
+                                .child(icon)
                                 .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(label))
                                 .on_click(cx.listener(move |this, _, w, cx| {
                                     this.quick.sel = row;
@@ -631,7 +632,6 @@ impl Workbench {
                 Some(i) => (&rel[..i], &rel[i + 1..]),
                 None => ("", rel.as_str()),
             };
-            let (icon, tint) = crate::files::icon_for(name);
             let selected = row == q.sel;
             let path = PathBuf::from(full);
             let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
@@ -654,7 +654,7 @@ impl Workbench {
                         }
                     })
                     .child(probe)
-                    .child(Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
+                    .child(crate::files::file_icon_el(name, theme::u(14.)))
                     .child(div().flex_none().text_sm().text_color(c(theme::FG_STRONG)).child(name.to_string()))
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir.to_string()))
                     .on_click(cx.listener(move |this, _, w, cx| {
@@ -695,7 +695,7 @@ impl Workbench {
             .bg(gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1])))
             .shadow_lg()
             .overflow_hidden()
-            .child(div().p_2().key_context("QuickOpen").child(Input::new(&q.input).small()))
+            .child(div().p_2().key_context("QuickOpen").child(crate::ui::McInput::new(&q.input).small()))
             .child(list);
         let panel_el = if motion {
             panel.with_animation("quick-open-in", fade(), |d, t| d.opacity(t).mt(px((1. - t) * 4.))).into_any_element()
@@ -775,10 +775,11 @@ mod tests {
 
     #[test]
     fn score_top_k_returns_best_matches_in_order() {
-        let paths: Vec<String> = (0..100).map(|i| format!("src/other/file_{i}.rs")).chain(["src/main.rs".to_string(), "docs/main_guide.md".to_string()]).collect();
+        let raw: Vec<String> = (0..100).map(|i| format!("src/other/file_{i}.rs")).chain(["src/main.rs".to_string(), "docs/main_guide.md".to_string()]).collect();
+        let paths = crate::memtrim::FlatStrings::from_iter(raw.iter().map(String::as_str));
         let hits = super::score_top_k(b"main", &paths, 2);
         assert_eq!(hits.len(), 2);
-        assert_eq!(paths[hits[0]], "src/main.rs");
-        assert_eq!(paths[hits[1]], "docs/main_guide.md");
+        assert_eq!(&paths[hits[0]], "src/main.rs");
+        assert_eq!(&paths[hits[1]], "docs/main_guide.md");
     }
 }

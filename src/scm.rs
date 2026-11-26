@@ -7,7 +7,7 @@ use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     menu::{DropdownMenu, PopupMenu},
     v_flex, Icon, IconName, Sizable,
 };
@@ -903,7 +903,7 @@ impl Workbench {
                 .px_3()
                 .pb_2()
                 .gap_2()
-                .child(Input::new(&s.message).small())
+                .child(crate::ui::McInput::new(&s.message).small())
                 .child(commit_row)
                 .when_some(s.busy.clone(), |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)))
                 .when_some(s.error.clone(), |v, e| {
@@ -981,7 +981,6 @@ impl Workbench {
                     .rsplit_once('/')
                     .map(|d| d.0.replace('/', "\\"))
                     .unwrap_or_default();
-                let (icon, tint) = crate::files::icon_for(&name);
                 let col = code_color(ch.code);
                 let deleted = ch.code == 'D';
                 let full = this
@@ -1001,12 +1000,7 @@ impl Workbench {
                     .text_size(theme::u(11.5))
                     .cursor_pointer()
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(
-                        Icon::new(icon)
-                            .flex_none()
-                            .size(theme::u(14.))
-                            .text_color(theme::tint(tint)),
-                    )
+                    .child(crate::files::file_icon_el(&name, theme::u(14.)))
                     .child(
                         div()
                             .flex_shrink(1.)

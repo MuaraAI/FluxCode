@@ -8,7 +8,7 @@ use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     spinner::Spinner,
     text::TextView,
@@ -222,6 +222,7 @@ impl Workbench {
                 this.ext.found = found;
                 this.ext.tasks = tasks;
                 this.ext.scanning = false;
+                this.mcbe_refresh(cx);
                 cx.notify();
             });
         })
@@ -546,7 +547,7 @@ impl Workbench {
         }
     }
 
-    fn ext_background(&mut self, meta: String, title: SharedString, cx: &mut Context<Self>, job: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static) {
+    pub(crate) fn ext_background(&mut self, meta: String, title: SharedString, cx: &mut Context<Self>, job: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static) {
         cx.spawn(async move |this, cx| {
             let res = cx.background_spawn(async move { job() }).await;
             _ = this.update(cx, |this, cx| {
@@ -705,7 +706,7 @@ impl Workbench {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(div().flex_1().min_w_0().max_w(theme::u(360.)).child(Input::new(&self.ext.new_name).small()))
+                        .child(div().flex_1().min_w_0().max_w(theme::u(360.)).child(crate::ui::McInput::new(&self.ext.new_name).small()))
                         .child(Button::new("ext-create").label(tr("Create")).small().on_click(cx.listener(move |this, _, w, cx| this.ext_create(&t, w, cx)))),
                 )
                 .child(div().w_full().truncate().text_xs().text_color(c(theme::FG_DIM)).child(where_))
@@ -914,7 +915,7 @@ impl Workbench {
 
     pub(crate) fn ext_lead(&self) -> (Option<usize>, bool) {
         let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
-        let ok = |i: usize, p: &Project| self.ext_installed(&p.ext) && self.ext.tasks.get(i).is_some_and(|t| t.len() > 1);
+        let ok = |i: usize, p: &Project| p.ext != "bedrock" && self.ext_installed(&p.ext) && self.ext.tasks.get(i).is_some_and(|t| t.len() > 1);
         let holding = active.and_then(|f| {
             self.ext.found.iter().enumerate().filter(|(i, p)| ok(*i, p) && f.starts_with(&p.dir)).max_by_key(|(_, p)| p.dir.components().count()).map(|(i, _)| i)
         });
@@ -955,7 +956,7 @@ impl Workbench {
         let mut col = v_flex().w_full().gap(theme::u(20.));
         let mut any = false;
         for (pix, p) in self.ext.found.iter().enumerate() {
-            if !self.ext_installed(&p.ext) {
+            if p.ext == "bedrock" || !self.ext_installed(&p.ext) {
                 continue;
             }
             any = true;
@@ -1028,7 +1029,7 @@ impl Workbench {
         let mut offered: Vec<&str> = Vec::new();
         let mut offers = v_flex().w_full().gap_0p5();
         for p in &self.ext.found {
-            if self.ext_installed(&p.ext) || offered.contains(&p.ext.as_str()) {
+            if p.ext == "bedrock" || self.ext_installed(&p.ext) || offered.contains(&p.ext.as_str()) {
                 continue;
             }
             offered.push(&p.ext);

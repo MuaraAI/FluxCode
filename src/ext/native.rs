@@ -1,15 +1,17 @@
 
 use super::market;
+use super::vsx_icons::{self, IconThemeMeta};
 use super::vsx_theme;
 use crate::theme::{self, Palette};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Applied {
     pub themes: Vec<(String, String)>,
+    pub icon_themes: Vec<(String, String)>,
     pub languages: Vec<String>,
     pub failed: Vec<String>,
 }
@@ -34,6 +36,8 @@ pub fn load() {
     let mut applied = HashMap::new();
     let mut palettes = Vec::new();
     let mut langs = Vec::new();
+    let mut icon_metas: Vec<IconThemeMeta> = Vec::new();
+    let mut used_icon_ids: HashSet<String> = HashSet::new();
     for ext in market::installed_list() {
         let Some(pkg) = read_pkg(&ext.folder) else {
             continue;
@@ -45,6 +49,15 @@ pub fn load() {
                 Ok(p) => {
                     a.themes.push((p.id.to_string(), p.name.to_string()));
                     palettes.push(p);
+                }
+                Err(e) => a.failed.push(e),
+            }
+        }
+        for t in list(&pkg, "iconThemes") {
+            match icon_theme(&ext, t, &mut nls, &mut used_icon_ids) {
+                Ok(meta) => {
+                    a.icon_themes.push((meta.id.clone(), meta.label.clone()));
+                    icon_metas.push(meta);
                 }
                 Err(e) => a.failed.push(e),
             }
@@ -65,6 +78,7 @@ pub fn load() {
     theme::set_extra(palettes);
     *LANGS.write().unwrap_or_else(|e| e.into_inner()) = langs;
     *APPLIED.write().unwrap_or_else(|e| e.into_inner()) = Some(applied);
+    vsx_icons::set_installed(icon_metas);
 }
 
 pub fn applied(id: &str) -> Applied {
@@ -90,6 +104,74 @@ fn list<'a>(pkg: &'a Value, key: &str) -> &'a [Value] {
 pub fn theme_id(ext_id: &str, theme: &Value, label: &str) -> String {
     let own = theme.get("id").and_then(Value::as_str).unwrap_or(label);
     format!("vsx:{ext_id}/{own}")
+}
+
+fn icon_slug(raw: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() { "icons".into() } else { out }
+}
+
+pub fn icon_theme(
+    ext: &market::Installed,
+    t: &Value,
+    nls: &mut Option<Value>,
+    used: &mut HashSet<String>,
+) -> Result<IconThemeMeta, String> {
+    let rel = t.get("path").and_then(Value::as_str).unwrap_or("").trim();
+    let raw_id = t.get("id").and_then(Value::as_str).unwrap_or("").trim();
+    let raw_label = t.get("label").and_then(Value::as_str).unwrap_or("");
+    let localized = market::localized(&ext.folder, raw_label, nls);
+    let label = if !localized.trim().is_empty() && !localized.starts_with('%') {
+        localized.trim().to_string()
+    } else if !raw_id.is_empty() {
+        raw_id.to_string()
+    } else {
+        Path::new(rel)
+            .file_stem()
+            .map_or_else(|| ext.display.clone(), |s| s.to_string_lossy().into_owned())
+    };
+    if rel.is_empty() || rel.contains("..") || Path::new(rel).is_absolute() {
+        return Err(format!("{label}: no icon theme file"));
+    }
+    let root = ext.folder.canonicalize().map_err(|e| format!("{label}: {e}"))?;
+    let path = ext.folder.join(rel).canonicalize().map_err(|e| format!("{label}: {e}"))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return Err(format!("{label}: icon theme file missing"));
+    }
+    let base_slug = icon_slug(if !raw_id.is_empty() { raw_id } else { &label });
+    let mut id = format!("vsx:{}:{base_slug}", ext.id);
+    if !used.insert(id.clone()) {
+        let mut n = 2usize;
+        loop {
+            let cand = format!("vsx:{}:{base_slug}-{n}", ext.id);
+            if used.insert(cand.clone()) {
+                id = cand;
+                break;
+            }
+            n += 1;
+        }
+    }
+    Ok(IconThemeMeta {
+        id,
+        label,
+        ext_id: ext.id.clone(),
+        ext_display: ext.display.clone(),
+        ext_folder: ext.folder.clone(),
+        path,
+    })
 }
 
 fn theme(
@@ -426,6 +508,35 @@ mod tests {
             theme(&installed, &list(&pkg, "themes")[0], &mut nls).unwrap()
         ));
         assert!(theme(&installed, &list(&pkg, "themes")[1], &mut nls).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn icon_theme_manifest_entry_parses_and_checks_path() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-native-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ext = dir.join("acme.icons-1.0.0");
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(ext.join("dim.json"), r#"{ "file": "f", "iconDefinitions": {} }"#).unwrap();
+        let installed = market::Installed {
+            id: "acme.icons".into(),
+            folder: ext.clone(),
+            display: "Acme Icons".into(),
+            ..Default::default()
+        };
+        let mut used = HashSet::new();
+        let mut nls = None;
+        let ok = icon_theme(
+            &installed,
+            &json!({ "id": "acme-dim", "label": "Acme Dim", "path": "./dim.json" }),
+            &mut nls,
+            &mut used,
+        )
+        .unwrap();
+        assert_eq!(ok.id, "vsx:acme.icons:acme-dim");
+        assert_eq!(ok.label, "Acme Dim");
+        assert!(icon_theme(&installed, &json!({ "id": "bad", "path": "./missing.json" }), &mut nls, &mut used).is_err());
+        assert!(icon_theme(&installed, &json!({ "id": "esc", "path": "../evil.json" }), &mut nls, &mut used).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

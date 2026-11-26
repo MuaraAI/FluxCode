@@ -515,6 +515,39 @@ pub fn folder_icon(_name: &str, open: bool) -> FluxIcon {
     }
 }
 
+pub fn file_icon_el(name: &str, size: gpui_kit::Pixels) -> gpui_kit::AnyElement {
+    use gpui_kit::{component::Icon, img, IntoElement, ObjectFit, Styled, StyledImage};
+    if let Some(path) = crate::ext::vsx_icons::file_icon(name, crate::theme::palette().dark) {
+        return img((*path).clone())
+            .flex_none()
+            .size(size)
+            .object_fit(ObjectFit::Contain)
+            .into_any_element();
+    }
+    let (ic, tint) = icon_for(name);
+    Icon::new(ic)
+        .flex_none()
+        .size(size)
+        .text_color(crate::theme::tint(tint))
+        .into_any_element()
+}
+
+pub fn folder_icon_el(name: &str, open: bool, root: bool, size: gpui_kit::Pixels) -> gpui_kit::AnyElement {
+    use gpui_kit::{component::Icon, img, IntoElement, ObjectFit, Styled, StyledImage};
+    if let Some(path) = crate::ext::vsx_icons::folder_icon(name, open, root, crate::theme::palette().dark) {
+        return img((*path).clone())
+            .flex_none()
+            .size(size)
+            .object_fit(ObjectFit::Contain)
+            .into_any_element();
+    }
+    Icon::new(folder_icon(name, open))
+        .flex_none()
+        .size(size)
+        .text_color(crate::theme::c(crate::theme::FOLDER))
+        .into_any_element()
+}
+
 gpui_kit::assets::icon_assets!(pub FileIcons, [
     File, FileCode, FileBraces, FileText, FileImage, FileLock, FileCog, FileTerminal, FileArchive,
     FileMusic, FileVideoCamera, FileType, FileSpreadsheet, FileKey, FolderGit, Clock,

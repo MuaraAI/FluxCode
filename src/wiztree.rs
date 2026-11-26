@@ -5,9 +5,8 @@ use crate::workbench::Workbench;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     popover::Popover,
-    switch::Switch,
     v_flex, Disableable, Icon, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -1729,7 +1728,7 @@ impl Workbench {
                                     ),
                             )
                             .child(
-                                Switch::new(id)
+                                crate::ui::McToggle::new(id)
                                     .small()
                                     .checked(on)
                                     .accessibility_label(tr(title))
@@ -2426,7 +2425,7 @@ impl Workbench {
                         div()
                             .w(theme::u(190.))
                             .min_w(theme::u(120.))
-                            .child(Input::new(&self.wiztree.filter).xsmall().cleanable(true)),
+                            .child(crate::ui::McInput::new(&self.wiztree.filter).xsmall().cleanable(true)),
                     ),
             );
 
@@ -2582,20 +2581,9 @@ impl Workbench {
                         let path = tree.full_path(rid);
                         let path_reveal = path.clone();
                         let row_icon = if is_dir {
-                            Icon::new(if expanded {
-                                gpui_kit::assets::IconName::FolderOpen
-                            } else {
-                                gpui_kit::assets::IconName::Folder
-                            })
-                            .flex_none()
-                            .size(theme::u(14.))
-                            .text_color(c(theme::FOLDER))
+                            files::folder_icon_el(&node.name, expanded, row.depth == 0, theme::u(14.))
                         } else {
-                            let (ic, tint) = files::icon_for(&node.name);
-                            Icon::new(ic)
-                                .flex_none()
-                                .size(theme::u(14.))
-                                .text_color(theme::tint(tint))
+                            files::file_icon_el(&node.name, theme::u(14.))
                         };
                         let bar_col = dominant_category(tree, rid).color();
                         let indent = (row.depth as f32 * 16.).min(160.);
@@ -2935,7 +2923,6 @@ impl Workbench {
             .children(items.into_iter().enumerate().map(|(i, f)| {
                 let node = &tree.nodes[f.node as usize];
                 let pct = ((f.size as f64 / total) * 100.).clamp(0., 100.) as f32;
-                let (icon, tint) = files::icon_for(&node.name);
                 let rel = tree.rel_path(f.node);
                 let path = tree.full_path(f.node);
                 let path_reveal = path.clone();
@@ -2952,12 +2939,7 @@ impl Workbench {
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.wiztree_open_file(path.clone(), w, cx);
                     }))
-                    .child(
-                        Icon::new(icon)
-                            .flex_none()
-                            .size(theme::u(14.))
-                            .text_color(theme::tint(tint)),
-                    )
+                    .child(files::file_icon_el(&node.name, theme::u(14.)))
                     .child(
                         div()
                             .flex_1()
