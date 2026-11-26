@@ -75,6 +75,16 @@ pub(crate) enum FoldExpansion {
     All,
 }
 
+/// Contiguous changed row range for rendering an overview ruler beside the scrollbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffOverviewMark {
+    pub start_row: usize,
+    pub end_row: usize,
+    pub removed: bool,
+    pub added: bool,
+    pub conflict: bool,
+}
+
 /// Notifications from the readonly comparison surface.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -220,6 +230,10 @@ pub struct DiffState {
     header_rows: Vec<usize>,
     rows: Rc<Vec<DisplayRow>>,
     change_rows: Vec<usize>,
+    hunk_rows: Vec<usize>,
+    overview_marks: Vec<DiffOverviewMark>,
+    active_hunk: usize,
+    navigated_scroll_top: std::cell::Cell<Option<usize>>,
     list: ListState,
     horizontal_scroll: ScrollHandle,
     focus: FocusHandle,
@@ -233,6 +247,7 @@ pub struct DiffState {
     syntax_highlighter: Option<DiffSyntaxHighlighter>,
     presentations: Vec<Option<Arc<FilePresentation>>>,
     viewport: Size<Pixels>,
+    split_ratio: f32,
     layout: Option<LayoutKey>,
     content_width: Pixels,
     row_height: Option<Pixels>,
@@ -351,6 +366,10 @@ impl DiffState {
             header_rows: Vec::new(),
             rows: Rc::default(),
             change_rows: Vec::new(),
+            hunk_rows: Vec::new(),
+            overview_marks: Vec::new(),
+            active_hunk: 0,
+            navigated_scroll_top: std::cell::Cell::new(None),
             list: ListState::new(0, ListAlignment::Top, px(0.)),
             horizontal_scroll: ScrollHandle::new(),
             focus,
@@ -367,6 +386,7 @@ impl DiffState {
             },
             syntax_highlighter: None,
             viewport: Size::default(),
+            split_ratio: 0.5,
             layout: None,
             content_width: px(0.),
             row_height: None,
@@ -585,6 +605,22 @@ impl DiffState {
     /// The body's size as of the last paint.
     pub(crate) fn viewport(&self) -> Size<Pixels> {
         self.viewport
+    }
+    pub(crate) fn split_width(&self, width: Pixels) -> Pixels {
+        let min = px(120.).min(width / 2.);
+        (width * self.split_ratio).clamp(min, width - min)
+    }
+
+    pub(crate) fn resize_split(&mut self, x: Pixels, width: Pixels, cx: &mut Context<Self>) {
+        if width <= px(0.) {
+            return;
+        }
+        let min = px(120.).min(width / 2.);
+        let ratio = x.clamp(min, width - min) / width;
+        if self.split_ratio != ratio {
+            self.split_ratio = ratio;
+            cx.notify();
+        }
     }
     /// The width rows need to show their longest line.
     pub(crate) fn content_width(&self) -> Pixels {
@@ -852,6 +888,98 @@ impl DiffState {
     /// Moves to the previous changed group before the current viewport, across files.
     pub fn previous_change(&mut self, cx: &mut Context<Self>) {
         self.move_change(false, cx);
+    }
+
+    /// Returns the zero-based hunk position for the navigation toolbar.
+    pub fn hunk_position(&self) -> Option<(usize, usize)> {
+        let count = self.hunk_rows.len();
+        if count == 0 {
+            return None;
+        }
+        let top = self.list.logical_scroll_top().item_ix;
+        if self.navigated_scroll_top.get() == Some(top) {
+            return Some((self.active_hunk.min(count.saturating_sub(1)), count));
+        }
+        let (_, vis) = self.viewport_rows();
+        let probe = top + vis / 4;
+        let idx = self
+            .hunk_rows
+            .partition_point(|&r| r <= probe)
+            .saturating_sub(1);
+        Some((idx.min(count.saturating_sub(1)), count))
+    }
+
+    /// Navigates patch hunks, using changed groups for conflict-only views.
+    pub fn move_hunk(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some((current, count)) = self.hunk_position() else {
+            self.move_change(forward, cx);
+            return;
+        };
+        self.active_hunk = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+        self.list.scroll_to(ListOffset {
+            item_ix: self.hunk_rows[self.active_hunk],
+            offset_in_item: px(0.),
+        });
+        self.navigated_scroll_top
+            .set(Some(self.list.logical_scroll_top().item_ix));
+        cx.notify();
+    }
+
+    /// Scrolls to a zero-based hunk index (clamped to available hunks).
+    pub fn jump_to_hunk(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(&row) = self
+            .hunk_rows
+            .get(ix.min(self.hunk_rows.len().saturating_sub(1)))
+        else {
+            return;
+        };
+        self.active_hunk = ix.min(self.hunk_rows.len().saturating_sub(1));
+        self.list.scroll_to(ListOffset {
+            item_ix: row,
+            offset_in_item: px(0.),
+        });
+        self.navigated_scroll_top
+            .set(Some(self.list.logical_scroll_top().item_ix));
+        cx.notify();
+    }
+
+    /// Total virtualized rows currently projected in the diff viewer.
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Current top row index and estimated visible row count for overview indicators.
+    pub fn viewport_rows(&self) -> (usize, usize) {
+        let top = self.list.logical_scroll_top().item_ix;
+        let vh = f32::from(self.list.viewport_bounds().size.height);
+        let rh = f32::from(self.row_height.unwrap_or(px(20.))).max(1.);
+        let visible = ((vh / rh).ceil() as usize).max(1);
+        (top, visible)
+    }
+
+    /// Cached contiguous changed regions across all projected rows for the overview ruler.
+    pub fn overview_marks(&self) -> &[DiffOverviewMark] {
+        &self.overview_marks
+    }
+
+    /// Scrolls the diff viewer so `row_ix` lands near the upper third of the viewport.
+    pub fn scroll_to_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let (_, visible) = self.viewport_rows();
+        let max_ix = self.rows.len().saturating_sub(1);
+        let target = row_ix.min(max_ix).saturating_sub(visible / 3);
+        self.navigated_scroll_top.set(None);
+        self.list.scroll_to(ListOffset {
+            item_ix: target,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
     }
 
     /// Reveals part or all of a collapsed unchanged range.
@@ -1319,6 +1447,13 @@ impl DiffState {
         let rows = self.project_rows();
         self.file_rows = source_rows(&self.files, &rows);
         self.change_rows = changed_groups(&rows);
+        self.hunk_rows = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, row)| matches!(row, DisplayRow::Hunk { .. }).then_some(ix))
+            .collect();
+        self.overview_marks = compute_overview_marks(&rows);
+        self.navigated_scroll_top.set(None);
         self.header_rows = rows
             .iter()
             .enumerate()
@@ -1558,6 +1693,43 @@ fn changed_groups(rows: &[DisplayRow]) -> Vec<usize> {
             .then_some(ix)
         })
         .collect()
+}
+
+fn compute_overview_marks(rows: &[DisplayRow]) -> Vec<DiffOverviewMark> {
+    let mut marks: Vec<DiffOverviewMark> = Vec::new();
+    for (ix, row) in rows.iter().enumerate() {
+        let flags = match row {
+            DisplayRow::Code {
+                original,
+                modified,
+                changed: true,
+                ..
+            } => Some((original.is_some(), modified.is_some(), false)),
+            DisplayRow::Conflict { .. } => Some((false, false, true)),
+            _ => None,
+        };
+        let Some((removed, added, conflict)) = flags else {
+            continue;
+        };
+        if let Some(last) = marks.last_mut() {
+            if last.end_row == ix
+                && last.removed == removed
+                && last.added == added
+                && last.conflict == conflict
+            {
+                last.end_row = ix + 1;
+                continue;
+            }
+        }
+        marks.push(DiffOverviewMark {
+            start_row: ix,
+            end_row: ix + 1,
+            removed,
+            added,
+            conflict,
+        });
+    }
+    marks
 }
 
 const SIDE_BIT: u64 = 1 << 40;

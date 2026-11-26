@@ -1,9 +1,10 @@
 use gpui::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, ScrollDelta,
-    ScrollEvent, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+    AppContext as _, Context, Entity, IntoElement, MouseButton, ParentElement as _, Render,
+    ScrollDelta, ScrollEvent, Styled as _, TestAppContext, VisualTestContext, Window, div, point,
+    px,
 };
 
-use super::{Diff, DiffState, document::fixture};
+use super::{Diff, DiffMode, DiffState, document::fixture};
 
 /// Every line changed, so the unified patch is two rows per line.
 const LINES: usize = 300;
@@ -81,4 +82,49 @@ fn the_wheel_scrolls_past_the_rows_rendered_so_far(cx: &mut TestAppContext) {
     let top = cx.update(|_, cx| state.read(cx).list().logical_scroll_top().item_ix);
     // 2000 px of wheel travel crosses far more than the first screen of rows.
     assert!(top > 40, "scrolled to row {top}");
+}
+
+#[gpui::test]
+fn split_divider_stays_inside_the_viewport_with_long_lines(cx: &mut TestAppContext) {
+    cx.update(crate::init);
+    let original = format!("original {}\n", "x".repeat(300));
+    let modified = format!("modified {}\n", "y".repeat(300));
+    let state = cx.new(|cx| {
+        DiffState::new([fixture::modified("wide.txt", &original, &modified)], cx)
+            .with_mode(DiffMode::Split)
+    });
+    let (_, cx) = cx.add_window_view({
+        let state = state.clone();
+        move |_, _| Host { state }
+    });
+    for _ in 0..3 {
+        draw(cx);
+    }
+    let divider_x =
+        |cx: &mut VisualTestContext| cx.debug_bounds("diff-split-divider").unwrap().center().x;
+    let start = divider_x(cx);
+    assert!((start - px(200.)).abs() <= px(2.));
+    cx.update(|_, cx| {
+        let state = state.read(cx);
+        assert!(state.content_width() > state.viewport().width);
+    });
+    let at = |x| point(x, px(120.));
+    cx.simulate_mouse_move(at(start), None, Default::default());
+    cx.simulate_mouse_down(at(start), MouseButton::Left, Default::default());
+    for x in [start + px(10.), px(280.)] {
+        cx.simulate_mouse_move(at(x), MouseButton::Left, Default::default());
+        draw(cx);
+    }
+    cx.simulate_mouse_up(at(px(280.)), MouseButton::Left, Default::default());
+    draw(cx);
+    let end = divider_x(cx);
+    assert!((end - px(280.)).abs() <= px(2.));
+    cx.simulate_event(ScrollEvent {
+        position: point(px(100.), px(120.)),
+        delta: ScrollDelta::Pixels(point(px(-100.), px(0.))),
+        ..Default::default()
+    });
+    draw(cx);
+    cx.update(|_, cx| assert!(state.read(cx).horizontal_scroll().offset().x < px(0.)));
+    assert_eq!(divider_x(cx), end);
 }
