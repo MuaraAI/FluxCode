@@ -16,16 +16,16 @@ pub use decoration::{DiffDecoration, DiffGutterMarker};
 pub use document::{DiffFile, DiffFileStatus, DiffLinePosition, DiffLineRange, DiffSide};
 pub use parser::{DiffParseError, DiffParseOptions};
 pub use presentation::DiffInlineUnit;
-pub use state::{DiffEvent, DiffState};
+pub use state::{DiffEvent, DiffOverviewMark, DiffState};
 
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use gpui::{
-    AnyElement, App, Axis, ClickEvent, ClipboardItem, Context, ElementId, Entity, Focusable as _,
-    HighlightStyle, Hsla, InteractiveElement as _, IntoElement, KeyBinding, ListOffset,
-    MouseButton, ParentElement as _, Pixels, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TextRun, Window, div, list, point,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Axis, ClickEvent, ClipboardItem, Context, DragMoveEvent,
+    ElementId, Empty, Entity, EntityId, Focusable as _, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, KeyBinding, ListOffset, MouseButton, ParentElement as _,
+    Pixels, Render, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, TextRun, Window, div, list, point, prelude::FluentBuilder as _, px,
 };
 use gpui_base::TestSupportExt as _;
 use rust_i18n::t;
@@ -524,6 +524,13 @@ fn render_diff(
         px(0.)
     };
     let mode = state.mode();
+    let split =
+        mode == DiffMode::Split && state.files().iter().any(|file| !file.is_single_column());
+    let width_mode = if split {
+        DiffMode::Split
+    } else {
+        DiffMode::Unified
+    };
     let soft_wrap = props.soft_wrap;
     let marker_lane = !props.gutter_markers.is_empty() && props.gutter_marker_content.is_some();
     let lane_width = if marker_lane { row_height } else { px(0.) };
@@ -547,7 +554,7 @@ fn render_diff(
                 &font_family,
                 gutter_width,
                 lane_width,
-                mode,
+                width_mode,
                 window,
                 cx,
             )
@@ -555,18 +562,25 @@ fn render_diff(
         state.set_content_width(width);
     }
     state.sync_annotations(&props.annotations.items);
-    let content_width = state.content_width().max(state.viewport().width);
-    let column_width = if mode == DiffMode::Split {
-        content_width / 2.
+    let viewport_width = state.viewport().width;
+    let left_width = state.split_width(viewport_width);
+    let right_width = viewport_width - left_width;
+    let scroll_width = if split {
+        let overflow = (state.content_width() / 2. - left_width.min(right_width)).max(px(0.));
+        viewport_width + overflow
     } else {
-        content_width
+        state.content_width().max(viewport_width)
     };
+    let horizontal = state.horizontal_scroll().clone();
+    let split_offset = (split && !soft_wrap).then(|| horizontal.offset().x);
     let code = Rc::new(CodePresentation {
         files: state.files().to_vec(),
         presentations: state.presentations().to_vec(),
         mode,
-        content_width,
-        column_width,
+        content_width: if split { viewport_width } else { scroll_width },
+        left_width,
+        right_width,
+        split_offset,
         font_size,
         row_height,
         gutter_width,
@@ -598,26 +612,42 @@ fn render_diff(
     });
     let rows = state.rows().clone();
     let scrollbar = state.list().clone();
-    let horizontal = state.horizontal_scroll().clone();
     let has_rows = !rows.is_empty();
     let label = match state.files() {
         [file] => t!("Diff.Viewer", name = file.path().as_str()).to_string(),
         files => t!("Diff.ViewerFiles", count = files.len()).to_string(),
     };
+    let diff_id = cx.entity_id();
+    let border = cx.theme().border;
+    let active_border = cx.theme().primary;
     let body = div()
         .id("diff-body")
         .relative()
         .min_h_0()
         .min_w_0()
         .flex_1()
+        .when(split && !soft_wrap, |this| {
+            // A scroll proxy keeps the two viewports in place while their text moves.
+            this.child(
+                div()
+                    .id("diff-split-scroll")
+                    .absolute()
+                    .inset_0()
+                    .overflow_x_hidden()
+                    .track_scroll(&horizontal)
+                    .child(div().w(scroll_width).h(px(1.))),
+            )
+        })
         .child(SelectionLayer::new(
             div()
                 .id("diff-horizontal")
                 .size_full()
                 // Preserve offset tracking and clipping without GPUI's
                 // single-axis wheel remapping. The sibling mask owns X input.
-                .when(!soft_wrap, |this| this.overflow_x_hidden())
-                .track_scroll(&horizontal)
+                .when(!split, |this| {
+                    this.when(!soft_wrap, |this| this.overflow_x_hidden())
+                        .track_scroll(&horizontal)
+                })
                 .child(gpui_base::ScrollBounce::new(
                     "diff-bounce",
                     &scrollbar,
@@ -629,12 +659,14 @@ fn render_diff(
                             .child(render_row(row, code.clone(), window, cx))
                             .into_any_element()
                     })
-                    .w(content_width)
+                    .when(split, |this| this.w_full())
+                    .when(!split, |this| this.w(scroll_width))
                     .h_full(),
                 ))
                 .into_any_element(),
             scrollbar.clone(),
             horizontal.clone(),
+            split.then_some(left_width),
             state.selection().clone(),
             state.geometry().clone(),
         ))
@@ -653,6 +685,42 @@ fn render_diff(
             .when(!soft_wrap, |this| {
                 this.child(Scrollbar::horizontal(&horizontal))
             })
+        })
+        .when(split && has_rows && viewport_width > px(0.), |this| {
+            this.on_drag_move(
+                cx.listener(|state, event: &DragMoveEvent<ResizeDiff>, _, cx| {
+                    if event.drag(cx).0 == cx.entity_id() {
+                        state.resize_split(
+                            event.event.position.x - event.bounds.left(),
+                            event.bounds.size.width,
+                            cx,
+                        );
+                    }
+                }),
+            )
+            .child(
+                div()
+                    .id("diff-split-divider")
+                    .test_support()
+                    .absolute()
+                    .top_0()
+                    .bottom(px(12.))
+                    .left(left_width - px(4.))
+                    .w(px(8.))
+                    .occlude()
+                    .cursor_col_resize()
+                    .group("diff-split-divider")
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .h_full()
+                            .w(px(1.))
+                            .bg(border)
+                            .group_hover("diff-split-divider", |this| this.bg(active_border)),
+                    )
+                    .on_drag(ResizeDiff(diff_id), |drag, _, _, cx| cx.new(|_| *drag)),
+            )
         })
         // A line-number drag may finish anywhere, including outside the body.
         .on_mouse_up(
@@ -766,9 +834,15 @@ fn render_diff(
                                 px(0.)
                             } else {
                                 let painted = state.geometry().borrow().painted_width();
-                                code_width(painted, gutter_width, lane_width, rem, mode)
+                                code_width(painted, gutter_width, lane_width, rem, width_mode)
                             };
-                            if state.record_paint(bounds.size, painted) || rehinted {
+                            let scroll_changed = split_offset.is_some_and(|offset| {
+                                state.horizontal_scroll().offset().x != offset
+                            });
+                            if state.record_paint(bounds.size, painted)
+                                || rehinted
+                                || scroll_changed
+                            {
                                 cx.notify();
                             }
                         });
@@ -799,6 +873,15 @@ fn render_diff(
         .into_any_element()
 }
 
+#[derive(Clone, Copy)]
+struct ResizeDiff(EntityId);
+
+impl Render for ResizeDiff {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 fn body_focused(state: &DiffState, window: &Window, cx: &mut Context<DiffState>) -> bool {
     if state.focus_handle(cx).is_focused(window) {
         true
@@ -813,7 +896,9 @@ struct CodePresentation {
     presentations: Vec<Option<Arc<FilePresentation>>>,
     mode: DiffMode,
     content_width: Pixels,
-    column_width: Pixels,
+    left_width: Pixels,
+    right_width: Pixels,
+    split_offset: Option<Pixels>,
     font_size: Pixels,
     row_height: Pixels,
     gutter_width: Pixels,
@@ -1439,12 +1524,13 @@ fn render_cell(
     cx: &mut App,
 ) -> AnyElement {
     let cell = v_flex()
-        .w(code.column_width)
+        .w(if side == DiffSide::Original {
+            code.left_width
+        } else {
+            code.right_width
+        })
         .min_w_0()
         .flex_shrink_0()
-        .when(side == DiffSide::Original, |this| {
-            this.border_r_1().border_color(cx.theme().border)
-        })
         .when(ix.is_none(), |this| {
             this.bg(cx.theme().muted.opacity(0.3))
                 .child(div().h(code.row_height))
@@ -1515,11 +1601,7 @@ fn render_unified_cell(
         ]
     };
     v_flex()
-        .w(if single_column {
-            code.content_width
-        } else {
-            code.column_width
-        })
+        .w(code.content_width)
         .id((
             if side == DiffSide::Original {
                 "old"
@@ -1841,6 +1923,8 @@ fn code_line(
                 .map(|this| {
                     if code.soft_wrap {
                         this.flex_1().min_w_0()
+                    } else if code.split_offset.is_some() {
+                        this.flex_1().min_w_0().overflow_hidden()
                     } else {
                         this.flex_shrink_0()
                     }
@@ -1876,7 +1960,7 @@ fn code_line(
                         handler(&position, event, window, cx)
                     })
                 })
-                .child(text),
+                .child(text.when_some(code.split_offset, |this, offset| this.ml(offset))),
         )
         .children(add_button)
         .into_any_element()
