@@ -38,8 +38,8 @@ actions!(
         ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
         NextTheme, NextIconTheme, ChooseTheme, ChooseIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
-        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
-        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
+        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmCommitDefault, ScmCommitSignoff, ScmPull, ScmPush, ScmSync, ScmFetch,
+        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, ScmCheckout, ScmManage, ScmFileHistory, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
         AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
         AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
@@ -70,6 +70,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
         KeyBinding::new("ctrl-l", ToggleAgent, None),
         KeyBinding::new("ctrl-shift-g", ScmShow, None),
+        KeyBinding::new("ctrl-enter", ScmCommitDefault, Some("ScmMessage > Input")),
         KeyBinding::new("ctrl-p", QuickOpenFile, None),
         KeyBinding::new("up", QuickUp, Some("QuickOpen > Input")),
         KeyBinding::new("down", QuickDown, Some("QuickOpen > Input")),
@@ -334,6 +335,7 @@ pub struct Workbench {
     pub(crate) right_view: SideView,
     pub(crate) sidebar_width: f32,
     pub(crate) resizing: u8,
+    pub(crate) diff_ruler_drag: Option<crate::diff_view::DiffRulerDrag>,
     pub(crate) focus: FocusHandle,
     pub(crate) status: SharedString,
     pub(crate) settings: crate::settings::Settings,
@@ -623,6 +625,7 @@ impl Workbench {
             right_view: SideView::Agent,
             sidebar_width: 260.,
             resizing: 0,
+            diff_ruler_drag: None,
             focus,
             status: SharedString::default(),
             settings,
@@ -860,6 +863,9 @@ impl Workbench {
     }
 
     pub(crate) fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.root.as_ref() != Some(&root) {
+            self.scm_reset_workspace();
+        }
         self.root = Some(root.clone());
         let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
         if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
@@ -1073,7 +1079,9 @@ impl Workbench {
         let read_only = prep.read_only;
         let complex = prep.complex;
         let text = std::mem::take(&mut prep.text);
-        let diff = prep.is_diff.then(|| crate::diff_view::parse(&text));
+        let diff = prep
+            .is_diff
+            .then(|| crate::diff_view::parse_with_state(&text, cx));
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(lang)
@@ -1245,7 +1253,7 @@ impl Workbench {
 
     fn hydrate_doc(&mut self, ix: usize, sync: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(doc) = self.docs.get(ix) else { return };
-        if doc.editor.is_some() || doc.image.is_some() {
+        if doc.editor.is_some() || doc.image.is_some() || doc.diff.is_some() {
             return;
         }
         let path = doc.path.clone();
@@ -1348,7 +1356,10 @@ impl Workbench {
     }
 
     pub(crate) fn ensure_doc_editor(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<EditorState>> {
-        if ix >= self.docs.len() || self.docs[ix].image.is_some() {
+        if ix >= self.docs.len()
+            || self.docs[ix].image.is_some()
+            || (self.docs[ix].diff.is_some() && self.docs[ix].editor.is_none())
+        {
             return None;
         }
         if self.docs[ix].editor.is_none() {
@@ -1687,7 +1698,14 @@ impl Workbench {
             self.hydrate_doc(ix, false, window, cx);
         }
         let d = &self.docs[ix];
-        let handle = if d.image.is_some()
+        let handle = if let Some(st) = d
+            .diff
+            .as_ref()
+            .filter(|x| !x.source)
+            .and_then(|x| x.state.as_ref())
+        {
+            st.focus_handle(cx)
+        } else if d.image.is_some()
             || d.diff.as_ref().is_some_and(|x| !x.source)
             || (d.flux.is_some() && !d.flux_source)
         {
@@ -1950,11 +1968,22 @@ impl Workbench {
     }
 
     pub(crate) fn save_session_now(&self) {
+        let mut files = Vec::new();
+        let mut active = None;
+        for (i, d) in self.docs.iter().enumerate() {
+            if d.diff.as_ref().is_some_and(|x| x.virtual_tab) {
+                continue;
+            }
+            if self.active == Some(i) {
+                active = Some(files.len());
+            }
+            files.push(d.path.clone());
+        }
         crate::settings::Session {
             root: self.root.clone(),
             extra: self.workspace.extra.clone(),
-            files: self.docs.iter().map(|d| d.path.clone()).collect(),
-            active: self.active,
+            files,
+            active,
         }
         .save();
     }
@@ -3135,7 +3164,7 @@ impl Workbench {
                 .child(div().flex_none().child(self.render_agent_switch(cx)))
                 .child(div().flex_1())
             })
-            .when(view == SideView::Scm && self.scm.repo.is_some(), |h| {
+            .when(view == SideView::Scm && self.root.is_some(), |h| {
                 h.child(div().flex_none().child(self.render_scm_header(cx)))
             })
             .when(view == SideView::Mcbe, |h| {
@@ -3730,9 +3759,21 @@ impl Workbench {
 
     fn render_breadcrumbs(&self, ix: usize) -> impl IntoElement {
         let d = &self.docs[ix];
-        let shown = self.rel_display(&d.path.to_string_lossy());
-        let rel = if shown == d.path.to_string_lossy() { PathBuf::from(d.name.as_ref()) } else { PathBuf::from(shown) };
-        let parts: Vec<String> = rel.components().map(|p| p.as_os_str().to_string_lossy().into_owned()).collect();
+        let src_path = d
+            .diff
+            .as_ref()
+            .and_then(|x| x.target.as_ref())
+            .unwrap_or(&d.path);
+        let shown = self.rel_display(&src_path.to_string_lossy());
+        let rel = if shown == src_path.to_string_lossy() {
+            PathBuf::from(d.name.as_ref())
+        } else {
+            PathBuf::from(shown)
+        };
+        let parts: Vec<String> = rel
+            .components()
+            .map(|p| p.as_os_str().to_string_lossy().into_owned())
+            .collect();
         let last = parts.len().saturating_sub(1);
         h_flex()
             .h(theme::u(22.))
@@ -4092,16 +4133,15 @@ impl Workbench {
                 },
             )
             .when_some(
-                self.scm
-                    .status
-                    .branch
-                    .clone()
-                    .filter(|_| self.scm.repo.is_some()),
+                self.scm.repo.as_ref().map(|_| {
+                    self.scm.status.branch.clone().unwrap_or_else(|| tr("Detached HEAD").to_string())
+                }),
                 |h, b| {
                     let st = &self.scm.status;
                     let dirty = if st.count() > 0 { "*" } else { "" };
                     let sync = match &st.upstream {
-                        None => "Publish".to_string(),
+                        None => tr("Publish Branch").to_string(),
+                        Some(_) if !st.upstream_available => tr("Upstream unavailable").to_string(),
                         Some(_) => format!("{}↓ {}↑", st.behind, st.ahead),
                     };
                     h.child(
@@ -4121,10 +4161,10 @@ impl Workbench {
                             )
                             .child(div().min_w_0().truncate().child(format!("{b}{dirty}")))
                             .on_click(
-                                cx.listener(|this, _, w, cx| this.on_scm_show(&ScmShow, w, cx)),
+                                cx.listener(|this, _, w, cx| this.on_scm_checkout(&ScmCheckout, w, cx)),
                             ),
                     )
-                    .when(medium, |h| {
+                    .when(st.branch.is_some() && st.head.is_some(), |h| {
                         h.child(
                             h_flex()
                                 .id("sb-sync")
@@ -4133,8 +4173,9 @@ impl Workbench {
                                 .h_full()
                                 .px_2()
                                 .gap_1()
-                                .cursor_pointer()
-                                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                .when(!self.scm.is_busy(), |h| {
+                                    h.cursor_pointer().hover(|s| s.bg(c(theme::BG_HOVER)))
+                                })
                                 .child(
                                     Icon::new(if st.upstream.is_some() {
                                         gpui_kit::assets::IconName::RefreshCcw
@@ -4144,14 +4185,14 @@ impl Workbench {
                                     .flex_none()
                                     .size(theme::u(13.)),
                                 )
-                                .child(if self.scm.busy.is_some() {
+                                .child(if self.scm.is_busy() {
                                     "…".to_string()
                                 } else {
                                     sync
                                 })
-                                .on_click(
-                                    cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx)),
-                                ),
+                                .when(!self.scm.is_busy(), |h| {
+                                    h.on_click(cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx)))
+                                }),
                         )
                     })
                 },
@@ -4736,21 +4777,36 @@ impl Render for Workbench {
                             this.settings.full_right_w = w;
                         }
                     }
+                    5 => this.scm_drag_pane(f32::from(ev.position.y)),
+                    6 => this.diff_drag_ruler(f32::from(ev.position.y), cx),
                     _ => return,
                 }
                 cx.notify();
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                if this.resizing != 0 {
-                    if this.resizing >= 3 {
-                        this.agent.full.drag = None;
-                        this.settings.save();
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.resizing != 0 {
+                        match this.resizing {
+                            3 | 4 => {
+                                this.agent.full.drag = None;
+                                this.settings.save();
+                            }
+                            5 => this.scm.pane_drag = None,
+                            6 => this.diff_ruler_drag = None,
+                            _ => {}
+                        }
+                        this.resizing = 0;
+                        cx.notify();
                     }
-                    this.resizing = 0;
-                    cx.notify();
-                }
-            }))
+                }),
+            )
             .on_action(cx.listener(Self::on_quick_open))
+            .on_action(cx.listener(Self::on_scm_commit_default))
+            .on_action(cx.listener(Self::on_scm_commit_signoff))
+            .on_action(cx.listener(Self::on_scm_checkout))
+            .on_action(cx.listener(Self::on_scm_manage))
+            .on_action(cx.listener(Self::on_scm_file_history))
             .on_action(cx.listener(Self::on_quick_close))
             .on_action(cx.listener(Self::on_quick_up))
             .on_action(cx.listener(Self::on_quick_down))

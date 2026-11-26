@@ -1,6 +1,5 @@
 
 use crate::i18n::tr;
-use crate::proc;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::assets::IconName as Ico;
@@ -9,48 +8,18 @@ use gpui_kit::component::{
     h_flex,
     input::{InputEvent, InputState},
     menu::{DropdownMenu, PopupMenu},
-    v_flex, Icon, IconName, Sizable,
+    scroll::ScrollableElement,
+    v_flex, Disableable, ElementExt, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use gpui_kit::component::tooltip::Tooltip;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct FileChange {
-    pub path: String,
-    pub code: char,
-    pub orig: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct RepoStatus {
-    pub branch: Option<String>,
-    pub upstream: Option<String>,
-    pub ahead: u32,
-    pub behind: u32,
-    pub staged: Vec<FileChange>,
-    pub changes: Vec<FileChange>,
-    pub conflicts: Vec<FileChange>,
-}
-
-impl RepoStatus {
-    pub fn count(&self) -> usize {
-        self.staged.len() + self.changes.len() + self.conflicts.len()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Commit {
-    pub hash: String,
-    pub short: String,
-    pub subject: String,
-    pub author: String,
-    pub when: String,
-    pub refs: Vec<String>,
-    pub merge: bool,
-}
+use crate::scm_git::{git_step, run_step, snapshot, FileChange, Group, RemoteAction, Step};
+pub use crate::scm_git::{parse_log, Commit, RepoStatus};
 
 #[derive(Clone, Debug)]
 pub struct Run {
@@ -75,22 +44,215 @@ pub enum After {
     Sync,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScmPane {
+    Conflicts = 0,
+    Staged = 1,
+    Changes = 2,
+    Graph = 3,
+    Actions = 4,
+    Untracked = 5,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PaneSpec {
+    id: ScmPane,
+    flexible: bool,
+    min_h: f32,
+    natural_h: f32,
+    saved: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScmPaneDrag {
+    pub(crate) sash: usize,
+    pub(crate) y0: f32,
+    pub(crate) ids: Vec<ScmPane>,
+    pub(crate) start: Vec<f32>,
+    pub(crate) mins: Vec<f32>,
+    pub(crate) maxs: Vec<f32>,
+}
+
+const SASH_H: f32 = 5.;
+
+fn water_fill_panes(budget: f32, specs: &[PaneSpec], flex_ix: &[usize]) -> Vec<f32> {
+    let mut out = vec![0.; specs.len()];
+    let mut active: Vec<usize> = flex_ix.to_vec();
+    let mut rem = budget;
+    loop {
+        if active.is_empty() {
+            break;
+        }
+        let share = rem / active.len() as f32;
+        let mut settled = false;
+        let mut next = Vec::with_capacity(active.len());
+        for i in active {
+            if specs[i].natural_h <= share {
+                let h = specs[i].natural_h.max(specs[i].min_h).min(rem);
+                out[i] = h;
+                rem = (rem - h).max(0.);
+                settled = true;
+            } else {
+                next.push(i);
+            }
+        }
+        active = next;
+        if !settled {
+            break;
+        }
+    }
+    if !active.is_empty() {
+        let share = rem / active.len() as f32;
+        for i in active {
+            out[i] = share.max(specs[i].min_h);
+        }
+    } else if rem > 0.5 {
+        if let Some(&last) = flex_ix.last() {
+            out[last] += rem;
+        }
+    }
+    out
+}
+
+fn resolve_pane_heights(avail_h: f32, specs: &[PaneSpec]) -> Vec<f32> {
+    let mut out: Vec<f32> = specs.iter().map(|s| s.min_h).collect();
+    let fixed_sum: f32 = specs.iter().filter(|s| !s.flexible).map(|s| s.min_h).sum();
+    let budget = (avail_h - fixed_sum).max(0.);
+    let flex_ix: Vec<usize> = specs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.flexible)
+        .map(|(i, _)| i)
+        .collect();
+    if flex_ix.is_empty() {
+        return out;
+    }
+    if flex_ix.len() == 1 {
+        let i = flex_ix[0];
+        out[i] = budget.max(specs[i].min_h);
+        return out;
+    }
+    let min_sum: f32 = flex_ix.iter().map(|&i| specs[i].min_h).sum();
+    if budget <= min_sum {
+        let denom = min_sum.max(1.);
+        for &i in &flex_ix {
+            out[i] = (budget * (specs[i].min_h / denom)).max(1.);
+        }
+        return out;
+    }
+    let def = water_fill_panes(budget, specs, &flex_ix);
+    if flex_ix.iter().all(|&i| specs[i].saved.is_none()) {
+        for &i in &flex_ix {
+            out[i] = def[i];
+        }
+        return out;
+    }
+    for &i in &flex_ix {
+        out[i] = specs[i].saved.unwrap_or(def[i]).max(specs[i].min_h);
+    }
+    let cur_sum: f32 = flex_ix.iter().map(|&i| out[i]).sum();
+    if cur_sum < budget {
+        let extra = budget - cur_sum;
+        let denom = cur_sum.max(1.);
+        for &i in &flex_ix {
+            out[i] += extra * (out[i] / denom);
+        }
+    } else if cur_sum > budget {
+        let excess = cur_sum - budget;
+        let slack_sum: f32 = flex_ix
+            .iter()
+            .map(|&i| (out[i] - specs[i].min_h).max(0.))
+            .sum();
+        if slack_sum > 0. {
+            for &i in &flex_ix {
+                let slack = (out[i] - specs[i].min_h).max(0.);
+                out[i] -= excess * (slack / slack_sum);
+            }
+        }
+    }
+    out
+}
+
+fn apply_sash_drag(drag: &ScmPaneDrag, y: f32) -> Vec<(ScmPane, f32)> {
+    let n = drag.start.len();
+    if drag.sash == 0 || drag.sash >= n {
+        return Vec::new();
+    }
+    let delta = y - drag.y0;
+    let mut h = drag.start.clone();
+    if delta > 0. {
+        let grow_above: f32 = (0..drag.sash).map(|i| (drag.maxs[i] - h[i]).max(0.)).sum();
+        let shrink_below: f32 = (drag.sash..n).map(|i| (h[i] - drag.mins[i]).max(0.)).sum();
+        let shift = delta.min(grow_above).min(shrink_below);
+        let mut rem = shift;
+        for i in (0..drag.sash).rev() {
+            let add = rem.min((drag.maxs[i] - h[i]).max(0.));
+            h[i] += add;
+            rem -= add;
+        }
+        let mut rem = shift;
+        for (cur, &min_h) in h[drag.sash..].iter_mut().zip(&drag.mins[drag.sash..]) {
+            let sub = rem.min((*cur - min_h).max(0.));
+            *cur -= sub;
+            rem -= sub;
+        }
+    } else if delta < 0. {
+        let shrink_above: f32 = (0..drag.sash).map(|i| (h[i] - drag.mins[i]).max(0.)).sum();
+        let grow_below: f32 = (drag.sash..n).map(|i| (drag.maxs[i] - h[i]).max(0.)).sum();
+        let shift = (-delta).min(shrink_above).min(grow_below);
+        let mut rem = shift;
+        for i in (0..drag.sash).rev() {
+            let sub = rem.min((h[i] - drag.mins[i]).max(0.));
+            h[i] -= sub;
+            rem -= sub;
+        }
+        let mut rem = shift;
+        for (cur, &max_h) in h[drag.sash..].iter_mut().zip(&drag.maxs[drag.sash..]) {
+            let add = rem.min((max_h - *cur).max(0.));
+            *cur += add;
+            rem -= add;
+        }
+    }
+    drag.ids
+        .iter()
+        .copied()
+        .zip(h)
+        .enumerate()
+        .filter(|(i, _)| drag.maxs[*i] > drag.mins[*i])
+        .map(|(_, pair)| pair)
+        .collect()
+}
+
 pub struct Scm {
     pub repo: Option<PathBuf>,
     pub status: RepoStatus,
     pub log: Vec<Commit>,
+    pub graph: crate::scm_graph::GraphLayout,
+    pub commit_open: Option<String>,
+    pub commit_files: HashMap<String, Vec<(char, String)>>,
     pub runs: Vec<Run>,
     pub workflows: Vec<Workflow>,
     pub busy: Option<SharedString>,
     pub error: Option<String>,
+    repo_error: Option<String>,
     pub note: Option<(String, Option<String>)>,
     pub message: Entity<InputState>,
+    pub workspace_generation: u64,
+    pub watch: crate::scm_watch::ScmWatch,
     refreshing: bool,
     again: bool,
+    show_changes_view: bool,
+    show_tree: bool,
+    collapsed_folders: [HashSet<String>; 4],
+    pub show_conflicts: bool,
+    pub show_staged: bool,
+    pub show_changes: bool,
+    pub show_untracked: bool,
+    row_limits: [usize; 4],
     pub show_graph: bool,
     pub show_actions: bool,
     pub actions_loaded: bool,
-    pub confirm_discard: Option<String>,
+    confirm_discard: Option<(Group, Option<String>, Vec<FileChange>)>,
     pub confirm_uninit: bool,
     pub marks: Rc<HashMap<String, char>>,
     pub dirty_dirs: Rc<HashSet<String>>,
@@ -105,29 +267,62 @@ pub struct Scm {
     pub fetching: bool,
     pub fetch_loop: bool,
     pub last_fetch: Option<std::time::Instant>,
+    pub pane_h: [Option<f32>; 6],
+    pub painted_h: Rc<Cell<[f32; 6]>>,
+    pub stack_h: Rc<Cell<f32>>,
+    pub pane_drag: Option<ScmPaneDrag>,
 }
 
 impl Scm {
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.is_some() || self.fetching
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
         let message = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Commit message")));
-        let sub = cx.subscribe_in(&message, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = ev {
-                this.scm_commit(After::Nothing, false, window, cx);
-            }
-        });
+        let sub = cx.subscribe_in(
+            &message,
+            window,
+            |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = ev {
+                    this.scm_commit(After::Nothing, false, window, cx);
+                } else {
+                    if this.scm.error.as_deref() == Some(tr("Enter a commit message."))
+                        && !this.scm.message.read(cx).value().trim().is_empty()
+                    {
+                        this.scm.error = None;
+                    }
+                    cx.notify();
+                }
+            },
+        );
         (
             Self {
                 repo: None,
                 status: RepoStatus::default(),
                 log: Vec::new(),
+                graph: crate::scm_graph::GraphLayout::default(),
+                commit_open: None,
+                commit_files: HashMap::new(),
                 runs: Vec::new(),
                 workflows: Vec::new(),
                 busy: None,
                 error: None,
+                repo_error: None,
                 note: None,
                 message,
+                workspace_generation: 0,
+                watch: Default::default(),
                 refreshing: false,
                 again: false,
+                show_changes_view: true,
+                show_tree: false,
+                collapsed_folders: Default::default(),
+                show_conflicts: true,
+                show_staged: true,
+                show_changes: true,
+                show_untracked: true,
+                row_limits: [MAX_ROWS; 4],
                 show_graph: true,
                 show_actions: false,
                 actions_loaded: false,
@@ -146,6 +341,10 @@ impl Scm {
                 fetching: false,
                 fetch_loop: false,
                 last_fetch: None,
+                pane_h: [None; 6],
+                painted_h: Rc::new(Cell::new([0.; 6])),
+                stack_h: Rc::new(Cell::new(0.)),
+                pane_drag: None,
             },
             sub,
         )
@@ -163,175 +362,25 @@ pub fn code_color(code: char) -> theme::Tok {
 }
 
 
-pub fn parse_status(out: &str) -> RepoStatus {
-    let mut st = RepoStatus::default();
-    let mut recs = out.split('\0').filter(|r| !r.is_empty());
-    let letter = |c: char| if c == '?' { 'U' } else if c == 'T' { 'M' } else { c };
-    while let Some(r) = recs.next() {
-        if let Some(h) = r.strip_prefix("# branch.head ") {
-            st.branch = (h != "(detached)").then(|| h.to_string());
-        } else if let Some(u) = r.strip_prefix("# branch.upstream ") {
-            st.upstream = Some(u.to_string());
-        } else if let Some(ab) = r.strip_prefix("# branch.ab ") {
-            let mut it = ab.split_whitespace();
-            st.ahead = it.next().and_then(|a| a.trim_start_matches('+').parse().ok()).unwrap_or(0);
-            st.behind = it.next().and_then(|b| b.trim_start_matches('-').parse().ok()).unwrap_or(0);
-        } else if let Some(p) = r.strip_prefix("? ") {
-            st.changes.push(FileChange { path: p.to_string(), code: 'U', orig: None });
-        } else if r.starts_with("1 ") || r.starts_with("2 ") {
-            let renamed = r.starts_with('2');
-            let fields: Vec<&str> = r.splitn(if renamed { 10 } else { 9 }, ' ').collect();
-            let xy: Vec<char> = fields.get(1).unwrap_or(&"..").chars().collect();
-            let path = fields.last().unwrap_or(&"").to_string();
-            let orig = if renamed { recs.next().map(str::to_string) } else { None };
-            if xy[0] != '.' {
-                st.staged.push(FileChange { path: path.clone(), code: letter(xy[0]), orig: orig.clone() });
-            }
-            if xy.get(1).is_some_and(|y| *y != '.') {
-                st.changes.push(FileChange { path, code: letter(xy[1]), orig });
-            }
-        } else if r.starts_with("u ") {
-            let path = r.splitn(11, ' ').last().unwrap_or("").to_string();
-            st.conflicts.push(FileChange { path, code: '!', orig: None });
-        }
-    }
-    st
-}
-
-pub fn parse_log(out: &str) -> Vec<Commit> {
-    out.split('\0')
-        .filter(|r| !r.trim().is_empty())
-        .filter_map(|r| {
-            let f: Vec<&str> = r.trim_start_matches('\n').split('\x1f').collect();
-            (f.len() >= 7).then(|| Commit {
-                hash: f[0].into(),
-                short: f[1].into(),
-                subject: f[2].into(),
-                author: f[3].into(),
-                when: f[4].into(),
-                refs: f[5].split(", ").filter(|s| !s.is_empty() && *s != "origin/HEAD").map(|s| s.replace("HEAD -> ", "")).collect(),
-                merge: f[6].split_whitespace().count() > 1,
-            })
-        })
-        .collect()
-}
-
 fn find_url(s: &str) -> Option<String> {
     let i = s.find("https://")?;
     Some(s[i..].split_whitespace().next()?.trim_end_matches(['.', ',', ')']).to_string())
 }
 
 
-#[derive(Clone)]
-pub enum Step {
-    Save { path: PathBuf, gen: u64, text: String, crlf: bool, nbt: Option<crate::nbt::NbtFormat> },
-    Git(Vec<String>, Option<String>),
-    Gh(Vec<String>),
-}
-
-fn git_step(args: &[&str]) -> Step {
-    Step::Git(args.iter().map(|s| s.to_string()).collect(), None)
-}
-
-fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
-    use std::io::Write;
-    let (prog, args, input) = match step {
-        Step::Save { path, text, crlf, nbt, .. } => {
-            crate::workbench::write_doc_to_disk(target, path, text, *crlf, *nbt)?;
-            return Ok(String::new());
-        }
-        Step::Git(a, i) => ("git", a, i.clone()),
-        Step::Gh(a) => ("gh", a, None),
-    };
-    let target = matches!(step, Step::Git(..)).then_some(target).flatten();
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let mut cmd = match &target {
-        Some(t) => {
-            let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
-            let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned, input.as_deref())) {
-                match r {
-                    Ok(g) if g.success => {
-                        return Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout })
-                    }
-                    Ok(g) => return Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), g.stderr.trim())),
-                    Err(_) => {}
-                }
-            }
-            crate::remote::program_command_env(
-                t,
-                &cwd,
-                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("NO_COLOR", "1")],
-                prog,
-                &refs,
-            )
-        }
-        None => {
-            let mut c = proc::command(prog);
-            c.args(args).current_dir(dir);
-            c
-        }
-    };
-    cmd.env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    crate::github::apply_env(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("{prog} could not start: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Some(text) = input {
-            let _ = stdin.write_all(text.as_bytes());
-        }
+fn group_title(group: Group) -> &'static str {
+    match group {
+        Group::Conflicts => tr("Merge Conflicts"),
+        Group::Staged => tr("Staged Changes"),
+        Group::Changes => tr("Changes"),
+        Group::Untracked => tr("Untracked Files"),
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if out.status.success() {
-        Ok(if stdout.trim().is_empty() { stderr } else { stdout })
-    } else {
-        let msg = if stderr.is_empty() { stdout.trim().to_string() } else { stderr };
-        Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), msg))
-    }
-}
-
-struct Snapshot {
-    repo: Option<PathBuf>,
-    status: RepoStatus,
-    log: Option<Vec<Commit>>,
-    incoming: (Vec<Commit>, Option<String>),
-}
-
-fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget>) -> Snapshot {
-    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"]), target).ok().map(|s| {
-        let p = s.trim();
-        match target {
-            Some(t) => t.unc_path(p),
-            None => PathBuf::from(p.replace('/', "\\")),
-        }
-    });
-    let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None, incoming: Default::default() } };
-    let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"]), target).map(|s| parse_status(&s)).unwrap_or_default();
-    let log = with_log.then(|| {
-        run_step(
-            &repo,
-            &git_step(&["-c", "i18n.logOutputEncoding=UTF-8", "log", "-n", "60", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"]),
-            target,
-        )
-        .map(|s| parse_log(&s))
-        .unwrap_or_default()
-    });
-    let incoming = if status.behind > 0 { crate::scm_incoming::incoming(&repo, target) } else { Default::default() };
-    Snapshot { repo: Some(repo), status, log, incoming }
 }
 
 const MAX_ROWS: usize = 200;
 pub(crate) const ROW_H: f32 = 24.;
-const LANE_MID: f32 = ROW_H * 0.5;
-const DOT_SIZE: f32 = 8.;
-const DOT_TOP: f32 = LANE_MID - DOT_SIZE * 0.5;
+// Clear gpui-base's 16px overlay scrollbar track so badges and controls never sit underneath it.
+pub(crate) const SCROLLBAR_PAD: f32 = 18.;
 
 // `.overflow_hidden()` drops Taffy's min-height to 0, so `.flex_none()` keeps rows from collapsing under scroll overflow.
 pub(crate) fn scm_row() -> Div {
@@ -343,90 +392,157 @@ pub(crate) fn scm_row() -> Div {
         .h(theme::u(ROW_H))
 }
 
-pub(crate) fn graph_lane(
-    first: bool,
-    end: bool,
-    color: theme::Tok,
-    line_alpha: f32,
-    filled: bool,
-) -> Div {
-    div()
-        .relative()
-        .w(theme::u(14.))
-        .h_full()
-        .flex_none()
-        .child(
-            div()
-                .absolute()
-                .left(theme::u(6.))
-                .w(px(2.))
-                .top(if first { theme::u(LANE_MID) } else { px(0.) })
-                .bottom(if end { theme::u(LANE_MID) } else { px(0.) })
-                .bg(c(color).opacity(line_alpha)),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(theme::u(3.))
-                .top(theme::u(DOT_TOP))
-                .size(theme::u(DOT_SIZE))
-                .rounded_full()
-                .border_2()
-                .border_color(c(color))
-                .bg(if filled { c(color) } else { c(theme::BG_SIDE) }),
-        )
+#[derive(Debug, PartialEq, Eq)]
+enum ChangeTreeRow<'a> {
+    Folder(&'a str, usize),
+    File(usize, usize),
 }
 
-fn more_rows(total: usize) -> Option<Div> {
-    (total > MAX_ROWS).then(|| {
-        div()
-            .flex_none()
-            .px(theme::u(18.))
-            .py_1()
-            .text_xs()
-            .text_color(c(theme::FG_DIM))
-            .child(crate::trf!("… and {n} more files (Stage All includes them)"; n => total - MAX_ROWS))
-    })
+fn change_tree_rows<'a>(files: &'a [FileChange], collapsed: &HashSet<String>) -> Vec<ChangeTreeRow<'a>> {
+    let mut sorted: Vec<_> = files.iter().enumerate().collect();
+    sorted.sort_unstable_by(|(_, a), (_, b)| a.path.cmp(&b.path));
+    let mut folders = HashSet::new();
+    let mut rows = Vec::new();
+    'file: for (index, file) in sorted {
+        let mut depth = 0;
+        for (offset, _) in file.path.match_indices('/') {
+            let folder = &file.path[..offset];
+            if folders.insert(folder) {
+                rows.push(ChangeTreeRow::Folder(folder, depth));
+            }
+            if collapsed.contains(folder) {
+                continue 'file;
+            }
+            depth += 1;
+        }
+        rows.push(ChangeTreeRow::File(index, depth));
+    }
+    rows
+}
+
+pub(crate) fn lane_geometry(index: usize, count: usize, extends_below: bool) -> (f32, f32, f32) {
+    let mid = ROW_H / 2.;
+    let top = if index == 0 { mid } else { 0. };
+    let bottom = if index + 1 >= count && !extends_below {
+        mid
+    } else {
+        0.
+    };
+    let dot_top = (ROW_H - 8.) / 2.;
+    (top, bottom, dot_top)
 }
 
 impl Workbench {
+    pub(crate) fn scm_reset_workspace(&mut self) {
+        let s = &mut self.scm;
+        s.workspace_generation = s.workspace_generation.wrapping_add(1);
+        s.watch = Default::default();
+        s.repo = None;
+        s.status = RepoStatus::default();
+        s.log.clear();
+        s.graph = Default::default();
+        s.commit_open = None;
+        s.commit_files.clear();
+        s.incoming.clear();
+        s.incoming_head = None;
+        s.incoming_dismissed = None;
+        s.incoming_open = None;
+        s.incoming_files.clear();
+        s.runs.clear();
+        s.workflows.clear();
+        s.actions_loaded = false;
+        s.refreshing = false;
+        s.again = false;
+        s.fetching = false;
+        s.last_fetch = None;
+        s.last_refresh = None;
+        s.busy = None;
+        s.error = None;
+        s.repo_error = None;
+        s.note = None;
+        s.confirm_discard = None;
+        s.confirm_uninit = false;
+        s.marks = Rc::default();
+        s.dirty_dirs = Rc::default();
+        s.row_limits = [MAX_ROWS; 4];
+        s.collapsed_folders = Default::default();
+        s.clear_message = true;
+    }
+
     pub(crate) fn scm_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };
-        if self.scm.refreshing {
+        if self.scm.refreshing || self.scm.is_busy() {
             self.scm.again = true;
             return;
         }
         self.scm.refreshing = true;
+        self.scm.again = false;
+        let generation = self.scm.workspace_generation;
         self.scm.last_refresh = Some(std::time::Instant::now());
         let with_log = self.scm.show_graph;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let snap = cx.background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) }).await;
             _ = this.update(cx, |this, cx| {
+                if this.scm.workspace_generation != generation {
+                    return;
+                }
                 let s = &mut this.scm;
                 s.refreshing = false;
+                if s.is_busy() {
+                    s.again = true;
+                    return;
+                }
+                let snap = match snap {
+                    Ok(snap) => snap,
+                    Err(error) => {
+                        s.repo_error = Some(error);
+                        cx.notify();
+                        if s.again {
+                            this.scm_refresh(cx);
+                        }
+                        return;
+                    }
+                };
+                s.repo_error = None;
                 let mut marks = HashMap::new();
                 let mut dirty_dirs = HashSet::new();
                 if let Some(repo) = &snap.repo {
-                    for ch in snap.status.changes.iter().chain(&snap.status.staged).chain(&snap.status.conflicts) {
-                        let full = repo.join(ch.path.replace('/', "\\"));
-                        let key = full.to_string_lossy().to_lowercase();
-                        marks.entry(key).or_insert(ch.code);
+                    for (ch, mark) in snap
+                        .status
+                        .changes
+                        .iter()
+                        .chain(&snap.status.untracked)
+                        .chain(&snap.status.staged)
+                        .map(|ch| (ch, ch.code))
+                        .chain(snap.status.conflicts.iter().map(|ch| (ch, '!')))
+                    {
+                        let full = repo.join(&ch.path);
+                        let key = |path: &std::path::Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
+                        marks.entry(key(&full)).or_insert(mark);
                         let mut p = full.parent();
                         while let Some(d) = p {
                             if !d.starts_with(repo) {
                                 break;
                             }
-                            dirty_dirs.insert(d.to_string_lossy().to_lowercase());
+                            dirty_dirs.insert(key(d));
                             p = d.parent();
                         }
                     }
                 }
                 s.marks = Rc::new(marks);
                 s.dirty_dirs = Rc::new(dirty_dirs);
+                if s.repo != snap.repo {
+                    s.log.clear();
+                    s.graph = Default::default();
+                    s.commit_open = None;
+                    s.commit_files.clear();
+                    s.confirm_discard = None;
+                }
                 s.repo = snap.repo;
                 s.status = snap.status;
                 if let Some(log) = snap.log {
+                    s.graph = crate::scm_graph::compute_graph(&log);
                     s.log = log;
                 }
                 let (incoming, head) = snap.incoming;
@@ -439,6 +555,7 @@ impl Workbench {
                 if s.repo.is_some() && s.status.upstream.is_some() {
                     this.scm_start_fetching(cx);
                 }
+                this.scm_watch(snap.watch_paths, cx);
                 let s = &mut this.scm;
                 if s.again {
                     s.again = false;
@@ -452,11 +569,18 @@ impl Workbench {
 
     pub(crate) fn scm_run(&mut self, label: &str, steps: Vec<Step>, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static) {
         let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else { return };
-        if self.scm.busy.is_some() {
+        if self.scm.is_busy() {
             self.status = tr("Source Control is busy, try again in a moment").into();
             cx.notify();
             return;
         }
+        let reload = steps.iter().any(|step| {
+            matches!(
+                step,
+                Step::Remote(RemoteAction::Pull | RemoteAction::Sync) | Step::WorkspaceGit(_) | Step::Resolve { .. }
+            )
+        });
+        let generation = self.scm.workspace_generation;
         self.scm.busy = Some(label.to_string().into());
         self.scm.error = None;
         self.scm.note = None;
@@ -464,31 +588,18 @@ impl Workbench {
         cx.notify();
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let (saved, res) = cx
+            let res = cx
                 .background_spawn(async move {
-                    let mut saved = Vec::new();
                     let mut last = String::new();
-                    for s in &steps {
-                        match run_step(&dir, s, wsl.as_ref()) {
-                            Ok(out) => {
-                                if let Step::Save { path, gen, .. } = s {
-                                    saved.push((path.clone(), *gen));
-                                }
-                                last = out;
-                            }
-                            Err(e) => return (saved, Err::<String, String>(e)),
-                        }
+                    for step in &steps {
+                        last = run_step(&dir, step, wsl.as_ref())?;
                     }
-                    (saved, Ok(last))
+                    Ok::<_, String>(last)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                for (path, gen) in saved {
-                    if let Some(d) = this.docs.iter_mut().find(|d| d.path == path) {
-                        if d.gen == gen {
-                            d.dirty = false;
-                        }
-                    }
+                if this.scm.workspace_generation != generation {
+                    return;
                 }
                 this.scm.busy = None;
                 match res {
@@ -505,6 +616,10 @@ impl Workbench {
                         }
                     }
                 }
+                if reload {
+                    this.agent.reloads.extend(this.docs.iter().filter(|d| !d.dirty).map(|d| d.path.clone()));
+                    this.refresh_tree(cx);
+                }
                 this.scm_refresh(cx);
                 cx.notify();
             });
@@ -512,90 +627,60 @@ impl Workbench {
         .detach();
     }
 
-    fn push_steps(&self) -> Vec<Step> {
-        if self.scm.status.upstream.is_some() {
-            vec![git_step(&["push"])]
-        } else {
-            vec![git_step(&["push", "-u", "origin", "HEAD"])]
-        }
+    pub(crate) fn scm_commit(&mut self, after: After, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.scm_commit_with_options(after, amend, false, window, cx);
     }
 
-    pub(crate) fn scm_commit(&mut self, after: After, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn scm_commit_with_options(&mut self, after: After, amend: bool, signoff: bool, window: &mut Window, cx: &mut Context<Self>) {
         let msg = self.scm.message.read(cx).value().trim().to_string();
-        let st = self.scm.status.clone();
-        if !st.conflicts.is_empty() {
-            self.scm.error = Some("Resolve the merge conflicts first (files marked !).".into());
+        if let Err(key) = self.scm.status.check_commit(&msg, amend) {
+            self.scm.error = Some(tr(key).to_string());
+            if msg.is_empty() {
+                self.scm.message.focus_handle(cx).focus(window, cx);
+            }
             cx.notify();
             return;
         }
-        if msg.is_empty() && !amend {
-            self.scm.error = Some("Type a commit message first.".into());
-            let h = self.scm.message.focus_handle(cx);
-            h.focus(window, cx);
-            cx.notify();
+        if after != After::Nothing && !self.scm_can_push(cx) {
             return;
         }
-        if st.staged.is_empty() && st.changes.is_empty() && !amend {
-            self.scm.error = Some("There are no changes to commit.".into());
-            cx.notify();
-            return;
-        }
-        let mut steps = Vec::new();
-        for d in &self.docs {
-            if !d.dirty || d.image.is_some() || d.read_only || d.flux_lazy {
-                continue;
+        let steps = vec![Step::Commit {
+            message: msg.clone(),
+            amend,
+            signoff,
+        }];
+        self.scm_run(tr("Committing…"), steps, cx, move |this, _, cx| {
+            if this.scm.message.read(cx).value().trim() == msg {
+                this.scm.clear_message = true;
             }
-            if let Some(ed) = d.editor.as_ref() {
-                steps.push(Step::Save {
-                    path: d.path.clone(),
-                    gen: d.gen,
-                    text: ed.read(cx).value().to_string(),
-                    crlf: d.crlf,
-                    nbt: d.nbt_format,
-                });
-            }
-        }
-        if st.staged.is_empty() && !amend {
-            steps.push(git_step(&["add", "-A"])); // smart commit
-        }
-        let mut args: Vec<String> = vec!["commit".into(), "--quiet".into()];
-        if amend {
-            args.push("--amend".into());
-        }
-        if msg.is_empty() {
-            args.push("--no-edit".into());
-            steps.push(Step::Git(args, None));
-        } else {
-            args.extend(["--file".into(), "-".into()]);
-            steps.push(Step::Git(args, Some(msg)));
-        }
-        match after {
-            After::Nothing => {}
-            After::Push => steps.extend(self.push_steps()),
-            After::Sync => {
-                steps.push(git_step(&["pull", "--autostash"]));
-                steps.extend(self.push_steps());
-            }
-        }
-        let label = match after {
-            After::Nothing => "Committing…",
-            After::Push => "Committing and pushing…",
-            After::Sync => "Committing and syncing…",
-        };
-        self.scm_run(label, steps, cx, move |this, _, _| {
-            this.scm.clear_message = true;
-            this.status = match after {
-                After::Nothing => "Committed".into(),
-                After::Push => "Committed and pushed".into(),
-                After::Sync => "Committed and synced".into(),
-            };
+            this.status = tr("Committed").into();
+            this.scm_after_commit(after, cx);
         });
     }
 
+    fn scm_after_commit(&mut self, after: After, cx: &mut Context<Self>) {
+        match after {
+            After::Nothing => {}
+            After::Push => self.scm_run(tr("Pushing…"), vec![Step::Remote(RemoteAction::Push)], cx, |this, _, _| {
+                this.status = tr("Committed and pushed").into();
+            }),
+            After::Sync => self.scm_sync(cx),
+        }
+    }
+
+    fn scm_can_push(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.scm.status.branch.is_some() {
+            return true;
+        }
+        self.scm.error = Some(tr("Switch to a branch before pushing or syncing.").to_string());
+        cx.notify();
+        false
+    }
+
     pub(crate) fn scm_sync(&mut self, cx: &mut Context<Self>) {
-        let mut steps = vec![git_step(&["pull", "--autostash"])];
-        steps.extend(self.push_steps());
-        self.scm_run("Syncing…", steps, cx, |this, _, _| this.status = tr("Synced with the remote").into());
+        self.scm_run(tr("Syncing…"), vec![Step::Remote(RemoteAction::Sync)], cx, |this, _, _| {
+            this.status = tr("Synced with the remote").into();
+        });
     }
 
     fn scm_create_pr(&mut self, cx: &mut Context<Self>) {
@@ -604,7 +689,7 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let mut steps = self.push_steps();
+        let mut steps = vec![Step::Remote(RemoteAction::Push)];
         steps.push(Step::Gh(vec!["pr".into(), "create".into(), "--fill".into()]));
         self.scm_run("Creating pull request…", steps, cx, |this, out, _| {
             let url = find_url(out);
@@ -684,120 +769,324 @@ impl Workbench {
         });
     }
 
-    fn scm_stage(&mut self, path: Option<String>, stage: bool, cx: &mut Context<Self>) {
-        let step = match (stage, path) {
-            (true, Some(p)) => Step::Git(vec!["add".into(), "--".into(), p], None),
-            (true, None) => git_step(&["add", "-A"]),
-            (false, Some(p)) => Step::Git(vec!["restore".into(), "--staged".into(), "--".into(), p], None),
-            (false, None) => git_step(&["restore", "--staged", "."]),
+    pub(crate) fn scm_paths(
+        &mut self,
+        group: Group,
+        path: Option<String>,
+        discard: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.scm.repo.as_ref() else {
+            return;
         };
-        self.scm_run(if stage { "Staging…" } else { "Unstaging…" }, vec![step], cx, |_, _, _| {});
-    }
-
-    fn scm_discard(&mut self, ch: FileChange, cx: &mut Context<Self>) {
-        if self.scm.confirm_discard.as_deref() != Some(ch.path.as_str()) {
-            self.scm.confirm_discard = Some(ch.path.clone());
-            cx.notify();
+        if self.scm.is_busy() {
             return;
         }
-        if ch.code == 'U' {
-            if let Some(repo) = &self.scm.repo {
-                let full = repo.join(ch.path.replace('/', "\\"));
-                if let Err(e) = crate::core::delete_path(&full) {
-                    self.scm.error = Some(e);
-                }
+        let files: Vec<_> = self
+            .scm
+            .status
+            .files(group)
+            .iter()
+            .filter(|file| path.as_ref().is_none_or(|path| *path == file.path))
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        if discard {
+            let selection = (group, path, files.clone());
+            if self.scm.confirm_discard.as_ref() != Some(&selection) {
+                self.scm.confirm_discard = Some(selection);
+                cx.notify();
+                return;
             }
-            self.scm.confirm_discard = None;
-            self.refresh_tree(cx);
-            self.scm_refresh(cx);
+            if crate::scm_git::file_paths(&files).iter().any(|p| {
+                let full = repo.join(p);
+                self.docs.iter().any(|doc| doc.dirty && crate::panel::same_path(&doc.path, &full))
+            }) {
+                self.scm.error =
+                    Some(tr("Save or close the modified editor before discarding.").to_string());
+                cx.notify();
+                return;
+            }
+        }
+        let label = if discard {
+            tr("Discarding…")
+        } else if group == Group::Staged {
+            tr("Unstaging…")
+        } else {
+            tr("Staging…")
+        };
+        self.scm_run(
+            label,
+            vec![Step::Paths {
+                group,
+                files,
+                discard,
+            }],
+            cx,
+            move |this, _, cx| {
+                if discard {
+                    this.agent.reloads.extend(
+                        this.docs
+                            .iter()
+                            .filter(|doc| !doc.dirty)
+                            .map(|doc| doc.path.clone()),
+                    );
+                    this.refresh_tree(cx);
+                }
+            },
+        );
+    }
+
+    fn scm_diff_key(repo: &std::path::Path, group: Group, path: &str) -> PathBuf {
+        PathBuf::from(format!(
+            "flux-diff://{}/{}/{}",
+            repo.display(),
+            group as u8,
+            path
+        ))
+    }
+
+    fn scm_show_diff(
+        &mut self,
+        ch: FileChange,
+        group: Group,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
+        let generation = self.scm.workspace_generation;
+        let file_name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
+        let badge = match group {
+            Group::Staged => tr("Index"),
+            Group::Conflicts => tr("Conflict"),
+            Group::Changes | Group::Untracked => tr("Working Tree"),
+        };
+        let virtual_key = Self::scm_diff_key(&repo, group, &ch.path);
+        let wsl = self.wsl.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let dir = repo.clone();
+            let file = ch.clone();
+            let result = cx
+                .background_spawn(async move {
+                    crate::scm_git::file_diff(&dir, &file, group, wsl.as_ref())
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.scm.workspace_generation != generation
+                    || this.scm.repo.as_ref() != Some(&repo)
+                {
+                    return;
+                }
+                let (patch, conflict_text, target) = match result {
+                    Ok(diff) => diff,
+                    Err(error) => {
+                        this.scm.error = Some(error);
+                        cx.notify();
+                        return;
+                    }
+                };
+                this.open_scm_diff_tab(
+                    crate::diff_view::ScmDiffSpec {
+                        virtual_key,
+                        tab_title: format!("{file_name} ({badge})"),
+                        display_name: ch.path.clone(),
+                        badge: badge.to_string(),
+                        patch,
+                        conflict_text,
+                        target,
+                        scm_stage: Some((repo, ch.path, group)),
+                        multi_file: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    fn scm_toggle_commit(&mut self, hash: String, cx: &mut Context<Self>) {
+        if self.scm.commit_open.as_deref() == Some(hash.as_str()) {
+            self.scm.commit_open = None;
+            return cx.notify();
+        }
+        self.scm.commit_open = Some(hash.clone());
+        cx.notify();
+        if self.scm.commit_files.contains_key(&hash) {
             return;
         }
-        let path = ch.path.clone();
-        self.scm_run("Discarding…", vec![Step::Git(vec!["restore".into(), "--".into(), path], None)], cx, |this, _, cx| {
-            this.agent.reloads.extend(this.docs.iter().map(|d| d.path.clone()));
-            cx.notify();
-        });
+        let Some(dir) = self.scm.repo.clone() else { return };
+        let wsl = self.wsl.clone();
+        cx.spawn(async move |this, cx| {
+            let h = hash.clone();
+            let files = cx
+                .background_spawn(async move {
+                    run_step(
+                        &dir,
+                        &Step::Git(
+                            [
+                                "-c",
+                                "core.quotepath=off",
+                                "show",
+                                "--format=",
+                                "--name-status",
+                                "-m",
+                                "--first-parent",
+                                "-z",
+                                &h,
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                            None,
+                        ),
+                        wsl.as_ref(),
+                    )
+                    .map(|s| crate::scm_incoming::parse_name_status(&s))
+                    .unwrap_or_default()
+                })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                this.scm.commit_files.insert(hash, files);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
-    fn scm_show_diff(&mut self, ch: FileChange, staged: bool, cx: &mut Context<Self>) {
+    pub(crate) fn scm_show_commit_file(
+        &mut self,
+        hash: String,
+        short: String,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(dir) = self.scm.repo.clone() else { return };
-        let mut args = vec!["-c".to_string(), "core.quotepath=off".into(), "diff".into()];
-        if staged {
-            args.push("--cached".into());
+        let wsl = self.wsl.clone();
+        let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        let full_path = dir.join(&path);
+        let target = full_path.is_file().then_some(full_path);
+        let virtual_key = PathBuf::from(format!("flux-diff://commit/{hash}/{path}"));
+        let p_bg = path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let patch = cx
+                .background_spawn(async move {
+                    run_step(
+                        &dir,
+                        &Step::Git(
+                            [
+                                "--literal-pathspecs",
+                                "-c",
+                                "core.quotepath=off",
+                                "show",
+                                "-m",
+                                "--first-parent",
+                                "--format=",
+                                "-U999999",
+                                &hash,
+                                "--",
+                                &p_bg,
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                            None,
+                        ),
+                        wsl.as_ref(),
+                    )
+                    .unwrap_or_default()
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.open_scm_diff_tab(
+                    crate::diff_view::ScmDiffSpec {
+                        virtual_key,
+                        tab_title: format!("{file_name} ({short})"),
+                        display_name: path,
+                        badge: short,
+                        patch,
+                        conflict_text: None,
+                        target,
+                        scm_stage: None,
+                        multi_file: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    fn scm_show_commit_all(
+        &mut self,
+        hash: String,
+        short: String,
+        subject: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
+        let wsl = self.wsl.clone();
+        let virtual_key = PathBuf::from(format!("flux-diff://commit/{hash}"));
+        cx.spawn_in(window, async move |this, cx| {
+            let patch = cx
+                .background_spawn(async move {
+                    run_step(
+                        &dir,
+                        &Step::Git(
+                            [
+                                "-c",
+                                "core.quotepath=off",
+                                "show",
+                                "-m",
+                                "--first-parent",
+                                "--format=",
+                                "-U3",
+                                &hash,
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                            None,
+                        ),
+                        wsl.as_ref(),
+                    )
+                    .unwrap_or_default()
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                this.open_scm_diff_tab(
+                    crate::diff_view::ScmDiffSpec {
+                        virtual_key,
+                        tab_title: format!("{short} · {subject}"),
+                        display_name: subject,
+                        badge: short,
+                        patch,
+                        conflict_text: None,
+                        target: None,
+                        scm_stage: None,
+                        multi_file: true,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn scm_drag_pane(&mut self, y: f32) {
+        let Some(drag) = self.scm.pane_drag.as_ref() else {
+            return;
+        };
+        for (id, h) in apply_sash_drag(drag, y) {
+            self.scm.pane_h[id as usize] = Some(h);
         }
-        args.extend(["--".into(), ch.path.clone()]);
-        let untracked = ch.code == 'U';
-        let path = ch.path.clone();
-        let wsl = self.wsl.clone();
-        cx.spawn(async move |this, cx| {
-            let text = cx
-                .background_spawn(async move {
-                    if untracked {
-                        std::fs::read_to_string(dir.join(&path)).map(|t| t.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n")).unwrap_or_default()
-                    } else {
-                        run_step(&dir, &Step::Git(args, None), wsl.as_ref()).unwrap_or_else(|e| e)
-                    }
-                })
-                .await;
-            _ = this.update(cx, |this, cx| {
-                this.out_lines.clear();
-                let mut head = Line::new(&ch.path, crate::term::LineKind::Cmd);
-                head.meta = if staged { "Staged diff".into() } else { "Diff".into() };
-                this.out_lines.push(head);
-                for l in text.lines() {
-                    let kind = if l.starts_with("+++") || l.starts_with("---") || l.starts_with("diff ") || l.starts_with("index ") {
-                        crate::term::LineKind::Dim
-                    } else if l.starts_with('+') {
-                        crate::term::LineKind::Success
-                    } else if l.starts_with('-') {
-                        crate::term::LineKind::Err
-                    } else if l.starts_with("@@") {
-                        crate::term::LineKind::Hunk
-                    } else {
-                        crate::term::LineKind::Normal
-                    };
-                    this.out_lines.push(Line::new(l, kind));
-                }
-                if text.trim().is_empty() {
-                    push_line(&mut this.out_lines, "No textual changes (binary file or mode change).", crate::term::LineKind::Dim);
-                }
-                this.panel_open = true;
-                this.panel_tab = PanelTab::Output;
-                this.out_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn scm_show_commit(&mut self, hash: String, cx: &mut Context<Self>) {
-        let Some(dir) = self.scm.repo.clone() else { return };
-        let wsl = self.wsl.clone();
-        cx.spawn(async move |this, cx| {
-            let text = cx
-                .background_spawn(async move {
-                    run_step(&dir, &Step::Git(["show", "--stat", "--format=%h  %s%n%an <%ae>, %ad%n%n%b", "--date=format:%Y-%m-%d %H:%M", &hash].map(String::from).to_vec(), None), wsl.as_ref())
-                        .unwrap_or_else(|e| e)
-                })
-                .await;
-            _ = this.update(cx, |this, cx| {
-                this.out_lines.clear();
-                for (i, l) in text.lines().enumerate() {
-                    let kind = if i == 0 {
-                        crate::term::LineKind::Code
-                    } else if l.contains(" | ") || l.contains("changed,") {
-                        crate::term::LineKind::Normal
-                    } else {
-                        crate::term::LineKind::Dim
-                    };
-                    push_line(&mut this.out_lines, l, kind);
-                }
-                this.panel_open = true;
-                this.panel_tab = PanelTab::Output;
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
 
@@ -807,52 +1096,89 @@ impl Workbench {
             return div().p_3().text_sm().text_color(c(theme::FG_DIM)).child(tr("Open a folder to use Source Control.")).into_any_element();
         }
         if s.repo.is_none() {
+            let status = if s.refreshing || s.last_refresh.is_none() {
+                tr("Checking for a Git repository…")
+            } else {
+                tr("This folder is not a Git repository.")
+            };
             return v_flex()
                 .p_3()
                 .gap_3()
                 .text_sm()
-                .child(div().text_color(c(theme::FG_MUTED)).child(tr("This folder is not a Git repository.")))
                 .child(
-                    Button::new("scm-init").label(tr("Initialize Repository")).primary().small().w_full().on_click(cx.listener(|this, _, _, cx| {
-                        let dir = this.root.clone();
-                        this.scm.repo = dir;
-                        this.scm_run("Initializing…", vec![git_step(&["init"])], cx, |this, _, _| this.status = tr("Git repository created").into());
-                    })),
+                    div()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(s.repo_error.clone().unwrap_or_else(|| status.to_string())),
                 )
+                .when(!s.refreshing && s.repo_error.is_none(), |v| {
+                    v.child(
+                        Button::new("scm-init")
+                            .label(tr("Initialize Repository"))
+                            .primary()
+                            .small()
+                            .w_full()
+                            .disabled(s.is_busy())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.scm_run(
+                                    tr("Initializing…"),
+                                    vec![git_step(&["init"])],
+                                    cx,
+                                    |this, _, _| {
+                                        this.status = tr("Git repository created").into();
+                                    },
+                                );
+                            })),
+                    )
+                })
+                .when_some(s.busy.clone().or_else(|| s.fetching.then(|| tr("Fetching…").into())), |v, status| {
+                    v.child(div().text_xs().child(status))
+                })
+                .when_some(s.error.clone(), |v, error| {
+                    v.child(div().text_color(c(theme::DANGER)).child(error))
+                })
+                .when(s.watch.unavailable, |v| {
+                    v.child(div().text_xs().child(tr(
+                        "File watching is unavailable. Use Refresh to check for changes.",
+                    )))
+                })
                 .into_any_element();
         }
         let st = &s.status;
-        let branch = st.branch.clone().unwrap_or_else(|| "detached HEAD".into());
-        let nothing_staged = st.staged.is_empty();
-        let commit_label = match (nothing_staged, st.count()) {
-            (_, 0) => "Commit".to_string(),
-            (true, _) => "Commit All".to_string(),
-            (false, _) => "Commit".to_string(),
-        };
-
+        let can_commit =
+            !s.is_busy() && st.check_commit(&s.message.read(cx).value(), false).is_ok();
         let commit_row = h_flex()
             .w_full()
+            .gap_px()
             .child(
                 Button::new("scm-commit")
                     .icon(Icon::new(IconName::Check))
-                    .label(commit_label)
+                    .label(tr("Commit"))
+                    .disabled(!can_commit)
                     .primary()
                     .small()
                     .flex_1()
-                    .tooltip(if nothing_staged { "Nothing is staged, so every change is committed (like VS Code's smart commit)" } else { "Commit the staged changes" })
-                    .on_click(cx.listener(|this, _, w, cx| this.scm_commit(After::Nothing, false, w, cx))),
+                    .tooltip(tr("Commit the staged changes (Enter)"))
+                    .on_click(
+                        cx.listener(|this, _, w, cx| this.scm_commit(After::Nothing, false, w, cx)),
+                    ),
             )
             .child(
-                Button::new("scm-commit-more").icon(Icon::new(IconName::ChevronDown)).primary().small().dropdown_menu(|m: PopupMenu, _, _| {
-                    m.min_w(px(220.))
-                        .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
-                        .menu(tr("Commit & Sync"), Box::new(ScmCommitSync))
-                        .separator()
-                        .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
-                }),
+                Button::new("scm-commit-more")
+                    .icon(Icon::new(IconName::ChevronDown))
+                    .disabled(s.is_busy())
+                    .primary()
+                    .small()
+                    .dropdown_menu(|m: PopupMenu, _, _| {
+                        m.min_w(px(220.))
+                            .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
+                            .menu(tr("Commit & Sync"), Box::new(ScmCommitSync))
+                            .separator()
+                            .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
+                            .menu(tr("Commit (Sign Off)"), Box::new(ScmCommitSignoff))
+                    }),
             );
 
-        let mut body = v_flex().id("scm-body").flex_1().min_h_0().overflow_y_scroll().pb_2();
+        let mut top = v_flex().w_full().min_w_0().flex_none().pt_1p5();
         if s.confirm_uninit {
             let home = std::env::var("USERPROFILE").unwrap_or_default();
             let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
@@ -861,10 +1187,11 @@ impl Workbench {
                 where_ = format!("~{}", &where_[home.len()..]);
             }
             let folder = s.repo.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            body = body.child(
+            top = top.child(
                 v_flex()
                     .flex_none()
-                    .mx_3()
+                    .ml_3()
+                    .mr(px(SCROLLBAR_PAD))
                     .mb_2()
                     .p_2()
                     .gap_2()
@@ -895,18 +1222,38 @@ impl Workbench {
             );
         }
         if let Some(card) = self.render_scm_incoming(cx) {
-            body = body.child(card);
+            let incoming_el: AnyElement = if s.incoming_shown {
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .max_h(theme::u(180.))
+                    .overflow_y_scrollbar()
+                    .id("scm-in-scroll")
+                    .scroll_bounce(false)
+                    .child(card)
+                    .into_any_element()
+            } else {
+                card
+            };
+            top = top.child(incoming_el);
         }
-        body = body.child(
+        top = top.child(
             v_flex()
+                .w_full()
+                .min_w_0()
                 .flex_none()
                 .px_3()
                 .pb_2()
-                .gap_2()
-                .child(crate::ui::McInput::new(&s.message).small())
+                .gap_1p5()
+                .child(div().key_context("ScmMessage").child(crate::ui::McInput::new(&s.message).small()))
                 .child(commit_row)
-                .when_some(s.busy.clone(), |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)))
-                .when_some(s.error.clone(), |v, e| {
+                .when(s.watch.unavailable, |v| {
+                    v.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr(
+                        "File watching is unavailable. Use Refresh to check for changes.",
+                    )))
+                })
+                .when_some(s.busy.clone().or_else(|| s.fetching.then(|| tr("Fetching…").into())), |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)))
+                .when_some(s.error.clone().or_else(|| s.repo_error.clone()), |v, e| {
                     v.child(
                         div()
                             .p_2()
@@ -942,11 +1289,74 @@ impl Workbench {
                 }),
         );
 
+        if let Some((group, path, files)) = &s.confirm_discard {
+            let group = *group;
+            let path = path.clone();
+            let detail = path.clone().unwrap_or_else(|| {
+                if files.len() == 1 {
+                    files[0].path.clone()
+                } else {
+                    crate::trf!("Discard {n} files in {group}?"; n => files.len(), group => group_title(group)).to_string()
+                }
+            });
+            top = top.child(
+                v_flex()
+                    .mx_3()
+                    .mb_2()
+                    .p_2()
+                    .gap_1()
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .text_xs()
+                    .child(div().text_color(c(theme::FG_STRONG)).child(detail))
+                    .child(div().text_color(c(theme::FG_MUTED)).child(match group {
+                        Group::Untracked => tr("Untracked files will be deleted."),
+                        Group::Staged if st.head.is_none() => {
+                            tr("Remove these files from the index and working tree.")
+                        }
+                        Group::Staged => {
+                            tr("Restore the index and working tree to the last commit.")
+                        }
+                        Group::Conflicts => {
+                            tr("Restore the original merge conflict in the working tree.")
+                        }
+                        Group::Changes => tr("Restore the working tree from the index."),
+                    }))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("scm-discard-yes")
+                                    .label(tr("Discard"))
+                                    .danger()
+                                    .xsmall()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.scm_paths(group, path.clone(), true, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("scm-discard-no")
+                                    .label(tr("Cancel"))
+                                    .ghost()
+                                    .xsmall()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.scm.confirm_discard = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        }
+
         let section = |id: &'static str, title: String, count: usize, open: bool| {
             scm_row()
                 .id(id)
-                .px_2()
+                .pl_2()
+                .pr(px(SCROLLBAR_PAD))
                 .gap_1()
+                .items_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER)))
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c(theme::FG_MUTED))
@@ -965,40 +1375,51 @@ impl Workbench {
                         div()
                             .flex_none()
                             .px_1p5()
-                            .rounded_full()
-                            .bg(c(theme::BG_HOVER))
+                            .rounded(px(8.))
+                            .bg(c(theme::BG_ELEVATED))
                             .text_color(c(theme::FG))
                             .child(count.to_string()),
                     )
                 })
         };
 
+        let active_doc_path = self
+            .active
+            .and_then(|i| self.docs.get(i))
+            .map(|d| d.path.clone());
         let file_row =
-            |i: usize, kind: u8, ch: &FileChange, this: &Self, cx: &mut Context<Self>| {
+            |i: usize, depth: usize, group: Group, ch: &FileChange, this: &Self, cx: &mut Context<Self>| {
+                let kind = group as u8;
                 let name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
-                let dir = ch
-                    .path
-                    .rsplit_once('/')
-                    .map(|d| d.0.replace('/', "\\"))
-                    .unwrap_or_default();
-                let col = code_color(ch.code);
+                let dir = if this.scm.show_tree {
+                    String::new()
+                } else {
+                    ch.path.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default()
+                };
+                let col = if group == Group::Conflicts {
+                    theme::DANGER
+                } else {
+                    code_color(ch.code)
+                };
                 let deleted = ch.code == 'D';
-                let full = this
-                    .scm
-                    .repo
-                    .as_ref()
-                    .map(|r| r.join(ch.path.replace('/', "\\")));
+                let full = this.scm.repo.as_ref().map(|r| r.join(&ch.path));
                 let staged = kind == 1;
-                let confirm = this.scm.confirm_discard.as_deref() == Some(ch.path.as_str());
-                let (c1, c2, c3) = (ch.clone(), ch.clone(), ch.clone());
+                let busy = this.scm.is_busy();
+                let is_active = this.scm.repo.as_ref().is_some_and(|repo| {
+                    active_doc_path.as_ref() == Some(&Self::scm_diff_key(repo, group, &ch.path))
+                });
+                let (ch_click, discard_path, full_open) = (ch.clone(), ch.path.clone(), full);
                 scm_row()
                     .id(("scm-f", i * 4 + kind as usize))
                     .group("scm-row")
-                    .pl(theme::u(18.))
-                    .pr_2()
+                    .relative()
+                    .pl(theme::u(22. + depth.min(12) as f32 * 12.))
+                    .pr(px(SCROLLBAR_PAD))
                     .gap_1p5()
-                    .text_size(theme::u(11.5))
+                    .items_center()
+                    .text_size(theme::u(13.))
                     .cursor_pointer()
+                    .when(is_active, |h| h.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
                     .child(crate::files::file_icon_el(&name, theme::u(14.)))
                     .child(
@@ -1006,7 +1427,7 @@ impl Workbench {
                             .flex_shrink(1.)
                             .min_w_0()
                             .truncate()
-                            .text_color(c(col))
+                            .text_color(c(theme::FG))
                             .when(deleted, |d| d.line_through())
                             .child(name),
                     )
@@ -1020,49 +1441,58 @@ impl Workbench {
                             .child(dir),
                     )
                     .child(
-                        h_flex()
+                        div()
                             .flex_none()
+                            .w(theme::u(12.))
+                            .text_right()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(c(col))
+                            .child(ch.code.to_string()),
+                    )
+                    // Overlay actions on hover so unhovered rows use the full width for filename and path.
+                    .child(
+                        h_flex()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right(px(SCROLLBAR_PAD) + theme::u(14.))
+                            .items_center()
                             .gap_px()
+                            .pl_1p5()
+                            .pr_0p5()
+                            .bg(c(theme::BG_HOVER))
                             .invisible()
                             .group_hover("scm-row", |s| s.visible())
-                            .when(!staged && kind != 2, |h| {
+                            .when(!deleted, |h| {
                                 h.child(
-                                    Button::new(("scm-diff", i))
-                                        .icon(Icon::new(Ico::FileDiff))
+                                    Button::new(("scm-open", i * 4 + kind as usize))
+                                        .icon(Icon::new(Ico::FileCode))
                                         .ghost()
                                         .xsmall()
-                                        .tooltip(tr("Show changes"))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                        .tooltip(tr("Open file"))
+                                        .on_click(cx.listener(move |this, _, w, cx| {
                                             cx.stop_propagation();
-                                            this.scm_show_diff(c1.clone(), false, cx);
-                                        })),
-                                )
-                                .child(
-                                    Button::new(("scm-discard", i))
-                                        .icon(Icon::new(Ico::Undo2))
-                                        .ghost()
-                                        .xsmall()
-                                        .when(confirm, |b| b.label(tr("Discard?")))
-                                        .tooltip(tr("Discard changes (click twice)"))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.scm_discard(c2.clone(), cx);
+                                            if let Some(f) =
+                                                full_open.clone().filter(|f| f.is_file())
+                                            {
+                                                this.open_file(f, w, cx);
+                                            }
                                         })),
                                 )
                             })
-                            .when(staged, |h| {
-                                h.child(
-                                    Button::new(("scm-sdiff", i))
-                                        .icon(Icon::new(Ico::FileDiff))
-                                        .ghost()
-                                        .xsmall()
-                                        .tooltip(tr("Show staged changes"))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.scm_show_diff(c3.clone(), true, cx);
-                                        })),
-                                )
-                            })
+                            .child(
+                                Button::new(("scm-discard", i * 4 + kind as usize))
+                                    .icon(Icon::new(Ico::Undo2))
+                                    .ghost()
+                                    .xsmall()
+                                    .disabled(busy)
+                                    .tooltip(tr("Discard"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.scm_paths(group, Some(discard_path.clone()), true, cx);
+                                    })),
+                            )
                             .child({
                                 let p = ch.path.clone();
                                 Button::new(("scm-stage", i * 4 + kind as usize))
@@ -1073,308 +1503,862 @@ impl Workbench {
                                     }))
                                     .ghost()
                                     .xsmall()
-                                    .tooltip(if staged { "Unstage" } else { "Stage" })
+                                    .disabled(busy)
+                                    .tooltip(if staged { tr("Unstage") } else { tr("Stage") })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.scm_stage(Some(p.clone()), !staged, cx);
+                                        this.scm_paths(group, Some(p.clone()), false, cx);
                                     }))
                             }),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(theme::u(12.))
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(c(col))
-                            .child(ch.code.to_string()),
-                    )
                     .on_click(cx.listener(move |this, _, w, cx| {
-                        if let Some(f) = full.clone().filter(|f| f.is_file()) {
-                            this.open_file(f, w, cx);
-                        }
+                        this.scm_show_diff(ch_click.clone(), group, w, cx);
                     }))
             };
 
-        if !st.conflicts.is_empty() {
-            body = body.child(section("scm-sec-conf", "Merge Changes".into(), st.conflicts.len(), true));
-            for (i, ch) in st.conflicts.iter().enumerate().take(MAX_ROWS) {
-                body = body.child(file_row(i, 2, ch, self, cx));
-            }
-        }
-        if !st.staged.is_empty() {
-            body = body.child(section("scm-sec-staged", "Staged Changes".into(), st.staged.len(), true).child(
-                Button::new("scm-unstage-all").icon(Icon::new(IconName::Minus)).ghost().xsmall().tooltip(tr("Unstage All")).on_click(cx.listener(|this, _, _, cx| {
-                    this.scm_stage(None, false, cx);
-                })),
-            ));
-            for (i, ch) in st.staged.iter().enumerate().take(MAX_ROWS) {
-                body = body.child(file_row(i, 1, ch, self, cx));
-            }
-            body = body.children(more_rows(st.staged.len()));
-        }
-        body = body.child(section("scm-sec-changes", "Changes".into(), st.changes.len(), true).when(!st.changes.is_empty(), |h| {
-            h.child(Button::new("scm-stage-all").icon(Icon::new(IconName::Plus)).ghost().xsmall().tooltip(tr("Stage All")).on_click(cx.listener(|this, _, _, cx| {
-                this.scm_stage(None, true, cx);
-            })))
-        }));
-        let untracked = st.changes.iter().filter(|c| c.code == 'U').count();
-        if untracked > 200 {
-            let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-            for ch in st.changes.iter().filter(|c| c.code == 'U') {
-                if let Some((top, _)) = ch.path.split_once('/') {
-                    *by.entry(top).or_default() += 1;
-                }
-            }
-            let mut top: Vec<(&str, usize)> = by.into_iter().collect();
-            top.sort_by(|a, b| b.1.cmp(&a.1));
-            body = body.child(
-                v_flex()
-                    .flex_none()
-                    .mx_3()
-                    .my_1()
-                    .p_2()
-                    .gap_1()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(c(theme::BORDER))
-                    .bg(c(theme::BG_ELEVATED))
-                    .text_xs()
-                    .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("{n} untracked files"; n => untracked)))
-                    .child(div().text_color(c(theme::FG_DIM)).child(tr("Folders with the most of them. Ignore the ones git should not track (they go to .gitignore).")))
-                    .children(top.into_iter().take(6).enumerate().map(|(i, (dir, n))| {
-                        let pattern = format!("{dir}/");
-                        h_flex()
-                            .flex_none()
-                            .gap_2()
-                            .h(theme::u(ROW_H))
-                            .child(Icon::new(IconName::Folder).size(theme::u(13.)).text_color(c(theme::FOLDER)))
-                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(pattern.clone()))
-                            .child(div().flex_none().text_color(c(theme::FG_DIM)).child(n.to_string()))
-                            .child(Button::new(("scm-ignore", i)).label(tr("Ignore")).xsmall().on_click(cx.listener(move |this, _, _, cx| this.scm_ignore(pattern.clone(), cx))))
-                    })),
-            );
-        }
-        for (i, ch) in st.changes.iter().enumerate().take(MAX_ROWS) {
-            body = body.child(file_row(i, 0, ch, self, cx));
-        }
-        body = body.children(more_rows(st.changes.len()));
-        if st.count() == 0 {
-            body = body.child(
-                div()
-                    .flex_none()
-                    .px(theme::u(18.))
-                    .py_1()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child(tr("No changes. The working tree matches the last commit.")),
-            );
+        struct PaneBuilt {
+            spec: PaneSpec,
+            scroll_id: &'static str,
+            header: AnyElement,
+            rows: Option<AnyElement>,
         }
 
-        let sync_label = match (&st.upstream, st.ahead, st.behind) {
-            (None, ..) => "Publish Branch".to_string(),
-            (Some(_), 0, 0) => "Up to date".to_string(),
-            (Some(_), a, b) => format!("Sync  {b}↓ {a}↑"),
+        let row_h = f32::from(theme::u(ROW_H));
+        let graph_h = f32::from(theme::u(crate::scm_graph::GRAPH_ROW_H));
+        let header_h = row_h;
+        let flex_min = |natural: f32, unit: f32, min_rows: f32| {
+            (header_h + min_rows * unit).min(natural).max(header_h)
         };
-        body = body.child(
-            h_flex()
-                .flex_none()
-                .px_3()
-                .pt_2()
-                .gap_1()
-                .child(
-                    Button::new("scm-sync")
-                        .icon(Icon::new(if st.upstream.is_none() { Ico::CloudUpload } else { Ico::RefreshCcw }))
-                        .label(sync_label)
-                        .tooltip(if st.upstream.is_none() { format!("Push {branch} to origin and track it") } else { format!("Pull, then push {branch}") })
-                        .small()
-                        .flex_1()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.scm.status.upstream.is_none() {
-                                let steps = this.push_steps();
-                                this.scm_run("Publishing branch…", steps, cx, |this, _, _| this.status = tr("Branch published").into());
-                            } else {
-                                this.scm_sync(cx);
-                            }
-                        })),
-                )
-                .child(
-                    Button::new("scm-pr")
-                        .icon(Icon::new(Ico::GitPullRequest))
-                        .small()
-                        .tooltip(tr("Create a pull request on GitHub (gh pr create --fill)"))
-                        .on_click(cx.listener(|this, _, _, cx| this.scm_create_pr(cx))),
-                ),
-        );
+        let mut panes: Vec<PaneBuilt> = Vec::with_capacity(6);
 
-        body = body.child(
-            section("scm-sec-graph", "Graph".into(), 0, s.show_graph).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
-                this.scm.show_graph = !this.scm.show_graph;
-                if this.scm.show_graph {
-                    this.scm_refresh(cx);
-                }
-                cx.notify();
-            })),
-        );
-        if s.show_graph {
-            let n = s.log.len();
-            for (i, cm) in s.log.iter().enumerate() {
-                let hash = cm.hash.clone();
-                let lane = graph_lane(i == 0, i + 1 == n, theme::ACCENT, 0.55, !cm.merge);
-                body = body.child(
-                    scm_row()
-                        .id(("scm-c", i))
-                        .pl(theme::u(12.))
-                        .pr_2()
-                        .gap_1p5()
-                        .text_size(theme::u(11.5))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .child(lane)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(c(theme::FG))
-                                .child(cm.subject.clone()),
-                        )
-                        .children(cm.refs.first().map(|r| {
-                            let remote = r.starts_with("origin/");
-                            div()
-                                .flex_shrink(1.)
-                                .min_w_0()
-                                .max_w(theme::u(110.))
-                                .truncate()
-                                .px_1p5()
-                                .rounded(px(8.))
-                                .text_xs()
-                                .bg(c(if remote { theme::BLUE } else { theme::ACCENT }).opacity(0.22))
-                                .text_color(c(if remote { theme::BLUE } else { theme::ACCENT_TEXT }))
-                                .child(r.clone())
-                        }))
-                        .when(cm.refs.len() > 1, |h| h.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(format!("+{}", cm.refs.len() - 1))))
-                        .tooltip({
-                            let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
-                            let tip = format!("{}  {}\n{} · {}{refs}", cm.short, cm.subject, cm.author, cm.when);
-                            move |w, cx| Tooltip::new(tip.clone()).build(w, cx)
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| this.scm_show_commit(hash.clone(), cx))),
-                );
+        for (group, pane, open, id) in [
+            (
+                Group::Conflicts,
+                ScmPane::Conflicts,
+                s.show_conflicts,
+                "scm-conflicts",
+            ),
+            (Group::Staged, ScmPane::Staged, s.show_staged, "scm-staged"),
+            (
+                Group::Changes,
+                ScmPane::Changes,
+                s.show_changes,
+                "scm-changes",
+            ),
+            (
+                Group::Untracked,
+                ScmPane::Untracked,
+                s.show_untracked,
+                "scm-untracked",
+            ),
+        ] {
+            if !s.show_changes_view {
+                break;
             }
+            let files = st.files(group);
+            if files.is_empty() && !(group == Group::Changes && st.count() == 0) {
+                continue;
+            }
+            let staged = group == Group::Staged;
+            let hdr = section(id, group_title(group).into(), files.len(), open)
+                .pl_3()
+                .when(!files.is_empty(), |h| {
+                    h.child(
+                        Button::new(("scm-group-stage", group as usize))
+                            .icon(Icon::new(if staged {
+                                IconName::Minus
+                            } else {
+                                IconName::Plus
+                            }))
+                            .ghost()
+                            .xsmall()
+                            .disabled(s.is_busy())
+                            .tooltip(if staged {
+                                tr("Unstage All")
+                            } else {
+                                tr("Stage All")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.scm_paths(group, None, false, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("scm-group-discard", group as usize))
+                            .icon(Icon::new(Ico::Undo2))
+                            .ghost()
+                            .xsmall()
+                            .disabled(s.is_busy())
+                            .tooltip(tr("Discard All"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.scm_paths(group, None, true, cx);
+                            })),
+                    )
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let expanded = match group {
+                        Group::Conflicts => &mut this.scm.show_conflicts,
+                        Group::Staged => &mut this.scm.show_staged,
+                        Group::Changes => &mut this.scm.show_changes,
+                        Group::Untracked => &mut this.scm.show_untracked,
+                    };
+                    *expanded = !*expanded;
+                    cx.notify();
+                }))
+                .into_any_element();
+            let limit = s.row_limits[group as usize];
+            let more = files.len().saturating_sub(limit).min(MAX_ROWS);
+            let displayed = &files[..files.len().min(limit)];
+            let collapsed = &s.collapsed_folders[group as usize];
+            let tree = (s.show_tree && open).then(|| change_tree_rows(displayed, collapsed));
+            let rows_n = (tree.as_ref().map_or(displayed.len(), Vec::len) + usize::from(more > 0)).max(1);
+            let extra = if group == Group::Untracked && files.len() > MAX_ROWS {
+                190.
+            } else {
+                0.
+            };
+            let natural_h = header_h + rows_n as f32 * row_h + extra;
+            let rows = open.then(|| {
+                let mut col = v_flex().w_full().min_w_0().pb_1();
+                if group == Group::Untracked && files.len() > MAX_ROWS {
+                    let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                    for ch in files {
+                        if let Some((top, _)) = ch.path.split_once('/') {
+                            *by.entry(top).or_default() += 1;
+                        }
+                    }
+                    let mut top_dirs: Vec<(&str, usize)> = by.into_iter().collect();
+                    top_dirs.sort_by_key(|a| std::cmp::Reverse(a.1));
+                    col = col.child(
+                        v_flex()
+                            .flex_shrink_0()
+                            .ml_3()
+                            .mr(px(SCROLLBAR_PAD))
+                            .my_1()
+                            .p_2()
+                            .gap_1()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .bg(c(theme::BG_ELEVATED))
+                            .text_xs()
+                            .child(div().text_color(c(theme::FG_STRONG)).child(crate::trf!("{n} untracked files"; n => files.len())))
+                            .child(div().text_color(c(theme::FG_DIM)).child(tr("Folders with the most of them. Ignore the ones git should not track (they go to .gitignore).")))
+                            .children(top_dirs.into_iter().take(6).enumerate().map(|(i, (dir, n))| {
+                                let pattern = format!("{dir}/");
+                                h_flex()
+                                    .gap_2()
+                                    .h(theme::u(ROW_H))
+                                    .items_center()
+                                    .child(Icon::new(IconName::Folder).size(theme::u(13.)).text_color(c(theme::FOLDER)))
+                                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(pattern.clone()))
+                                    .child(div().flex_none().text_color(c(theme::FG_DIM)).child(n.to_string()))
+                                    .child(Button::new(("scm-ignore", i)).label(tr("Ignore")).xsmall().on_click(cx.listener(move |this, _, _, cx| this.scm_ignore(pattern.clone(), cx))))
+                            })),
+                    );
+                }
+                if let Some(tree) = tree {
+                    for (row, entry) in tree.into_iter().enumerate() {
+                        match entry {
+                            ChangeTreeRow::File(i, depth) => {
+                                col = col.child(file_row(i, depth, group, &displayed[i], self, cx));
+                            }
+                            ChangeTreeRow::Folder(path, depth) => {
+                                let expanded = !collapsed.contains(path);
+                                let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                                let path = path.to_string();
+                                col = col.child(
+                                    h_flex()
+                                        .id(("scm-folder", row * 4 + group as usize))
+                                        .w_full()
+                                        .min_w_0()
+                                        .flex_none()
+                                        .h(theme::u(ROW_H))
+                                        .pl(theme::u(10. + depth.min(12) as f32 * 12.))
+                                        .pr(px(SCROLLBAR_PAD))
+                                        .gap_1()
+                                        .cursor_pointer()
+                                        .hover(|h| h.bg(c(theme::BG_HOVER)))
+                                        .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)))
+                                        .child(Icon::new(IconName::Folder).size(theme::u(14.)).text_color(c(theme::FOLDER)))
+                                        .child(div().min_w_0().truncate().text_sm().child(name))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let folders = &mut this.scm.collapsed_folders[group as usize];
+                                            if !folders.remove(&path) {
+                                                folders.insert(path.clone());
+                                            }
+                                            cx.notify();
+                                        })),
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    for (i, ch) in displayed.iter().enumerate() {
+                        col = col.child(file_row(i, 0, group, ch, self, cx));
+                    }
+                }
+                if more > 0 {
+                    col = col.child(Button::new(("scm-show-more", group as usize)).ghost().xsmall()
+                        .label(crate::trf!("Show {n} more files"; n => more))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.scm.row_limits[group as usize] += more;
+                            cx.notify();
+                        })));
+                }
+                if files.is_empty() {
+                    col = col.child(div().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_MUTED)).child(tr("No changes.")));
+                }
+                col.into_any_element()
+            });
+            panes.push(PaneBuilt {
+                spec: PaneSpec {
+                    id: pane,
+                    flexible: open,
+                    min_h: if open {
+                        flex_min(natural_h, row_h, 2.)
+                    } else {
+                        header_h
+                    },
+                    natural_h,
+                    saved: s.pane_h[pane as usize],
+                },
+                scroll_id: id,
+                header: hdr,
+                rows,
+            });
         }
 
-        body = body.child(
-            section("scm-sec-actions", "GitHub Actions (deploy)".into(), 0, s.show_actions).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
+        {
+            let hdr = section("scm-sec-graph", tr("Graph").to_uppercase(), 0, s.show_graph)
+                .border_t_1()
+                .border_color(c(theme::BORDER))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.scm.show_graph = !this.scm.show_graph;
+                    if this.scm.show_graph {
+                        this.scm_refresh(cx);
+                    }
+                    cx.notify();
+                }))
+                .into_any_element();
+            let open_extra = s
+                .commit_open
+                .as_ref()
+                .map(|h| {
+                    (1 + s.commit_files.get(h).map(|f| f.len().min(60)).unwrap_or(1)) as f32 * row_h
+                })
+                .unwrap_or(0.);
+            let natural = header_h + s.log.len().max(1) as f32 * graph_h + open_extra;
+            let flexible = s.show_graph;
+            let rows = flexible.then(|| {
+                let mut col = v_flex().w_full().min_w_0().pb_1();
+                let n = s.log.len();
+                if n == 0 {
+                    col = col.child(div().flex_shrink_0().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No commits yet.")));
+                }
+                for (i, cm) in s.log.iter().enumerate() {
+                    let hash = cm.hash.clone();
+                    let open = s.commit_open.as_deref() == Some(cm.hash.as_str());
+                    let grow = s.graph.rows.get(i).cloned().unwrap_or(crate::scm_graph::GraphRow {
+                        col: 0,
+                        color: 0,
+                        merge: cm.merge,
+                        is_head: cm.is_head,
+                        continues_up: i > 0,
+                        continues_down: i + 1 < n,
+                        row_lanes: 1,
+                        pass_lanes: Vec::new(),
+                        in_edges: Vec::new(),
+                        out_edges: Vec::new(),
+                        after_lanes: if i + 1 < n { vec![(0, 0)] } else { Vec::new() },
+                    });
+                    let after_lanes = grow.after_lanes.clone();
+                    let badges = crate::scm_graph::sort_ref_badges(&cm.refs, cm.is_head);
+                    let primary_badge = badges.first().cloned();
+                    let extra_badge = badges.get(1).cloned();
+                    let has_refs = !badges.is_empty();
+                    col = col.child(
+                        h_flex()
+                            .id(("scm-c", i))
+                            .w_full()
+                            .min_w_0()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .h(theme::u(crate::scm_graph::GRAPH_ROW_H))
+                            .pr(px(SCROLLBAR_PAD))
+                            .gap_1()
+                            .items_center()
+                            .text_size(theme::u(11.5))
+                            .cursor_pointer()
+                            .when(open, |h| h.bg(c(theme::SELECT)))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(crate::scm_graph::render_graph_cell(grow))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .gap_1p5()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_shrink(1.)
+                                            .min_w_0()
+                                            .truncate()
+                                            .when(cm.is_head, |d| d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)))
+                                            .when(!cm.is_head, |d| d.text_color(c(theme::FG)))
+                                            .child(cm.subject.clone()),
+                                    )
+                                    .when(!has_refs && !cm.author.is_empty(), |h| {
+                                        h.child(
+                                            div()
+                                                .flex_shrink(1.)
+                                                .min_w_0()
+                                                .max_w(theme::u(86.))
+                                                .truncate()
+                                                .text_size(theme::u(10.5))
+                                                .text_color(c(theme::FG_DIM))
+                                                .child(cm.author.clone()),
+                                        )
+                                    }),
+                            )
+                            .children(primary_badge.map(|b| {
+                                let (ico, tint, text_tok) = match b.kind {
+                                    crate::scm_graph::RefKind::Head => (Ico::GitBranch, theme::BLUE, theme::BLUE),
+                                    crate::scm_graph::RefKind::Branch => (Ico::GitBranch, theme::ACCENT, theme::ACCENT_TEXT),
+                                    crate::scm_graph::RefKind::Remote => (Ico::Cloud, theme::WARN, theme::WARN),
+                                    crate::scm_graph::RefKind::Tag => (Ico::Tag, theme::WARN, theme::WARN),
+                                };
+                                h_flex()
+                                    .flex_shrink(1.)
+                                    .min_w_0()
+                                    .max_w(theme::u(108.))
+                                    .h(theme::u(17.))
+                                    .px_1p5()
+                                    .gap_1()
+                                    .items_center()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(c(tint).opacity(0.45))
+                                    .bg(c(tint).opacity(0.18))
+                                    .text_size(theme::u(10.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(c(text_tok))
+                                    .child(Icon::new(ico).flex_none().size(theme::u(10.)))
+                                    .child(div().min_w_0().truncate().child(b.label))
+                            }))
+                            .children(extra_badge.map(|b| {
+                                let (ico, tint) = match b.kind {
+                                    crate::scm_graph::RefKind::Head => (Ico::GitBranch, theme::BLUE),
+                                    crate::scm_graph::RefKind::Branch => (Ico::GitBranch, theme::ACCENT),
+                                    crate::scm_graph::RefKind::Remote => (Ico::Cloud, theme::ACCENT),
+                                    crate::scm_graph::RefKind::Tag => (Ico::Tag, theme::WARN),
+                                };
+                                h_flex()
+                                    .flex_none()
+                                    .h(theme::u(17.))
+                                    .px_1()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(c(tint).opacity(0.45))
+                                    .bg(c(tint).opacity(0.18))
+                                    .text_color(c(tint))
+                                    .child(Icon::new(ico).size(theme::u(10.)))
+                            }))
+                            .when(badges.len() > 2, |h| {
+                                h.child(div().flex_none().text_size(theme::u(10.)).text_color(c(theme::FG_DIM)).child(format!("+{}", badges.len() - 2)))
+                            })
+                            .tooltip({
+                                let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
+                                let tip = format!("{}  {}\n{} · {}{refs}", cm.short, cm.subject, cm.author, cm.when);
+                                move |w, cx| Tooltip::new(tip.clone()).build(w, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| this.scm_toggle_commit(hash.clone(), cx))),
+                    );
+                    if !open {
+                        continue;
+                    }
+                    let (h_all, short_all, subj_all) = (cm.hash.clone(), cm.short.clone(), cm.subject.clone());
+                    col = col.child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .h(theme::u(ROW_H))
+                            .pr(px(SCROLLBAR_PAD))
+                            .gap_1p5()
+                            .items_center()
+                            .bg(c(theme::BG_ELEVATED).opacity(0.6))
+                            .text_size(theme::u(10.5))
+                            .text_color(c(theme::FG_DIM))
+                            .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
+                            .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(theme::ACCENT_TEXT)).child(cm.short.clone()))
+                            .child(div().flex_1().min_w_0().truncate().child(format!("{} · {}", cm.author, cm.when)))
+                            .child(
+                                div()
+                                    .id(("scm-c-all", i))
+                                    .flex_none()
+                                    .px_1p5()
+                                    .py(px(1.))
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                    .child(tr("View full diff"))
+                                    .on_click(cx.listener(move |this, _, w, cx| {
+                                        this.scm_show_commit_all(h_all.clone(), short_all.clone(), subj_all.clone(), w, cx);
+                                    })),
+                            ),
+                    );
+                    match s.commit_files.get(&cm.hash) {
+                        None => {
+                            col = col.child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_shrink_0()
+                                    .h(theme::u(ROW_H))
+                                    .pr(px(SCROLLBAR_PAD))
+                                    .gap_1p5()
+                                    .items_center()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
+                                    .child(tr("Reading the changed files…")),
+                            );
+                        }
+                        Some(files) if files.is_empty() => {
+                            col = col.child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_shrink_0()
+                                    .h(theme::u(ROW_H))
+                                    .pr(px(SCROLLBAR_PAD))
+                                    .gap_1p5()
+                                    .items_center()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
+                                    .child(tr("No changed files.")),
+                            );
+                        }
+                        Some(files) => {
+                            for (k, (code, fpath)) in files.iter().enumerate().take(60) {
+                                let (h_f, short_f, p_f) = (cm.hash.clone(), cm.short.clone(), fpath.clone());
+                                let name = fpath.rsplit('/').next().unwrap_or(fpath).to_string();
+                                let dir = fpath.rsplit_once('/').map(|(d, _)| d.replace('/', "\\")).unwrap_or_default();
+                                let col_tok = code_color(*code);
+                                let file_key = PathBuf::from(format!("flux-diff://commit/{}/{}", cm.hash, fpath));
+                                let is_active = active_doc_path.as_ref() == Some(&file_key);
+                                col = col.child(
+                                    h_flex()
+                                        .id(("scm-cf", i * 1000 + k))
+                                        .w_full()
+                                        .min_w_0()
+                                        .flex_none()
+                                        .overflow_hidden()
+                                        .h(theme::u(ROW_H))
+                                        .pr(px(SCROLLBAR_PAD))
+                                        .gap_1p5()
+                                        .items_center()
+                                        .text_xs()
+                                        .cursor_pointer()
+                                        .when(is_active, |h| h.bg(c(theme::SELECT)))
+                                        .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                        .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
+                                        .child(crate::files::file_icon_el(&name, theme::u(13.)))
+                                        .child(div().flex_shrink(1.).min_w_0().truncate().text_color(c(col_tok)).child(name))
+                                        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir))
+                                        .child(div().flex_none().w(theme::u(12.)).text_right().font_weight(FontWeight::BOLD).text_color(c(col_tok)).child(code.to_string()))
+                                        .on_click(cx.listener(move |this, _, w, cx| {
+                                            this.scm_show_commit_file(h_f.clone(), short_f.clone(), p_f.clone(), w, cx);
+                                        })),
+                                );
+                            }
+                            if files.len() > 60 {
+                                col = col.child(
+                                    h_flex()
+                                        .w_full()
+                                        .min_w_0()
+                                        .flex_shrink_0()
+                                        .h(theme::u(ROW_H))
+                                        .pr(px(SCROLLBAR_PAD))
+                                        .gap_1p5()
+                                        .items_center()
+                                        .text_xs()
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(crate::scm_graph::render_rails_cell(after_lanes.clone()))
+                                        .child(crate::trf!("… and {n} more files"; n => files.len() - 60)),
+                                );
+                            }
+                        }
+                    }
+                }
+                col.into_any_element()
+            });
+            panes.push(PaneBuilt {
+                spec: PaneSpec {
+                    id: ScmPane::Graph,
+                    flexible,
+                    min_h: if flexible {
+                        flex_min(natural, graph_h, 3.)
+                    } else {
+                        header_h
+                    },
+                    natural_h: natural,
+                    saved: s.pane_h[ScmPane::Graph as usize],
+                },
+                scroll_id: "scm-scroll-graph",
+                header: hdr,
+                rows,
+            });
+        }
+
+        {
+            let hdr = section(
+                "scm-sec-actions",
+                "GitHub Actions (deploy)".into(),
+                0,
+                s.show_actions,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
                 this.scm.show_actions = !this.scm.show_actions;
                 if this.scm.show_actions {
                     this.scm_load_actions(cx);
                 }
                 cx.notify();
-            })),
-        );
-        if s.show_actions {
-            if s.workflows.is_empty() && s.runs.is_empty() {
-                body = body.child(
-                    div()
-                        .flex_none()
-                        .px(theme::u(18.))
-                        .py_1()
-                        .text_xs()
-                        .text_color(c(theme::FG_DIM))
-                        .child(if s.actions_loaded {
-                            "No active workflows in this repository."
-                        } else {
-                            "Loading workflows…"
-                        }),
-                );
-            }
-            for (i, wf) in s.workflows.iter().enumerate() {
-                let w = wf.clone();
-                body = body.child(
-                    scm_row()
-                        .pl(theme::u(18.))
-                        .pr_2()
-                        .gap_1p5()
-                        .text_size(theme::u(11.5))
-                        .child(Icon::new(Ico::Rocket).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
-                        .child(div().flex_1().min_w_0().truncate().child(wf.name.clone()))
-                        .child(
-                            Button::new(("scm-wf", i))
-                                .icon(Icon::new(IconName::Play))
-                                .label(tr("Run"))
-                                .ghost()
-                                .xsmall()
-                                .tooltip(tr("gh workflow run on the current branch (needs workflow_dispatch)"))
-                                .on_click(cx.listener(move |this, _, _, cx| this.scm_run_workflow(w.clone(), cx))),
-                        ),
-                );
-            }
-            for (i, r) in s.runs.iter().enumerate() {
-                let (mark, col) = match (r.status.as_str(), r.conclusion.as_str()) {
-                    ("completed", "success") => ("✓", theme::GREEN),
-                    ("completed", "failure") => ("✕", theme::DANGER),
-                    ("completed", _) => ("–", theme::FG_DIM),
-                    _ => ("●", theme::BLUE),
-                };
-                let url = r.url.clone();
-                body = body.child(
-                    scm_row()
-                        .id(("scm-run", i))
-                        .pl(theme::u(18.))
-                        .pr_2()
-                        .gap_1p5()
-                        .text_size(theme::u(11.5))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(theme::u(12.))
-                                .text_color(c(col))
-                                .child(mark),
-                        )
-                        .child(div().flex_1().min_w_0().truncate().child(r.title.clone()))
-                        .child(
-                            div()
-                                .flex_shrink(1.)
-                                .min_w_0()
-                                .max_w(theme::u(130.))
-                                .truncate()
-                                .text_xs()
-                                .text_color(c(theme::FG_DIM))
-                                .child(format!("{} · {}", r.workflow, r.branch)),
-                        )
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                );
-            }
+            }))
+            .into_any_element();
+            let rows_n = (s.workflows.len() + s.runs.len()).max(1);
+            let natural = header_h + rows_n as f32 * row_h;
+            let flexible = s.show_actions;
+            let rows = flexible.then(|| {
+                let mut col = v_flex().w_full().min_w_0().pb_1();
+                if s.workflows.is_empty() && s.runs.is_empty() {
+                    col = col.child(div().flex_shrink_0().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(if s.actions_loaded { "No active workflows in this repository." } else { "Loading workflows…" }));
+                }
+                for (i, wf) in s.workflows.iter().enumerate() {
+                    let w = wf.clone();
+                    col = col.child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .h(theme::u(ROW_H))
+                            .pl(theme::u(18.))
+                            .pr(px(SCROLLBAR_PAD))
+                            .gap_1p5()
+                            .items_center()
+                            .text_size(theme::u(11.5))
+                            .child(Icon::new(Ico::Rocket).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
+                            .child(div().flex_1().min_w_0().truncate().child(wf.name.clone()))
+                            .child(
+                                Button::new(("scm-wf", i))
+                                    .icon(Icon::new(IconName::Play))
+                                    .label(tr("Run"))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(tr("gh workflow run on the current branch (needs workflow_dispatch)"))
+                                    .on_click(cx.listener(move |this, _, _, cx| this.scm_run_workflow(w.clone(), cx))),
+                            ),
+                    );
+                }
+                for (i, r) in s.runs.iter().enumerate() {
+                    let (mark, col_tok) = match (r.status.as_str(), r.conclusion.as_str()) {
+                        ("completed", "success") => ("✓", theme::GREEN),
+                        ("completed", "failure") => ("✕", theme::DANGER),
+                        ("completed", _) => ("–", theme::FG_DIM),
+                        _ => ("●", theme::BLUE),
+                    };
+                    let url = r.url.clone();
+                    col = col.child(
+                        h_flex()
+                            .id(("scm-run", i))
+                            .w_full()
+                            .min_w_0()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .h(theme::u(ROW_H))
+                            .pl(theme::u(18.))
+                            .pr(px(SCROLLBAR_PAD))
+                            .gap_1p5()
+                            .items_center()
+                            .text_size(theme::u(11.5))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(theme::u(12.))
+                                    .text_color(c(col_tok))
+                                    .child(mark),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child(r.title.clone()))
+                            .child(
+                                div()
+                                    .flex_shrink(1.)
+                                    .min_w_0()
+                                    .max_w(theme::u(130.))
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(format!("{} · {}", r.workflow, r.branch)),
+                            )
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                }
+                col.into_any_element()
+            });
+            panes.push(PaneBuilt {
+                spec: PaneSpec {
+                    id: ScmPane::Actions,
+                    flexible,
+                    min_h: if flexible {
+                        flex_min(natural, row_h, 2.)
+                    } else {
+                        header_h
+                    },
+                    natural_h: natural,
+                    saved: s.pane_h[ScmPane::Actions as usize],
+                },
+                scroll_id: "scm-scroll-actions",
+                header: hdr,
+                rows,
+            });
         }
-        v_flex().size_full().child(body).into_any_element()
+
+        let specs: Vec<PaneSpec> = panes.iter().map(|p| p.spec).collect();
+        let has_sash: Vec<bool> = (0..specs.len())
+            .map(|i| {
+                i > 0
+                    && specs[..i].iter().any(|p| p.flexible)
+                    && specs[i..].iter().any(|p| p.flexible)
+            })
+            .collect();
+        let sash_count = has_sash.iter().filter(|&&b| b).count();
+        let stack_h = s.stack_h.get();
+        let avail_h = if stack_h > 1. {
+            (stack_h - sash_count as f32 * SASH_H).max(120.)
+        } else {
+            600.
+        };
+        let heights = resolve_pane_heights(avail_h, &specs);
+        let active_sash = (self.resizing == 5)
+            .then(|| self.scm.pane_drag.as_ref().map(|d| d.sash))
+            .flatten();
+        let stack_ref = s.stack_h.clone();
+        let mut stack = v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .min_w_0()
+            .relative()
+            .on_prepaint(move |bounds, _, _| {
+                stack_ref.set(f32::from(bounds.size.height));
+            });
+
+        let drag_ids: Vec<ScmPane> = specs.iter().map(|p| p.id).collect();
+        let drag_mins: Vec<f32> = specs.iter().map(|p| p.min_h).collect();
+        let drag_maxs: Vec<f32> = specs
+            .iter()
+            .map(|p| if p.flexible { f32::INFINITY } else { p.min_h })
+            .collect();
+
+        for (i, pane) in panes.into_iter().enumerate() {
+            let id = pane.spec.id;
+            if i > 0 {
+                if has_sash[i] {
+                    let on = active_sash == Some(i);
+                    let ids = drag_ids.clone();
+                    let mins = drag_mins.clone();
+                    let maxs = drag_maxs.clone();
+                    let fallback = heights.clone();
+                    stack = stack.child(
+                        div()
+                            .id(("scm-sash", i))
+                            .group("scm-sash")
+                            .w_full()
+                            .h(px(SASH_H))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .cursor_row_resize()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(if on { px(2.) } else { px(1.) })
+                                    .bg(if on {
+                                        c(theme::ACCENT)
+                                    } else {
+                                        c(theme::BORDER)
+                                    })
+                                    .group_hover("scm-sash", |st| {
+                                        st.h(px(2.)).bg(c(theme::ACCENT))
+                                    }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                    if ev.click_count == 2 {
+                                        this.scm.pane_h = [None; 6];
+                                        cx.notify();
+                                        return;
+                                    }
+                                    let painted = this.scm.painted_h.get();
+                                    let start: Vec<f32> = ids
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(j, pid)| {
+                                            let p = painted[*pid as usize];
+                                            if p > 1. {
+                                                p
+                                            } else {
+                                                fallback[j]
+                                            }
+                                        })
+                                        .collect();
+                                    this.scm.pane_drag = Some(ScmPaneDrag {
+                                        sash: i,
+                                        y0: f32::from(ev.position.y),
+                                        ids: ids.clone(),
+                                        start,
+                                        mins: mins.clone(),
+                                        maxs: maxs.clone(),
+                                    });
+                                    this.resizing = 5;
+                                    cx.notify();
+                                }),
+                            ),
+                    );
+                } else {
+                    stack = stack.child(div().w_full().h(px(1.)).flex_none().bg(c(theme::BORDER)));
+                }
+            }
+            let painted_ref = s.painted_h.clone();
+            let mut box_el = v_flex()
+                .w_full()
+                .min_w_0()
+                .relative()
+                .overflow_hidden()
+                .child(pane.header)
+                .on_prepaint(move |bounds, _, _| {
+                    let mut a = painted_ref.get();
+                    a[id as usize] = f32::from(bounds.size.height);
+                    painted_ref.set(a);
+                });
+            if pane.spec.flexible {
+                if let Some(rows_el) = pane.rows {
+                    box_el = box_el.child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_y_scrollbar()
+                            .id(pane.scroll_id)
+                            .scroll_bounce(false)
+                            .child(rows_el),
+                    );
+                }
+                let h = heights[i].max(1.);
+                let eff_min = pane.spec.min_h.min(h);
+                box_el.style().flex_grow = Some(h);
+                box_el = box_el.flex_shrink_1().flex_basis(px(0.)).min_h(px(eff_min));
+            } else {
+                box_el = box_el.flex_none().h(px(header_h));
+            }
+            stack = stack.child(box_el);
+        }
+
+        let heading = section("scm-changes-view", tr("Changes").to_uppercase(), 0, s.show_changes_view)
+            .border_t_1()
+            .border_b_1()
+            .border_color(c(theme::BORDER))
+            .when(s.show_changes_view, |h| {
+                h.child(
+                    Button::new("scm-view-mode")
+                        .label(if s.show_tree { tr("List") } else { tr("Tree") })
+                        .ghost()
+                        .xsmall()
+                        .tooltip(if s.show_tree { tr("View as List") } else { tr("View as Tree") })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.scm.show_tree = !this.scm.show_tree;
+                            cx.notify();
+                        })),
+                )
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.scm.show_changes_view = !this.scm.show_changes_view;
+                cx.notify();
+            }));
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .bg(c(theme::BG_SIDE))
+            .child(heading)
+            .when(
+                s.show_changes_view || s.is_busy() || s.error.is_some() || s.repo_error.is_some()
+                    || s.confirm_discard.is_some() || s.confirm_uninit,
+                |v| v.child(top),
+            )
+            .child(stack)
+            .into_any_element()
     }
 
     pub(crate) fn render_scm_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_px()
-            .child(tool_button("scm-h-commit", IconName::Check, "Commit", cx, |this, w, cx| this.scm_commit(After::Nothing, false, w, cx)))
-            .child(tool_button("scm-h-refresh", IconName::RefreshCw, "Refresh", cx, |this, _, cx| this.scm_refresh(cx)))
-            .child(Button::new("scm-h-more").icon(Icon::new(IconName::Ellipsis)).ghost().xsmall().dropdown_menu(|m: PopupMenu, _, _| {
-                m.min_w(px(230.))
-                    .menu(tr("Pull"), Box::new(ScmPull))
-                    .menu(tr("Push"), Box::new(ScmPush))
-                    .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
-                    .menu(tr("Fetch"), Box::new(ScmFetch))
-                    .separator()
-                    .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
-                    .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
-                    .separator()
-                    .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
-                    .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
-                    .separator()
-                    .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
-                    .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
-                    .separator()
-                    .menu(tr("Remove Git from This Folder…"), Box::new(ScmRemoveGit))
-            }))
+            .child(tool_button(
+                "scm-h-refresh",
+                IconName::RefreshCw,
+                "Refresh",
+                cx,
+                |this, _, cx| {
+                    if this.scm.watch.unavailable {
+                        this.scm.watch.paths.clear();
+                    }
+                    this.scm_refresh(cx);
+                },
+            ))
+            .when(self.scm.repo.is_some(), |h| {
+                h.child(
+                    Button::new("scm-h-more")
+                        .icon(Icon::new(IconName::Ellipsis))
+                        .ghost()
+                        .xsmall()
+                        .disabled(self.scm.is_busy())
+                        .dropdown_menu(|m: PopupMenu, _, _| {
+                            m.min_w(px(230.))
+                                .menu(tr("Pull"), Box::new(ScmPull))
+                                .menu(tr("Push"), Box::new(ScmPush))
+                                .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
+                                .menu(tr("Fetch"), Box::new(ScmFetch))
+                                .menu(tr("Git: Checkout Branch or Tag"), Box::new(ScmCheckout))
+                                .menu(tr("Git: Branches, Tags, Remotes and Stashes"), Box::new(ScmManage))
+                                .menu(tr("Git: Show Current File History"), Box::new(ScmFileHistory))
+                                .separator()
+                                .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
+                                .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
+                            .menu(tr("Commit (Sign Off)"), Box::new(ScmCommitSignoff))
+                                .separator()
+                                .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
+                                .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
+                                .separator()
+                                .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
+                                .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
+                                .separator()
+                                .menu(tr("Remove Git from This Folder…"), Box::new(ScmRemoveGit))
+                        }),
+                )
+            })
     }
 
 
@@ -1391,25 +2375,32 @@ impl Workbench {
     pub(crate) fn on_scm_commit_sync(&mut self, _: &ScmCommitSync, w: &mut Window, cx: &mut Context<Self>) {
         self.scm_commit(After::Sync, false, w, cx);
     }
+    pub(crate) fn on_scm_commit_default(&mut self, _: &ScmCommitDefault, w: &mut Window, cx: &mut Context<Self>) {
+        self.scm_commit(After::Nothing, false, w, cx);
+    }
+    pub(crate) fn on_scm_commit_signoff(&mut self, _: &ScmCommitSignoff, w: &mut Window, cx: &mut Context<Self>) {
+        self.scm_commit_with_options(After::Nothing, false, true, w, cx);
+    }
     pub(crate) fn on_scm_commit_amend(&mut self, _: &ScmCommitAmend, w: &mut Window, cx: &mut Context<Self>) {
         self.scm_commit(After::Nothing, true, w, cx);
     }
     pub(crate) fn on_scm_pull(&mut self, _: &ScmPull, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run("Pulling…", vec![git_step(&["pull", "--autostash"])], cx, |this, _, cx| {
-            this.agent.reloads.extend(this.docs.iter().filter(|d| !d.dirty).map(|d| d.path.clone()));
-            this.refresh_tree(cx);
+        self.scm_run(tr("Pulling…"), vec![Step::Remote(RemoteAction::Pull)], cx, |this, _, _| {
             this.status = tr("Pulled").into();
         });
     }
     pub(crate) fn on_scm_push(&mut self, _: &ScmPush, _: &mut Window, cx: &mut Context<Self>) {
-        let steps = self.push_steps();
-        self.scm_run("Pushing…", steps, cx, |this, _, _| this.status = tr("Pushed").into());
+        self.scm_run(tr("Pushing…"), vec![Step::Remote(RemoteAction::Push)], cx, |this, _, _| {
+            this.status = tr("Pushed").into();
+        });
     }
     pub(crate) fn on_scm_sync(&mut self, _: &ScmSync, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_sync(cx);
     }
     pub(crate) fn on_scm_fetch(&mut self, _: &ScmFetch, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run("Fetching…", vec![git_step(&["fetch", "--prune"])], cx, |this, _, _| this.status = tr("Fetched").into());
+        self.scm_run(tr("Fetching…"), vec![Step::Remote(RemoteAction::Fetch)], cx, |this, _, _| {
+            this.status = tr("Fetched").into();
+        });
     }
     pub(crate) fn on_scm_remove_git(&mut self, _: &ScmRemoveGit, _: &mut Window, cx: &mut Context<Self>) {
         if self.scm.repo.is_some() {
@@ -1468,10 +2459,17 @@ impl Workbench {
     }
 
     pub(crate) fn on_scm_stage_all(&mut self, _: &ScmStageAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_stage(None, true, cx);
+        if self.scm.repo.is_some() {
+            self.scm_run(
+                tr("Staging…"),
+                vec![git_step(&["add", "-A"])],
+                cx,
+                |_, _, _| {},
+            );
+        }
     }
     pub(crate) fn on_scm_unstage_all(&mut self, _: &ScmUnstageAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_stage(None, false, cx);
+        self.scm_paths(Group::Staged, None, false, cx);
     }
     pub(crate) fn on_scm_create_pr(&mut self, _: &ScmCreatePr, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_create_pr(cx);
@@ -1493,33 +2491,27 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_url, parse_log, parse_status, scm_row, DOT_SIZE, DOT_TOP, LANE_MID, ROW_H};
+    use super::{
+        apply_sash_drag, change_tree_rows, find_url, lane_geometry, parse_log,
+        resolve_pane_heights, scm_row, ChangeTreeRow, FileChange, PaneSpec, ScmPane, ScmPaneDrag,
+        ROW_H,
+    };
     use crate::theme;
     use gpui_kit::{Length, Overflow, Styled as _};
 
     #[test]
-    fn porcelain_v2() {
-        let out = "# branch.oid abc\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -21\0\
-1 .M N... 100644 100644 100644 a b src/app.py\0\
-1 A. N... 000000 100644 100644 0 b new.txt\0\
-1 MM N... 100644 100644 100644 a b both.rs\0\
-2 R. N... 100644 100644 100644 a b R100 renamed.py\0old.py\0\
-? notes.md\0u UU N... 100644 100644 100644 100644 a b c conflict.txt\0";
-        let st = parse_status(out);
-        assert_eq!(st.branch.as_deref(), Some("main"));
-        assert_eq!(st.upstream.as_deref(), Some("origin/main"));
-        assert_eq!((st.ahead, st.behind), (2, 21));
-        assert_eq!(st.staged.iter().map(|c| (c.path.as_str(), c.code)).collect::<Vec<_>>(), vec![("new.txt", 'A'), ("both.rs", 'M'), ("renamed.py", 'R')]);
-        assert_eq!(st.staged[2].orig.as_deref(), Some("old.py"));
-        assert_eq!(st.changes.iter().map(|c| (c.path.as_str(), c.code)).collect::<Vec<_>>(), vec![("src/app.py", 'M'), ("both.rs", 'M'), ("notes.md", 'U')]);
-        assert_eq!(st.conflicts[0].path, "conflict.txt");
-        assert_eq!(st.count(), 7);
-    }
-
-    #[test]
-    fn spaces_in_paths() {
-        let st = parse_status("1 .M N... 100644 100644 100644 a b my folder/a file.py\0");
-        assert_eq!(st.changes[0].path, "my folder/a file.py");
+    fn changes_tree_groups_paths_and_hides_only_collapsed_descendants() {
+        use ChangeTreeRow::{File, Folder};
+        let files = ["src/lib.rs", "README.md", "src/nested/main.rs", "other/end.rs"]
+            .map(|path| FileChange { path: path.into(), code: 'M', orig: None });
+        assert_eq!(
+            change_tree_rows(&files, &["src".to_string()].into_iter().collect()),
+            vec![File(1, 0), Folder("other", 0), File(3, 1), Folder("src", 0)]
+        );
+        assert_eq!(
+            change_tree_rows(&files, &["src/nested".to_string()].into_iter().collect()),
+            vec![File(1, 0), Folder("other", 0), File(3, 1), Folder("src", 0), File(0, 1), Folder("src/nested", 1)]
+        );
     }
 
     #[test]
@@ -1550,21 +2542,98 @@ mod tests {
     }
 
     #[test]
-    fn scm_row_height_clears_xs_controls_and_centers_lane() {
-        assert_eq!(LANE_MID * 2., ROW_H);
-        assert_eq!(DOT_TOP + DOT_SIZE * 0.5, LANE_MID);
-        for scale in [1.0_f32, 1.15, 1.3] {
-            let row_px = (ROW_H * scale).round();
-            let xs_line_h = 0.75 * 16. * scale * 1.618_034;
-            let xsmall_btn_h = 1.25 * 16. * scale;
-            assert!(
-                row_px > xs_line_h,
-                "row_px {row_px} must exceed xs line_height {xs_line_h}"
-            );
-            assert!(
-                row_px > xsmall_btn_h,
-                "row_px {row_px} must exceed xsmall button {xsmall_btn_h}"
-            );
-        }
+    fn graph_lane_geometry_centers_dot_and_caps_ends() {
+        assert_eq!(lane_geometry(0, 1, false), (12., 12., 8.));
+        assert_eq!(lane_geometry(0, 3, false), (12., 0., 8.));
+        assert_eq!(lane_geometry(1, 3, false), (0., 0., 8.));
+        assert_eq!(lane_geometry(2, 3, false), (0., 12., 8.));
+        assert_eq!(lane_geometry(2, 3, true), (0., 0., 8.));
+    }
+
+    #[test]
+    fn pane_layout_splits_open_sections_and_cascades_sash_drag() {
+        let specs = vec![
+            PaneSpec {
+                id: ScmPane::Staged,
+                flexible: true,
+                min_h: 72.,
+                natural_h: 576.,
+                saved: None,
+            },
+            PaneSpec {
+                id: ScmPane::Changes,
+                flexible: false,
+                min_h: 24.,
+                natural_h: 24.,
+                saved: None,
+            },
+            PaneSpec {
+                id: ScmPane::Graph,
+                flexible: true,
+                min_h: 100.,
+                natural_h: 2000.,
+                saved: None,
+            },
+            PaneSpec {
+                id: ScmPane::Actions,
+                flexible: false,
+                min_h: 24.,
+                natural_h: 24.,
+                saved: None,
+            },
+        ];
+        let h = resolve_pane_heights(600., &specs);
+        assert!((h[0] - 276.).abs() < 0.1);
+        assert!((h[1] - 24.).abs() < 0.1);
+        assert!((h[2] - 276.).abs() < 0.1);
+        assert!((h[3] - 24.).abs() < 0.1);
+
+        // Dragging sash above empty Changes cascades straight between Staged and Graph.
+        let drag = ScmPaneDrag {
+            sash: 1,
+            y0: 300.,
+            ids: specs.iter().map(|s| s.id).collect(),
+            start: h.clone(),
+            mins: specs.iter().map(|s| s.min_h).collect(),
+            maxs: specs
+                .iter()
+                .map(|s| if s.flexible { f32::INFINITY } else { s.min_h })
+                .collect(),
+        };
+        let moved = apply_sash_drag(&drag, 200.);
+        assert_eq!(moved.len(), 2);
+        assert_eq!(moved[0].0, ScmPane::Staged);
+        assert!((moved[0].1 - 176.).abs() < 0.1);
+        assert_eq!(moved[1].0, ScmPane::Graph);
+        assert!((moved[1].1 - 376.).abs() < 0.1);
+
+        // Dragging further respects min_h floor on Staged.
+        let clamped = apply_sash_drag(&drag, 0.);
+        assert!((clamped[0].1 - 72.).abs() < 0.1);
+        assert!((clamped[1].1 - 480.).abs() < 0.1);
+    }
+
+    #[test]
+    fn pane_layout_shrinks_saved_heights_gracefully_on_small_window() {
+        let specs = vec![
+            PaneSpec {
+                id: ScmPane::Staged,
+                flexible: true,
+                min_h: 72.,
+                natural_h: 500.,
+                saved: Some(380.),
+            },
+            PaneSpec {
+                id: ScmPane::Changes,
+                flexible: true,
+                min_h: 72.,
+                natural_h: 500.,
+                saved: Some(220.),
+            },
+        ];
+        let h = resolve_pane_heights(400., &specs);
+        assert!((h[0] + h[1] - 400.).abs() < 0.1);
+        assert!(h[0] >= 72. && h[1] >= 72.);
+        assert!(h[0] > h[1]);
     }
 }

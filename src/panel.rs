@@ -233,7 +233,7 @@ impl PanelSel {
 }
 
 fn mono_kind(k: LineKind) -> bool {
-    matches!(k, LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk | LineKind::Code | LineKind::Caret | LineKind::Blank)
+    matches!(k, LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Code | LineKind::Caret | LineKind::Blank)
 }
 
 pub(crate) type WrapCache = std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
@@ -249,7 +249,7 @@ pub(crate) struct Problem {
     pub message: String,
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     let n = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_start_matches(r"\\?\").to_lowercase();
     if cfg!(windows) { n(a) == n(b) } else { a == b }
 }
@@ -1308,7 +1308,6 @@ impl Workbench {
                 let col = match k {
                     LineKind::Err | LineKind::Caret => theme::DANGER,
                     LineKind::Warn => theme::WARN,
-                    LineKind::Hunk => theme::BLUE,
                     LineKind::Dim => theme::FG_DIM,
                     LineKind::Success => theme::GREEN,
                     LineKind::Code => theme::FG_STRONG,
@@ -1423,7 +1422,7 @@ impl Workbench {
         for (ix, l) in lines.iter().enumerate() {
             let marked = l.kind == LineKind::Code && lines.get(ix + 1).is_some_and(|n| n.kind == LineKind::Caret);
             let (width, hang) = match l.kind {
-                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Hunk => (cols.mono, 2),
+                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame => (cols.mono, 2),
                 LineKind::Code if !marked => (cols.mono, 2),
                 LineKind::CardMsg | LineKind::CardHint => (cols.card, 0),
                 LineKind::Result if l.err => (cols.result, 0),
