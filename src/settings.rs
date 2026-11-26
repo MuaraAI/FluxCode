@@ -1,6 +1,6 @@
 
 use crate::i18n::tr;
-use crate::theme::{self, c, GlassExt, UiSize, Visibility, PALETTES};
+use crate::theme::{self, c, GlassExt, UiSize, Visibility};
 use crate::workbench::{ScrollTarget, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
@@ -123,7 +123,7 @@ impl Default for Settings {
             show_whitespace: false,
             auto_save: true,
             agent_auto_approve: false,
-            theme: PALETTES[0].id.into(),
+            theme: theme::CODE_OSS_DARK.into(),
             icon_theme: String::new(),
             bg_image: None,
             bg_visibility: Visibility::default(),
@@ -225,11 +225,14 @@ impl Settings {
     }
 
     pub fn background(&self) -> Option<&Path> {
+        if self.theme == theme::CODE_OSS_DARK {
+            return None;
+        }
         self.bg_image.as_deref().filter(|p| p.is_file())
     }
 
     pub fn scene(&self) -> Option<crate::scene::Scene> {
-        if self.background().is_some() {
+        if self.theme == theme::CODE_OSS_DARK || self.background().is_some() {
             return None;
         }
         crate::scene::Scene::from_id(&self.bg_scene)
@@ -241,7 +244,7 @@ impl Settings {
 
     pub fn apply_backdrop(&self) {
         crate::theme::set(&self.theme, self.backdrop_visibility());
-        crate::theme::set_glass(self.glass);
+        crate::theme::set_glass(self.glass && self.theme != theme::CODE_OSS_DARK);
         crate::scene::set(self.scene(), self.bg_motion);
         crate::theme::set_scene_backdrop(self.scene().is_some());
         let _ = crate::ext::vsx_icons::set_active(&self.icon_theme);

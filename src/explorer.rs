@@ -684,7 +684,7 @@ impl Workbench {
                                 .w_full()
                                 .h(theme::u(20.))
                                 .pl(pl)
-                                .pr_2()
+                                .pr(px(18.))
                                 .gap_1()
                                 .items_center()
                                 .text_size(theme::u(11.))
@@ -762,7 +762,7 @@ impl Workbench {
                             .h(theme::u(20.))
                             .overflow_hidden()
                             .pl(px(base_pl))
-                            .pr_2()
+                            .pr(px(18.))
                             .gap_1()
                             .items_center()
                             .cursor_pointer()
@@ -969,7 +969,7 @@ impl Workbench {
             liq.sample_frame(cross_w, now).map(|fr| {
                 let st = crate::ui::liquid::LiquidStyle {
                     inset_a: 4.0,
-                    inset_b: 6.0,
+                    inset_b: 14.0,
                     cross_base: cross_w,
                     max_squeeze: 3.5,
                     radius: 6.0,
@@ -1208,8 +1208,8 @@ fn name_row(id: &str, depth: usize, icon: AnyElement, hide_arrows: bool, name_in
         .w_full()
         .h(theme::u(20.))
         .py_0()
-        .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
+        .pr(px(18.))
         .gap_1()
         .items_center()
         .bg(c(theme::SELECT))
@@ -1236,8 +1236,8 @@ fn delete_row(id: &str, depth: usize, path: &Path, view: &Entity<Workbench>) -> 
         .w_full()
         .h(theme::u(20.))
         .py_0()
-        .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
+        .pr(px(18.))
         .gap_1()
         .items_center()
         .bg(c(theme::SELECT))
