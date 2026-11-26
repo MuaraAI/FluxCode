@@ -1453,9 +1453,7 @@ impl Workbench {
             }
             self.wiztree.open_seq = self.wiztree.open_seq.wrapping_add(1);
         }
-        self.settings_open = false;
-        self.ext.page = None;
-        self.whats_new = None;
+        self.close_pages(window, cx);
         self.agent_full = false;
         self.wiztree.page = true;
         let want = self.wiztree.target.clone().or_else(|| self.root.clone());

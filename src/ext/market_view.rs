@@ -353,12 +353,11 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn market_open(&mut self, item: Item, cx: &mut Context<Self>) {
+    pub(crate) fn market_open(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
         let id = item.id();
         let loading = self.ext.market.open.as_ref().is_some_and(|o| o.id() == id);
+        self.close_pages(window, cx);
         self.ext.page = Some(format!("{PAGE}{id}"));
-        self.settings_open = false;
-        self.whats_new = None;
         if !self.ext.market.readme.contains_key(&id) && !loading {
             let folder = self.ext.market.installed(&id).map(|i| i.folder.clone());
             let it = item.clone();
@@ -412,9 +411,9 @@ impl Workbench {
                     .label(tr("Installed"))
                     .xsmall()
                     .ghost()
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, w, cx| {
                         cx.stop_propagation();
-                        this.market_open(it.clone(), cx);
+                        this.market_open(it.clone(), w, cx);
                     }))
                     .into_any_element()
             }
@@ -529,7 +528,7 @@ impl Workbench {
                             ))),
                     ),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.market_open(open.clone(), cx)))
+            .on_click(cx.listener(move |this, _, w, cx| this.market_open(open.clone(), w, cx)))
             .into_any_element()
     }
 
@@ -844,6 +843,7 @@ impl Workbench {
         let busy = m.busy.get(&id).copied();
         let gallery = !it.asset_uri.is_empty();
 
+        let applied = inst.as_ref().map(|_| super::native::applied(&id)).unwrap_or_default();
         let mut actions = h_flex().flex_none().gap_1();
         actions = match (busy, &inst) {
             (Some(b), _) => actions.child(
@@ -857,8 +857,41 @@ impl Workbench {
                     .loading(true),
             ),
             (None, Some(i)) => {
+                let has_icon_themes = !applied.icon_themes.is_empty();
+                let has_color_themes = !applied.themes.is_empty();
+                let mut a = actions;
+                if has_icon_themes {
+                    let only_icon = (applied.icon_themes.len() == 1).then(|| applied.icon_themes[0].0.clone());
+                    a = a.child(
+                        Button::new("vsx-choose-icon")
+                            .label(tr("Choose Icon Theme"))
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                if let Some(tid) = only_icon.as_deref().filter(|t| *t != super::vsx_icons::active_id()) {
+                                    this.set_icon_theme(tid, cx);
+                                } else {
+                                    this.open_icon_theme_picker(w, cx);
+                                }
+                            })),
+                    );
+                }
+                if has_color_themes {
+                    let only_theme = (applied.themes.len() == 1).then(|| applied.themes[0].0.clone());
+                    let btn = Button::new("vsx-choose-theme")
+                        .label(tr("Choose Color Theme"))
+                        .small();
+                    let btn = if !has_icon_themes { btn.primary() } else { btn.outline() };
+                    a = a.child(btn.on_click(cx.listener(move |this, _, w, cx| {
+                        if let Some(tid) = only_theme.as_deref().filter(|t| *t != theme::palette().id) {
+                            this.set_theme(tid, w, cx);
+                        } else {
+                            this.open_theme_picker(w, cx);
+                        }
+                    })));
+                }
                 let uid = id.clone();
-                let a = actions.child(
+                let a = a.child(
                     Button::new("vsx-uninstall")
                         .label(tr("Uninstall"))
                         .small()
@@ -1019,7 +1052,6 @@ impl Workbench {
             Some(_) => tr("It declares no themes, languages or snippets.").into(),
             None => tr("Install it to see what it declares (themes, languages, snippets).").into(),
         };
-        let applied = inst.as_ref().map(|_| super::native::applied(&id)).unwrap_or_default();
         let current = theme::palette().id;
         let theme_chips = h_flex().flex_wrap().gap_1().children(applied.themes.iter().enumerate().map(|(i, (tid, name))| {
             let tid = tid.clone();

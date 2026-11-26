@@ -37,7 +37,7 @@ actions!(
         RunFile, StopRun, NewTerminal, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
         ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
         CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
-        NextTheme, NextIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
+        NextTheme, NextIconTheme, ChooseTheme, ChooseIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
         GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmPull, ScmPush, ScmSync, ScmFetch,
         ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, QuickOpenFile, QuickClose, QuickUp, QuickDown,
         AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
@@ -97,7 +97,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-f5", RunFile, None),
         KeyBinding::new("shift-f5", StopRun, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
-        KeyBinding::new("ctrl-k ctrl-t", NextTheme, None),
+        KeyBinding::new("ctrl-k ctrl-t", ChooseTheme, None),
         KeyBinding::new("ctrl-k v", TogglePreview, None),
         KeyBinding::new("up", ExplorerUp, Some("Explorer")),
         KeyBinding::new("down", ExplorerDown, Some("Explorer")),
@@ -415,6 +415,10 @@ pub struct Workbench {
     pub(crate) settings_theme_anim: u64,
     pub(crate) settings_icon_open: bool,
     pub(crate) settings_icon_focus: FocusHandle,
+    pub(crate) settings_lang_open: bool,
+    pub(crate) settings_lang_focus: FocusHandle,
+    pub(crate) settings_font_open: bool,
+    pub(crate) settings_font_focus: FocusHandle,
     pub(crate) theme_preview_origin: Option<crate::settings::ThemeSnapshot>,
     pub(crate) motion_check: Option<crate::motion_check::Check>,
     pub(crate) quick: crate::quick::QuickOpen,
@@ -701,6 +705,10 @@ impl Workbench {
             settings_theme_anim: 0,
             settings_icon_open: false,
             settings_icon_focus: cx.focus_handle(),
+            settings_lang_open: false,
+            settings_lang_focus: cx.focus_handle(),
+            settings_font_open: false,
+            settings_font_focus: cx.focus_handle(),
             theme_preview_origin: None,
             motion_check: None,
             quick,
@@ -1014,15 +1022,27 @@ impl Workbench {
         self.finish_open_prepared(path, res, window, cx);
     }
 
+    pub(crate) fn close_pages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        self.settings_theme_open = false;
+        self.settings_icon_open = false;
+        self.settings_lang_open = false;
+        self.settings_font_open = false;
+        self.cancel_theme_preview(window, cx);
+        self.wiztree.page = false;
+        self.wiztree.settings_open = false;
+        self.mcbe.page = false;
+        self.ext.page = None;
+        self.whats_new = None;
+        self.theme_menu = false;
+    }
+
     fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.wiztree.page && !self.nav_replaying {
             self.push_nav_history(NavTarget::WizTree);
             self.nav_suppress_path = Some(path.clone());
         }
-        self.ext.page = None;
-        self.settings_open = false;
-        self.whats_new = None;
-        self.wiztree.page = false;
+        self.close_pages(window, cx);
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
             return true;
@@ -1690,10 +1710,7 @@ impl Workbench {
     ) {
         self.agent.user_nav = Some(std::time::Instant::now());
         self.agent_full = false;
-        self.settings_open = false;
-        self.ext.page = None;
-        self.whats_new = None;
-        self.wiztree.page = false;
+        self.close_pages(window, cx);
         if let Some(ln) = line {
             self.open_location(path.clone(), ln, 0, window, cx);
         } else if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
@@ -1763,9 +1780,7 @@ impl Workbench {
         self.nav_replaying = true;
         match target {
             NavTarget::WizTree => {
-                self.settings_open = false;
-                self.ext.page = None;
-                self.whats_new = None;
+                self.close_pages(window, cx);
                 self.agent_full = false;
                 self.wiztree.page = true;
                 self.wiztree.open_seq = self.wiztree.open_seq.wrapping_add(1);
@@ -2314,13 +2329,8 @@ impl Workbench {
         h.focus(window, cx);
     }
 
-    fn on_show_mcbe(&mut self, _: &ShowMcbe, _: &mut Window, cx: &mut Context<Self>) {
-        if self.has_mcbe_workspace() {
-            self.show_view(SideView::Mcbe, cx);
-        } else {
-            self.status = tr("No packs detected yet. Generate BP/RP below.").into();
-            cx.notify();
-        }
+    fn on_show_mcbe(&mut self, _: &ShowMcbe, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_mcbe(window, cx);
     }
 
     pub(crate) fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
@@ -2354,14 +2364,13 @@ impl Workbench {
     }
 
     fn on_show_settings(&mut self, _: &ShowSettings, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings_open = !self.settings_open;
+        let opening = !self.settings_open;
+        self.close_pages(window, cx);
+        self.settings_open = opening;
         if self.settings_open {
             self.settings_scroll.set_offset(point(px(0.), px(0.)));
             self.settings_focus.focus(window, cx);
         } else {
-            self.settings_theme_open = false;
-            self.settings_icon_open = false;
-            self.cancel_theme_preview(window, cx);
             self.focus.focus(window, cx);
         }
         cx.notify();
@@ -2814,6 +2823,8 @@ impl Workbench {
     pub(crate) fn primary_ab_slot(&self) -> Option<usize> {
         if self.settings_open {
             None
+        } else if self.mcbe.page && self.has_mcbe_workspace() {
+            Some(6)
         } else if self.wiztree.page {
             Some(if self.has_mcbe_workspace() { 7 } else { 6 })
         } else if self.sidebar_open && !self.on_right(self.view) {
@@ -2966,6 +2977,7 @@ impl Workbench {
                 })
         };
 
+        let mcbe_active = self.mcbe.page && !self.settings_open;
         let wiztree_active = self.wiztree.page && !self.settings_open;
         let mcbe_on = self.has_mcbe_workspace();
         let slots = v_flex()
@@ -3024,7 +3036,13 @@ impl Workbench {
             .child(view_item("ab-ext", 4, Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
             .child(view_item("ab-agent", 5, Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
             .when(mcbe_on, |d| {
-                d.child(view_item("ab-mcbe", 6, Icon::new(crate::fluxicon::MCBE), SideView::Mcbe, self, cx))
+                d.child(
+                    div()
+                        .id("ab-mcbe-page")
+                        .relative()
+                        .child(slot_box("ab-mcbe", 6, Icon::new(crate::fluxicon::MCBE), mcbe_active, "Minecraft Bedrock", cx))
+                        .on_click(cx.listener(|this, _, w, cx| this.toggle_mcbe(w, cx))),
+                )
             })
             .child(
                 div()
@@ -3258,8 +3276,8 @@ impl Workbench {
                     )
                     .child(
                         h_flex().pt_2().child(
-                            self.action_button("run-open-mcbe", tr("Open Minecraft Bedrock Tools"), ui::Kind::Primary, cx, |this, _, cx| {
-                                this.show_view(SideView::Mcbe, cx);
+                            self.action_button("run-open-mcbe", tr("Open Minecraft Bedrock Tools"), ui::Kind::Primary, cx, |this, w, cx| {
+                                this.open_mcbe(w, cx);
                             }),
                         ),
                     ),
@@ -3727,6 +3745,9 @@ impl Workbench {
         }
         if self.wiztree.page {
             return self.render_wiztree(window, cx);
+        }
+        if self.mcbe.page {
+            return self.render_mcbe_page(window, cx);
         }
         if let Some(id) = self.ext.page.clone() {
             return self.render_ext_page(&id, cx);
@@ -4416,7 +4437,7 @@ impl Render for Workbench {
         let right_close = (!right_on && !full && !self.settings_open && motion).then_some(self.right_closing).flatten();
         let right_visible = right_on || right_close.is_some();
         let panel_visible = self.panel_open || (motion && self.panel_closing.is_some());
-        let editor_full_page = self.wiztree.page || self.ext.page.is_some() || self.whats_new.is_some();
+        let editor_full_page = self.wiztree.page || self.mcbe.page || self.ext.page.is_some() || self.whats_new.is_some();
         let vis = compute_visible_regions(
             self.settings_open,
             full,
@@ -4673,6 +4694,8 @@ impl Render for Workbench {
             .children(backdrop)
             .on_action(cx.listener(Self::on_next_theme))
             .on_action(cx.listener(Self::on_next_icon_theme))
+            .on_action(cx.listener(Self::on_choose_theme))
+            .on_action(cx.listener(Self::on_choose_icon_theme))
             .on_action(cx.listener(Self::on_tab_accept))
             .on_action(cx.listener(Self::on_term_history_prev))
             .on_action(cx.listener(Self::on_term_history_next))
@@ -4799,9 +4822,8 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_zoom_reset))
-            .on_action(cx.listener(|this, _: &ShowWhatsNew, _, cx| {
-                this.settings_open = false;
-                this.wiztree.page = false;
+            .on_action(cx.listener(|this, _: &ShowWhatsNew, w, cx| {
+                this.close_pages(w, cx);
                 this.whats_new = Some(crate::whatsnew::Page::all());
                 cx.notify();
             }))

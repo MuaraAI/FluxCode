@@ -169,7 +169,7 @@ pub fn icon_theme(
         label,
         ext_id: ext.id.clone(),
         ext_display: ext.display.clone(),
-        ext_folder: ext.folder.clone(),
+        ext_folder: root,
         path,
     })
 }
