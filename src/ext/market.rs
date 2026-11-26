@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use serde_json::{json, Value};
 use std::cell::Cell;
@@ -433,18 +432,34 @@ fn download(url: &str, to: &Path, max_secs: u32, max_bytes: u64) -> Result<(), S
 }
 
 pub fn fetch_icon(urls: &[String], to: &Path) -> bool {
-    if std::fs::metadata(to).is_ok_and(|m| m.len() > 0) {
+    if valid_local_icon(to) {
         return true;
     }
+    let _ = std::fs::remove_file(to);
     let Some(dir) = to.parent() else { return false };
     let _ = std::fs::create_dir_all(dir);
     let part = to.with_extension("part");
     for url in urls {
-        if download(url, &part, 20, 2_000_000).is_ok()
-            && std::fs::metadata(&part).is_ok_and(|m| m.len() > 0)
-            && std::fs::rename(&part, to).is_ok()
-        {
-            return true;
+        let _ = std::fs::remove_file(&part);
+        if download(url, &part, 20, 2_000_000).is_ok() {
+            let Some(ext) = read_head_512(&part).as_deref().and_then(sniff_image) else {
+                continue;
+            };
+            let ready = if ext == "svg" {
+                Some(part.clone())
+            } else {
+                clamp_image_to(&part, &part, MAX_ICON_DIM)
+            };
+            if let Some(src) = ready {
+                if to.exists() {
+                    let _ = std::fs::remove_file(to);
+                }
+                if std::fs::rename(&src, to).is_ok() {
+                    let _ = std::fs::remove_file(&part);
+                    return true;
+                }
+                let _ = std::fs::remove_file(&src);
+            }
         }
     }
     let _ = std::fs::remove_file(&part);
@@ -501,10 +516,49 @@ pub fn readme(item: &Item, installed: Option<&Path>) -> Result<String, String> {
     Ok(text)
 }
 
+fn decode_url_entities(s: &str) -> String {
+    if s.contains("&amp;") {
+        s.replace("&amp;", "&")
+    } else {
+        s.to_string()
+    }
+}
+
+fn img_src_attr(tag: &str, tl: &str) -> Option<String> {
+    let bytes = tl.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = tl[from..].find("src") {
+        let pos = from + rel;
+        if pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
+            let mut i = pos + 3;
+            while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                let v = tag.get(i..)?;
+                let q = v.chars().next().unwrap_or(' ');
+                let val = if q == '"' || q == '\'' {
+                    v[1..].split(q).next().unwrap_or("")
+                } else {
+                    v.split_whitespace().next().unwrap_or("")
+                };
+                return Some(val.to_string());
+            }
+        }
+        from = pos + 3;
+    }
+    None
+}
+
 pub fn readme_image_urls(md: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |u: &str| {
-        let u = u.trim().trim_matches(['<', '>']).split_whitespace().next().unwrap_or("").to_string();
+        let cleaned = decode_url_entities(u.trim().trim_matches(['<', '>']));
+        let u = cleaned.split_whitespace().next().unwrap_or("").to_string();
         if !u.is_empty() && !u.starts_with("data:") && !out.contains(&u) {
             out.push(u);
         }
@@ -526,11 +580,8 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
         let tag_end = lower[tag_start..].find('>').map(|e| tag_start + e).unwrap_or(lower.len());
         let tag = &md[tag_start..tag_end];
         let tl = &lower[tag_start..tag_end];
-        if let Some(p) = tl.find("src=") {
-            let v = &tag[p + 4..];
-            let q = v.chars().next().unwrap_or(' ');
-            let val = if q == '"' || q == '\'' { v[1..].split(q).next().unwrap_or("") } else { v.split_whitespace().next().unwrap_or("") };
-            add(val);
+        if let Some(val) = img_src_attr(tag, tl) {
+            add(&val);
         }
         from = tag_end.max(tag_start + 4);
     }
@@ -538,7 +589,7 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
 }
 
 fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
-    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).to_ascii_lowercase();
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_ascii_lowercase();
     Some(match bytes {
         [0x89, b'P', b'N', b'G', ..] => "png",
         [0xFF, 0xD8, ..] => "jpg",
@@ -550,25 +601,71 @@ fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
-const MAX_README_IMAGE_DIM: u32 = 6144;
+fn read_head_512(p: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p).ok()?;
+    let mut buf = [0u8; 512];
+    let n = f.read(&mut buf).ok()?;
+    (n > 0).then(|| buf[..n].to_vec())
+}
+
+const MAX_README_IMAGE_DIM: u32 = 4096;
+const MAX_ICON_DIM: u32 = 256;
+const MAX_DECODE_PIXELS: u64 = 64_000_000;
 
 fn is_svg_path(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+}
+
+fn image_dimensions_sniffed(src: &Path) -> Option<(u32, u32)> {
+    image::ImageReader::open(src)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+fn valid_local_icon(p: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(p) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() == 0 || meta.len() > 8_000_000 {
+        return false;
+    }
+    let Some(ext) = read_head_512(p).as_deref().and_then(sniff_image) else {
+        return false;
+    };
+    if ext == "svg" {
+        return true;
+    }
+    image_dimensions_sniffed(p).is_some_and(|(w, h)| {
+        w > 0
+            && h > 0
+            && w <= MAX_README_IMAGE_DIM
+            && h <= MAX_README_IMAGE_DIM
+            && (w as u64).saturating_mul(h as u64) <= MAX_DECODE_PIXELS
+    })
 }
 
 fn clamp_image_to(src: &Path, dst: &Path, max_dim: u32) -> Option<PathBuf> {
     if is_svg_path(src) {
         return Some(src.to_path_buf());
     }
-    let (w, h) = image::image_dimensions(src).ok()?;
-    if w == 0 || h == 0 {
+    let (w, h) = image_dimensions_sniffed(src)?;
+    if w == 0 || h == 0 || (w as u64).saturating_mul(h as u64) > MAX_DECODE_PIXELS {
         return None;
     }
     if w <= max_dim && h <= max_dim {
         return Some(src.to_path_buf());
     }
-    // Downscale tall images (e.g. sprite sheets) under Direct3D's 16384px limit before GPUI uploads them.
-    let img = image::open(src).ok()?;
+    // Downscale tall images (e.g. sprite sheets) under GPU texture limits before GPUI uploads them.
+    let img = image::ImageReader::open(src)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
     let scale = (max_dim as f64 / w as f64).min(max_dim as f64 / h as f64);
     let nw = ((w as f64 * scale).round() as u32).max(1);
     let nh = ((h as f64 * scale).round() as u32).max(1);
@@ -597,12 +694,14 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
             if let Some(p) = known {
                 if let Some(ready) = clamp_image_to(&p, &p, MAX_README_IMAGE_DIM) {
                     out.insert(url, ready);
+                } else {
+                    let _ = std::fs::remove_file(&p);
                 }
                 continue;
             }
             let part = cache.join(format!("{key}.part"));
             if download(&url, &part, 15, 6_000_000).is_ok() {
-                if let Some(ext) = std::fs::read(&part).ok().as_deref().and_then(sniff_image) {
+                if let Some(ext) = read_head_512(&part).as_deref().and_then(sniff_image) {
                     let to = cache.join(format!("{key}.{ext}"));
                     if to.exists() {
                         let _ = std::fs::remove_file(&to);
@@ -610,6 +709,8 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
                     if std::fs::rename(&part, &to).is_ok() {
                         if let Some(ready) = clamp_image_to(&to, &to, MAX_README_IMAGE_DIM) {
                             out.insert(url, ready);
+                        } else {
+                            let _ = std::fs::remove_file(&to);
                         }
                         continue;
                     }
@@ -618,6 +719,12 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
             let _ = std::fs::remove_file(&part);
         } else if let Some(folder) = installed {
             let rel = url.trim_start_matches("./").split(['?', '#']).next().unwrap_or("");
+            if Path::new(rel)
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)))
+            {
+                continue;
+            }
             let p = folder.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             if p.is_file() && p.starts_with(folder) {
                 let key = sha1_smol::Sha1::from(p.to_string_lossy().as_bytes()).digest().to_string();
@@ -734,7 +841,7 @@ fn read_installed(folder: &Path) -> Option<Installed> {
         .and_then(Value::as_str)
         .filter(|i| !i.contains(".."))
         .map(|i| folder.join(i))
-        .filter(|p| p.is_file());
+        .filter(|p| valid_local_icon(p));
     Some(Installed {
         id: format!("{publisher}.{name}").to_lowercase(),
         folder: folder.to_path_buf(),
@@ -1243,6 +1350,21 @@ mod tests {
     }
 
     #[test]
+    fn readme_image_urls_and_clamp_hardening() {
+        let md = concat!(
+            "<img data-src=\"https://example.com/ignored.png\" src = \"https://img.shields.io/a?x=1&amp;y=2\">\n",
+            "![b](https://example.com/b.png?p=1&amp;q=2)\n",
+        );
+        assert_eq!(
+            readme_image_urls(md),
+            vec![
+                "https://example.com/b.png?p=1&q=2".to_string(),
+                "https://img.shields.io/a?x=1&y=2".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn clamp_image_downscales_oversized_png_and_keeps_small() {
         let dir = std::env::temp_dir().join(format!("fx-img-clamp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1250,12 +1372,23 @@ mod tests {
         image::RgbaImage::new(100, 200).save_with_format(&small, image::ImageFormat::Png).unwrap();
         assert_eq!(clamp_image_to(&small, &small, 400).as_deref(), Some(small.as_path()));
         assert_eq!(image::image_dimensions(&small).unwrap(), (100, 200));
+        assert!(valid_local_icon(&small));
 
-        let tall = dir.join("tall.png");
-        image::RgbaImage::new(80, 400).save_with_format(&tall, image::ImageFormat::Png).unwrap();
-        let out = clamp_image_to(&tall, &tall, 200).unwrap();
-        assert_eq!(out, tall);
-        assert_eq!(image::image_dimensions(&tall).unwrap(), (40, 200));
+        let tall_part = dir.join("tall.part");
+        image::RgbaImage::new(80, 400).save_with_format(&tall_part, image::ImageFormat::Png).unwrap();
+        let out = clamp_image_to(&tall_part, &tall_part, 200).unwrap();
+        assert_eq!(out, dir.join("tall.png"));
+        assert_eq!(image::image_dimensions(&out).unwrap(), (40, 200));
+
+        let fake = dir.join("fake.png");
+        std::fs::write(&fake, b"<html>404</html>").unwrap();
+        assert_eq!(clamp_image_to(&fake, &fake, 200), None);
+        assert!(!valid_local_icon(&fake));
+
+        let svg = dir.join("ok.svg");
+        std::fs::write(&svg, b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>").unwrap();
+        assert!(valid_local_icon(&svg));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -432,30 +432,84 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn render_quick_open(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_quick_open(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let q = &self.quick;
-        let mut list = v_flex().id("quick-list").max_h(theme::u(420.)).overflow_y_scroll().py_1();
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("quick-row-liq", window, cx);
+        let row_cross = 500.0f32;
+        let origin_probe = crate::ui::liquid::keyed_origin_probe(liq.clone(), view_id);
+
+        let wrap_rows = |rows_box: Div, count: usize, sel: Option<usize>| -> Stateful<Div> {
+            let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(&liq, true, count, sel, row_cross, 165, motion);
+            let layer = frame.map(|fr| {
+                let st = crate::ui::liquid::LiquidStyle {
+                    inset_a: 4.0,
+                    inset_b: 4.0,
+                    cross_base: row_cross,
+                    max_squeeze: 3.5,
+                    radius: 6.0,
+                    capillary: 26.0,
+                    active_bg: c(theme::ACCENT).opacity(0.20),
+                    active_border: c(theme::ACCENT).opacity(0.55),
+                    hover_bg: c(theme::BG_HOVER).opacity(0.75),
+                    hover_border: c(theme::BORDER_STRONG).opacity(0.78),
+                    union_border: c(theme::ACCENT).opacity(0.58),
+                    bridge_bg: c(theme::ACCENT).opacity(0.18),
+                };
+                crate::ui::liquid::render_coalesced_layer("quick-liq-l", true, st, fr)
+            });
+            let inner = v_flex()
+                .id("quick-rows-inner")
+                .relative()
+                .w_full()
+                .on_hover({
+                    let h = liq.clone();
+                    move |entered: &bool, _, cx| {
+                        if !*entered && motion {
+                            crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                        }
+                    }
+                })
+                .child(origin_probe)
+                .children(layer)
+                .child(rows_box);
+            v_flex().id("quick-list").max_h(theme::u(420.)).overflow_y_scroll().py_1().child(inner)
+        };
+
+        let mut rows_col = v_flex().w_full();
         match q.mode {
             Mode::Commands => {
                 let all = crate::commands::commands();
                 if q.hits.is_empty() {
-                    list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No command matches.")));
+                    rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No command matches.")));
+                    return self.quick_frame(wrap_rows(rows_col, 0, None), cx).into_any_element();
                 }
+                let has_liq = motion && !q.hits.is_empty();
                 for (row, &ix) in q.hits.iter().enumerate() {
                     let Some(cmd) = all.get(ix) else { continue };
                     let selected = row == q.sel;
                     let make = cmd.action;
-                    list = list.child(
+                    let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+                    let h_hov = liq.clone();
+                    rows_col = rows_col.child(
                         h_flex()
                             .id(("quick-cmd", row))
+                            .relative()
                             .mx_1()
                             .px_2()
                             .h(theme::u(28.))
                             .gap_2()
-                            .rounded(px(4.))
+                            .rounded(px(6.))
                             .cursor_pointer()
-                            .when(selected, |d| d.bg(c(theme::SELECT)))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .when(selected && !has_liq, |d| d.bg(c(theme::SELECT)))
+                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                            .on_hover(move |entered: &bool, _, cx| {
+                                if *entered && motion {
+                                    crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                                }
+                            })
+                            .child(probe)
                             .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(tr(cmd.label)))
                             .when(!cmd.keys.is_empty(), |h| h.child(keys_chips(cmd.keys)))
                             .on_click(cx.listener(move |this, _, w, cx| {
@@ -464,7 +518,7 @@ impl Workbench {
                             })),
                     );
                 }
-                return self.quick_frame(list, cx).into_any_element();
+                return self.quick_frame(wrap_rows(rows_col, q.hits.len(), Some(q.sel)), cx).into_any_element();
             }
             Mode::Line => {
                 let qv = q.input.read(cx).value().to_string();
@@ -482,13 +536,15 @@ impl Workbench {
                     Some((l, col)) => crate::trf!("Go to line {l}, column {col}."; l => l, col => col),
                     None => crate::trf!("Current line: {cur} of {total}. Type a line number to go there."; cur => cur, total => total),
                 };
-                list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_MUTED)).child(text));
-                return self.quick_frame(list, cx).into_any_element();
+                rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_MUTED)).child(text));
+                return self.quick_frame(v_flex().id("quick-list").max_h(theme::u(420.)).overflow_y_scroll().py_1().child(rows_col), cx).into_any_element();
             }
             Mode::Wsl => {
                 if let Some((_, path)) = &q.wsl_browse {
-                    list = list.child(div().px_3().py_1().text_xs().text_color(c(theme::FG_DIM)).child(path.clone()));
+                    rows_col = rows_col.child(div().px_3().py_1().text_xs().text_color(c(theme::FG_DIM)).child(path.clone()));
+                    let mut n = 0usize;
                     for (row, item) in q.wsl_rows.iter().enumerate() {
+                        n += 1;
                         let selected = row == q.sel;
                         let (label, icon) = match item {
                             WslRow::Up => ("..".to_string(), Icon::new(gpui_kit::assets::IconName::ArrowUp)),
@@ -496,17 +552,26 @@ impl Workbench {
                             WslRow::OpenPath(path) => (crate::trf!("Open {path}"; path => path), Icon::new(crate::files::folder_icon("", true))),
                             WslRow::Dir(name) => (name.clone(), Icon::new(crate::files::folder_icon(name, false))),
                         };
-                        list = list.child(
+                        let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+                        let h_hov = liq.clone();
+                        rows_col = rows_col.child(
                             h_flex()
                                 .id(("quick-wsl-row", row))
+                                .relative()
                                 .mx_1()
                                 .px_2()
                                 .h(theme::u(28.))
                                 .gap_2()
-                                .rounded(px(4.))
+                                .rounded(px(6.))
                                 .cursor_pointer()
-                                .when(selected, |d| d.bg(c(theme::SELECT)))
-                                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                .when(selected && !motion, |d| d.bg(c(theme::SELECT)))
+                                .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                                .on_hover(move |entered: &bool, _, cx| {
+                                    if *entered && motion {
+                                        crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                                    }
+                                })
+                                .child(probe)
                                 .child(icon.size(theme::u(14.)).text_color(c(theme::FOLDER)))
                                 .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(label))
                                 .on_click(cx.listener(move |this, _, w, cx| {
@@ -515,25 +580,35 @@ impl Workbench {
                                 })),
                         );
                     }
-                    return self.quick_frame(list, cx).into_any_element();
+                    return self.quick_frame(wrap_rows(rows_col, n, (n > 0).then_some(q.sel)), cx).into_any_element();
                 }
                 if q.hits.is_empty() {
-                    list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No WSL distro found.")));
+                    rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No WSL distro found.")));
+                    return self.quick_frame(wrap_rows(rows_col, 0, None), cx).into_any_element();
                 }
                 for (row, &ix) in q.hits.iter().enumerate() {
                     let Some(distro) = q.wsl.get(ix) else { continue };
                     let selected = row == q.sel;
-                    list = list.child(
+                    let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+                    let h_hov = liq.clone();
+                    rows_col = rows_col.child(
                         h_flex()
                             .id(("quick-wsl", row))
+                            .relative()
                             .mx_1()
                             .px_2()
                             .h(theme::u(28.))
                             .gap_2()
-                            .rounded(px(4.))
+                            .rounded(px(6.))
                             .cursor_pointer()
-                            .when(selected, |d| d.bg(c(theme::SELECT)))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)))
+                            .when(selected && !motion, |d| d.bg(c(theme::SELECT)))
+                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                            .on_hover(move |entered: &bool, _, cx| {
+                                if *entered && motion {
+                                    crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                                }
+                            })
+                            .child(probe)
                             .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG_STRONG)).child(distro.clone()))
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.quick.sel = row;
@@ -541,12 +616,13 @@ impl Workbench {
                             })),
                     );
                 }
-                return self.quick_frame(list, cx).into_any_element();
+                return self.quick_frame(wrap_rows(rows_col, q.hits.len(), Some(q.sel)), cx).into_any_element();
             }
             Mode::Files => {}
         }
         if q.hits.is_empty() {
-            list = list.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No file matches. Try fewer letters.")));
+            rows_col = rows_col.child(div().px_3().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No file matches. Try fewer letters.")));
+            return self.quick_frame(wrap_rows(rows_col, 0, None), cx).into_any_element();
         }
         for (row, &ix) in q.hits.iter().enumerate() {
             let full = &self.all_files[ix];
@@ -558,17 +634,26 @@ impl Workbench {
             let (icon, tint) = crate::files::icon_for(name);
             let selected = row == q.sel;
             let path = PathBuf::from(full);
-            list = list.child(
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+            let h_hov = liq.clone();
+            rows_col = rows_col.child(
                 h_flex()
                     .id(("quick", row))
+                    .relative()
                     .mx_1()
                     .px_2()
                     .h(theme::u(26.))
                     .gap_2()
-                    .rounded(px(4.))
+                    .rounded(px(6.))
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(c(theme::SELECT)))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .when(selected && !motion, |d| d.bg(c(theme::SELECT)))
+                    .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(&h_hov, row, true, row_cross, 140, view_id, cx);
+                        }
+                    })
+                    .child(probe)
                     .child(Icon::new(icon).size(theme::u(14.)).text_color(theme::tint(tint)))
                     .child(div().flex_none().text_sm().text_color(c(theme::FG_STRONG)).child(name.to_string()))
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir.to_string()))
@@ -579,7 +664,7 @@ impl Workbench {
                     })),
             );
         }
-        self.quick_frame(list, cx).into_any_element()
+        self.quick_frame(wrap_rows(rows_col, q.hits.len(), Some(q.sel)), cx).into_any_element()
     }
 
     fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {

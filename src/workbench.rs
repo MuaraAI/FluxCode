@@ -385,13 +385,8 @@ pub struct Workbench {
     pub(crate) opened_tab: Option<(PathBuf, u64)>,
     pub(crate) tab_switch_seq: u64,
     pub(crate) file_jump_anim: Option<(PathBuf, u64)>,
-    pub(crate) tab_hover_ix: Option<usize>,
-    pub(crate) tab_hover_from: (f32, f32),
-    pub(crate) tab_hover_to: (f32, f32),
-    pub(crate) tab_hover_seq: u64,
-    pub(crate) tab_hover_fade_in: bool,
-    pub(crate) tab_hover_leave: Option<((f32, f32), u64)>,
-    pub(crate) tab_hover_last_at: Option<std::time::Instant>,
+    pub(crate) tab_liq: std::cell::RefCell<crate::ui::liquid::LiquidTrackState>,
+    pub(crate) tab_liq_scroll_x: std::cell::Cell<f32>,
     pub(crate) problems_scroll: UniformListScrollHandle,
     pub(crate) side_anim: std::cell::Cell<(bool, u64)>,
     pub(crate) full_anim: std::cell::Cell<(bool, u64)>,
@@ -402,15 +397,7 @@ pub struct Workbench {
     pub(crate) right_closing: Option<u64>,
     pub(crate) panel_closing: Option<u64>,
     pub(crate) anim_seq: u64,
-    pub(crate) ab_active_slot: Option<usize>,
-    pub(crate) ab_active_from: usize,
-    pub(crate) ab_active_seq: u64,
-    pub(crate) ab_hover_slot: Option<usize>,
-    pub(crate) ab_hover_from: usize,
-    pub(crate) ab_hover_seq: u64,
-    pub(crate) ab_hover_fade_in: bool,
-    pub(crate) ab_hover_leave: Option<(usize, u64)>,
-    pub(crate) ab_hover_last_at: Option<std::time::Instant>,
+    pub(crate) ab_liq: std::cell::RefCell<crate::ui::liquid::LiquidTrackState>,
     pub(crate) side_view_anim: std::cell::Cell<(SideView, i8, u64)>,
     pub(crate) wsl_runtimes: u32,
     pub(crate) wash: std::cell::Cell<(bool, u64)>,
@@ -680,13 +667,8 @@ impl Workbench {
             opened_tab: None,
             tab_switch_seq: 0,
             file_jump_anim: None,
-            tab_hover_ix: None,
-            tab_hover_from: (0., 0.),
-            tab_hover_to: (0., 0.),
-            tab_hover_seq: 0,
-            tab_hover_fade_in: false,
-            tab_hover_leave: None,
-            tab_hover_last_at: None,
+            tab_liq: std::cell::RefCell::new(crate::ui::liquid::LiquidTrackState::default()),
+            tab_liq_scroll_x: std::cell::Cell::new(0.),
             problems_scroll: UniformListScrollHandle::new(),
             side_anim: std::cell::Cell::new((true, 0)),
             full_anim: std::cell::Cell::new((false, 0)),
@@ -697,15 +679,7 @@ impl Workbench {
             right_closing: None,
             panel_closing: None,
             anim_seq: 0,
-            ab_active_slot: Some(0),
-            ab_active_from: 0,
-            ab_active_seq: 0,
-            ab_hover_slot: None,
-            ab_hover_from: 0,
-            ab_hover_seq: 0,
-            ab_hover_fade_in: false,
-            ab_hover_leave: None,
-            ab_hover_last_at: None,
+            ab_liq: std::cell::RefCell::new(crate::ui::liquid::LiquidTrackState::default()),
             side_view_anim: std::cell::Cell::new((SideView::Explorer, 1, 0)),
             wsl_runtimes: 0,
             wash: std::cell::Cell::new((false, 0)),
@@ -884,8 +858,7 @@ impl Workbench {
         self.explorer.loading.clear();
         self.explorer.rows.clear();
         self.explorer.revealed_tab = None;
-        self.explorer.hovered_ix = None;
-        self.explorer.hover_leave = None;
+        *self.explorer.liq.borrow_mut() = crate::ui::liquid::LiquidTrackState::default();
         self.selected = None;
         self.explorer.scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.explorer.bump_workspace_anim(Vec::new());
@@ -1625,8 +1598,11 @@ impl Workbench {
                 if (target - cur).abs() < 0.75 {
                     return;
                 }
-                this.tab_hover_ix = None;
-                this.tab_hover_leave = None;
+                {
+                    let mut liq = this.tab_liq.borrow_mut();
+                    liq.hover_ix = None;
+                    liq.leave = None;
+                }
                 if reduce {
                     this.tabs_scroll.set_offset(point(px(-target), px(0.)));
                     this.tabs_scroll_x.set(target);
@@ -2827,50 +2803,23 @@ impl Workbench {
     }
 
     fn ab_hover_enter(&mut self, slot: usize, cx: &mut Context<Self>) {
-        if self.ab_hover_slot == Some(slot) {
-            return;
-        }
-        let gliding = self.ab_hover_slot.is_some()
-            || self.ab_hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
-        self.ab_hover_from = if gliding {
-            self.ab_hover_slot
-                .or_else(|| self.ab_hover_leave.map(|(s, _)| s))
-                .unwrap_or(slot)
-        } else {
-            slot
+        let bar_w = f32::from(theme::u(40.));
+        let slot_h = f32::from(theme::u(36.));
+        let pill_h = (slot_h - 6.).max(20.);
+        let pill_w = (bar_w - 8.).max(20.);
+        let rect = crate::ui::liquid::Rect1D {
+            pos: slot as f32 * slot_h + (slot_h - pill_h) * 0.5,
+            len: pill_h,
         };
-        self.ab_hover_slot = Some(slot);
-        self.ab_hover_fade_in = !gliding;
-        self.ab_hover_leave = None;
-        self.ab_hover_last_at = Some(std::time::Instant::now());
-        self.ab_hover_seq = self.ab_hover_seq.wrapping_add(1);
-        cx.notify();
+        if self.ab_liq.borrow_mut().hover_enter(slot, Some(rect), pill_w, 165, std::time::Instant::now()) {
+            cx.notify();
+        }
     }
 
     fn ab_hover_clear(&mut self, cx: &mut Context<Self>) {
-        let Some(prev) = self.ab_hover_slot.take() else {
-            return;
-        };
-        self.ab_hover_last_at = Some(std::time::Instant::now());
-        if cx.reduce_motion() {
-            self.ab_hover_leave = None;
+        if self.ab_liq.borrow_mut().hover_clear(std::time::Instant::now()) {
             cx.notify();
-            return;
         }
-        self.ab_hover_seq = self.ab_hover_seq.wrapping_add(1);
-        let seq = self.ab_hover_seq;
-        self.ab_hover_leave = Some((prev, seq));
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(120)).await;
-            _ = this.update(cx, |this, cx| {
-                if this.ab_hover_leave.is_some_and(|(_, s)| s == seq) {
-                    this.ab_hover_leave = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
     }
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2878,127 +2827,34 @@ impl Workbench {
         let slot_h = f32::from(theme::u(36.));
         let pill_h = (slot_h - 6.).max(20.);
         let pill_w = (bar_w - 8.).max(20.);
-        let rail_h = (slot_h * 0.52).round().max(14.);
         let pill_top = |slot: usize| slot as f32 * slot_h + (slot_h - pill_h) * 0.5;
-        let rail_top = |slot: usize| slot as f32 * slot_h + (slot_h - rail_h) * 0.5;
         let motion = !cx.reduce_motion();
-        let primary_slot = self.ab_active_slot;
+        let primary_slot = self.primary_ab_slot();
+        let now = std::time::Instant::now();
 
-        let hover_layer: Option<AnyElement> = if !motion {
+        let liquid_layer: Option<AnyElement> = if !motion {
             None
-        } else if let Some(hslot) = self.ab_hover_slot {
-            let from_y = pill_top(self.ab_hover_from);
-            let to_y = pill_top(hslot);
-            let seq = self.ab_hover_seq;
-            let fade_in = self.ab_hover_fade_in;
-            let bg_hov = c(theme::BG_HOVER).opacity(0.78);
-            let bd_hov = c(theme::BORDER_STRONG).opacity(0.65);
-            let pill = div()
-                .absolute()
-                .rounded(px(8.))
-                .bg(bg_hov)
-                .border_1()
-                .border_color(bd_hov);
-            Some(if self.ab_hover_from == hslot && !fade_in {
-                pill.left(px(4.)).top(px(to_y)).w(px(pill_w)).h(px(pill_h)).into_any_element()
-            } else {
-                let dur = Duration::from_millis(if fade_in { 110 } else { 165 });
-                pill.with_animation(
-                    SharedString::from(format!("ab-hov-{seq}")),
-                    Animation::new(dur),
-                    move |d, t| {
-                        let cap = crate::ui::liquid::capsule(from_y, to_y, pill_h, pill_w, t, true);
-                        let op = if fade_in { crate::ui::liquid::quintic_fade(t) } else { 1.0 };
-                        d.left(px(4. + cap.offset_x))
-                            .top(px(cap.top))
-                            .w(px(cap.width))
-                            .h(px(cap.height))
-                            .opacity(op)
-                    },
-                )
-                .into_any_element()
+        } else {
+            let mut ab = self.ab_liq.borrow_mut();
+            let act_rect = primary_slot.map(|s| crate::ui::liquid::Rect1D { pos: pill_top(s), len: pill_h });
+            ab.sync_active(primary_slot, act_rect, pill_w, 225, now);
+            ab.sample_frame(pill_w, now).map(|fr| {
+                let st = crate::ui::liquid::LiquidStyle {
+                    inset_a: 4.0,
+                    inset_b: 4.0,
+                    cross_base: pill_w,
+                    max_squeeze: 3.5,
+                    radius: 8.0,
+                    capillary: slot_h * 0.95,
+                    active_bg: c(theme::ACCENT).opacity(0.18),
+                    active_border: c(theme::ACCENT).opacity(0.55),
+                    hover_bg: c(theme::BG_HOVER).opacity(0.76),
+                    hover_border: c(theme::BORDER_STRONG).opacity(0.70),
+                    union_border: c(theme::ACCENT).opacity(0.62),
+                    bridge_bg: c(theme::ACCENT).opacity(0.18),
+                };
+                crate::ui::liquid::render_coalesced_layer("ab-liq", true, st, fr)
             })
-        } else if let Some((lslot, seq)) = self.ab_hover_leave {
-            let y = pill_top(lslot);
-            Some(
-                div()
-                    .absolute()
-                    .left(px(4.))
-                    .top(px(y))
-                    .w(px(pill_w))
-                    .h(px(pill_h))
-                    .rounded(px(8.))
-                    .bg(c(theme::BG_HOVER).opacity(0.78))
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG).opacity(0.65))
-                    .with_animation(
-                        SharedString::from(format!("ab-hov-out-{seq}")),
-                        Animation::new(Duration::from_millis(115)),
-                        |d, t| d.opacity(1.0 - crate::ui::liquid::quintic_fade(t)),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
-
-        let (active_halo, active_rail): (Option<AnyElement>, Option<AnyElement>) = if !motion {
-            (None, None)
-        } else if let Some(aslot) = primary_slot {
-            let from_slot = self.ab_active_from;
-            let seq = self.ab_active_seq;
-            let halo_from = pill_top(from_slot);
-            let halo_to = pill_top(aslot);
-            let rail_from = rail_top(from_slot);
-            let rail_to = rail_top(aslot);
-            let halo_bg = c(theme::ACCENT).opacity(0.14);
-            let halo_bd = c(theme::ACCENT).opacity(0.28);
-            let rail_bg = c(theme::ACCENT);
-            let animate = seq > 0 && from_slot != aslot;
-            let halo = div()
-                .absolute()
-                .rounded(px(8.))
-                .bg(halo_bg)
-                .border_1()
-                .border_color(halo_bd);
-            let rail = div().absolute().rounded_r_full().bg(rail_bg);
-            if animate {
-                let dur = Duration::from_millis(235);
-                let halo_el = halo
-                    .with_animation(
-                        SharedString::from(format!("ab-halo-{seq}")),
-                        Animation::new(dur),
-                        move |d, t| {
-                            let cap = crate::ui::liquid::capsule(halo_from, halo_to, pill_h, pill_w, t, false);
-                            d.left(px(4. + cap.offset_x))
-                                .top(px(cap.top))
-                                .w(px(cap.width))
-                                .h(px(cap.height))
-                        },
-                    )
-                    .into_any_element();
-                let rail_el = rail
-                    .with_animation(
-                        SharedString::from(format!("ab-rail-{seq}")),
-                        Animation::new(dur),
-                        move |d, t| {
-                            let cap = crate::ui::liquid::capsule(rail_from, rail_to, rail_h, 3.0, t, false);
-                            d.left(px(1.0))
-                                .top(px(cap.top))
-                                .w(px(cap.width.clamp(2.2, 3.2)))
-                                .h(px(cap.height))
-                        },
-                    )
-                    .into_any_element();
-                (Some(halo_el), Some(rail_el))
-            } else {
-                (
-                    Some(halo.left(px(4.)).top(px(halo_to)).w(px(pill_w)).h(px(pill_h)).into_any_element()),
-                    Some(rail.left(px(1.)).top(px(rail_to)).w(px(3.)).h(px(rail_h)).into_any_element()),
-                )
-            }
-        } else {
-            (None, None)
         };
 
         let slot_box = |id: &'static str, slot: usize, icon: Icon, active: bool, tip: &'static str, cx: &mut Context<Self>| {
@@ -3016,11 +2872,32 @@ impl Workbench {
                 .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
                 .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .when(static_active, |d| {
-                    d.bg(c(theme::ACCENT).opacity(0.14))
-                        .child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.5)).rounded_r_full().bg(c(theme::ACCENT)))
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .right(px(4.))
+                            .top(px(3.))
+                            .bottom(px(3.))
+                            .rounded(px(8.))
+                            .bg(c(theme::ACCENT).opacity(0.18))
+                            .border_1()
+                            .border_color(c(theme::ACCENT).opacity(0.55)),
+                    )
                 })
                 .when(secondary_active, |d| {
-                    d.child(div().absolute().right(px(2.)).top(px(10.)).bottom(px(10.)).w(px(2.5)).rounded_l_full().bg(c(theme::ACCENT).opacity(0.78)))
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .right(px(4.))
+                            .top(px(3.))
+                            .bottom(px(3.))
+                            .rounded(px(8.))
+                            .bg(c(theme::ACCENT).opacity(0.09))
+                            .border_1()
+                            .border_color(c(theme::ACCENT).opacity(0.24)),
+                    )
                 })
                 .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
                 .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
@@ -3064,9 +2941,7 @@ impl Workbench {
                     this.ab_hover_clear(cx);
                 }
             }))
-            .children(hover_layer)
-            .children(active_halo)
-            .children(active_rail)
+            .children(liquid_layer)
             .child(view_item("ab-explorer", 0, Icon::new(IconName::FolderOpen), SideView::Explorer, self, cx))
             .child(view_item("ab-search", 1, Icon::new(IconName::Search), SideView::Search, self, cx))
             .child({
@@ -3357,45 +3232,17 @@ impl Workbench {
     }
 
     fn tab_hover_enter(&mut self, ix: usize, left_px: f32, width_px: f32, cx: &mut Context<Self>) {
-        if self.tab_hover_ix == Some(ix) && (self.tab_hover_to.0 - left_px).abs() < 0.5 && (self.tab_hover_to.1 - width_px).abs() < 0.5 {
-            return;
+        let bar_h = f32::from(theme::u(29.));
+        let rect = crate::ui::liquid::Rect1D { pos: left_px + 2., len: (width_px - 4.).max(4.) };
+        if self.tab_liq.borrow_mut().hover_enter(ix, Some(rect), bar_h, 155, std::time::Instant::now()) {
+            cx.notify();
         }
-        let gliding = self.tab_hover_ix.is_some()
-            || self.tab_hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
-        self.tab_hover_from = if gliding { self.tab_hover_to } else { (left_px, width_px) };
-        self.tab_hover_to = (left_px, width_px);
-        self.tab_hover_ix = Some(ix);
-        self.tab_hover_fade_in = !gliding;
-        self.tab_hover_leave = None;
-        self.tab_hover_last_at = Some(std::time::Instant::now());
-        self.tab_hover_seq = self.tab_hover_seq.wrapping_add(1);
-        cx.notify();
     }
 
     fn tab_hover_clear(&mut self, cx: &mut Context<Self>) {
-        if self.tab_hover_ix.take().is_none() {
-            return;
-        }
-        self.tab_hover_last_at = Some(std::time::Instant::now());
-        if cx.reduce_motion() {
-            self.tab_hover_leave = None;
+        if self.tab_liq.borrow_mut().hover_clear(std::time::Instant::now()) {
             cx.notify();
-            return;
         }
-        self.tab_hover_seq = self.tab_hover_seq.wrapping_add(1);
-        let seq = self.tab_hover_seq;
-        self.tab_hover_leave = Some((self.tab_hover_to, seq));
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(130)).await;
-            _ = this.update(cx, |this, cx| {
-                if this.tab_hover_leave.is_some_and(|(_, s)| s == seq) {
-                    this.tab_hover_leave = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3416,62 +3263,47 @@ impl Workbench {
         let (range, left_w, right_w) = visible_tab_window_from_offsets(&tab_lefts, scroll_x, viewport_w);
         let motion = !cx.reduce_motion();
         let opened_tab = self.opened_tab.clone();
-        let switch_seq = self.tab_switch_seq;
+        let bar_h = f32::from(theme::u(29.));
+        let now = std::time::Instant::now();
 
-        let hover_pill: Option<AnyElement> = if !motion {
+        let liquid_layer: Option<AnyElement> = if !motion {
             None
-        } else if let Some(hix) = self.tab_hover_ix.filter(|&i| i < widths.len()) {
-            let live_x = tab_lefts[hix] - scroll_x;
-            let live_w = widths[hix];
-            let (fx, fw) = self.tab_hover_from;
-            let (tx, tw) = self.tab_hover_to;
-            let seq = self.tab_hover_seq;
-            let fade_in = self.tab_hover_fade_in;
-            let scrolled = (live_x - tx).abs() > 1.0;
-            let pill = div()
-                .absolute()
-                .top(px(3.))
-                .bottom(px(3.))
-                .rounded(px(5.))
-                .bg(c(theme::BG_HOVER).opacity(0.72))
-                .border_1()
-                .border_color(c(theme::BORDER_STRONG).opacity(0.85));
-            Some(if scrolled {
-                pill.left(px(live_x + 2.)).w(px((live_w - 4.).max(4.))).into_any_element()
-            } else {
-                pill.with_animation(
-                    SharedString::from(format!("tab-hov-{seq}")),
-                    Animation::new(Duration::from_millis(if fade_in { 120 } else { 150 })).with_easing(gpui_kit::ease_out_quint()),
-                    move |d, t| {
-                        let x = fx + (tx - fx) * t;
-                        let w = fw + (tw - fw) * t;
-                        let op = if fade_in { t } else { 1. };
-                        d.left(px(x + 2.)).w(px((w - 4.).max(4.))).opacity(op)
-                    },
-                )
-                .into_any_element()
-            })
-        } else if let Some(((lx, lw), seq)) = self.tab_hover_leave {
-            Some(
-                div()
-                    .absolute()
-                    .top(px(3.))
-                    .bottom(px(3.))
-                    .left(px(lx + 2.))
-                    .w(px((lw - 4.).max(4.)))
-                    .rounded(px(5.))
-                    .bg(c(theme::BG_HOVER).opacity(0.72))
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG).opacity(0.85))
-                    .with_animation(
-                        SharedString::from(format!("tab-hov-out-{seq}")),
-                        Animation::new(Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()),
-                        |d, t| d.opacity(1. - t),
-                    )
-                    .into_any_element(),
-            )
         } else {
-            None
+            let scrolled = (self.tab_liq_scroll_x.get() - scroll_x).abs() > 0.5;
+            self.tab_liq_scroll_x.set(scroll_x);
+            let mut liq = self.tab_liq.borrow_mut();
+            let rect_for = |i: usize| -> Option<crate::ui::liquid::Rect1D> {
+                let w = *widths.get(i)?;
+                Some(crate::ui::liquid::Rect1D { pos: tab_lefts[i] - scroll_x + 2., len: (w - 4.).max(4.) })
+            };
+            let act_rect = self.active.and_then(rect_for);
+            if scrolled {
+                if let Some(r) = act_rect {
+                    liq.active_ix = self.active;
+                    liq.active.snap(r, false);
+                }
+            } else {
+                liq.sync_active(self.active, act_rect, bar_h, 200, now);
+            }
+            let hov_rect = liq.hover_ix.and_then(rect_for);
+            liq.sync_hover_rect(hov_rect, bar_h, now);
+            liq.sample_frame(bar_h, now).map(|fr| {
+                let st = crate::ui::liquid::LiquidStyle {
+                    inset_a: 3.0,
+                    inset_b: 3.0,
+                    cross_base: bar_h,
+                    max_squeeze: 2.0,
+                    radius: 6.0,
+                    capillary: 22.0,
+                    active_bg: c(theme::BG_EDITOR),
+                    active_border: c(theme::ACCENT).opacity(0.55),
+                    hover_bg: c(theme::BG_HOVER).opacity(0.75),
+                    hover_border: c(theme::BORDER_STRONG).opacity(0.78),
+                    union_border: c(theme::ACCENT).opacity(0.58),
+                    bridge_bg: c(theme::ACCENT).opacity(0.16),
+                };
+                crate::ui::liquid::render_coalesced_layer("tab-liq", false, st, fr)
+            })
         };
 
         let probe = {
@@ -3528,19 +3360,8 @@ impl Workbench {
                     .border_color(c(theme::BORDER))
                     .relative()
                     .cursor_pointer()
-                    .when(active, |s| {
-                        let line = div().absolute().top_0().left_0().right_0().h(px(2.)).bg(c(theme::ACCENT));
-                        let el = if !motion {
-                            line.into_any_element()
-                        } else {
-                            line.with_animation(
-                                SharedString::from(format!("tab-line-{switch_seq}")),
-                                Animation::new(Duration::from_millis(190)).with_easing(gpui_kit::ease_out_quint()),
-                                |el, t| el.left(relative(0.5 * (1. - t))).right(relative(0.5 * (1. - t))),
-                            )
-                            .into_any_element()
-                        };
-                        s.bg(c(theme::BG_EDITOR)).child(el)
+                    .when(active && !motion, |s| {
+                        s.bg(c(theme::BG_EDITOR))
                     })
                     .when(!active && !motion, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
                     .when(!active && motion, |s| s.hover(|s| s.text_color(c(theme::FG))))
@@ -3648,7 +3469,7 @@ impl Workbench {
                 }
             }))
             .child(probe)
-            .children(hover_pill)
+            .children(liquid_layer)
             .child(
                 h_flex()
                     .id("tabs")
@@ -4500,16 +4321,13 @@ impl Render for Workbench {
         if self.panel_open {
             self.panel_closing = None;
         }
+        let motion = !cx.reduce_motion();
         let next_slot = self.primary_ab_slot();
-        if next_slot != self.ab_active_slot {
-            if let (Some(prev), Some(_)) = (self.ab_active_slot, next_slot) {
-                self.ab_active_from = prev;
-                self.ab_active_seq = self.ab_active_seq.wrapping_add(1);
-            } else if let Some(next) = next_slot {
-                self.ab_active_from = next;
-                self.ab_active_seq = self.ab_active_seq.wrapping_add(1);
+        if !motion {
+            if let Some(slot) = next_slot {
+                let mut ab = self.ab_liq.borrow_mut();
+                ab.active_ix = Some(slot);
             }
-            self.ab_active_slot = next_slot;
         }
         let (prev_view, _, mut view_seq) = self.side_view_anim.get();
         if prev_view != self.view {
@@ -4518,7 +4336,6 @@ impl Render for Workbench {
             self.side_view_anim.set((self.view, view_dir, view_seq));
         }
 
-        let motion = !cx.reduce_motion();
         let full = self.agent_docked_visible() && self.agent_full && !self.settings_open;
         let side_visible = self.sidebar_open || self.side_closing.is_some();
         let right_on = self.right_dock_on() && !full && !self.settings_open;
@@ -4938,7 +4755,7 @@ impl Render for Workbench {
             .child(self.render_title_bar(window, cx))
             .child(main)
             .child(self.render_status_bar(window, cx))
-            .when(self.quick.open, |v| v.child(self.render_quick_open(cx)))
+            .when(self.quick.open, |v| v.child(self.render_quick_open(window, cx)))
             .children(self.render_drop_ask(cx))
             .children(self.render_preview_ask(cx))
             .children(self.render_update(cx))

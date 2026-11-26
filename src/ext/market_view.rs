@@ -616,30 +616,36 @@ impl Workbench {
             })
             .detach();
         }
-        let tab = |id: &'static str, label: SharedString, f: Filter, cx: &mut Context<Self>| {
-            chip(id, label, self.ext.filter == f).on_click(cx.listener(move |this, _, _, cx| {
-                this.ext.filter = f;
-                if f == Filter::Market {
-                    this.market_search(0, cx);
-                }
-                cx.notify();
-            }))
+        let wb = cx.entity().downgrade();
+        let switch = |f: Filter| {
+            let wb = wb.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                _ = wb.update(cx, |this, cx| {
+                    this.ext.filter = f;
+                    if f == Filter::Market {
+                        this.market_search(0, cx);
+                    }
+                    cx.notify();
+                });
+            }
         };
-        let tabs = h_flex()
-            .flex_none()
-            .gap_0p5()
-            .child(tab(
-                "ext-f-market",
-                tr("Marketplace").into(),
-                Filter::Market,
-                cx,
-            ))
-            .child(tab(
-                "ext-f-inst",
-                format!("{} {}", tr("Installed"), m.installed.len()).into(),
-                Filter::Installed,
-                cx,
-            ));
+        let tabs = crate::ui::SegmentedControl::new(
+            "ext-filter-tabs",
+            [
+                crate::ui::SegItem::new(
+                    "ext-f-market",
+                    tr("Marketplace"),
+                    self.ext.filter == Filter::Market,
+                    switch(Filter::Market),
+                ),
+                crate::ui::SegItem::new(
+                    "ext-f-inst",
+                    format!("{} {}", tr("Installed"), m.installed.len()),
+                    self.ext.filter == Filter::Installed,
+                    switch(Filter::Installed),
+                ),
+            ],
+        );
         let status: Option<SharedString> = if !on_market {
             None
         } else if let Some(e) = &m.error {
@@ -1057,17 +1063,30 @@ impl Workbench {
                 .child(tr("Loading the README…"))
                 .into_any_element(),
             Some(Ok(t)) => {
+                let loaded = m.readme_images.contains_key(&id);
                 let images = m.readme_images.get(&id).cloned().unwrap_or_default();
-                let gen = images.len();
+                let view_id = SharedString::from(format!(
+                    "vsx-readme-{id}-{}-{}",
+                    u8::from(loaded),
+                    images.len()
+                ));
                 div()
                     .text_sm()
                     .text_color(c(theme::FG))
-                    .child(
-                        TextView::markdown(SharedString::from(format!("vsx-readme-{id}-{gen}")), t.clone()).image_source(move |uri| match images.get(uri.as_ref()) {
+                    .child(TextView::markdown(view_id, t.clone()).image_source(move |uri| {
+                        let key = uri.as_ref();
+                        let hit = images.get(key).or_else(|| {
+                            key.contains("&amp;")
+                                .then(|| key.replace("&amp;", "&"))
+                                .and_then(|k| images.get(&k))
+                        });
+                        match hit {
                             Some(p) => ImageSource::from(p.clone()),
-                            None => ImageSource::from(uri.clone()),
-                        }),
-                    )
+                            None => ImageSource::Custom(std::sync::Arc::new(|_, _| {
+                                Some(Err(ImageCacheError::Asset("unavailable".into())))
+                            })),
+                        }
+                    }))
                     .into_any_element()
             }
             Some(Err(e)) => div()
@@ -1185,5 +1204,59 @@ impl Workbench {
                 )
                 .into_any_element()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::text::normalize_markdown_html;
+
+    #[test]
+    fn normalizes_marketplace_html_readmes_cleanly() {
+        let flow_icons = concat!(
+            "<h1 align=\"center\">\n",
+            "  <img width=\"160\" src=\"https://raw.githubusercontent.com/thang-nm/flow-icons/main/assets/logo.png\" />\n",
+            "  <br/>\n",
+            "  <a href=\"https://example.com/flow-icons\">Flow Icons</a>\n",
+            "</h1>\n\n",
+            "<p align=\"center\">\n",
+            "💎 <strong>IMPORTANT</strong>: Use cleanly.\n",
+            "</p>\n\n",
+            "<p align=\"center\">\n",
+            "  <a href=\"https://example.com/marketplace\">\n",
+            "    <img alt=\"v\" src=\"https://img.shields.io/a?style=flat&amp;color=blue\">&nbsp;",
+            "<img alt=\"i\" src=\"https://img.shields.io/b\">\n",
+            "  </a>\n",
+            "</p>\n\n",
+            "<details>\n",
+            "  <summary><img src=\"https://example.com/i.png\" width=\"24\"/> File Icons</summary>\n",
+            "  <p>Inside details with <code>jsonc</code>.</p>\n",
+            "</details>\n\n",
+            "<picture>\n",
+            "  <source media=\"(prefers-color-scheme: dark)\" srcset=\"dark.png\">\n",
+            "  <img width=\"640\" src=\"https://raw.githubusercontent.com/thang-nm/flow-icons/main/assets/preview.png\">\n",
+            "</picture>\n\n",
+            "<table>\n",
+            "  <tr><th>Col A</th><th>Col B</th></tr>\n",
+            "  <tr><td><img src=\"https://example.com/c.png\" width=\"20\"/></td><td><code>a | b</code></td></tr>\n",
+            "</table>\n\n",
+            "```jsonc\n",
+            "// keep <p>literal</p>\n",
+            "{ \"x\": \"<img src='a'>\" }\n",
+            "```\n",
+        );
+
+        let normalized = normalize_markdown_html(flow_icons);
+        assert!(normalized.contains("# <img"));
+        assert!(normalized.contains("width=\"160\""));
+        assert!(normalized.contains("**IMPORTANT**"));
+        assert!(normalized.contains("https://img.shields.io/a?style=flat&color=blue"));
+        assert!(normalized.contains("| Col A | Col B |"));
+        assert!(normalized.contains("`a \\| b`"));
+        assert!(normalized.contains("// keep <p>literal</p>"));
+        assert!(matches!(
+            normalize_markdown_html(normalized.as_ref()),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 }

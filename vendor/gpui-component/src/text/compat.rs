@@ -45,6 +45,8 @@ pub struct TextView {
     /// `None` leaves the state's own policy alone; `Some(false)` turns a
     /// fade off that an earlier frame turned on.
     stream_fade: Option<bool>,
+    is_markdown: bool,
+    is_mdx: bool,
 }
 
 impl Styled for TextView {
@@ -62,17 +64,26 @@ impl TextView {
             text_style: None,
             motion: None,
             stream_fade: None,
+            is_markdown: false,
+            is_mdx: false,
         }
     }
     /// Creates a text view that parses `text` as Markdown.
     pub fn markdown(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Self {
         let id = id.into();
+        let raw: SharedString = text.into();
+        let normalized = match super::html_blocks::normalize_markdown_html(raw.as_ref()) {
+            std::borrow::Cow::Borrowed(_) => raw,
+            std::borrow::Cow::Owned(s) => SharedString::from(s),
+        };
         Self {
             id: id.clone(),
-            inner: gpui_base::TextView::markdown(id, text),
+            inner: gpui_base::TextView::markdown(id, normalized),
             text_style: None,
             motion: None,
             stream_fade: None,
+            is_markdown: true,
+            is_mdx: false,
         }
     }
     /// Creates a text view that parses `text` as HTML.
@@ -84,6 +95,8 @@ impl TextView {
             text_style: None,
             motion: None,
             stream_fade: None,
+            is_markdown: false,
+            is_mdx: false,
         }
     }
     /// Overrides the source of every document image, including embedded data URLs.
@@ -201,6 +214,7 @@ impl TextView {
     }
     /// Enables the MDX Markdown extensions.
     pub fn markdown_mdx(mut self) -> Self {
+        self.is_mdx = true;
         self.inner = self.inner.markdown_mdx();
         self
     }
@@ -274,6 +288,14 @@ impl Element for TextView {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut inner = self.inner.clone();
+        if self.is_markdown && !self.is_mdx {
+            inner = inner
+                .markdown_block_parser(super::html_blocks::fallback_html_block_parser)
+                .markdown_block_renderer(
+                    super::html_blocks::HTML_FALLBACK_NODE,
+                    super::html_blocks::render_fallback_html_block,
+                );
+        }
         if let Some(style) = self.text_style.clone() {
             // `request_layout` runs every frame, so this asks whether the
             // caller ever replaced the theme -- a pointer comparison against
@@ -553,5 +575,56 @@ mod tests {
             renders_after_redraw,
             "an unchanged compatibility TextView must not schedule another render after its parse",
         );
+    }
+
+    #[gpui::test]
+    fn multi_html_block_markdown_renders_without_inline_flow_id_collision(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::init);
+        let md = concat!(
+            "<h1 align=\"center\">\n",
+            "  <img width=\"160\" src=\"https://example.com/logo.png\" />\n",
+            "  <br/>\n",
+            "  <a href=\"https://example.com\">Flow Icons</a>\n",
+            "</h1>\n\n",
+            "<p align=\"center\">\n",
+            "  <strong>IMPORTANT</strong>: Use cleanly.\n",
+            "</p>\n\n",
+            "<p align=\"center\">\n",
+            "  <a href=\"https://example.com\"><img alt=\"v\" src=\"https://example.com/a.svg\">&nbsp;<img alt=\"i\" src=\"https://example.com/b.svg\"></a>\n",
+            "</p>\n\n",
+            "<details>\n",
+            "  <summary><img src=\"https://example.com/icon.png\" width=\"24\"/> Icons</summary>\n",
+            "  <p>More <code>inline</code> details</p>\n",
+            "</details>\n\n",
+            "<table>\n",
+            "  <tr><th>Preview</th><th>Name</th></tr>\n",
+            "  <tr><td><img src=\"https://example.com/cell.png\" width=\"20\"/></td><td><code>flow</code></td></tr>\n",
+            "</table>\n\n",
+            "<unclosed\n<div>raw html fallback\n",
+        );
+
+        struct HtmlMarkdownView {
+            md: &'static str,
+        }
+        impl Render for HtmlMarkdownView {
+            fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+                use gpui::Styled as _;
+                div().w(gpui::px(600.)).child(
+                    super::TextView::markdown("flow-icons-test", self.md).image_source(|_| {
+                        gpui::ImageSource::Custom(Arc::new(|_, _| {
+                            Some(Err(gpui::ImageCacheError::Asset("test".into())))
+                        }))
+                    }),
+                )
+            }
+        }
+
+        let (_, cx) = cx.add_window_view(move |_, _| HtmlMarkdownView { md });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
     }
 }

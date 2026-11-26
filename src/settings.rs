@@ -1302,9 +1302,9 @@ impl Workbench {
                 }
             }))
             .child(if stacked_nav {
-                self.render_settings_top_nav(&sections, active, searching, cx)
+                self.render_settings_top_nav(&sections, active, searching, window, cx)
             } else {
-                self.render_settings_nav(&sections, active, searching, narrow_nav, cx)
+                self.render_settings_nav(&sections, active, searching, narrow_nav, window, cx)
             })
             .child(scroll_area)
             .into_any_element()
@@ -1391,8 +1391,33 @@ impl Workbench {
         sections: &[SettingsSection],
         active: SettingsSection,
         searching: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let pill_h = f32::from(theme::u(28.));
+        let top_liq = crate::ui::liquid::keyed_state("settings-top-liq", window, cx);
+        let active_ix = if searching { None } else { sections.iter().position(|&s| s == active) };
+        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(&top_liq, false, sections.len(), active_ix, pill_h, 190, motion);
+        let origin_probe = crate::ui::liquid::keyed_origin_probe(top_liq.clone(), view_id);
+        let liq_layer = frame.map(|fr| {
+            let st = crate::ui::liquid::LiquidStyle {
+                inset_a: 0.0,
+                inset_b: 0.0,
+                cross_base: pill_h,
+                max_squeeze: 2.0,
+                radius: f32::from(theme::u(6.)),
+                capillary: 20.0,
+                active_bg: c(theme::ACCENT).opacity(0.18),
+                active_border: c(theme::ACCENT).opacity(0.55),
+                hover_bg: c(theme::BG_HOVER).opacity(0.75),
+                hover_border: c(theme::BORDER_STRONG).opacity(0.78),
+                union_border: c(theme::ACCENT).opacity(0.58),
+                bridge_bg: c(theme::ACCENT).opacity(0.18),
+            };
+            crate::ui::liquid::render_coalesced_layer("settings-top-liq-l", false, st, fr)
+        });
         let close_btn = Button::new("settings-close-top")
             .icon(gpui_kit::component::IconName::Close)
             .xsmall()
@@ -1405,17 +1430,28 @@ impl Workbench {
                 this.focus.focus(w, cx);
                 cx.notify();
             }));
-        let pills = h_flex()
-            .id("settings-top-pills")
-            .w_full()
-            .min_w_0()
-            .overflow_x_scroll()
+        let pills_inner = h_flex()
+            .id("settings-top-pills-inner")
+            .relative()
+            .flex_none()
             .gap_1()
-            .pb_1()
-            .children(sections.iter().copied().map(|sec| {
+            .on_hover({
+                let h = top_liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(origin_probe)
+            .children(liq_layer)
+            .children(sections.iter().copied().enumerate().map(|(i, sec)| {
                 let on = !searching && sec == active;
+                let probe = crate::ui::liquid::keyed_item_probe(top_liq.clone(), i, view_id);
+                let h_hov = top_liq.clone();
                 h_flex()
                     .id(SharedString::from(format!("settings-top-{}", sec.title())))
+                    .relative()
                     .flex_none()
                     .whitespace_nowrap()
                     .h(theme::u(28.))
@@ -1425,14 +1461,21 @@ impl Workbench {
                     .cursor_pointer()
                     .text_xs()
                     .when(on, |d| {
-                        d.bg(c(theme::SELECT))
+                        d.when(!has_liq, |d| d.bg(c(theme::SELECT)))
                             .text_color(c(theme::FG_STRONG))
                             .font_weight(FontWeight::MEDIUM)
                     })
                     .when(!on, |d| {
                         d.text_color(c(theme::FG_MUTED))
-                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                            .when(motion, |d| d.hover(|s| s.text_color(c(theme::FG))))
                     })
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(&h_hov, i, false, pill_h, 150, view_id, cx);
+                        }
+                    })
+                    .child(probe)
                     .child(sec.icon().size(theme::u(12.)).text_color(c(if on {
                         theme::ACCENT_TEXT
                     } else {
@@ -1449,6 +1492,13 @@ impl Workbench {
                         cx.notify();
                     }))
             }));
+        let pills = h_flex()
+            .id("settings-top-pills")
+            .w_full()
+            .min_w_0()
+            .overflow_x_scroll()
+            .pb_1()
+            .child(pills_inner);
         v_flex()
             .w_full()
             .flex_none()
@@ -1497,8 +1547,39 @@ impl Workbench {
         active: SettingsSection,
         searching: bool,
         narrow: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let nav_w = f32::from(theme::u(if narrow { 188. } else { 240. }));
+        let nav_cross = (nav_w - 20.).max(100.);
+        let row_h = f32::from(theme::u(32.));
+        let nav_liq = crate::ui::liquid::keyed_state("settings-nav-liq", window, cx);
+        let ordered_secs: Vec<SettingsSection> = NavGroup::ALL
+            .into_iter()
+            .flat_map(|grp| sections.iter().copied().filter(move |s| s.group() == grp))
+            .collect();
+        let active_ix = if searching { None } else { ordered_secs.iter().position(|&s| s == active) };
+        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(&nav_liq, true, ordered_secs.len(), active_ix, nav_cross, 200, motion);
+        let origin_probe = crate::ui::liquid::keyed_origin_probe(nav_liq.clone(), view_id);
+        let liq_layer = frame.map(|fr| {
+            let st = crate::ui::liquid::LiquidStyle {
+                inset_a: 0.0,
+                inset_b: 0.0,
+                cross_base: nav_cross,
+                max_squeeze: 3.5,
+                radius: f32::from(theme::u(6.)),
+                capillary: row_h * 1.15,
+                active_bg: c(theme::ACCENT).opacity(0.18),
+                active_border: c(theme::ACCENT).opacity(0.55),
+                hover_bg: c(theme::BG_HOVER).opacity(0.75),
+                hover_border: c(theme::BORDER_STRONG).opacity(0.78),
+                union_border: c(theme::ACCENT).opacity(0.58),
+                bridge_bg: c(theme::ACCENT).opacity(0.16),
+            };
+            crate::ui::liquid::render_coalesced_layer("settings-nav-liq-l", true, st, fr)
+        });
         let close_btn = Button::new("settings-close")
             .icon(gpui_kit::component::IconName::Close)
             .xsmall()
@@ -1539,13 +1620,28 @@ impl Workbench {
                         .prefix(Icon::new(gpui_kit::component::IconName::Search).xsmall().text_color(c(theme::FG_MUTED))),
                 ),
             );
-        let mut list = v_flex().id("settings-nav-list").flex_1().min_h_0().overflow_y_scroll().gap(px(2.));
+        let mut inner = v_flex()
+            .id("settings-nav-inner")
+            .relative()
+            .w_full()
+            .gap(px(2.))
+            .on_hover({
+                let h = nav_liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(origin_probe)
+            .children(liq_layer);
+        let mut item_ix = 0usize;
         for (gi, grp) in NavGroup::ALL.into_iter().enumerate() {
             let group_secs: Vec<SettingsSection> = sections.iter().copied().filter(|s| s.group() == grp).collect();
             if group_secs.is_empty() {
                 continue;
             }
-            list = list.child(
+            inner = inner.child(
                 div()
                     .px_2p5()
                     .when(gi > 0, |d| d.pt_3())
@@ -1556,9 +1652,13 @@ impl Workbench {
                     .child(tr(grp.label())),
             );
             for sec in group_secs {
+                let i = item_ix;
+                item_ix += 1;
                 let on = !searching && sec == active;
                 let modified = sec.modified(self);
-                list = list.child(
+                let probe = crate::ui::liquid::keyed_item_probe(nav_liq.clone(), i, view_id);
+                let h_hov = nav_liq.clone();
+                inner = inner.child(
                     div()
                         .relative()
                         .id(SharedString::from(format!("settings-nav-{}", sec.title())))
@@ -1569,20 +1669,14 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .when(on, |d| d.bg(c(theme::SELECT)))
-                        .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
-                        .when(on, |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left(px(0.))
-                                    .top(theme::u(7.))
-                                    .bottom(theme::u(7.))
-                                    .w(px(2.))
-                                    .rounded_full()
-                                    .bg(c(theme::ACCENT)),
-                            )
+                        .when(on && !has_liq, |d| d.bg(c(theme::SELECT)))
+                        .when(!on && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                        .on_hover(move |entered: &bool, _, cx| {
+                            if *entered && motion {
+                                crate::ui::liquid::keyed_hover_enter(&h_hov, i, true, nav_cross, 150, view_id, cx);
+                            }
                         })
+                        .child(probe)
                         .child(sec.icon().size(theme::u(14.)).text_color(c(if on { theme::ACCENT_TEXT } else { theme::FG_MUTED })))
                         .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(if on { theme::FG_STRONG } else { theme::FG })).child(tr(sec.nav_label())))
                         .when(modified, |d| d.child(div().size(px(6.)).rounded_full().bg(c(theme::WARN))))
@@ -1597,6 +1691,7 @@ impl Workbench {
                 );
             }
         }
+        let list = v_flex().id("settings-nav-list").flex_1().min_h_0().overflow_y_scroll().child(inner);
         nav = nav.child(list);
         nav.into_any_element()
     }
