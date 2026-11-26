@@ -803,6 +803,9 @@ pub fn apply(cx: &mut App) {
         k.secondary_hover = c(BG_HOVER);
         k.secondary_foreground = c(FG);
         k.danger = c(DANGER);
+        k.success = c(GREEN);
+        k.info = c(BLUE);
+        k.warning = c(WARN);
         k.red = c(DANGER);
         k.yellow = c(WARN);
         k.caret = c(ACCENT_TEXT);
