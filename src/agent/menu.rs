@@ -6,8 +6,8 @@ use crate::workbench::Workbench;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     h_flex,
-    input::{Input, InputEvent, InputState},
-    v_flex, Icon, Sizable,
+    input::{InputEvent, InputState},
+    v_flex, Icon,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::cell::Cell;
@@ -439,7 +439,7 @@ impl Workbench {
                     div()
                         .px_2()
                         .pb_1()
-                        .child(Input::new(&st.query).small().cleanable(true).prefix(Icon::new(IconName::Search).size(theme::u(13.)).text_color(c(theme::FG_DIM)))),
+                        .child(crate::ui::McInput::new(&st.query).small().cleanable(true).prefix(Icon::new(IconName::Search).size(theme::u(13.)).text_color(c(theme::FG_DIM)))),
                 )
             })
             .when(m == Menu::Model, |v| v.children(self.render_effort_strip(cx)))

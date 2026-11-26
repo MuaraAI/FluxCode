@@ -864,6 +864,14 @@ fn quoted(s: &str) -> String {
     if s.contains(' ') { format!("\"{s}\"") } else { s.to_string() }
 }
 
+pub fn is_shell_not_found_line(text: &str) -> bool {
+    let l = text.trim().to_ascii_lowercase();
+    l.contains("is not recognized as an internal or external command")
+        || l.contains("is not recognized as the name of a cmdlet")
+        || l.ends_with(": command not found")
+        || l.starts_with("operable program or batch file")
+}
+
 fn advise(kind: &str, msg: &str, python: &str, cwd: &Path) -> (Option<String>, Option<String>) {
     let short = kind.rsplit('.').next().unwrap_or(kind);
     let between = |s: &str| s.split('\'').nth(1).map(str::to_string);
@@ -871,94 +879,94 @@ fn advise(kind: &str, msg: &str, python: &str, cwd: &Path) -> (Option<String>, O
         "ModuleNotFoundError" => {
             let Some(module) = between(msg) else { return (None, None) };
             if module == "tkinter" || module == "_tkinter" {
-                return (Some("tkinter comes with Python itself. Reinstall Python with \"tcl/tk and IDLE\" ticked.".into()), None);
+                return (Some("Reinstall Python with tcl/tk enabled.".into()), None);
             }
             let root = module.split('.').next().unwrap_or(&module).to_string();
             let pkg = pip_package(&root).map(str::to_string).unwrap_or(root.clone());
             (
-                Some(format!("'{root}' isn't installed for this Python. Install it, then run again.")),
+                Some(format!("Missing package '{root}'.")),
                 Some(format!("{} -m pip install {pkg}", quoted(python))),
             )
         }
         "ImportError" if msg.contains("cannot import name") => {
-            (Some("That name doesn't exist in the module: check the spelling, or the module's version.".into()), None)
+            (Some("Symbol not found in module.".into()), None)
         }
         "NameError" => (
             Some(if msg.contains("Did you mean") {
-                "Python doesn't know this name. Use the suggested name, or define it before this line.".into()
+                "Undefined name; use the suggested spelling.".into()
             } else {
-                "Python doesn't know this name here. Check the spelling, or define it (or import it) before this line.".into()
+                "Undefined name; check spelling or imports.".into()
             }),
             None,
         ),
         "SyntaxError" => {
             let m = msg.to_ascii_lowercase();
             let h = if m.contains("was never closed") {
-                "A bracket or quote opened here is never closed. Add the closing one."
+                "Unclosed bracket or quote."
             } else if m.contains("unterminated string") || m.contains("eol while scanning") {
-                "This text has no closing quote. Add the matching \" or '."
+                "Unterminated string."
             } else if m.contains("expected ':'") {
-                "Lines with if, elif, else, for, while, def and class end with a colon ':'."
+                "Missing ':' at end of header."
             } else if m.contains("forgot a comma") {
-                "Put a comma between the items."
+                "Missing comma between items."
             } else if m.contains("invalid character") {
-                "There is a character Python can't read, often a curly quote or a dash pasted from a document. Retype it."
+                "Invalid character (check pasted quotes or dashes)."
             } else if m.contains("'(' was never closed") || m.contains("unmatched") {
-                "Brackets don't pair up. Check every ( [ { has its closing ) ] }."
+                "Mismatched brackets."
             } else {
-                "Python couldn't read this line. Look for a missing bracket, quote, colon or comma at the ^ mark."
+                "Invalid syntax near '^'."
             };
             (Some(h.into()), None)
         }
         "IndentationError" | "TabError" => (
-            Some("Indent each block the same way: 4 spaces under if/for/def, and don't mix tabs with spaces.".into()),
+            Some("Inconsistent indentation; use 4 spaces and don't mix tabs.".into()),
             None,
         ),
         "TypeError" => {
             let h = if msg.contains("can only concatenate str") || msg.contains("must be str, not") {
-                "Text and numbers can't be joined with +. Use str(x), or an f-string: f\"Total: {x}\"."
+                "Can't join str with non-str; use str(x) or an f-string."
             } else if msg.contains("unsupported operand") && msg.contains("'str'") {
-                "One of the values is text. Convert it with int(x) or float(x) first."
+                "String used in numeric op; convert with int(x) or float(x)."
             } else if msg.contains("required positional argument") {
-                "The function needs more arguments than it was given."
+                "Missing required argument."
             } else if msg.contains("takes") && msg.contains("positional argument") {
-                "The function was given more arguments than it accepts. Inside a class, the first parameter must be self."
+                "Too many arguments (methods need self)."
             } else if msg.contains("'NoneType'") {
-                "The value is None here: a function probably returned nothing."
+                "Value is None."
             } else if msg.contains("not callable") {
-                "Something that isn't a function is being called with (). A variable may hide a function of the same name."
+                "Object is not callable."
             } else {
-                "A value has the wrong type for this operation."
+                "Wrong type for this operation."
             };
             (Some(h.into()), None)
         }
         "AttributeError" => (
             Some(if msg.contains("'NoneType'") {
-                "The value is None: something before this line returned nothing.".into()
+                "Value is None.".into()
             } else {
-                "That object has no such attribute or method. Check the spelling.".into()
+                "Attribute not found; check spelling.".into()
             }),
             None,
         ),
-        "KeyError" => (Some(format!("The dictionary has no key {msg}. Check the key, or use .get({msg}).")), None),
-        "IndexError" => (Some("The index is past the end. Valid positions run from 0 to len(...) - 1.".into()), None),
+        "KeyError" => (Some(format!("Missing key {msg} (or use .get()).")), None),
+        "IndexError" => (Some("Index out of range (valid: 0..len - 1).".into()), None),
         "ValueError" if msg.contains("invalid literal for int()") || msg.contains("could not convert string to float") => {
-            (Some("The text isn't a number. Check the input, or catch it with try/except ValueError.".into()), None)
+            (Some("Not a valid number.".into()), None)
         }
-        "ValueError" => (Some("The value has the right type but content the function can't use.".into()), None),
-        "ZeroDivisionError" => (Some("Division by zero. Check the divisor before dividing.".into()), None),
+        "ValueError" => (Some("Value rejected by function.".into()), None),
+        "ZeroDivisionError" => (Some("Division by zero.".into()), None),
         "FileNotFoundError" => {
             let near = between(msg).and_then(|f| fix_file(&f, cwd, &[]));
             let h = match near {
-                Some(n) => format!("No such file. Did you mean '{}'? Relative paths start in {}", unquote(&n), cwd.display()),
-                None => format!("No such file. Relative paths start in the folder the program runs from: {}", cwd.display()),
+                Some(n) => format!("Did you mean '{}'?", unquote(&n)),
+                None => format!("Not found in {}", cwd.display()),
             };
             (Some(h), None)
         }
-        "RecursionError" => (Some("A function keeps calling itself. Check its stop condition.".into()), None),
-        "UnicodeDecodeError" => (Some("Open the file with encoding=\"utf-8\".".into()), None),
-        "PermissionError" => (Some("The file is open in another program, or the folder is read-only.".into()), None),
-        "TclError" => (Some("Tk rejected a widget option, image or font. Check the value at this line.".into()), None),
+        "RecursionError" => (Some("Infinite recursion; check the base case.".into()), None),
+        "UnicodeDecodeError" => (Some("Pass encoding=\"utf-8\" when opening.".into()), None),
+        "PermissionError" => (Some("File locked by another process or read-only.".into()), None),
+        "TclError" => (Some("Invalid Tk widget option or asset.".into()), None),
         _ => (None, None),
     }
 }
@@ -1097,22 +1105,22 @@ fn js_advise(kind: &str, msg: &str) -> (Option<String>, Option<String>) {
                     pkg.split('/').next().unwrap_or(pkg).to_string()
                 };
                 return (
-                    Some(format!("Package '{root}' is not installed in node_modules.")),
+                    Some(format!("Missing package '{root}'.")),
                     Some(format!("npm install {root}")),
                 );
             }
-            return (Some("Check the relative import path and file extension.".into()), None);
+            return (Some("Check the import path or extension.".into()), None);
         }
     }
     let hint = match kind {
-        "ReferenceError" => Some("This name is not defined in the current scope. Check spelling or add an import.".into()),
+        "ReferenceError" => Some("Undefined identifier; check spelling or imports.".into()),
         "TypeError" if msg.contains("Cannot read properties of undefined") || msg.contains("Cannot read properties of null") => {
-            Some("Value is null or undefined before accessing the property. Guard it or use optional chaining (?.)".into())
+            Some("Value is null or undefined; guard it or use '?.'.".into())
         }
         "TypeError" if msg.contains("is not a function") => {
-            Some("Called value is not a function. Check the export/import name or variable type.".into())
+            Some("Target is not callable; check the import or type.".into())
         }
-        "SyntaxError" => Some("Syntax error on this line. Check brackets, quotes, commas, or module type (ESM vs CommonJS).".into()),
+        "SyntaxError" => Some("Invalid syntax (brackets, commas, or ESM vs CJS).".into()),
         _ => None,
     };
     (hint, None)
@@ -1455,20 +1463,14 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
     };
     if let Some((t, _)) = lines.iter().find(|(t, _)| t.contains(": can't open file '")) {
         let quoted_path = t.split('\'').nth(1).unwrap_or("").replace("\\\\", "\\");
-        let name = Path::new(&quoted_path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(quoted_path.clone());
+        let name = Path::new(&quoted_path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(quoted_path);
         let near = fix_file(&name, cwd, &["py", "pyw"]);
         let fix = near.as_ref().map(|n| command.replacen(&name, unquote(n), 1)).filter(|f| f != command);
-        let hint = match &near {
-            Some(n) => format!("Did you mean {}?", unquote(n)),
-            None => "Check the file path or folder and try again.".into(),
-        };
-        return Some(card("File not found", format!("Can't find '{name}' in {}", cwd.display()), Some(hint), fix));
+        let hint = near.as_ref().map(|n| format!("Did you mean '{}'?", unquote(n)));
+        return Some(card("Not found", format!("'{name}' not found"), hint, fix));
     }
     if let Some((t, _)) = lines.iter().find(|(t, _)| {
-        let l = t.to_ascii_lowercase();
-        l.contains("is not recognized as an internal or external command")
-            || l.contains("is not recognized as the name of a cmdlet")
-            || l.ends_with(": command not found")
+        is_shell_not_found_line(t) && !t.trim().to_ascii_lowercase().starts_with("operable program or batch file")
     }) {
         let name = if let Some(n) = t.split('\'').nth(1).filter(|s| !s.is_empty()) {
             n.to_string()
@@ -1477,14 +1479,13 @@ pub fn parse_problem(lines: &[(&str, LineKind)], command: &str, python: &str, cw
         };
         let near = closest(&name, KNOWN.iter().copied()).filter(|k| on_path(k) || matches!(*k, "cd" | "dir" | "cls" | "type" | "echo"));
         let fix = near.map(|n| command.replacen(&name, n, 1));
-        let hint = match near {
-            Some(n) => format!("Did you mean {n}?"),
-            None if matches!(name.as_str(), "python" | "python3" | "pip" | "pip3") => {
-                "Python isn't on PATH. Try py (the Windows launcher), e.g.  py -m pip install ...".into()
-            }
-            None => "Check the spelling, or install the program and open a new terminal.".into(),
+        let msg = if near.is_none() && matches!(name.as_str(), "python" | "python3" | "pip" | "pip3") {
+            format!("'{name}' not found (try 'py')")
+        } else {
+            format!("'{name}' not found")
         };
-        return Some(card("Unknown command", format!("'{name}' isn't a program or command here"), Some(hint), fix));
+        let hint = near.map(|n| format!("Did you mean '{n}'?"));
+        return Some(card("Not found", msg, hint, fix));
     }
     None
 }
@@ -1899,5 +1900,19 @@ mod tests {
         assert_eq!(e.source, "zig");
         assert_eq!(e.line, Some(14));
         assert_eq!(e.col, Some(9));
+    }
+
+    #[test]
+    fn unknown_command_error_is_concise() {
+        let d = tmp();
+        let raw = [
+            ("'tste' is not recognized as an internal or external command,", LineKind::Err),
+            ("operable program or batch file.", LineKind::Err),
+        ];
+        let e = parse_problem(&raw, "tste", "py", &d).unwrap();
+        assert_eq!(e.kind, "Not found");
+        assert_eq!(e.message, "'tste' not found");
+        assert_eq!(e.hint, None);
+        assert_eq!(e.fix, None);
     }
 }

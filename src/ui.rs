@@ -1,7 +1,14 @@
 
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
+use gpui_kit::component::{
+    input::{Input, InputState},
+    Sizable, Size, StyledExt,
+};
 use gpui_kit::{prelude::FluentBuilder, *};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -212,6 +219,384 @@ impl RenderOnce for SegmentedControl {
             .child(origin_probe)
             .children(liquid_layer)
             .children(buttons)
+    }
+}
+
+struct McToggleMem {
+    checked: bool,
+    from_on: bool,
+    seq: u64,
+    hovered: bool,
+}
+
+type ToggleClick = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+
+/// KiwEssentials Minecraft Ore-UI toggle switch with underdamped jelly bounce physics.
+#[derive(IntoElement)]
+pub struct McToggle {
+    id: SharedString,
+    checked: bool,
+    small: bool,
+    accessibility_label: Option<SharedString>,
+    on_click: Option<ToggleClick>,
+}
+
+impl McToggle {
+    pub fn new(id: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            checked: false,
+            small: false,
+            accessibility_label: None,
+            on_click: None,
+        }
+    }
+
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked;
+        self
+    }
+
+    pub fn small(mut self) -> Self {
+        self.small = true;
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    pub fn on_click(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_click = Some(Rc::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for McToggle {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let checked = self.checked;
+        let disabled = false;
+        let small = self.small;
+        let id = self.id;
+        let view_id = window.current_view();
+        let mem = window
+            .use_keyed_state(
+                SharedString::from(format!("mc-tgl-st-{id}")),
+                cx,
+                |_, _| Rc::new(RefCell::new(McToggleMem { checked, from_on: checked, seq: 0, hovered: false })),
+            )
+            .read(cx)
+            .clone();
+        let fh = window
+            .use_keyed_state(SharedString::from(format!("mc-tgl-fh-{id}")), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let focused = fh.is_focused(window) && !disabled;
+
+        let (from_on, seq, hovered) = {
+            let mut m = mem.borrow_mut();
+            if m.checked != checked {
+                m.from_on = m.checked;
+                m.checked = checked;
+                m.seq = m.seq.wrapping_add(1);
+            }
+            (m.from_on, m.seq, m.hovered && !disabled)
+        };
+
+        let sc = theme::scale();
+        let w = if small { 38.0 } else { 46.0 } * sc;
+        let h = if small { 22.0 } else { 26.0 } * sc;
+        let track_h = if small { 18.0 } else { 22.0 } * sc;
+        let track_top = (h - track_h) * 0.5;
+        let thumb_w = if small { 18.0 } else { 22.0 } * sc;
+        let thumb_h = if small { 20.0 } else { 24.0 } * sc;
+        let travel = (w - thumb_w).max(0.0);
+        let dark = theme::live_dark();
+        let motion = !cx.reduce_motion() && seq > 0;
+
+        let paint_at = move |canvas_div: Div, u: f32| -> Div {
+            let j = liquid::jelly_toggle_eval(from_on, checked, u);
+            let tbx = j.track_bump_x * sc;
+            let tby = j.track_bump_y * sc;
+            let th_w = thumb_w * j.sx;
+            let th_h = thumb_h * j.sy;
+            let cx_thumb = thumb_w * 0.5 + travel * j.pos;
+            let left = (cx_thumb - th_w * 0.5).clamp(-1.5 * sc, w - th_w + 1.5 * sc);
+            let top = ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-2.0 * sc, h - th_h + 2.0 * sc);
+            let split_x = (left + th_w * 0.5).clamp(0.0, w);
+
+            // Exact KiwEssentials toggle/{on,off,on_hover,off_hover}.png colors.
+            let green_body = rgb(0x3C8527);
+            let green_hi = rgb(0x639D52);
+            let gray_body = rgb(0x8C8D90);
+            let gray_hi = rgb(0xA3A4A6);
+            let thumb_face = if hovered { rgb(0xF4F6F9) } else { rgb(0xD0D1D4) };
+            let thumb_bevel = rgb(0xFFFFFF);
+            let thumb_lip = rgb(0x58585A);
+            let outline = if dark { rgb(0x000000) } else { rgb(0x18181B) };
+            let glyph_w = (2.0 * sc).max(1.5);
+            let glyph_h = (8.0 * sc).max(6.0);
+            let o_sz = (6.0 * sc).max(5.0);
+
+            let track = div()
+                .absolute()
+                .left(px(tbx))
+                .top(px(track_top + tby))
+                .w(px(w))
+                .h(px(track_h))
+                .rounded(px(2.0 * sc))
+                .border_2()
+                .border_color(outline)
+                .overflow_hidden()
+                .bg(gray_body)
+                // OFF side top bevel + hollow square O mark on the right half
+                .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(gray_hi))
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(thumb_w * 0.5 - o_sz * 0.5 - 2.0 * sc))
+                        .top(px((track_h - 4.0 * sc - o_sz) * 0.5))
+                        .size(px(o_sz))
+                        .rounded(px(1.))
+                        .border(px(1.5 * sc))
+                        .border_color(rgb(0x141416))
+                        .opacity((1.0 - j.fill).clamp(0.18, 1.0)),
+                )
+                // ON side green body + top bevel + white vertical I mark
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .w(px(split_x))
+                        .overflow_hidden()
+                        .bg(green_body)
+                        .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(green_hi))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(thumb_w * 0.5 - glyph_w * 0.5 - 2.0 * sc))
+                                .top(px((track_h - 4.0 * sc - glyph_h) * 0.5))
+                                .w(px(glyph_w))
+                                .h(px(glyph_h))
+                                .bg(rgb(0xFFFFFF))
+                                .opacity(j.fill.clamp(0.2, 1.0)),
+                        ),
+                );
+
+            let thumb = div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(th_w))
+                .h(px(th_h))
+                .rounded(px(2.0 * sc))
+                .border_2()
+                .border_color(outline)
+                .overflow_hidden()
+                .bg(thumb_face)
+                .child(div().absolute().top_0().left_0().right_0().h(px(2.0 * sc)).bg(thumb_bevel))
+                .child(div().absolute().top_0().bottom_0().left_0().w(px(1.5 * sc)).bg(rgb(0xEAEAEC)))
+                .child(div().absolute().bottom_0().left_0().right_0().h(px(3.0 * sc)).bg(thumb_lip));
+
+            canvas_div.child(track).child(thumb)
+        };
+
+        let inner = div().relative().w(px(w)).h(px(h));
+        let visual: AnyElement = if motion {
+            inner
+                .with_animation(
+                    SharedString::from(format!("mc-tgl-{id}-{seq}")),
+                    Animation::new(Duration::from_millis(380)),
+                    paint_at,
+                )
+                .into_any_element()
+        } else {
+            paint_at(inner, 1.0).into_any_element()
+        };
+
+        let on_click = self.on_click.clone();
+        let on_key = self.on_click;
+        let mem_hov = mem;
+        div()
+            .id(SharedString::from(format!("mc-tgl-{id}")))
+            .flex_none()
+            .p(px(2.))
+            .rounded(px(3.))
+            .border_1()
+            .border_color(if focused { c(theme::ACCENT) } else { gpui::transparent_black() })
+            .when_some(self.accessibility_label, |d, lbl| d.aria_label(lbl))
+            .when(disabled, |d| d.opacity(0.5).cursor_not_allowed())
+            .when(!disabled, |d| d.cursor_pointer())
+            .track_focus(&fh)
+            .tab_stop(!disabled)
+            .on_hover(move |entered: &bool, _, cx| {
+                mem_hov.borrow_mut().hovered = *entered;
+                cx.notify(view_id);
+            })
+            .when(!disabled, |d| {
+                d.on_click(move |_, w, cx| {
+                    if let Some(cb) = &on_click {
+                        cb(&!checked, w, cx);
+                    }
+                })
+                .on_key_down(move |ev: &KeyDownEvent, w, cx| {
+                    if matches!(ev.keystroke.key.as_str(), "enter" | "space") {
+                        cx.stop_propagation();
+                        if let Some(cb) = &on_key {
+                            cb(&!checked, w, cx);
+                        }
+                    }
+                })
+            })
+            .child(visual)
+    }
+}
+
+/// KiwEssentials recessed 3D Minecraft cavity frame matching `kiwui/edit_box.png`.
+pub fn mc_box_frame(base: Div, focused: bool, dark: bool) -> Div {
+    let sc = theme::scale();
+    let outer = if focused {
+        rgb(if dark { 0x639D52 } else { 0x3C8527 }).into()
+    } else if dark {
+        rgb(0x28282C).into()
+    } else {
+        c(theme::BORDER_STRONG)
+    };
+    let fill = if dark { rgb(0x121214).into() } else { c(theme::BG_EDITOR) };
+    let shadow = if dark { rgb(0x060608).into() } else { gpui::black().opacity(0.14) };
+    let rim = if focused {
+        rgb(0x3C8527).into()
+    } else if dark {
+        Hsla::from(rgb(0x686A72)).opacity(0.65)
+    } else {
+        gpui::white().opacity(0.9)
+    };
+    let bevel = (1.5 * sc).max(1.0);
+    base.relative()
+        .rounded(px(2.0 * sc))
+        .border_1()
+        .border_color(outer)
+        .bg(fill)
+        .overflow_hidden()
+        .child(div().absolute().top_0().left_0().right_0().h(px(bevel)).bg(shadow))
+        .child(div().absolute().top_0().bottom_0().left_0().w(px(bevel)).bg(shadow))
+        .child(div().absolute().bottom_0().left_0().right_0().h(px(1.)).bg(rim))
+        .child(div().absolute().top_0().bottom_0().right_0().w(px(1.)).bg(rim))
+}
+
+struct McInputFocusMem {
+    focused: bool,
+    seq: u64,
+}
+
+/// Recessed Minecraft Ore-UI input box wrapping `InputState` with subtle focus bounce.
+#[derive(IntoElement)]
+pub struct McInput {
+    state: Entity<InputState>,
+    size: Option<Size>,
+    cleanable: bool,
+    prefix: Option<AnyElement>,
+    focus_bordered: bool,
+    style: StyleRefinement,
+}
+
+impl McInput {
+    pub fn new(state: &Entity<InputState>) -> Self {
+        Self {
+            state: state.clone(),
+            size: None,
+            cleanable: false,
+            prefix: None,
+            focus_bordered: true,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn small(mut self) -> Self {
+        self.size = Some(Size::Small);
+        self
+    }
+
+    pub fn xsmall(mut self) -> Self {
+        self.size = Some(Size::XSmall);
+        self
+    }
+
+    pub fn cleanable(mut self, cleanable: bool) -> Self {
+        self.cleanable = cleanable;
+        self
+    }
+
+    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
+        self.prefix = Some(prefix.into_any_element());
+        self
+    }
+
+    pub fn focus_bordered(mut self, enabled: bool) -> Self {
+        self.focus_bordered = enabled;
+        self
+    }
+}
+
+impl Styled for McInput {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for McInput {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focused = self.focus_bordered && self.state.focus_handle(cx).is_focused(window);
+        let dark = theme::live_dark();
+        let mem = window
+            .use_keyed_state(
+                ("mc-inp-f", self.state.entity_id()),
+                cx,
+                |_, _| Rc::new(RefCell::new(McInputFocusMem { focused: false, seq: 0 })),
+            )
+            .read(cx)
+            .clone();
+        let pop_seq = {
+            let mut m = mem.borrow_mut();
+            if focused && !m.focused {
+                m.seq = m.seq.wrapping_add(1);
+            }
+            m.focused = focused;
+            if focused && !cx.reduce_motion() { m.seq } else { 0 }
+        };
+
+        let mut inner = Input::new(&self.state).appearance(false).focus_bordered(false);
+        inner = match self.size {
+            Some(Size::XSmall) => inner.xsmall(),
+            Some(Size::Small) => inner.small(),
+            _ => inner,
+        };
+        if self.cleanable {
+            inner = inner.cleanable(true);
+        }
+        if let Some(p) = self.prefix {
+            inner = inner.prefix(p);
+        }
+
+        let box_base = mc_box_frame(div().w_full().refine_style(&self.style), focused, dark).child(inner);
+        if pop_seq > 0 {
+            let eid = self.state.entity_id();
+            box_base
+                .with_animation(
+                    ("mc-inp-pop", (eid.as_u64() ^ (pop_seq << 32))),
+                    Animation::new(Duration::from_millis(190)),
+                    move |d, u| {
+                        let pulse = 1.0 - (1.0 - u) * (1.0 - u);
+                        d.border_color(rgb(0x639D52).opacity(0.6 + 0.4 * pulse))
+                    },
+                )
+                .into_any_element()
+        } else {
+            box_base.into_any_element()
+        }
     }
 }
 
@@ -985,6 +1370,56 @@ pub mod liquid {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    pub struct JellySample {
+        pub pos: f32,
+        pub fill: f32,
+        pub sx: f32,
+        pub sy: f32,
+        pub track_bump_x: f32,
+        pub track_bump_y: f32,
+    }
+
+    /// Underdamped harmonic spring (`zeta = 0.44`) with area-conserving jelly squash/stretch (`sx * sy ~= 1`).
+    pub fn jelly_toggle_eval(from_on: bool, to_on: bool, u: f32) -> JellySample {
+        let from = if from_on { 1.0 } else { 0.0 };
+        let to = if to_on { 1.0 } else { 0.0 };
+        let dir = to - from;
+        if from_on == to_on || u >= 1.0 {
+            return JellySample { pos: to, fill: to, sx: 1.0, sy: 1.0, track_bump_x: 0.0, track_bump_y: 0.0 };
+        }
+        if u <= 0.0 {
+            return JellySample { pos: from, fill: from, sx: 1.0, sy: 1.0, track_bump_x: 0.0, track_bump_y: 0.0 };
+        }
+        let zeta = 0.44f32;
+        let omega = 15.0f32;
+        let sq = (1.0 - zeta * zeta).sqrt();
+        let omega_d = omega * sq;
+        let ratio = zeta / sq;
+        let raw = |t: f32| {
+            1.0 - fast_exp_neg(zeta * omega * t) * ((omega_d * t).cos() + ratio * (omega_d * t).sin())
+        };
+        let norm = raw(1.0);
+        let s = if norm.abs() < 1e-5 { u } else { raw(u) / norm };
+        let pos = from + dir * s;
+        let fill = pos.clamp(0.0, 1.0);
+
+        let flight = fast_exp_neg(11.0 * (u - 0.10).abs()) * (u * 8.0).min(1.0) * (1.0 - u);
+        let tau = (u - 0.22).max(0.0);
+        let wobble = -fast_exp_neg(5.8 * tau) * (20.5 * tau).sin() * (1.0 - u);
+        let sx = (1.0 + 0.28 * flight + 0.26 * wobble).clamp(0.76, 1.34);
+        let sy = (1.0 / sx).clamp(0.75, 1.32);
+
+        JellySample {
+            pos,
+            fill,
+            sx,
+            sy,
+            track_bump_x: wobble * 1.6 * dir,
+            track_bump_y: -wobble * 1.1,
+        }
+    }
+
     #[cfg(test)]
     mod liquid_tests {
         use super::*;
@@ -1072,6 +1507,31 @@ pub mod liquid {
             std::hint::black_box(acc);
             eprintln!("liquid 10,000 capsule+coalesce evals: {:?} ({:.2} ns/eval)", elapsed, elapsed.as_nanos() as f64 / 10_000.0);
             assert!(elapsed.as_millis() < 20, "10k evaluations took {:?}", elapsed);
+        }
+
+        #[test]
+        fn jelly_toggle_overshoots_conserves_area_and_settles() {
+            for (from, to) in [(false, true), (true, false)] {
+                let s0 = jelly_toggle_eval(from, to, 0.0);
+                let s1 = jelly_toggle_eval(from, to, 1.0);
+                assert!((s0.pos - if from { 1.0 } else { 0.0 }).abs() < 1e-5);
+                assert!((s1.pos - if to { 1.0 } else { 0.0 }).abs() < 1e-5);
+                assert!((s1.sx - 1.0).abs() < 1e-5 && (s1.sy - 1.0).abs() < 1e-5);
+
+                let mut overshot = false;
+                let mut stretched = false;
+                let mut squashed = false;
+                for i in 1..100 {
+                    let j = jelly_toggle_eval(from, to, i as f32 * 0.01);
+                    assert!((j.sx * j.sy - 1.0).abs() < 0.02, "area not conserved: {j:?}");
+                    if to && j.pos > 1.03 { overshot = true; }
+                    if !to && j.pos < -0.03 { overshot = true; }
+                    if j.sx > 1.04 { stretched = true; }
+                    if j.sx < 0.96 { squashed = true; }
+                }
+                assert!(overshot, "expected bumble overshoot for {from}->{to}");
+                assert!(stretched && squashed, "expected squash & stretch for {from}->{to}");
+            }
         }
     }
 }

@@ -5,10 +5,8 @@ use crate::workbench::{ScrollTarget, Workbench};
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
     popover::Popover,
-    switch::Switch,
-    v_flex, Disableable, Icon, Selectable, Sizable,
+    v_flex, Icon, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
@@ -62,6 +60,7 @@ pub struct Settings {
     pub auto_save: bool,
     pub agent_auto_approve: bool,
     pub theme: String,
+    pub icon_theme: String,
     pub bg_image: Option<PathBuf>,
     pub bg_visibility: Visibility,
     pub ui_size: UiSize,
@@ -125,6 +124,7 @@ impl Default for Settings {
             auto_save: true,
             agent_auto_approve: false,
             theme: PALETTES[0].id.into(),
+            icon_theme: String::new(),
             bg_image: None,
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
@@ -244,11 +244,13 @@ impl Settings {
         crate::theme::set_glass(self.glass);
         crate::scene::set(self.scene(), self.bg_motion);
         crate::theme::set_scene_backdrop(self.scene().is_some());
+        let _ = crate::ext::vsx_icons::set_active(&self.icon_theme);
     }
 
     pub fn reset_appearance(&mut self) {
         let def = Self::default();
         self.theme = def.theme;
+        self.icon_theme = def.icon_theme;
         self.language = def.language;
         self.ui_size = def.ui_size;
         self.bg_image = def.bg_image;
@@ -480,6 +482,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Appearance => {
                 s.theme != def.theme
+                    || s.icon_theme != def.icon_theme
                     || s.language != def.language
                     || s.ui_size != def.ui_size
                     || s.bg_image.is_some()
@@ -630,7 +633,7 @@ fn settings_switch(
     cx: &mut Context<Workbench>,
     toggle: impl Fn(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static,
 ) -> AnyElement {
-    Switch::new(id)
+    crate::ui::McToggle::new(id)
         .checked(on)
         .accessibility_label(tr(label))
         .on_click(cx.listener(move |this, _: &bool, w, cx| toggle(this, w, cx)))
@@ -638,7 +641,7 @@ fn settings_switch(
 }
 
 fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Context<Workbench>, flip: fn(&mut Workbench)) -> AnyElement {
-    Switch::new(id)
+    crate::ui::McToggle::new(id)
         .checked(on)
         .accessibility_label(tr(label))
         .on_click(cx.listener(move |this, _: &bool, w, cx| {
@@ -649,37 +652,54 @@ fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Con
 }
 
 fn settings_stepper(id: &'static str, value: String, can_dec: bool, can_inc: bool, cx: &mut Context<Workbench>, step: fn(&mut Workbench, i32)) -> AnyElement {
-    h_flex()
-        .items_center()
-        .p(px(2.))
-        .gap(px(2.))
-        .rounded(theme::u(7.))
-        .border_1()
-        .border_color(c(theme::BORDER))
-        .bg(c(theme::BG_SIDE))
+    let dark = theme::live_dark();
+    let step_btn = |ix: usize, lbl: &'static str, enabled: bool, delta: i32| {
+        let face = if dark { rgb(0x2D2E34) } else { rgb(0xD0D1D4) };
+        let hi = if dark { rgb(0x474952) } else { rgb(0xFFFFFF) };
+        let lip = if dark { rgb(0x16171B) } else { rgb(0x58585A) };
+        let fg = if dark { c(theme::FG_STRONG) } else { rgb(0x141416).into() };
+        div()
+            .id((id, ix))
+            .relative()
+            .flex_none()
+            .size(theme::u(22.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(2.))
+            .border_1()
+            .border_color(if dark { rgb(0x0A0A0D) } else { rgb(0x18181B) })
+            .bg(face)
+            .overflow_hidden()
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(fg)
+            .child(div().absolute().top_0().left_0().right_0().h(px(1.5)).bg(hi))
+            .child(div().absolute().bottom_0().left_0().right_0().h(px(2.)).bg(lip))
+            .when(!enabled, |d| d.opacity(0.45).cursor_not_allowed())
+            .when(enabled, |d| {
+                d.cursor_pointer()
+                    .hover(|s| s.opacity(0.88))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        step(this, delta);
+                        this.apply_settings(w, cx);
+                    }))
+            })
+            .child(lbl)
+    };
+    crate::ui::mc_box_frame(h_flex().items_center().p(px(2.)).gap(px(2.)), false, dark)
+        .child(step_btn(0, "-", can_dec, -1))
         .child(
-            Button::new((id, 0usize))
-                .label("−")
-                .xsmall()
-                .ghost()
-                .disabled(!can_dec)
-                .on_click(cx.listener(move |this, _, w, cx| {
-                    step(this, -1);
-                    this.apply_settings(w, cx);
-                })),
+            div()
+                .min_w(px(52.))
+                .px_1p5()
+                .text_center()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(c(theme::FG_STRONG))
+                .child(value),
         )
-        .child(div().min_w(px(52.)).px_1p5().text_center().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(value))
-        .child(
-            Button::new((id, 1usize))
-                .label("+")
-                .xsmall()
-                .ghost()
-                .disabled(!can_inc)
-                .on_click(cx.listener(move |this, _, w, cx| {
-                    step(this, 1);
-                    this.apply_settings(w, cx);
-                })),
-        )
+        .child(step_btn(1, "+", can_inc, 1))
         .into_any_element()
 }
 
@@ -953,6 +973,29 @@ impl Workbench {
         self.status = crate::trf!("Color theme: {name}"; name => name).into();
     }
 
+    pub(crate) fn set_icon_theme(&mut self, id: &str, cx: &mut Context<Self>) {
+        let label = match crate::ext::vsx_icons::set_active(id) {
+            Ok(Some(label)) => {
+                self.settings.icon_theme = crate::ext::vsx_icons::active_id();
+                label
+            }
+            Ok(None) => {
+                self.settings.icon_theme.clear();
+                tr("FluxCode (Built-in)").to_string()
+            }
+            Err(e) => {
+                self.settings.icon_theme.clear();
+                self.settings.save();
+                self.status = e.into();
+                cx.notify();
+                return;
+            }
+        };
+        self.settings.save();
+        self.status = crate::trf!("File icon theme: {name}"; name => label).into();
+        cx.notify();
+    }
+
     fn render_theme_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let active = theme::palette();
         let committed = self.committed_theme_id().to_string();
@@ -1193,6 +1236,245 @@ impl Workbench {
         )
     }
 
+    fn render_icon_theme_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let active_id = crate::ext::vsx_icons::active_id();
+        let active_label = crate::ext::vsx_icons::active_label();
+        let display: SharedString = if active_label.is_empty() {
+            tr("FluxCode (Built-in)").into()
+        } else {
+            active_label.into()
+        };
+        let open = self.settings_icon_open;
+        let focus = self.settings_icon_focus.clone();
+        let weak_open = cx.entity().downgrade();
+        let weak_content = cx.entity().downgrade();
+        let trigger = Button::new("settings-icon-trigger")
+            .outline()
+            .small()
+            .dropdown_caret(true)
+            .selected(open)
+            .when(compact, |b| b.w_full())
+            .when(!compact, |b| b.w(theme::u(220.)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(crate::files::folder_icon_el("", true, false, theme::u(14.)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(display),
+                    ),
+            );
+        Popover::new("settings-icon-dd")
+            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .open(open)
+            .track_focus(&focus)
+            .appearance(false)
+            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .on_open_change(move |next_open, _, cx| {
+                _ = weak_open.update(cx, |this, cx| {
+                    this.settings_icon_open = *next_open;
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let installed = crate::ext::vsx_icons::list();
+                let pop_entity = cx.entity().downgrade();
+                let mut list = v_flex()
+                    .id("settings-icon-list")
+                    .max_h(theme::u(300.))
+                    .overflow_y_scroll()
+                    .gap_0p5();
+                let builtin_on = active_id.is_empty();
+                let weak_builtin = weak_content.clone();
+                let pop_builtin = pop_entity.clone();
+                list = list.child(
+                    h_flex()
+                        .id("settings-icon-builtin")
+                        .w_full()
+                        .min_w_0()
+                        .h(theme::u(34.))
+                        .px_2()
+                        .gap_2()
+                        .items_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .when(builtin_on, |d| d.bg(c(theme::BG_HOVER)))
+                        .hover(|d| d.bg(c(theme::BG_HOVER)))
+                        .on_click(move |_, window, cx| {
+                            _ = weak_builtin.update(cx, |this, cx| {
+                                this.settings_icon_open = false;
+                                this.set_icon_theme("", cx);
+                            });
+                            _ = pop_builtin.update(cx, |st, cx| st.dismiss(window, cx));
+                        })
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_sm()
+                                        .font_weight(if builtin_on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(tr("FluxCode (Built-in)")),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(tr("Built-in file and folder icons")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(theme::u(14.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(builtin_on, |d| {
+                                    d.child(
+                                        Icon::new(gpui_kit::assets::IconName::Check)
+                                            .size(theme::u(13.))
+                                            .text_color(c(theme::ACCENT_TEXT)),
+                                    )
+                                }),
+                        ),
+                );
+                for (i, m) in installed.iter().enumerate() {
+                    let on = m.id == active_id;
+                    let tid = m.id.clone();
+                    let weak_clk = weak_content.clone();
+                    let pop_clk = pop_entity.clone();
+                    list = list.child(
+                        h_flex()
+                            .id(("settings-icon-opt", i))
+                            .w_full()
+                            .min_w_0()
+                            .h(theme::u(34.))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(on, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|d| d.bg(c(theme::BG_HOVER)))
+                            .on_click(move |_, window, cx| {
+                                _ = weak_clk.update(cx, |this, cx| {
+                                    this.settings_icon_open = false;
+                                    this.set_icon_theme(&tid, cx);
+                                });
+                                _ = pop_clk.update(cx, |st, cx| st.dismiss(window, cx));
+                            })
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_sm()
+                                            .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                            .text_color(c(theme::FG_STRONG))
+                                            .child(m.label.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(m.ext_display.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(theme::u(14.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(on, |d| {
+                                        d.child(
+                                            Icon::new(gpui_kit::assets::IconName::Check)
+                                                .size(theme::u(13.))
+                                                .text_color(c(theme::ACCENT_TEXT)),
+                                        )
+                                    }),
+                            ),
+                    );
+                }
+                let weak_browse = weak_content.clone();
+                let pop_browse = pop_entity.clone();
+                v_flex()
+                    .id("settings-icon-pop")
+                    .key_context("ThemeDropdown")
+                    .track_focus(&focus)
+                    .w(theme::u(264.))
+                    .max_w(relative(0.92))
+                    .p_1p5()
+                    .gap_1()
+                    .glass_pop()
+                    .occlude()
+                    .child(list)
+                    .when(installed.is_empty(), |v| {
+                        v.child(
+                            h_flex()
+                                .id("settings-icon-browse")
+                                .mt_0p5()
+                                .pt_1p5()
+                                .px_2()
+                                .pb_0p5()
+                                .gap_2()
+                                .items_center()
+                                .border_t_1()
+                                .border_color(c(theme::BORDER))
+                                .rounded(px(5.))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(c(theme::FG_MUTED))
+                                .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                                .on_click(move |_, window, cx| {
+                                    _ = weak_browse.update(cx, |this, cx| {
+                                        this.settings_icon_open = false;
+                                        this.settings_open = false;
+                                        this.view = crate::workbench::SideView::Extensions;
+                                        this.sidebar_open = true;
+                                        this.ext.filter = crate::ext::Filter::Market;
+                                        this.ext.query.update(cx, |s, cx| s.set_value("icon theme", window, cx));
+                                        this.market_search(0, cx);
+                                    });
+                                    _ = pop_browse.update(cx, |st, cx| st.dismiss(window, cx));
+                                })
+                                .child(Icon::new(gpui_kit::assets::IconName::Search).size(theme::u(12.)))
+                                .child(div().flex_1().min_w_0().truncate().child(tr("Browse icon themes in Extensions"))),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn icon_theme_setting_entry(&self, compact: bool, cx: &mut Context<Self>) -> SettingEntry {
+        SettingEntry::inline(
+            "Theme",
+            "File icon theme",
+            tr("Icons shown next to files and folders in Explorer, tabs and lists.").into(),
+            "icon file icons explorer theme pack vsx",
+            self.render_icon_theme_dropdown(compact, cx),
+        )
+    }
+
     pub(crate) fn choose_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -1286,8 +1568,9 @@ impl Workbench {
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
-                    if this.settings_theme_open {
+                    if this.settings_theme_open || this.settings_icon_open {
                         this.settings_theme_open = false;
+                        this.settings_icon_open = false;
                         this.cancel_theme_preview(w, cx);
                     } else if !this.settings_search.read(cx).value().trim().is_empty() {
                         this.settings_search
@@ -1425,6 +1708,7 @@ impl Workbench {
             .tooltip(tr("Close"))
             .on_click(cx.listener(|this, _, w, cx| {
                 this.settings_theme_open = false;
+                this.settings_icon_open = false;
                 this.cancel_theme_preview(w, cx);
                 this.settings_open = false;
                 this.focus.focus(w, cx);
@@ -1525,7 +1809,7 @@ impl Workbench {
                     )
                     .child(
                         div().flex_1().min_w_0().child(
-                            Input::new(&self.settings_search)
+                            crate::ui::McInput::new(&self.settings_search)
                                 .small()
                                 .cleanable(true)
                                 .prefix(
@@ -1587,6 +1871,7 @@ impl Workbench {
             .tooltip(tr("Close"))
             .on_click(cx.listener(|this, _, w, cx| {
                 this.settings_theme_open = false;
+                this.settings_icon_open = false;
                 this.cancel_theme_preview(w, cx);
                 this.settings_open = false;
                 this.focus.focus(w, cx);
@@ -1614,7 +1899,7 @@ impl Workbench {
             )
             .child(
                 div().px_1().pb_2().child(
-                    Input::new(&self.settings_search)
+                    crate::ui::McInput::new(&self.settings_search)
                         .small()
                         .cleanable(true)
                         .prefix(Icon::new(gpui_kit::component::IconName::Search).xsmall().text_color(c(theme::FG_MUTED))),
@@ -1944,7 +2229,10 @@ impl Workbench {
                     .gap_5()
                     .child(settings_group(
                         "Theme",
-                        vec![self.theme_setting_entry(compact, cx).render(compact)],
+                        vec![
+                            self.theme_setting_entry(compact, cx).render(compact),
+                            self.icon_theme_setting_entry(compact, cx).render(compact),
+                        ],
                     ))
                     .child(settings_group("Display & language", display_rows))
                     .child(settings_group("Backdrop & scenes", scene_rows))
@@ -2090,8 +2378,15 @@ impl Workbench {
                     rows.push(entry.render(compact));
                 }
             }
-            if sec == SettingsSection::Appearance && matches_query(query, &["theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky", tr("Theme"), tr("Color theme")]) {
+            let color_hit = sec == SettingsSection::Appearance
+                && matches_query(query, &["theme color palette dark light FluxDark FluxCream FluxMono FluxRed FluxMuara FluxSky", tr("Theme"), tr("Color theme")]);
+            if color_hit {
                 rows.insert(0, self.theme_setting_entry(compact, cx).render(compact));
+            }
+            if sec == SettingsSection::Appearance
+                && matches_query(query, &["icon file icons explorer theme pack vsx", tr("Theme"), tr("File icon theme")])
+            {
+                rows.insert(usize::from(color_hit), self.icon_theme_setting_entry(compact, cx).render(compact));
             }
             if sec == SettingsSection::SoulFiles && matches_query(query, &[sec.title(), tr(sec.title()), sec.description(), tr(sec.description()), "claude codex opencode gemini soul"]) {
                 rows.push(div().p_4().child(self.render_soul_files(cx)).into_any_element());
@@ -2461,7 +2756,7 @@ impl Workbench {
             .w_full()
             .max_w(px(360.))
             .gap_1p5()
-            .child(Input::new(&self.github_input).small())
+            .child(crate::ui::McInput::new(&self.github_input).small())
             .child(
                 h_flex()
                     .gap_1p5()

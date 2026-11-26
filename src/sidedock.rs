@@ -6,7 +6,15 @@ use gpui_kit::component::{h_flex, menu::PopupMenu, menu::PopupMenuItem, Icon};
 use gpui_kit::{prelude::FluentBuilder, *};
 
 impl SideView {
-    pub(crate) const ALL: [SideView; 6] = [SideView::Explorer, SideView::Search, SideView::Scm, SideView::Run, SideView::Extensions, SideView::Agent];
+    pub(crate) const ALL: [SideView; 7] = [
+        SideView::Explorer,
+        SideView::Search,
+        SideView::Scm,
+        SideView::Run,
+        SideView::Extensions,
+        SideView::Agent,
+        SideView::Mcbe,
+    ];
 
     pub(crate) fn id(self) -> &'static str {
         match self {
@@ -16,6 +24,7 @@ impl SideView {
             SideView::Run => "run",
             SideView::Extensions => "extensions",
             SideView::Agent => "agent",
+            SideView::Mcbe => "mcbe",
         }
     }
 
@@ -29,6 +38,7 @@ impl SideView {
             SideView::Run => Icon::new(C::Play),
             SideView::Extensions => Icon::new(A::Blocks),
             SideView::Agent => Icon::new(A::MessageSquareCode),
+            SideView::Mcbe => Icon::new(crate::fluxicon::MCBE),
         }
     }
 
@@ -40,6 +50,7 @@ impl SideView {
             SideView::Run => "Run and Debug",
             SideView::Extensions => "Extensions",
             SideView::Agent => "Agent",
+            SideView::Mcbe => "Minecraft Bedrock",
         }
     }
 }
@@ -139,7 +150,11 @@ impl Workbench {
     }
 
     pub(crate) fn render_right_tabs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let views: Vec<SideView> = SideView::ALL.into_iter().filter(|v| self.on_right(*v)).collect();
+        let mcbe_on = self.has_mcbe_workspace();
+        let views: Vec<SideView> = SideView::ALL
+            .into_iter()
+            .filter(|v| self.on_right(*v) && (*v != SideView::Mcbe || mcbe_on))
+            .collect();
         if views.len() < 2 {
             return None;
         }

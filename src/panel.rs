@@ -367,6 +367,16 @@ impl Workbench {
         if typed.is_empty() {
             return;
         }
+        if typed.eq_ignore_ascii_case("exit") {
+            if self.terms.len() > 1 {
+                self.close_terminal(self.term_ix, window, cx);
+            } else {
+                self.terms[self.term_ix].lines.clear();
+                self.set_panel_open(false, cx);
+                cx.notify();
+            }
+            return;
+        }
         if self.terms[self.term_ix].history.last() != Some(&typed) {
             self.terms[self.term_ix].history.push(typed.clone());
         }
@@ -396,6 +406,12 @@ impl Workbench {
         let lower = cmdline.to_ascii_lowercase();
         if lower == "cls" || lower == "clear" {
             self.terms[self.term_ix].lines.clear();
+        } else if lower == "help" || lower == "?" {
+            push_line(
+                &mut self.terms[self.term_ix].lines,
+                "cd, pwd, clear, exit  ·  Up/Down history  ·  Tab complete  ·  Ctrl+L clear  ·  Ctrl+C stop",
+                LineKind::Dim,
+            );
         } else if lower == "pwd" {
             let meta = self.term_full();
             push_line(&mut self.terms[self.term_ix].lines, &meta, LineKind::Normal);
@@ -592,6 +608,12 @@ impl Workbench {
         self.set_term_input("", window, cx);
     }
 
+    pub(crate) fn on_term_clear(&mut self, _: &TermClear, _: &mut Window, cx: &mut Context<Self>) {
+        self.panel_sel = None;
+        self.terms[self.term_ix].lines.clear();
+        cx.notify();
+    }
+
 
     pub(crate) fn on_run_file(&mut self, _: &RunFile, _: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else {
@@ -723,22 +745,59 @@ impl Workbench {
         let output = lines[from..].iter().filter(|l| !l.text.trim().is_empty()).count();
         let spent = run.as_ref().map(|r| r.started.elapsed());
         let quiet = terminal && code == Some(0) && error.is_none() && spent.is_some_and(|d| d < std::time::Duration::from_secs(1));
-        match (&error, &run) {
-            (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
-            _ if !quiet && output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
-            _ => {}
-        }
+        let inline_shell_err = terminal
+            && error
+                .as_ref()
+                .is_some_and(|e| e.source == "runtime" && e.file.is_none());
         let took = spent.map(term::elapsed).unwrap_or_default();
-        let (text, ok) = match code {
-            Some(0) => (tr("Finished").to_string(), true),
-            Some(c) => (crate::trf!("Failed (exit code {c})"; c => c), false),
-            None => (tr("Stopped").to_string(), false),
-        };
-        let mut status = Line::new(&text, LineKind::Status);
-        status.err = !ok;
-        status.meta = took.into();
-        if !quiet {
-            lines.push(status);
+        if inline_shell_err {
+            if let Some(e) = &error {
+                let mut idx = from;
+                while idx < lines.len() {
+                    if term::is_shell_not_found_line(&lines[idx].text) {
+                        lines.remove(idx);
+                    } else {
+                        idx += 1;
+                    }
+                }
+                while lines.len() > from && lines.last().is_some_and(|l| l.text.trim().is_empty()) {
+                    lines.pop();
+                }
+                let mut head = Line::new(&e.message, LineKind::CardHead);
+                let exit_tag = code.map(|c| crate::trf!("exit {c}"; c => c)).unwrap_or_default();
+                head.meta = match (exit_tag.is_empty(), took.is_empty()) {
+                    (false, false) => format!("{exit_tag} · {took}").into(),
+                    (false, true) => exit_tag.into(),
+                    _ => took.into(),
+                };
+                lines.push(head);
+                if let Some(h) = &e.hint {
+                    lines.push(Line::new(h, LineKind::CardHint));
+                }
+                if let Some(fix) = &e.fix {
+                    let mut l = Line::new(fix, LineKind::CardAction);
+                    l.run = Some(fix.clone().into());
+                    lines.push(l);
+                }
+            }
+        } else {
+            match (&error, &run) {
+                (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
+                _ if !quiet && output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
+                _ => {}
+            }
+            let (text, ok) = match code {
+                Some(0) => (tr("Finished").to_string(), true),
+                Some(c) if terminal => (crate::trf!("exit {c}"; c => c), false),
+                Some(c) => (crate::trf!("Failed (exit code {c})"; c => c), false),
+                None => (tr("Stopped").to_string(), false),
+            };
+            let mut status = Line::new(&text, LineKind::Status);
+            status.err = !ok;
+            status.meta = took.into();
+            if !quiet {
+                lines.push(status);
+            }
         }
         if let Some(r) = reason {
             let link = term::parse_path_loc(&r);
@@ -1014,7 +1073,9 @@ impl Workbench {
                     .items_center()
                     .px_3()
                     .gap_2()
-                    .bg(c(theme::DANGER).opacity(0.08)),
+                    .border_l_2()
+                    .border_color(c(theme::DANGER).opacity(0.75))
+                    .bg(c(theme::DANGER).opacity(0.045)),
             )
             .into_any_element()
         };
@@ -1182,9 +1243,11 @@ impl Workbench {
                 let mut inner = h_flex()
                     .font_family(UI_FONT)
                     .child(Icon::new(IconName::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)))
-                    .child(div().flex_none().text_color(c(theme::DANGER)).font_weight(FontWeight::SEMIBOLD).child(l.text.clone()));
+                    .child(div().flex_shrink(1.).min_w_0().truncate().text_color(c(theme::DANGER)).font_weight(FontWeight::SEMIBOLD).child(l.text.clone()));
                 if let Some((path, line, col)) = &l.link {
                     inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, *col, cx).min_w_0().truncate());
+                } else if !l.meta.is_empty() {
+                    inner = inner.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(format!("· {}", l.meta)));
                 }
                 card(base, inner)
             }
@@ -1861,30 +1924,26 @@ impl Workbench {
             .pt(px(gap))
             .child(probe)
             .child(list)
-            .when(terminal, |d| d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(mono_font, font_size, narrow, m)));
+            .when(terminal, |d| {
+                d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(mono_font, font_size, narrow, m, window, cx))
+            });
 
         let empty = count == 0;
-        let hint = |line: &'static str| div().min_w_0().child(line);
         let content = v_flex()
             .id("panel-body")
             .flex_1()
             .min_h_0()
-            .when(empty, |v| {
+            .when(empty && !terminal, |v| {
                 v.child(
-                    v_flex()
+                    div()
                         .flex_shrink(1.)
                         .min_h_0()
                         .overflow_hidden()
                         .px_3()
                         .py_2()
-                        .gap_1()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .when(terminal, |v| {
-                            v.child(div().min_w_0().text_sm().text_color(c(theme::FG_MUTED)).child(tr("Type a command and press Enter to run it.")))
-                                .when(!narrow, |v| v.child(hint(tr("↑ ↓ history · Tab completes · Ctrl+C stops · Click any file:line error to jump to code"))))
-                        })
-                        .when(!terminal, |v| v.child(hint(tr("Nothing has run yet. Press F5 to run the open file, or pick a task under Run.")))),
+                        .child(tr("No output yet. Press F5 to run.")),
                 )
             })
             .child(body)
@@ -1904,24 +1963,37 @@ impl Workbench {
             .child(wrap_tab(content))
     }
 
-    fn render_prompt(&self, mono_font: SharedString, font_size: Pixels, narrow: bool, m: Metrics) -> impl IntoElement {
+    fn render_prompt(
+        &self,
+        mono_font: SharedString,
+        font_size: Pixels,
+        narrow: bool,
+        m: Metrics,
+        window: &Window,
+        cx: &App,
+    ) -> impl IntoElement {
         let busy = self.term_running();
         let short = term::short_cwd(&self.terms[self.term_ix].cwd, self.root.as_deref());
         let place: SharedString = prompt_place(&short, self.panel_size.get().0).into();
         let full: SharedString = self.terms[self.term_ix].cwd.display().to_string().into();
         let placeholder = match (busy, narrow) {
-            (false, false) => tr("Type a command, then press Enter"),
+            (false, false) => tr("Run command…"),
             (false, true) => tr("Type a command"),
-            (true, false) => tr("Running. Type here if the program asks for something"),
+            (true, false) => tr("Running… (Ctrl+C to stop)"),
             (true, true) => tr("Running"),
         };
+        let focused = self.term_input.focus_handle(cx).is_focused(window);
+        let dark = theme::live_dark();
         let hint = !self.terms[self.term_ix].typed && (busy || self.terms[self.term_ix].lines.is_empty());
+        let box_h = m.row.max(theme::u(26.));
         h_flex()
-            .h(m.row)
+            .h(box_h + px(6.))
             .w_full()
             .flex_none()
             .px_3()
+            .pb_1()
             .gap_2()
+            .items_center()
             .whitespace_nowrap()
             .font_family(mono_font)
             .text_size(font_size)
@@ -1939,34 +2011,44 @@ impl Workbench {
                 .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).child("❯"))
             })
             .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h(m.row)
-                    .flex()
-                    .items_center()
-                    .ml(px(-8.))
-                    .key_context("Terminal")
-                    .child(Input::new(&self.term_input).appearance(false).with_size(px(f32::from(font_size) / 0.875)))
-                    .when(hint, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left_0()
-                                .right_0()
-                                .pl(px(8.))
-                                .flex()
-                                .items_center()
-                                .font_family(UI_FONT)
-                                .text_sm()
-                                .text_color(c(theme::FG_DIM))
-                                .overflow_hidden()
-                                .child(placeholder),
-                        )
-                    }),
+                crate::ui::mc_box_frame(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h(box_h)
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .key_context("Terminal"),
+                    focused,
+                    dark,
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .ml(px(-8.))
+                        .child(Input::new(&self.term_input).appearance(false).focus_bordered(false).with_size(px(f32::from(font_size) / 0.875))),
+                )
+                .when(hint, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .pl(px(8.))
+                            .flex()
+                            .items_center()
+                            .font_family(UI_FONT)
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .overflow_hidden()
+                            .child(placeholder),
+                    )
+                }),
             )
     }
 }
@@ -2043,8 +2125,16 @@ fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
 }
 
 fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
-    push_line(lines, "", LineKind::Blank);
-    let mut head = Line::new(&e.kind, LineKind::CardHead);
+    if !lines.is_empty() && !matches!(lines.last().map(|l| l.kind), Some(LineKind::Cmd | LineKind::Blank)) {
+        push_line(lines, "", LineKind::Blank);
+    }
+    let compact_msg = !e.message.is_empty() && e.kind.len() + e.message.len() <= 84;
+    let title = if compact_msg {
+        format!("{}: {}", e.kind, e.message)
+    } else {
+        e.kind.clone()
+    };
+    let mut head = Line::new(&title, LineKind::CardHead);
     let col = e.col.unwrap_or(0);
     let link = match (&e.file, e.line) {
         (Some(file), Some(line)) => {
@@ -2063,7 +2153,7 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
         _ => None,
     };
     lines.push(head);
-    if !e.message.is_empty() {
+    if !e.message.is_empty() && !compact_msg {
         lines.push(Line::new(&e.message, LineKind::CardMsg));
     }
     if let (Some(code), Some(line)) = (&e.code, e.line) {

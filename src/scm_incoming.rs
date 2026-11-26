@@ -292,7 +292,6 @@ impl Workbench {
                         let (h, p) = (cm.hash.clone(), path.clone());
                         let name = path.rsplit('/').next().unwrap_or(path).to_string();
                         let dir = path.rsplit_once('/').map(|(d, _)| d.replace('/', "\\")).unwrap_or_default();
-                        let (icon, tint) = crate::files::icon_for(&name);
                         col = col.child(
                             crate::scm::scm_row()
                                 .id(("scm-in-file", i * 1000 + k))
@@ -304,7 +303,7 @@ impl Workbench {
                                 .text_xs()
                                 .cursor_pointer()
                                 .hover(|st| st.bg(c(theme::BG_HOVER)))
-                                .child(Icon::new(icon).flex_none().size(theme::u(14.)).text_color(theme::tint(tint)))
+                                .child(crate::files::file_icon_el(&name, theme::u(14.)))
                                 .child(div().flex_none().max_w(relative(0.6)).truncate().text_color(c(theme::FG)).child(name))
                                 .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir))
                                 .child(div().flex_none().w(theme::u(12.)).font_weight(FontWeight::BOLD).text_color(c(code_color(*code))).child(code.to_string()))

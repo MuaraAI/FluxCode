@@ -6,7 +6,7 @@ use crate::workbench::*;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
+    input::InputState,
     menu::ContextMenuExt,
     scroll::ScrollableElement,
     v_flex, Icon, IconName, Sizable,
@@ -47,6 +47,7 @@ pub(crate) struct ExplorerState {
     pub liq: std::cell::RefCell<crate::ui::liquid::LiquidTrackState>,
     pub liq_scroll_y: std::cell::Cell<f32>,
     pub row_height: std::rc::Rc<std::cell::Cell<f32>>,
+    pub viewport_height: std::rc::Rc<std::cell::Cell<f32>>,
     pub body_origin_y: std::rc::Rc<std::cell::Cell<f32>>,
     pub last_scroll_y: std::rc::Rc<std::cell::Cell<f32>>,
     pub last_mouse_y: std::rc::Rc<std::cell::Cell<Option<f32>>>,
@@ -68,6 +69,7 @@ impl ExplorerState {
             liq: std::cell::RefCell::new(crate::ui::liquid::LiquidTrackState::default()),
             liq_scroll_y: std::cell::Cell::new(0.),
             row_height: std::rc::Rc::new(std::cell::Cell::new(0.)),
+            viewport_height: std::rc::Rc::new(std::cell::Cell::new(0.)),
             body_origin_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
             last_scroll_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
             last_mouse_y: std::rc::Rc::new(std::cell::Cell::new(None)),
@@ -258,8 +260,25 @@ fn explorer_row_at_y(rel_y: f32, scroll_y: f32, row_h: f32, count: usize) -> Opt
     (ix < count).then_some(ix)
 }
 
+fn clamp_explorer_scroll_y(
+    raw_scroll_y: f32,
+    count: usize,
+    row_h: f32,
+    viewport_h: f32,
+    fallback_max_y: f32,
+) -> f32 {
+    let min_y = if viewport_h.is_finite() && viewport_h > 1. {
+        let content_h = count as f32 * row_h;
+        (viewport_h - content_h).min(0.0)
+    } else {
+        -fallback_max_y.max(0.0)
+    };
+    raw_scroll_y.clamp(min_y, 0.0)
+}
+
 struct ExplorerMetricsProbe {
     row_h: std::rc::Rc<std::cell::Cell<f32>>,
+    viewport_h: std::rc::Rc<std::cell::Cell<f32>>,
     origin_y: std::rc::Rc<std::cell::Cell<f32>>,
     last_scroll_y: std::rc::Rc<std::cell::Cell<f32>>,
     last_mouse_y: std::rc::Rc<std::cell::Cell<Option<f32>>>,
@@ -281,17 +300,27 @@ impl UniformListDecoration for ExplorerMetricsProbe {
         if h.is_finite() && h > 4. {
             self.row_h.set(h);
         }
+        let vh = f32::from(bounds.size.height);
+        if vh.is_finite() && vh > 1. {
+            self.viewport_h.set(vh);
+        }
         // UniformList passes bounds.origin = padded_bounds.origin + scroll_offset.
         let sy = f32::from(scroll_offset.y);
         self.origin_y.set(f32::from(bounds.origin.y) - sy);
         if (self.last_scroll_y.get() - sy).abs() > 0.25 {
             self.last_scroll_y.set(sy);
-            if let Some(rel_y) = self.last_mouse_y.get() {
-                let wb = self.wb.clone();
-                cx.defer(move |cx| {
-                    _ = wb.update(cx, |this, cx| this.explorer_hover_at_y(rel_y, cx));
+            let rel_y = self.last_mouse_y.get();
+            let wb = self.wb.clone();
+            cx.defer(move |cx| {
+                _ = wb.update(cx, |this, cx| {
+                    if let Some(y) = rel_y {
+                        this.explorer_hover_at_y(y, cx);
+                    }
+                    if (this.explorer.liq_scroll_y.get() - sy).abs() > 0.5 {
+                        cx.notify();
+                    }
                 });
-            }
+            });
         }
         div().into_any_element()
     }
@@ -299,13 +328,23 @@ impl UniformListDecoration for ExplorerMetricsProbe {
 
 impl Workbench {
     fn explorer_row_metrics(&self) -> (f32, f32) {
-        let scroll_y = f32::from(self.explorer.scroll.0.borrow().base_handle.offset().y);
+        let sh = self.explorer.scroll.0.borrow();
+        let raw_y = f32::from(sh.base_handle.offset().y);
+        let fallback_max_y = f32::from(sh.base_handle.max_offset().y);
+        drop(sh);
         let measured = self.explorer.row_height.get();
         let row_h = if measured.is_finite() && measured > 4. {
             measured
         } else {
             f32::from(theme::u(20.))
         };
+        let scroll_y = clamp_explorer_scroll_y(
+            raw_y,
+            self.explorer.rows.len(),
+            row_h,
+            self.explorer.viewport_height.get(),
+            fallback_max_y,
+        );
         (row_h, scroll_y)
     }
 
@@ -614,6 +653,9 @@ impl Workbench {
                     .map(|(p, s)| (p.to_string_lossy().into_owned(), *s));
                 let ws_anim = this.explorer.workspace_anim;
                 let added_roots = &this.explorer.added_roots;
+                let themed_icons = crate::ext::vsx_icons::is_active();
+                let hide_arrows = crate::ext::vsx_icons::hides_explorer_arrows();
+                let icon_sz = if themed_icons { theme::u(15.) } else { theme::u(13.) };
 
                 range
                     .map(|ix| {
@@ -621,21 +663,18 @@ impl Workbench {
                         let id = row.id.clone();
 
                         if row.is_pending {
-                            let icon = match &pending {
-                                Some(PendingOp::NewFolder(_)) => Icon::new(files::folder_icon("", true))
-                                    .size(theme::u(13.))
-                                    .text_color(c(theme::FOLDER)),
+                            let icon: AnyElement = match &pending {
+                                Some(PendingOp::NewFolder(_)) => files::folder_icon_el("", true, false, icon_sz),
                                 _ => {
                                     let typed = name_input.read(cx).value();
-                                    if typed.is_empty() {
-                                        Icon::new(IconName::File).size(theme::u(13.)).text_color(c(theme::FG_MUTED))
+                                    if typed.is_empty() && !themed_icons {
+                                        Icon::new(IconName::File).size(icon_sz).text_color(c(theme::FG_MUTED)).into_any_element()
                                     } else {
-                                        let (ic, tint) = files::icon_for(&typed);
-                                        Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                                        files::file_icon_el(&typed, icon_sz)
                                     }
                                 }
                             };
-                            return name_row(PENDING_ROW_ID, row.depth, icon, &name_input).into_any_element();
+                            return name_row(PENDING_ROW_ID, row.depth, icon, hide_arrows, &name_input).into_any_element();
                         }
 
                         if row.is_placeholder {
@@ -657,16 +696,13 @@ impl Workbench {
                         if let Some(PendingOp::Rename(p)) = &pending {
                             if p.to_string_lossy() == id {
                                 let icon = if row.is_dir {
-                                    Icon::new(files::folder_icon(&row.label, row.expanded))
-                                        .size(theme::u(13.))
-                                        .text_color(c(theme::FOLDER))
+                                    files::folder_icon_el(&row.label, row.expanded, multi && row.depth == 0, icon_sz)
                                 } else {
                                     let typed = name_input.read(cx).value();
                                     let name: &str = if typed.is_empty() { &row.label } else { &typed };
-                                    let (ic, tint) = files::icon_for(name);
-                                    Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                                    files::file_icon_el(name, icon_sz)
                                 };
-                                return name_row(&id, row.depth, icon, &name_input).into_any_element();
+                                return name_row(&id, row.depth, icon, hide_arrows, &name_input).into_any_element();
                             }
                         }
 
@@ -681,20 +717,19 @@ impl Workbench {
                         let is_sel = !naming && selected.as_deref() == Some(id.as_str());
                         let is_dir = row.is_dir;
                         let expanded = row.expanded;
-                        let chevron = div().w(theme::u(12.)).flex().items_center().justify_center().when(is_dir, |d| {
-                            d.child(
-                                Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
-                                    .xsmall()
-                                    .text_color(c(theme::FG_DIM)),
-                            )
+                        let chevron = (!hide_arrows).then(|| {
+                            div().w(theme::u(12.)).flex().items_center().justify_center().when(is_dir, |d| {
+                                d.child(
+                                    Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                                        .xsmall()
+                                        .text_color(c(theme::FG_DIM)),
+                                )
+                            })
                         });
                         let icon = if is_dir {
-                            Icon::new(files::folder_icon(&row.label, expanded))
-                                .size(theme::u(13.))
-                                .text_color(c(theme::FOLDER))
+                            files::folder_icon_el(&row.label, expanded, multi && row.depth == 0, icon_sz)
                         } else {
-                            let (ic, tint) = files::icon_for(&row.label);
-                            Icon::new(ic).size(theme::u(13.)).text_color(theme::tint(tint))
+                            files::file_icon_el(&row.label, icon_sz)
                         };
                         let (mark, dir_dirty) = if has_scm {
                             let key = id.replace('/', "\\").to_lowercase();
@@ -736,7 +771,7 @@ impl Workbench {
                             .when(!motion && (is_open || is_sel), |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::SELECT))))
                             .when(motion && is_open && !is_sel, |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::ACCENT).opacity(0.08))))
                             .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }).active(|s| s.bg(c(theme::SELECT))))
-                            .child(chevron)
+                            .children(chevron)
                             .child(icon)
                             .child(
                                 div()
@@ -897,6 +932,7 @@ impl Workbench {
         .track_scroll(&self.explorer.scroll)
         .with_decoration(ExplorerMetricsProbe {
             row_h: self.explorer.row_height.clone(),
+            viewport_h: self.explorer.viewport_height.clone(),
             origin_y: self.explorer.body_origin_y.clone(),
             last_scroll_y: self.explorer.last_scroll_y.clone(),
             last_mouse_y: self.explorer.last_mouse_y.clone(),
@@ -1166,7 +1202,7 @@ impl Workbench {
     }
 }
 
-fn name_row(id: &str, depth: usize, icon: Icon, name_input: &Entity<InputState>) -> Stateful<Div> {
+fn name_row(id: &str, depth: usize, icon: AnyElement, hide_arrows: bool, name_input: &Entity<InputState>) -> Stateful<Div> {
     h_flex()
         .id(SharedString::from(format!("xr-edit-{id}")))
         .w_full()
@@ -1178,7 +1214,7 @@ fn name_row(id: &str, depth: usize, icon: Icon, name_input: &Entity<InputState>)
         .items_center()
         .bg(c(theme::SELECT))
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(div().w(theme::u(12.)).flex().justify_center())
+        .when(!hide_arrows, |h| h.child(div().w(theme::u(12.)).flex().justify_center()))
         .child(icon)
         .child(
             div()
@@ -1187,7 +1223,7 @@ fn name_row(id: &str, depth: usize, icon: Icon, name_input: &Entity<InputState>)
                 .h_full()
                 .flex()
                 .items_center()
-                .child(Input::new(name_input).xsmall().focus_bordered(false).w_full()),
+                .child(crate::ui::McInput::new(name_input).xsmall().focus_bordered(false).w_full()),
         )
 }
 
@@ -1238,8 +1274,8 @@ fn short(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        explorer_row_at_y, explorer_row_top, flatten_nodes, is_descendant_of,
-        stray_press_keeps_input, PENDING_ROW_ID,
+        clamp_explorer_scroll_y, explorer_row_at_y, explorer_row_top, flatten_nodes,
+        is_descendant_of, stray_press_keeps_input, PENDING_ROW_ID,
     };
     use crate::files::Node;
     use crate::workbench::PendingOp;
@@ -1347,5 +1383,16 @@ mod tests {
         assert_eq!(explorer_row_at_y(top + row_h - 0.5, scroll_y, row_h, 500), Some(ix));
         assert_eq!(explorer_row_at_y(-1.0, scroll_y, row_h, 500), None);
         assert_eq!(explorer_row_at_y(500.0, 0.0, 20.0, 5), None);
+    }
+
+    #[test]
+    fn explorer_scroll_y_clamps_bottom_and_top_overscroll() {
+        // 145 rows * 20px = 2900px; viewport 500px -> valid scroll range [-2400, 0].
+        assert_eq!(clamp_explorer_scroll_y(-2460.0, 145, 20.0, 500.0, 0.0), -2400.0);
+        assert_eq!(clamp_explorer_scroll_y(60.0, 145, 20.0, 500.0, 0.0), 0.0);
+        // Short list that fits in viewport stays at 0.0.
+        assert_eq!(clamp_explorer_scroll_y(-40.0, 5, 20.0, 500.0, 0.0), 0.0);
+        // Fallback before viewport measurement uses base_handle.max_offset().y.
+        assert_eq!(clamp_explorer_scroll_y(-950.0, 145, 20.0, 0.0, 800.0), -800.0);
     }
 }

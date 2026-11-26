@@ -7,7 +7,7 @@ use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, InputState},
     menu::DropdownMenu,
     v_flex, Icon, IconName, Selectable, Sizable,
 };
@@ -284,7 +284,7 @@ impl Workbench {
                                     this.agent_rename_done(false, cx);
                                 }
                             }))
-                            .child(Input::new(&r.input).small()),
+                            .child(crate::ui::McInput::new(&r.input).small()),
                     );
                     continue;
                 }
@@ -428,7 +428,6 @@ impl Workbench {
         for (i, ch) in a.changes.iter().enumerate() {
             let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let dir = ch.path.parent().map(|p| self.rel_display(&p.to_string_lossy())).unwrap_or_default();
-            let (icon, tint) = crate::files::icon_for(&name);
             list = list.child(
                 h_flex()
                     .id(("agf-ch", i))
@@ -443,7 +442,7 @@ impl Workbench {
                         this.agent.user_nav = Some(std::time::Instant::now());
                         this.agent_show_diff(i, w, cx)
                     }))
-                    .child(Icon::new(icon).flex_none().size(theme::u(14.)).text_color(theme::tint(tint)))
+                    .child(crate::files::file_icon_el(&name, theme::u(14.)))
                     .child(
                         v_flex()
                             .flex_1()

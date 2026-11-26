@@ -176,6 +176,8 @@ pub const FILE: FluxIcon = FluxIcon("fluxicon/file.svg");
 pub const CODE: FluxIcon = FluxIcon("fluxicon/code.svg");
 pub const FOLDER: FluxIcon = FluxIcon("fluxicon/folder.svg");
 pub const FOLDER_OPEN: FluxIcon = FluxIcon("fluxicon/folder-open.svg");
+pub const MCBE: FluxIcon = FluxIcon("fluxicon/mcbe.svg");
+pub const MCBE_COLOR: FluxIcon = FluxIcon("fluxicon/mcbe-color.svg");
 
 pub static SVGS: &[(&str, &[u8])] = &[
     ("fluxicon/python.svg", include_bytes!("../assets/fluxicon/python.svg")),
@@ -344,6 +346,8 @@ pub static SVGS: &[(&str, &[u8])] = &[
     ("fluxicon/code.svg", include_bytes!("../assets/fluxicon/code.svg")),
     ("fluxicon/folder.svg", include_bytes!("../assets/fluxicon/folder.svg")),
     ("fluxicon/folder-open.svg", include_bytes!("../assets/fluxicon/folder-open.svg")),
+    ("fluxicon/mcbe.svg", include_bytes!("../assets/fluxicon/mcbe.svg")),
+    ("fluxicon/mcbe-color.svg", include_bytes!("../assets/fluxicon/mcbe-color.svg")),
 ];
 
 pub fn load(path: &str) -> Option<&'static [u8]> {
@@ -696,4 +700,4 @@ pub fn for_name(name: &str) -> Option<(FluxIcon, Option<u32>)> {
 }
 
 #[allow(dead_code)]
-pub const KINDS: usize = 166;
+pub const KINDS: usize = 168;

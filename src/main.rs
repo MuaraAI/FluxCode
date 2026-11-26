@@ -83,6 +83,7 @@ fn main() {
         _ => {}
     }
     boot::start();
+    memtrim::init_process_heap();
     let paths: Vec<PathBuf> = std::env::args_os()
         .skip(1)
         .filter(|a| !a.to_string_lossy().starts_with('-'))

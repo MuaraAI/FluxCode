@@ -5,7 +5,7 @@ use crate::workbench::Workbench;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
+    input::InputState,
     text::TextView,
     v_flex, Icon, Sizable,
 };
@@ -289,7 +289,7 @@ impl Workbench {
                     q = q.child(row(SharedString::from(format!("ask-{fi}-other")), letter(options.len()), tr("Type my own answer").into(), String::new(), on, *multi).on_click(cx.listener(move |this, _, w, cx| this.agent_pick(fi, OTHER, w, cx))));
                     if on {
                         if let Some(input) = self.agent.ask_inputs.get(fi) {
-                            q = q.child(div().pl(theme::u(28.)).child(Input::new(input).small()));
+                            q = q.child(div().pl(theme::u(28.)).child(crate::ui::McInput::new(input).small()));
                         }
                     }
                 }
@@ -301,7 +301,7 @@ impl Workbench {
                 }
                 Kind::Text { .. } => {
                     if let Some(input) = self.agent.ask_inputs.get(fi) {
-                        q = q.child(Input::new(input).small());
+                        q = q.child(crate::ui::McInput::new(input).small());
                     }
                 }
             }

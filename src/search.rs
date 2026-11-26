@@ -7,7 +7,6 @@ use crate::workbench::*;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
     v_flex, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
@@ -133,7 +132,7 @@ impl Workbench {
                     .px_3()
                     .pb_2()
                     .gap_1()
-                    .child(Input::new(&self.search_input).small())
+                    .child(crate::ui::McInput::new(&self.search_input).small())
                     .child(
                         h_flex()
                             .w_full()
@@ -183,7 +182,6 @@ impl Workbench {
                                     None => {
                                         let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                                         let rel = fh.path.parent().map(|p| this.rel_display(&p.to_string_lossy())).unwrap_or_default();
-                                        let (icon, tint) = files::icon_for(&name);
                                         let closed = this.search_closed.contains(&f);
                                         row.cursor_pointer()
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -204,12 +202,7 @@ impl Workbench {
                                                 .size(theme::u(12.))
                                                 .text_color(c(theme::FG_DIM))
                                             })
-                                            .child(
-                                                gpui_kit::component::Icon::new(icon)
-                                                    .flex_none()
-                                                    .size(theme::u(14.))
-                                                    .text_color(theme::tint(tint)),
-                                            )
+                                            .child(files::file_icon_el(&name, theme::u(14.)))
                                             .child(
                                                 div()
                                                     .flex_shrink(1.)
