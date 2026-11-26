@@ -408,6 +408,8 @@ pub struct Workbench {
     pub(crate) scm: crate::scm::Scm,
     pub(crate) ext: crate::ext::Ext,
     pub(crate) mcbe: crate::ext::mcbe_view::McbeState,
+    pub(crate) ink: Rc<RefCell<crate::fluxdoc::view::InkState>>,
+    pub(crate) ink_bounds: Rc<std::cell::Cell<Option<[f32; 4]>>>,
     pub(crate) theme_menu: bool,
     pub(crate) settings_theme_open: bool,
     pub(crate) settings_theme_focus: FocusHandle,
@@ -698,6 +700,8 @@ impl Workbench {
             scm,
             ext,
             mcbe,
+            ink: Rc::new(RefCell::new(crate::fluxdoc::view::InkState::new())),
+            ink_bounds: Rc::new(std::cell::Cell::new(None)),
             theme_menu: false,
             settings_theme_open: false,
             settings_theme_focus: cx.focus_handle(),
@@ -2673,18 +2677,22 @@ impl Workbench {
             .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Settings (Ctrl+,)")).build(w, cx))
             .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx)));
 
+        let ink_tools = self.render_title_ink_tools(cx);
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
-            return TitleBar::new().child(row.when(show_center, |r| r.child(center).child(div().flex_1())).child(settings_btn)).into_any_element();
+            return TitleBar::new()
+                .child(row.when(show_center, |r| r.child(center).child(div().flex_1())).child(ink_tools).child(settings_btn))
+                .into_any_element();
         }
         let win_w = f32::from(window.viewport_size().width);
         let box_w = f32::from(theme::u(420.)).min(win_w * 0.3);
         let menus = self.title_menu_end.get() + 12.;
         let left = ((win_w - box_w) / 2.).max(menus);
         let ctl_w = theme::u(44.);
-        // Reserve space for Settings + separator + Min + Max + Close and optional Update badge.
+        // Reserve space for Ink tools + Settings + separator + Min + Max + Close and optional Update badge.
         let right_reserve = f32::from(ctl_w) * 3.
             + f32::from(settings_w)
+            + self.title_ink_reserve()
             + 8.
             + if self.update_waiting().is_some() {
                 96.
@@ -2733,6 +2741,7 @@ impl Workbench {
             .border_b_1()
             .border_color(c(theme::BORDER))
             .child(row)
+            .child(ink_tools)
             .child(settings_btn)
             .child(div().w(px(1.)).h(theme::u(14.)).my_auto().bg(c(theme::BORDER)))
             .child(ctl("tb-min", Icon::default().data(MINIMIZE_SVG).size(theme::u(14.)), false).on_click(|_, w, _| w.minimize_window()))
@@ -4669,7 +4678,13 @@ impl Render for Workbench {
                 .child(dock)
                 .into_any_element()
         };
-        let main = h_flex().flex_1().min_h_0().child(self.render_activity_bar(cx)).child(center);
+        let main = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .size_full()
+            .child(h_flex().size_full().child(self.render_activity_bar(cx)).child(center))
+            .children(self.render_global_ink_overlay(cx));
         let backdrop = self.settings.background().map(|p| {
             img(p.to_path_buf()).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)
         });
