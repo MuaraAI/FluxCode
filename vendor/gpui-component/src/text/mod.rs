@@ -2,12 +2,15 @@
 
 mod compat;
 mod frontmatter;
+mod html_blocks;
 mod style;
 
 pub use compat::{
     Text, TextView, TextViewLayoutState, TextViewPlugin, TextViewPrepaintState, html, markdown,
 };
 pub use frontmatter::FrontmatterPlugin;
+#[doc(hidden)]
+pub use html_blocks::normalize_markdown_html;
 pub use gpui_base::text::{
     InlineElement, InlineRenderContext, MarkdownBlockParserFn, MarkdownBlockRenderFn,
     MarkdownExtensions, MarkdownNode, MarkdownParseContext, MarkdownPlugin, RangeHighlight,

@@ -1,4 +1,3 @@
-
 const TABLE: [u32; 256] = {
     let mut t = [0u32; 256];
     let mut i = 0;
@@ -121,10 +120,12 @@ pub struct Listed {
 }
 
 fn u16at(zip: &[u8], i: usize) -> Option<u16> {
-    zip.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    let end = i.checked_add(2)?;
+    zip.get(i..end).map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 fn u32at(zip: &[u8], i: usize) -> Option<u32> {
-    zip.get(i..i + 4)
+    let end = i.checked_add(4)?;
+    zip.get(i..end)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
@@ -133,24 +134,26 @@ pub fn list(zip: &[u8]) -> Option<Vec<Listed>> {
     let end = (from..zip.len().saturating_sub(21))
         .rev()
         .find(|&i| u32at(zip, i) == Some(0x0605_4b50))?;
-    let count = u16at(zip, end + 10)? as usize;
-    let mut at = u32at(zip, end + 16)? as usize;
-    let mut out = Vec::with_capacity(count);
+    let count = u16at(zip, end.checked_add(10)?)? as usize;
+    let mut at = u32at(zip, end.checked_add(16)?)? as usize;
+    let mut out = Vec::with_capacity(count.min(zip.len() / 46));
     for _ in 0..count {
         if u32at(zip, at)? != 0x0201_4b50 {
             return None;
         }
-        let method = u16at(zip, at + 10)?;
-        let packed = u32at(zip, at + 20)? as usize;
-        let size = u32at(zip, at + 24)? as usize;
+        let method = u16at(zip, at.checked_add(10)?)?;
+        let packed = u32at(zip, at.checked_add(20)?)? as usize;
+        let size = u32at(zip, at.checked_add(24)?)? as usize;
         let (nlen, xlen, clen) = (
-            u16at(zip, at + 28)? as usize,
-            u16at(zip, at + 30)? as usize,
-            u16at(zip, at + 32)? as usize,
+            u16at(zip, at.checked_add(28)?)? as usize,
+            u16at(zip, at.checked_add(30)?)? as usize,
+            u16at(zip, at.checked_add(32)?)? as usize,
         );
-        let offset = u32at(zip, at + 42)? as usize;
-        let name = String::from_utf8_lossy(zip.get(at + 46..at + 46 + nlen)?).into_owned();
-        at += 46 + nlen + xlen + clen;
+        let offset = u32at(zip, at.checked_add(42)?)? as usize;
+        let name_start = at.checked_add(46)?;
+        let name_end = name_start.checked_add(nlen)?;
+        let name = String::from_utf8_lossy(zip.get(name_start..name_end)?).into_owned();
+        at = name_end.checked_add(xlen)?.checked_add(clen)?;
         out.push(Listed {
             name,
             size,
@@ -166,17 +169,21 @@ pub fn read(zip: &[u8], e: &Listed, max: usize) -> Option<Vec<u8>> {
     if e.size > max {
         return None;
     }
+    if u32at(zip, e.offset)? != 0x0403_4b50 {
+        return None;
+    }
     let (ln, lx) = (
-        u16at(zip, e.offset + 26)? as usize,
-        u16at(zip, e.offset + 28)? as usize,
+        u16at(zip, e.offset.checked_add(26)?)? as usize,
+        u16at(zip, e.offset.checked_add(28)?)? as usize,
     );
-    let start = e.offset + 30 + ln + lx;
-    let body = zip.get(start..start + e.packed)?;
+    let start = e.offset.checked_add(30)?.checked_add(ln)?.checked_add(lx)?;
+    let end = start.checked_add(e.packed)?;
+    let body = zip.get(start..end)?;
     match e.method {
         0 => Some(body.to_vec()),
         8 => miniz_oxide::inflate::decompress_to_vec_with_limit(
             body,
-            (e.size.max(1) * 2 + 1024).min(max),
+            e.size.max(1).saturating_mul(2).saturating_add(1024).min(max),
         )
         .ok(),
         _ => None,
@@ -223,5 +230,25 @@ mod tests {
         let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
         let body = &bytes[30 + name_len..30 + name_len + packed];
         assert_eq!(miniz_oxide::inflate::decompress_to_vec(body).unwrap(), text.as_bytes());
+    }
+
+    #[test]
+    fn malformed_offsets_never_overflow() {
+        let mut z = Zip::default();
+        z.add("a.txt", b"ok");
+        let mut bytes = z.finish();
+        // Corrupt local-header name length near u16::MAX on a huge offset entry.
+        let bad = Listed {
+            name: "bad".into(),
+            size: 1,
+            method: 0,
+            packed: usize::MAX,
+            offset: usize::MAX - 10,
+        };
+        assert_eq!(read(&bytes, &bad, usize::MAX), None);
+        // Corrupt EOCD central directory offset to u32::MAX.
+        let end = bytes.len() - 22;
+        bytes[end + 16..end + 20].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(list(&bytes).is_none());
     }
 }

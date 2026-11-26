@@ -44,13 +44,8 @@ pub(crate) struct ExplorerState {
     pub folder_anim_seq: u64,
     pub workspace_anim: u64,
     pub added_roots: HashSet<String>,
-    pub hovered_ix: Option<usize>,
-    pub hover_from_y: f32,
-    pub hover_to_y: f32,
-    pub hover_seq: u64,
-    pub hover_fade_in: bool,
-    pub hover_leave: Option<(f32, u64)>,
-    pub hover_last_at: Option<std::time::Instant>,
+    pub liq: std::cell::RefCell<crate::ui::liquid::LiquidTrackState>,
+    pub liq_scroll_y: std::cell::Cell<f32>,
     pub row_height: std::rc::Rc<std::cell::Cell<f32>>,
     pub body_origin_y: std::rc::Rc<std::cell::Cell<f32>>,
     pub last_scroll_y: std::rc::Rc<std::cell::Cell<f32>>,
@@ -70,13 +65,8 @@ impl ExplorerState {
             folder_anim_seq: 0,
             workspace_anim: 0,
             added_roots: HashSet::new(),
-            hovered_ix: None,
-            hover_from_y: 0.,
-            hover_to_y: 0.,
-            hover_seq: 0,
-            hover_fade_in: false,
-            hover_leave: None,
-            hover_last_at: None,
+            liq: std::cell::RefCell::new(crate::ui::liquid::LiquidTrackState::default()),
+            liq_scroll_y: std::cell::Cell::new(0.),
             row_height: std::rc::Rc::new(std::cell::Cell::new(0.)),
             body_origin_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
             last_scroll_y: std::rc::Rc::new(std::cell::Cell::new(0.)),
@@ -333,47 +323,19 @@ impl Workbench {
     }
 
     fn explorer_hover_row(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let (row_h, _) = self.explorer_row_metrics();
         let target_y = self.explorer_row_y(ix);
-        if self.explorer.hovered_ix == Some(ix) && (self.explorer.hover_to_y - target_y).abs() < 0.5 {
-            return;
+        let cross_w = (self.sidebar_width - 10.).max(120.);
+        let rect = crate::ui::liquid::Rect1D { pos: target_y, len: row_h };
+        if self.explorer.liq.borrow_mut().hover_enter(ix, Some(rect), cross_w, 150, std::time::Instant::now()) {
+            cx.notify();
         }
-        let gliding = self.explorer.hovered_ix.is_some()
-            || self.explorer.hover_last_at.is_some_and(|t| t.elapsed() < Duration::from_millis(140));
-        self.explorer.hover_from_y = if gliding { self.explorer.hover_to_y } else { target_y };
-        self.explorer.hover_to_y = target_y;
-        self.explorer.hovered_ix = Some(ix);
-        self.explorer.hover_fade_in = !gliding;
-        self.explorer.hover_leave = None;
-        self.explorer.hover_last_at = Some(std::time::Instant::now());
-        self.explorer.hover_seq = self.explorer.hover_seq.wrapping_add(1);
-        cx.notify();
     }
 
     fn explorer_hover_clear(&mut self, cx: &mut Context<Self>) {
-        if self.explorer.hovered_ix.take().is_none() {
-            return;
-        }
-        self.explorer.hover_last_at = Some(std::time::Instant::now());
-        if cx.reduce_motion() {
-            self.explorer.hover_leave = None;
+        if self.explorer.liq.borrow_mut().hover_clear(std::time::Instant::now()) {
             cx.notify();
-            return;
         }
-        self.explorer.hover_seq = self.explorer.hover_seq.wrapping_add(1);
-        let seq = self.explorer.hover_seq;
-        let last_y = self.explorer.hover_to_y;
-        self.explorer.hover_leave = Some((last_y, seq));
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(130)).await;
-            _ = this.update(cx, |this, cx| {
-                if this.explorer.hover_leave.is_some_and(|(_, s)| s == seq) {
-                    this.explorer.hover_leave = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
     }
 
     pub(crate) fn rebuild_explorer_rows(&mut self, cx: &mut Context<Self>) {
@@ -386,9 +348,10 @@ impl Workbench {
             self.root.as_deref(),
             &mut dirs,
         );
-        if let Some(h) = self.explorer.hovered_ix {
-            if h >= self.explorer.rows.len() {
-                self.explorer.hovered_ix = None;
+        {
+            let mut liq = self.explorer.liq.borrow_mut();
+            if liq.hover_ix.is_some_and(|h| h >= self.explorer.rows.len()) {
+                liq.hover_ix = None;
             }
         }
         self.dirs = std::rc::Rc::new(dirs);
@@ -616,6 +579,10 @@ impl Workbench {
         }
         let active_path = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.to_string_lossy().into_owned());
         let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let sel_ix = selected
+            .as_deref()
+            .and_then(|s| self.explorer.index_of(s))
+            .or_else(|| active_path.as_deref().and_then(|a| self.explorer.index_of(a)));
         let root = self.root.clone();
         let root_target = self.ctx_target.clone();
         let focused = self.explorer.focus.is_focused(window);
@@ -755,6 +722,7 @@ impl Workbench {
 
                         let row_el = h_flex()
                             .id(SharedString::from(format!("xr-{}", id)))
+                            .relative()
                             .w_full()
                             .h(theme::u(20.))
                             .overflow_hidden()
@@ -765,10 +733,9 @@ impl Workbench {
                             .cursor_pointer()
                             .text_size(theme::u(11.5))
                             .text_color(label_color)
-                            .when(is_open || is_sel, |s| s.bg(c(theme::SELECT)))
-                            .when(focused && is_sel, |s| s.border_l_2().border_color(c(theme::ACCENT)))
-                            .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }))
-                            .active(|s| s.bg(c(theme::SELECT)))
+                            .when(!motion && (is_open || is_sel), |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::SELECT))))
+                            .when(motion && is_open && !is_sel, |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::ACCENT).opacity(0.08))))
+                            .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }).active(|s| s.bg(c(theme::SELECT))))
                             .child(chevron)
                             .child(icon)
                             .child(
@@ -937,60 +904,49 @@ impl Workbench {
         })
         .size_full();
 
-        let (row_h, _) = self.explorer_row_metrics();
-        let hover_outline: Option<AnyElement> = if !motion {
+        let (row_h, scroll_y) = self.explorer_row_metrics();
+        let cross_w = (self.sidebar_width - 10.).max(120.);
+        let now = std::time::Instant::now();
+        let liquid_layer: Option<AnyElement> = if !motion {
             None
-        } else if let Some(hix) = self.explorer.hovered_ix.filter(|&i| i < self.explorer.rows.len()) {
-            let live_y = self.explorer_row_y(hix);
-            let from_y = self.explorer.hover_from_y;
-            let to_y = self.explorer.hover_to_y;
-            let seq = self.explorer.hover_seq;
-            let fade_in = self.explorer.hover_fade_in;
-            let scrolled = (live_y - to_y).abs() > 1.0;
-            let pill = div()
-                .absolute()
-                .left(px(4.))
-                .right(px(6.))
-                .h(px(row_h))
-                .rounded(px(5.))
-                .bg(c(theme::BG_HOVER).opacity(0.65))
-                .border_1()
-                .border_color(c(theme::BORDER_STRONG).opacity(0.85));
-            Some(if scrolled {
-                pill.top(px(live_y)).into_any_element()
-            } else {
-                pill.with_animation(
-                    SharedString::from(format!("xr-hov-{seq}")),
-                    Animation::new(Duration::from_millis(if fade_in { 120 } else { 145 })).with_easing(gpui_kit::ease_out_quint()),
-                    move |d, t| {
-                        let y = from_y + (to_y - from_y) * t;
-                        let op = if fade_in { t } else { 1. };
-                        d.top(px(y)).opacity(op)
-                    },
-                )
-                .into_any_element()
-            })
-        } else if let Some((ly, seq)) = self.explorer.hover_leave {
-            Some(
-                div()
-                    .absolute()
-                    .left(px(4.))
-                    .right(px(6.))
-                    .top(px(ly))
-                    .h(px(row_h))
-                    .rounded(px(5.))
-                    .bg(c(theme::BG_HOVER).opacity(0.65))
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG).opacity(0.85))
-                    .with_animation(
-                        SharedString::from(format!("xr-hov-out-{seq}")),
-                        Animation::new(Duration::from_millis(120)).with_easing(gpui_kit::ease_out_quint()),
-                        |d, t| d.opacity(1. - t),
-                    )
-                    .into_any_element(),
-            )
         } else {
-            None
+            let scrolled = (self.explorer.liq_scroll_y.get() - scroll_y).abs() > 0.5;
+            self.explorer.liq_scroll_y.set(scroll_y);
+            let mut liq = self.explorer.liq.borrow_mut();
+            let act_rect = sel_ix.filter(|&i| i < count).map(|i| crate::ui::liquid::Rect1D {
+                pos: explorer_row_top(i, scroll_y, row_h),
+                len: row_h,
+            });
+            if scrolled {
+                if let Some(r) = act_rect {
+                    liq.active_ix = sel_ix;
+                    liq.active.snap(r, false);
+                }
+            } else {
+                liq.sync_active(sel_ix, act_rect, cross_w, 195, now);
+            }
+            let hov_rect = liq.hover_ix.filter(|&i| i < count).map(|i| crate::ui::liquid::Rect1D {
+                pos: explorer_row_top(i, scroll_y, row_h),
+                len: row_h,
+            });
+            liq.sync_hover_rect(hov_rect, cross_w, now);
+            liq.sample_frame(cross_w, now).map(|fr| {
+                let st = crate::ui::liquid::LiquidStyle {
+                    inset_a: 4.0,
+                    inset_b: 6.0,
+                    cross_base: cross_w,
+                    max_squeeze: 3.5,
+                    radius: 6.0,
+                    capillary: row_h * 1.15,
+                    active_bg: c(theme::ACCENT).opacity(if focused { 0.22 } else { 0.14 }),
+                    active_border: c(theme::ACCENT).opacity(if focused { 0.65 } else { 0.36 }),
+                    hover_bg: c(theme::BG_HOVER).opacity(0.68),
+                    hover_border: c(theme::BORDER_STRONG).opacity(0.80),
+                    union_border: c(theme::ACCENT).opacity(0.58),
+                    bridge_bg: c(theme::ACCENT).opacity(0.16),
+                };
+                crate::ui::liquid::render_coalesced_layer("xr-liq", true, st, fr)
+            })
         };
 
         let body = div()
@@ -1011,7 +967,7 @@ impl Workbench {
                     this.explorer_hover_clear(cx);
                 }
             }))
-            .children(hover_outline)
+            .children(liquid_layer)
             .child(list)
             .vertical_scrollbar(&self.explorer.scroll);
 

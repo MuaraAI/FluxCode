@@ -1534,64 +1534,123 @@ impl Workbench {
         let prob_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
         let prob_total = prob_errs + prob_warns;
 
-        let tab = |id: &'static str, label: &'static str, badge: Option<(usize, theme::Tok)>, which: PanelTab, this: &Self, cx: &mut Context<Self>| {
-            let on = this.panel_tab == which;
-            h_flex()
-                .id(id)
-                .flex_none()
-                .whitespace_nowrap()
-                .px_1()
-                .h_full()
-                .gap_1p5()
-                .items_center()
-                .text_sm()
-                .cursor_pointer()
-                .border_b_1()
-                .border_color(if on { c(theme::ACCENT) } else { transparent_black() })
-                .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                .when(!on, |d| d.hover(|s| s.text_color(c(theme::FG))))
-                .child(label)
-                .when_some(badge.filter(|(n, _)| *n > 0), |h, (n, col)| {
-                    h.child(
-                        div()
-                            .px_1()
-                            .min_w(theme::u(16.))
-                            .h(theme::u(16.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(c(col).opacity(0.18))
-                            .text_color(c(col))
-                            .text_size(theme::u(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
-                    )
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.panel_tab = which;
-                    cx.notify();
-                }))
-        };
         let is_problems = self.panel_tab == PanelTab::Problems;
         let terminal = self.panel_tab == PanelTab::Terminal;
+        let motion = !cx.reduce_motion();
+        let tab_h = f32::from(theme::u(26.));
+        let tab_specs = [
+            ("p-term", tr("Terminal"), None, PanelTab::Terminal),
+            ("p-out", tr("Output"), None, PanelTab::Output),
+            (
+                "p-prob",
+                tr("Problems"),
+                (prob_total > 0).then_some((prob_total, if prob_errs > 0 { theme::DANGER } else { theme::WARN })),
+                PanelTab::Problems,
+            ),
+        ];
+        let active_tab_ix = tab_specs.iter().position(|(_, _, _, w)| *w == self.panel_tab);
+        let tab_liq = crate::ui::liquid::keyed_state("panel-tab-liq", window, cx);
+        let (tab_frame, has_tab_liq) = crate::ui::liquid::keyed_sync_and_sample(&tab_liq, false, tab_specs.len(), active_tab_ix, tab_h, 190, motion);
+        let panel_view_id = window.current_view();
+        let tab_origin = crate::ui::liquid::keyed_origin_probe(tab_liq.clone(), panel_view_id);
+        let tab_liq_layer = tab_frame.map(|fr| {
+            let st = crate::ui::liquid::LiquidStyle {
+                inset_a: 1.0,
+                inset_b: 1.0,
+                cross_base: tab_h,
+                max_squeeze: 2.0,
+                radius: 6.0,
+                capillary: 20.0,
+                active_bg: c(theme::ACCENT).opacity(0.18),
+                active_border: c(theme::ACCENT).opacity(0.55),
+                hover_bg: c(theme::BG_HOVER).opacity(0.75),
+                hover_border: c(theme::BORDER_STRONG).opacity(0.78),
+                union_border: c(theme::ACCENT).opacity(0.58),
+                bridge_bg: c(theme::ACCENT).opacity(0.18),
+            };
+            crate::ui::liquid::render_coalesced_layer("panel-tab-liq-l", false, st, fr)
+        });
+        let tab_bar = h_flex()
+            .id("panel-tab-bar")
+            .relative()
+            .h(theme::u(26.))
+            .items_center()
+            .gap_1()
+            .on_hover({
+                let h = tab_liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, panel_view_id, cx);
+                    }
+                }
+            })
+            .child(tab_origin)
+            .children(tab_liq_layer)
+            .children(tab_specs.into_iter().enumerate().map(|(i, (id, label, badge, which))| {
+                let on = self.panel_tab == which;
+                let probe = crate::ui::liquid::keyed_item_probe(tab_liq.clone(), i, panel_view_id);
+                let h_hov = tab_liq.clone();
+                h_flex()
+                    .id(id)
+                    .relative()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .px_2p5()
+                    .h_full()
+                    .gap_1p5()
+                    .items_center()
+                    .rounded(px(6.))
+                    .text_sm()
+                    .cursor_pointer()
+                    .when(on && !has_tab_liq, |d| d.bg(c(theme::ACCENT).opacity(0.18)))
+                    .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                    .when(!on && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                    .when(!on && motion, |d| d.hover(|s| s.text_color(c(theme::FG))))
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(&h_hov, i, false, tab_h, 150, panel_view_id, cx);
+                        }
+                    })
+                    .child(probe)
+                    .child(label)
+                    .when_some(badge.filter(|(n, _)| *n > 0), |h, (n, col)| {
+                        h.child(
+                            div()
+                                .px_1()
+                                .min_w(theme::u(16.))
+                                .h(theme::u(16.))
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(c(col).opacity(0.18))
+                                .text_color(c(col))
+                                .text_size(theme::u(10.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.panel_tab = which;
+                        cx.notify();
+                    }))
+            }));
+
         let running = if terminal { self.terms[self.term_ix].proc.is_some() } else if is_problems { false } else { self.out_proc.is_some() };
         let shown_lines = if terminal { &self.terms[self.term_ix].lines } else { &self.out_lines };
         let python = (!is_problems)
             .then(|| self.python_version.clone().filter(|_| Self::ran_python(shown_lines)))
             .flatten();
-        let prob_badge = (prob_total > 0).then_some((prob_total, if prob_errs > 0 { theme::DANGER } else { theme::WARN }));
         let header = h_flex()
             .w_full()
             .min_w_0()
             .overflow_hidden()
             .h(theme::u(35.))
             .px_3()
-            .gap_3()
+            .gap_2()
+            .items_center()
             .flex_none()
-            .child(tab("p-term", tr("Terminal"), None, PanelTab::Terminal, self, cx))
-            .child(tab("p-out", tr("Output"), None, PanelTab::Output, self, cx))
-            .child(tab("p-prob", tr("Problems"), prob_badge, PanelTab::Problems, self, cx))
+            .child(tab_bar)
             .when(terminal, |h| {
                 h.child(div().flex_none().w(px(1.)).h(theme::u(16.)).bg(c(theme::BORDER)))
                     .child(

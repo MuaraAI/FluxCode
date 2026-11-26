@@ -106,49 +106,6 @@ impl SegItem {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct SegRect {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
-impl SegRect {
-    fn lerp(self, to: Self, t: f32) -> Self {
-        Self {
-            x: self.x + (to.x - self.x) * t,
-            y: self.y + (to.y - self.y) * t,
-            w: self.w + (to.w - self.w) * t,
-            h: self.h + (to.h - self.h) * t,
-        }
-    }
-
-    fn close_to(self, other: Self) -> bool {
-        (self.x - other.x).abs() < 0.5
-            && (self.y - other.y).abs() < 0.5
-            && (self.w - other.w).abs() < 0.5
-            && (self.h - other.h).abs() < 0.5
-    }
-}
-
-#[derive(Default)]
-struct SegState {
-    origin: Option<Point<Pixels>>,
-    rects: Vec<Option<Bounds<Pixels>>>,
-    active: Option<usize>,
-    from: Option<SegRect>,
-    to: Option<SegRect>,
-    seq: u64,
-    started: Option<std::time::Instant>,
-}
-
-const SEG_GLIDE: std::time::Duration = std::time::Duration::from_millis(190);
-
-fn ease_out_quint(t: f32) -> f32 {
-    1. - (1. - t.clamp(0., 1.)).powi(5)
-}
-
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     id: SharedString,
@@ -163,107 +120,34 @@ impl SegmentedControl {
 
 impl RenderOnce for SegmentedControl {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(SharedString::from(format!("seg-st-{}", self.id)), cx, |_, _| {
-            std::rc::Rc::new(std::cell::RefCell::new(SegState::default()))
-        });
-        let st_rc = state.read(cx).clone();
+        let handle = liquid::keyed_state(SharedString::from(format!("seg-st-{}", self.id)), window, cx);
         let active_ix = self.items.iter().position(|it| it.active);
         let motion = !cx.reduce_motion();
         let count = self.items.len();
-
-        let (glide, has_pill) = {
-            let mut st = st_rc.borrow_mut();
-            if st.rects.len() != count {
-                st.rects.resize(count, None);
-            }
-            let measured = active_ix.and_then(|ix| {
-                let o = st.origin?;
-                let b = st.rects.get(ix).copied().flatten()?;
-                Some(SegRect {
-                    x: f32::from(b.origin.x - o.x),
-                    y: f32::from(b.origin.y - o.y),
-                    w: f32::from(b.size.width),
-                    h: f32::from(b.size.height),
-                })
-            });
-            let now = std::time::Instant::now();
-            if st.active != active_ix {
-                let cur = match (st.from, st.to, st.started) {
-                    (Some(f), Some(t), Some(s)) => {
-                        let p = (now.saturating_duration_since(s).as_secs_f32() / SEG_GLIDE.as_secs_f32()).min(1.);
-                        Some(f.lerp(t, ease_out_quint(p)))
-                    }
-                    (_, to, _) => to,
-                };
-                st.active = active_ix;
-                st.from = cur.or(measured);
-                st.to = measured;
-                st.seq = st.seq.wrapping_add(1);
-                st.started = Some(now);
-            } else if let Some(m) = measured {
-                if st.to.is_none_or(|prev| !prev.close_to(m)) {
-                    st.from = Some(m);
-                    st.to = Some(m);
-                    st.started = None;
-                }
-            }
-            let glide = match (st.from, st.to) {
-                (Some(from), Some(to)) if motion => Some((from, to, st.seq, !from.close_to(to))),
-                _ => None,
-            };
-            (glide, glide.is_some())
-        };
-
+        let (frame, has_active_liq) = liquid::keyed_sync_and_sample(&handle, false, count, active_ix, 24.0, 200, motion);
         let view_id = window.current_view();
-        let origin_probe = {
-            let st_rc = st_rc.clone();
-            canvas(
-                move |bounds, _, cx| {
-                    let mut st = st_rc.borrow_mut();
-                    let first = st.origin.is_none();
-                    st.origin = Some(bounds.origin);
-                    if first {
-                        cx.defer(move |cx| cx.notify(view_id));
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0()
-            .size_full()
-        };
+        let origin_probe = liquid::keyed_origin_probe(handle.clone(), view_id);
 
-        let pill: Option<AnyElement> = glide.map(|(from, to, seq, animate)| {
-            let base = div().absolute().rounded(theme::u(5.)).bg(c(theme::ACCENT));
-            if animate {
-                base.with_animation(
-                    SharedString::from(format!("seg-pill-{}-{seq}", self.id)),
-                    Animation::new(SEG_GLIDE).with_easing(gpui_kit::ease_out_quint()),
-                    move |el, t| {
-                        let r = from.lerp(to, t);
-                        el.left(px(r.x)).top(px(r.y)).w(px(r.w)).h(px(r.h))
-                    },
-                )
-                .into_any_element()
-            } else {
-                base.left(px(to.x)).top(px(to.y)).w(px(to.w)).h(px(to.h)).into_any_element()
-            }
+        let liquid_layer: Option<AnyElement> = frame.map(|fr| {
+            let style = liquid::LiquidStyle {
+                inset_a: 2.0,
+                inset_b: 2.0,
+                cross_base: 24.0,
+                max_squeeze: 2.0,
+                radius: f32::from(theme::u(5.)),
+                capillary: 22.0,
+                active_bg: c(theme::ACCENT),
+                active_border: c(theme::ACCENT),
+                hover_bg: c(theme::BG_HOVER).opacity(0.82),
+                hover_border: c(theme::BORDER_STRONG).opacity(0.75),
+                union_border: c(theme::ACCENT).opacity(0.65),
+                bridge_bg: c(theme::ACCENT).opacity(0.55),
+            };
+            liquid::render_coalesced_layer(SharedString::from(format!("seg-liq-{}", self.id)), false, style, fr)
         });
 
         let buttons = self.items.into_iter().enumerate().map(|(i, item)| {
-            let st_rc = st_rc.clone();
-            let probe = canvas(
-                move |bounds, _, _| {
-                    let mut st = st_rc.borrow_mut();
-                    if i < st.rects.len() {
-                        st.rects[i] = Some(bounds);
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0()
-            .size_full();
+            let probe = liquid::keyed_item_probe(handle.clone(), i, view_id);
             let fh = window
                 .use_keyed_state(SharedString::from(format!("seg-fh-{}", item.id)), cx, |_, cx| cx.focus_handle())
                 .read(cx)
@@ -271,6 +155,7 @@ impl RenderOnce for SegmentedControl {
             let focused = fh.is_focused(window);
             let on_click = item.on_click.clone();
             let on_key = item.on_click.clone();
+            let h_hov = handle.clone();
             div()
                 .id(item.id)
                 .relative()
@@ -288,9 +173,15 @@ impl RenderOnce for SegmentedControl {
                 .tab_stop(true)
                 .border_1()
                 .border_color(if focused { c(theme::ACCENT) } else { gpui::transparent_black() })
-                .when(item.active && !has_pill, |d| d.bg(c(theme::ACCENT)))
+                .when(item.active && !has_active_liq, |d| d.bg(c(theme::ACCENT)))
                 .text_color(if item.active { c(theme::ON_ACCENT) } else { c(theme::FG_MUTED) })
-                .when(!item.active, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))))
+                .when(!item.active && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))))
+                .when(!item.active && motion, |d| d.hover(|s| s.text_color(c(theme::FG_STRONG))))
+                .on_hover(move |entered: &bool, _, cx| {
+                    if *entered && motion {
+                        liquid::keyed_hover_enter(&h_hov, i, false, 24.0, 155, view_id, cx);
+                    }
+                })
                 .on_click(move |ev, w, cx| (on_click)(ev, w, cx))
                 .on_key_down(move |ev: &KeyDownEvent, w, cx| {
                     if matches!(ev.keystroke.key.as_str(), "enter" | "space") {
@@ -302,6 +193,7 @@ impl RenderOnce for SegmentedControl {
                 .child(item.label)
         });
 
+        let h_leave = handle.clone();
         gpui_kit::component::h_flex()
             .id(self.id)
             .relative()
@@ -312,37 +204,77 @@ impl RenderOnce for SegmentedControl {
             .border_1()
             .border_color(c(theme::BORDER))
             .bg(c(theme::BG_SIDE))
+            .on_hover(move |entered: &bool, _, cx| {
+                if !*entered && motion {
+                    liquid::keyed_hover_leave(&h_leave, view_id, cx);
+                }
+            })
             .child(origin_probe)
-            .children(pill)
+            .children(liquid_layer)
             .children(buttons)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SegRect, ease_out_quint};
+    use super::liquid::{Rect1D, Slide1D};
+    use std::time::{Duration, Instant};
 
     #[test]
-    fn segmented_rect_lerp_reaches_endpoints() {
-        let a = SegRect { x: 0., y: 2., w: 60., h: 24. };
-        let b = SegRect { x: 64., y: 2., w: 80., h: 24. };
-        assert!(a.lerp(b, 0.).close_to(a));
-        assert!(a.lerp(b, 1.).close_to(b));
-        let mid = a.lerp(b, ease_out_quint(0.5));
-        assert!(mid.x > 60. && mid.x < 64.);
+    fn slide_retargets_continuously_mid_flight() {
+        let mut s = Slide1D::default();
+        let t0 = Instant::now();
+        s.snap(Rect1D { pos: 0.0, len: 60.0 }, false);
+        s.retarget(Rect1D { pos: 64.0, len: 80.0 }, 200, false, 24.0, t0);
+        let mid_time = t0 + Duration::from_millis(60);
+        let live = s.sample(mid_time, 24.0);
+        assert!(live.pos > 0.0 && live.pos < 64.0, "live mid: {live:?}");
+        s.retarget(Rect1D { pos: 148.0, len: 70.0 }, 200, false, 24.0, mid_time);
+        assert!((s.from.pos - live.pos).abs() < 1e-4, "must pick up from live pos");
     }
 }
 
-/// Closed-form liquid physics and low-spec scalar math kernels for sidebar/activity-bar motion.
+/// Closed-form liquid physics and Plateau-Rayleigh capillary coalescence kernels across FluxCode UI.
 pub mod liquid {
-    /// 64-byte cache-line-aligned capsule geometry (Drepper 2007).
+    use gpui_kit::{
+        canvas, div, prelude::FluentBuilder, px, Animation, AnimationExt as _, AnyElement, App,
+        Bounds, Div, EntityId, Hsla, IntoElement as _, ParentElement as _, Pixels, Point,
+        SharedString, Styled as _, Window,
+    };
+    use std::time::{Duration, Instant};
+
+    /// 64-byte cache-line-aligned axis-agnostic liquid capsule span (Drepper 2007).
     #[repr(C, align(64))]
     #[derive(Clone, Copy, Debug, PartialEq)]
-    pub struct LiquidCapsule {
-        pub top: f32,
-        pub height: f32,
-        pub width: f32,
-        pub offset_x: f32,
+    pub struct LiquidSpan {
+        pub pos: f32,
+        pub len: f32,
+        pub cross: f32,
+        pub cross_offset: f32,
+        pub squeeze: f32,
+        pub stretch: f32,
+    }
+
+    /// 64-byte cache-line-aligned Plateau-Rayleigh capillary coalescence output between two droplets.
+    #[repr(C, align(64))]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct LiquidCoalesce {
+        pub coupling: f32,
+        pub a_r_start: f32,
+        pub a_r_end: f32,
+        pub h_r_start: f32,
+        pub h_r_end: f32,
+        pub union_start: f32,
+        pub union_len: f32,
+        pub bridge_start: f32,
+        pub bridge_len: f32,
+        pub bridge_squeeze: f32,
+        pub bridge_alpha: f32,
+        pub seam_center: f32,
+        pub seam_alpha: f32,
+        pub overlap_boost: f32,
+        pub split_border_alpha: f32,
+        pub union_border_alpha: f32,
     }
 
     /// Fast inverse square root via IEEE-754 bit guess + 1 Newton-Raphson step (Lomont 2003).
@@ -375,7 +307,6 @@ pub mod liquid {
         } else {
             f32::from_bits(((127 - k_i) as u32) << 23)
         };
-        // Constrained cubic minimax on [0, 1] matching 2^0 = 1.0 and 2^(-1) = 0.5 exactly at octave boundaries.
         let poly = 1.0 + f * (-0.6915176 + f * (0.2310276 - 0.0395100 * f));
         pow2_neg_k * poly
     }
@@ -400,33 +331,663 @@ pub mod liquid {
         if norm <= 1e-6 { u } else { (raw(u) / norm).clamp(0.0, 1.0) }
     }
 
-    /// Connected dual-front viscous liquid capsule interpolating between two vertical slot positions.
+    /// Normalized overdamped bi-exponential harmonic oscillator (zeta > 1) for viscous trailing meniscus.
     #[inline(always)]
-    pub fn capsule(from_y: f32, to_y: f32, base_h: f32, base_w: f32, t: f32, hover: bool) -> LiquidCapsule {
+    pub fn overdamped_trail(t: f32, omega: f32, zeta: f32) -> f32 {
         let u = t.clamp(0.0, 1.0);
-        let h0 = base_h.max(1.0);
-        let a_lead = critically_damped(u, if hover { 11.0 } else { 10.5 });
-        let lag = ((u * 1.15) - 0.15).clamp(0.0, 1.0);
-        let a_trail = 0.55 * quintic_fade(lag) + 0.45 * critically_damped(u, 5.2);
-        let delta = to_y - from_y;
-        let y_lead = from_y + delta * a_lead;
-        let y_trail = from_y + delta * a_trail;
-        // Branchless interval union (Warren 2002) handles both downward and upward moves identically.
-        let top = y_lead.min(y_trail);
-        let bot = y_lead.max(y_trail) + h0;
-        let height = (bot - top).max(h0 * 0.85);
-        // 2D incompressibility approximation (w * h ~= const) via fast inverse sqrt.
-        let ratio = (height / h0).max(0.5);
-        let scale_w = fast_inv_sqrt(ratio).clamp(0.76, 1.06);
-        let width = base_w * scale_w;
-        let offset_x = (base_w - width) * 0.5;
-        LiquidCapsule { top, height, width, offset_x }
+        let w = omega.max(0.5);
+        let z = zeta.max(1.02);
+        let z2_m1 = z * z - 1.0;
+        let s = z2_m1 * fast_inv_sqrt(z2_m1);
+        let r1 = w * (z - s);
+        let r2 = w * (z + s);
+        let inv_diff = 1.0 / (r2 - r1).max(1e-4);
+        let raw = |tau: f32| 1.0 - (r2 * fast_exp_neg(r1 * tau) - r1 * fast_exp_neg(r2 * tau)) * inv_diff;
+        let norm = raw(1.0);
+        if norm <= 1e-6 { u } else { (raw(u) / norm).clamp(0.0, 1.0) }
+    }
+
+    /// Axis-agnostic area-conserving viscous liquid capsule between two 1D spans.
+    #[inline(always)]
+    pub fn capsule_1d(
+        from_pos: f32,
+        to_pos: f32,
+        from_len: f32,
+        to_len: f32,
+        cross_base: f32,
+        t: f32,
+        hover: bool,
+    ) -> LiquidSpan {
+        let u = t.clamp(0.0, 1.0);
+        let fl = from_len.max(1.0);
+        let tl = to_len.max(1.0);
+        let a_lead = critically_damped(u, if hover { 11.5 } else { 10.5 });
+        let a_trail = overdamped_trail(u, if hover { 8.4 } else { 7.6 }, 1.28);
+        let moving_fwd = (to_pos + 0.5 * tl) >= (from_pos + 0.5 * fl);
+        let (a_start, a_end) = if moving_fwd { (a_trail, a_lead) } else { (a_lead, a_trail) };
+        let start = from_pos + (to_pos - from_pos) * a_start;
+        let end = (from_pos + fl) + ((to_pos + tl) - (from_pos + fl)) * a_end;
+        let rest_len = fl + (tl - fl) * a_lead;
+        let pos = start.min(end);
+        let len = (end - start).abs().max(rest_len * 0.92);
+        let stretch = (len / rest_len).max(0.5);
+        let scale_cross = fast_inv_sqrt(stretch).clamp(0.80, 1.04);
+        let cb = cross_base.max(1.0);
+        let cross = cb * scale_cross;
+        let cross_offset = (cb - cross) * 0.5;
+        LiquidSpan {
+            pos,
+            len,
+            cross,
+            cross_offset,
+            squeeze: cross_offset.max(0.0),
+            stretch,
+        }
+    }
+
+    /// Plateau-Rayleigh catenoid capillary coalescence kernel between active and hovered droplets.
+    #[inline(always)]
+    pub fn coalesce_1d(
+        a_pos: f32,
+        a_len: f32,
+        h_pos: f32,
+        h_len: f32,
+        cross_base: f32,
+        base_r: f32,
+        capillary_range: f32,
+    ) -> LiquidCoalesce {
+        let a_end = a_pos + a_len.max(1.0);
+        let h_end = h_pos + h_len.max(1.0);
+        let a_mid = a_pos + 0.5 * a_len;
+        let h_mid = h_pos + 0.5 * h_len;
+        let gap = (h_pos - a_end).max(a_pos - h_end);
+        let xi = (gap / capillary_range.max(1.0)).clamp(0.0, 1.0);
+        let coupling = 1.0 - quintic_fade(xi);
+        let center_dist = (h_mid - a_mid).abs();
+        let coincident_thresh = 0.35 * a_len.min(h_len).max(1.0);
+        let overlap_boost = if gap < 0.0 {
+            1.0 - quintic_fade((center_dist / coincident_thresh).clamp(0.0, 1.0))
+        } else {
+            0.0
+        };
+
+        let inv_k = 1.0 - coupling;
+        let r_face = base_r * inv_k * inv_k;
+        let (a_r_start, a_r_end, h_r_start, h_r_end, seam_center) = if overlap_boost > 0.5 {
+            (base_r, base_r, base_r, base_r, 0.5 * (a_mid + h_mid))
+        } else if h_mid < a_mid {
+            (r_face, base_r, base_r, r_face, 0.5 * (h_end + a_pos))
+        } else {
+            (base_r, r_face, r_face, base_r, 0.5 * (a_end + h_pos))
+        };
+
+        let union_start = a_pos.min(h_pos);
+        let union_len = (a_end.max(h_end) - union_start).max(1.0);
+        let blend = ((coupling - 0.55) / 0.45).clamp(0.0, 1.0);
+        let union_border_alpha = blend * blend * (3.0 - 2.0 * blend);
+        let split_border_alpha = 1.0 - union_border_alpha;
+
+        let (bridge_start, bridge_len, bridge_squeeze, bridge_alpha) = if gap > 0.5 && coupling > 0.01 {
+            let bs = a_end.min(h_end) - base_r * 0.35;
+            let be = a_pos.max(h_pos) + base_r * 0.35;
+            let s_neck = coupling * (0.42 + 0.58 * coupling);
+            let sq = (cross_base * (1.0 - s_neck) * 0.5).max(0.0);
+            let alpha = coupling * coupling * (3.0 - 2.0 * coupling);
+            (bs, (be - bs).max(0.0), sq, alpha)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        let seam_alpha = if overlap_boost < 0.5 { union_border_alpha * 0.55 } else { 0.0 };
+
+        LiquidCoalesce {
+            coupling,
+            a_r_start,
+            a_r_end,
+            h_r_start,
+            h_r_end,
+            union_start,
+            union_len,
+            bridge_start,
+            bridge_len,
+            bridge_squeeze,
+            bridge_alpha,
+            seam_center,
+            seam_alpha,
+            overlap_boost,
+            split_border_alpha,
+            union_border_alpha,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct Rect1D {
+        pub pos: f32,
+        pub len: f32,
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct Slide1D {
+        pub from: Rect1D,
+        pub to: Rect1D,
+        pub started: Option<Instant>,
+        pub dur_ms: u32,
+        pub hover: bool,
+    }
+
+    impl Slide1D {
+        pub fn sample(&self, now: Instant, cross_base: f32) -> LiquidSpan {
+            let u = match self.started {
+                Some(s) if self.dur_ms > 0 => {
+                    (now.saturating_duration_since(s).as_secs_f32() / (self.dur_ms as f32 * 0.001)).clamp(0.0, 1.0)
+                }
+                _ => 1.0,
+            };
+            capsule_1d(self.from.pos, self.to.pos, self.from.len, self.to.len, cross_base, u, self.hover)
+        }
+
+        pub fn snap(&mut self, rect: Rect1D, hover: bool) {
+            self.from = rect;
+            self.to = rect;
+            self.started = None;
+            self.hover = hover;
+        }
+
+        pub fn retarget(&mut self, next: Rect1D, dur_ms: u32, hover: bool, cross_base: f32, now: Instant) {
+            let live = self.sample(now, cross_base);
+            self.from = if self.from.len > 0.5 || self.to.len > 0.5 {
+                Rect1D { pos: live.pos, len: live.len }
+            } else {
+                next
+            };
+            self.to = next;
+            self.dur_ms = dur_ms;
+            self.hover = hover;
+            self.started = if (self.from.pos - next.pos).abs() < 0.5 && (self.from.len - next.len).abs() < 0.5 {
+                None
+            } else {
+                Some(now)
+            };
+        }
+
+        pub fn remaining_ms(&self, now: Instant) -> u32 {
+            match self.started {
+                Some(s) if self.dur_ms > 0 => {
+                    let el = now.saturating_duration_since(s).as_millis() as u32;
+                    self.dur_ms.saturating_sub(el)
+                }
+                _ => 0,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct AnimTrack {
+        pub from: Rect1D,
+        pub to: Rect1D,
+        pub cross_base: f32,
+        pub elapsed0: f32,
+        pub dur_s: f32,
+        pub hover: bool,
+        pub fade_in: bool,
+        pub fade_out: bool,
+    }
+
+    impl AnimTrack {
+        pub fn from_slide(s: &Slide1D, cross_base: f32, now: Instant, fade_in: bool, fade_out: bool) -> Self {
+            let elapsed0 = s.started.map_or(1.0, |st| now.saturating_duration_since(st).as_secs_f32());
+            let dur_s = (s.dur_ms as f32 * 0.001).max(0.001);
+            Self {
+                from: s.from,
+                to: s.to,
+                cross_base,
+                elapsed0: if s.started.is_some() { elapsed0 } else { dur_s },
+                dur_s,
+                hover: s.hover,
+                fade_in,
+                fade_out,
+            }
+        }
+
+        pub fn eval(&self, elapsed_anim: f32) -> (LiquidSpan, f32) {
+            let u = ((self.elapsed0 + elapsed_anim) / self.dur_s).clamp(0.0, 1.0);
+            let span = capsule_1d(self.from.pos, self.to.pos, self.from.len, self.to.len, self.cross_base, u, self.hover);
+            let op = if self.fade_out {
+                1.0 - quintic_fade(u)
+            } else if self.fade_in {
+                quintic_fade(u)
+            } else {
+                1.0
+            };
+            (span, op)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct CoalesceFrame {
+        pub seq: u64,
+        pub anim_ms: u32,
+        pub active: Option<AnimTrack>,
+        pub hover: Option<AnimTrack>,
+    }
+
+    #[derive(Default)]
+    pub struct LiquidTrackState {
+        pub active_ix: Option<usize>,
+        pub active: Slide1D,
+        pub hover_ix: Option<usize>,
+        pub hover: Slide1D,
+        pub leave: Option<(Rect1D, Instant)>,
+        pub last_hover_at: Option<Instant>,
+        pub fade_in: bool,
+        pub seq: u64,
+    }
+
+    impl LiquidTrackState {
+        pub fn sync_active(&mut self, ix: Option<usize>, rect: Option<Rect1D>, cross: f32, dur_ms: u32, now: Instant) {
+            if self.active_ix != ix {
+                self.active_ix = ix;
+                if let Some(r) = rect {
+                    if self.active.to.len > 0.5 {
+                        self.active.retarget(r, dur_ms, false, cross, now);
+                    } else {
+                        self.active.snap(r, false);
+                    }
+                    self.seq = self.seq.wrapping_add(1);
+                }
+            } else if let Some(r) = rect {
+                if self.active.to.len <= 0.5 {
+                    self.active.snap(r, false);
+                } else if (self.active.to.pos - r.pos).abs() > 1.0 || (self.active.to.len - r.len).abs() > 1.0 {
+                    // Layout shift or scroll snaps cleanly to stay locked to row/tab text.
+                    self.active.snap(r, false);
+                }
+            }
+        }
+
+        pub fn sync_hover_rect(&mut self, rect: Option<Rect1D>, cross: f32, now: Instant) {
+            if let Some(r) = rect {
+                if (self.hover.to.pos - r.pos).abs() > 1.0 || (self.hover.to.len - r.len).abs() > 1.0 {
+                    let _ = (cross, now);
+                    self.hover.snap(r, true);
+                }
+            }
+        }
+
+        pub fn hover_enter(&mut self, ix: usize, rect: Option<Rect1D>, cross: f32, dur_ms: u32, now: Instant) -> bool {
+            let Some(r) = rect else { return false };
+            if self.hover_ix == Some(ix) && (self.hover.to.pos - r.pos).abs() < 0.5 && (self.hover.to.len - r.len).abs() < 0.5 {
+                return false;
+            }
+            let gliding = self.hover_ix.is_some()
+                || self.leave.is_some()
+                || self.last_hover_at.is_some_and(|t| t.elapsed() < Duration::from_millis(145));
+            if gliding {
+                if let Some((lr, _)) = self.leave.take() {
+                    if self.hover.to.len <= 0.5 {
+                        self.hover.snap(lr, true);
+                    }
+                }
+                self.hover.retarget(r, dur_ms, true, cross, now);
+            } else {
+                self.leave = None;
+                self.hover.snap(r, true);
+                self.hover.dur_ms = 115;
+                self.hover.started = Some(now);
+            }
+            self.hover_ix = Some(ix);
+            self.fade_in = !gliding;
+            self.last_hover_at = Some(now);
+            self.seq = self.seq.wrapping_add(1);
+            true
+        }
+
+        pub fn hover_clear(&mut self, now: Instant) -> bool {
+            if self.hover_ix.take().is_none() {
+                return false;
+            }
+            self.last_hover_at = Some(now);
+            let live = self.hover.sample(now, 28.0);
+            self.leave = Some((Rect1D { pos: live.pos, len: live.len }, now));
+            self.seq = self.seq.wrapping_add(1);
+            true
+        }
+
+        pub fn sample_frame(&mut self, cross: f32, now: Instant) -> Option<CoalesceFrame> {
+            let active = (self.active_ix.is_some() && self.active.to.len > 0.5)
+                .then(|| AnimTrack::from_slide(&self.active, cross, now, false, false));
+            let hover = if self.hover_ix.is_some() && self.hover.to.len > 0.5 {
+                Some(AnimTrack::from_slide(&self.hover, cross, now, self.fade_in, false))
+            } else if let Some((lr, lstart)) = self.leave {
+                let el = now.saturating_duration_since(lstart).as_millis() as u32;
+                if el >= 120 {
+                    self.leave = None;
+                    None
+                } else {
+                    Some(AnimTrack {
+                        from: lr,
+                        to: lr,
+                        cross_base: cross,
+                        elapsed0: el as f32 * 0.001,
+                        dur_s: 0.120,
+                        hover: true,
+                        fade_in: false,
+                        fade_out: true,
+                    })
+                }
+            } else {
+                None
+            };
+            if active.is_none() && hover.is_none() {
+                return None;
+            }
+            let rem_a = if active.is_some() { self.active.remaining_ms(now) } else { 0 };
+            let rem_h = if self.hover_ix.is_some() {
+                self.hover.remaining_ms(now).max(if self.fade_in { 115u32.saturating_sub(self.hover.started.map_or(115, |s| now.saturating_duration_since(s).as_millis() as u32)) } else { 0 })
+            } else if let Some((_, lstart)) = self.leave {
+                120u32.saturating_sub(now.saturating_duration_since(lstart).as_millis() as u32)
+            } else {
+                0
+            };
+            Some(CoalesceFrame { seq: self.seq, anim_ms: rem_a.max(rem_h), active, hover })
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct LiquidStyle {
+        pub inset_a: f32,
+        pub inset_b: f32,
+        pub cross_base: f32,
+        pub max_squeeze: f32,
+        pub radius: f32,
+        pub capillary: f32,
+        pub active_bg: Hsla,
+        pub active_border: Hsla,
+        pub hover_bg: Hsla,
+        pub hover_border: Hsla,
+        pub union_border: Hsla,
+        pub bridge_bg: Hsla,
+    }
+
+    fn with_radii(mut d: Div, tl: f32, tr: f32, br: f32, bl: f32) -> Div {
+        let r = &mut d.style().corner_radii;
+        r.top_left = Some(px(tl).into());
+        r.top_right = Some(px(tr).into());
+        r.bottom_right = Some(px(br).into());
+        r.bottom_left = Some(px(bl).into());
+        d
+    }
+
+    pub fn render_coalesced_layer(
+        id: impl Into<SharedString>,
+        vertical: bool,
+        st: LiquidStyle,
+        frame: CoalesceFrame,
+    ) -> AnyElement {
+        let key_prefix = id.into();
+        let paint_at = move |layer: Div, anim_el: f32| -> Div {
+            let active = frame.active.map(|a| a.eval(anim_el).0);
+            let hover = frame.hover.map(|h| h.eval(anim_el));
+            if vertical {
+                paint_coalesced_v(layer, &st, active, hover)
+            } else {
+                paint_coalesced_h(layer, &st, active, hover)
+            }
+        };
+        let base = div().absolute().inset_0().size_full();
+        if frame.anim_ms == 0 {
+            paint_at(base, 0.0).into_any_element()
+        } else {
+            let dur_s = frame.anim_ms as f32 * 0.001;
+            base.with_animation(
+                SharedString::from(format!("{key_prefix}-{}", frame.seq)),
+                Animation::new(Duration::from_millis(frame.anim_ms as u64)),
+                move |d, u| paint_at(d, u * dur_s),
+            )
+            .into_any_element()
+        }
+    }
+
+    pub fn paint_coalesced_v(
+        layer: Div,
+        st: &LiquidStyle,
+        active: Option<LiquidSpan>,
+        hover: Option<(LiquidSpan, f32)>,
+    ) -> Div {
+        paint_coalesced_axis(layer, true, st, active, hover)
+    }
+
+    pub fn paint_coalesced_h(
+        layer: Div,
+        st: &LiquidStyle,
+        active: Option<LiquidSpan>,
+        hover: Option<(LiquidSpan, f32)>,
+    ) -> Div {
+        paint_coalesced_axis(layer, false, st, active, hover)
+    }
+
+    #[derive(Default)]
+    pub struct KeyedLiquid {
+        pub origin: Option<Point<Pixels>>,
+        pub rects: Vec<Option<Bounds<Pixels>>>,
+        pub track: LiquidTrackState,
+    }
+
+    pub type KeyedLiquidHandle = std::rc::Rc<std::cell::RefCell<KeyedLiquid>>;
+
+    pub fn keyed_state(id: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> KeyedLiquidHandle {
+        window
+            .use_keyed_state(id.into(), cx, |_, _| std::rc::Rc::new(std::cell::RefCell::new(KeyedLiquid::default())))
+            .read(cx)
+            .clone()
+    }
+
+    fn rect_1d(origin: Point<Pixels>, b: Bounds<Pixels>, vertical: bool) -> Rect1D {
+        if vertical {
+            Rect1D { pos: f32::from(b.origin.y - origin.y), len: f32::from(b.size.height) }
+        } else {
+            Rect1D { pos: f32::from(b.origin.x - origin.x), len: f32::from(b.size.width) }
+        }
+    }
+
+    pub fn keyed_sync_and_sample(
+        handle: &KeyedLiquidHandle,
+        vertical: bool,
+        count: usize,
+        active_ix: Option<usize>,
+        cross_base: f32,
+        active_dur_ms: u32,
+        motion: bool,
+    ) -> (Option<CoalesceFrame>, bool) {
+        let now = Instant::now();
+        let mut st = handle.borrow_mut();
+        if st.rects.len() != count {
+            st.rects.resize(count, None);
+        }
+        let origin = st.origin;
+        let act_rect = active_ix
+            .and_then(|ix| Some(rect_1d(origin?, st.rects.get(ix).copied().flatten()?, vertical)));
+        st.track.sync_active(active_ix, act_rect, cross_base, active_dur_ms, now);
+        let hov_rect = st
+            .track
+            .hover_ix
+            .and_then(|ix| Some(rect_1d(origin?, st.rects.get(ix).copied().flatten()?, vertical)));
+        st.track.sync_hover_rect(hov_rect, cross_base, now);
+        let frame = if motion { st.track.sample_frame(cross_base, now) } else { None };
+        (frame, motion && act_rect.is_some())
+    }
+
+    pub fn keyed_origin_probe(handle: KeyedLiquidHandle, view_id: EntityId) -> AnyElement {
+        canvas(
+            move |bounds, _, cx| {
+                let mut st = handle.borrow_mut();
+                let changed = st.origin.is_none_or(|p| {
+                    (f32::from(p.x) - f32::from(bounds.origin.x)).abs() > 1.0
+                        || (f32::from(p.y) - f32::from(bounds.origin.y)).abs() > 1.0
+                });
+                st.origin = Some(bounds.origin);
+                if changed {
+                    cx.defer(move |cx| cx.notify(view_id));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+        .size_full()
+        .into_any_element()
+    }
+
+    pub fn keyed_item_probe(handle: KeyedLiquidHandle, ix: usize, view_id: EntityId) -> AnyElement {
+        canvas(
+            move |bounds, _, cx| {
+                let mut st = handle.borrow_mut();
+                let changed = st.rects.get(ix).and_then(|o| *o).is_none_or(|prev| {
+                    (f32::from(prev.origin.x) - f32::from(bounds.origin.x)).abs() > 1.0
+                        || (f32::from(prev.origin.y) - f32::from(bounds.origin.y)).abs() > 1.0
+                        || (f32::from(prev.size.width) - f32::from(bounds.size.width)).abs() > 1.0
+                        || (f32::from(prev.size.height) - f32::from(bounds.size.height)).abs() > 1.0
+                });
+                if ix < st.rects.len() {
+                    st.rects[ix] = Some(bounds);
+                }
+                if changed {
+                    cx.defer(move |cx| cx.notify(view_id));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+        .size_full()
+        .into_any_element()
+    }
+
+    pub fn keyed_hover_enter(
+        handle: &KeyedLiquidHandle,
+        ix: usize,
+        vertical: bool,
+        cross_base: f32,
+        dur_ms: u32,
+        view_id: EntityId,
+        cx: &mut App,
+    ) {
+        let mut st = handle.borrow_mut();
+        let rect = st
+            .origin
+            .and_then(|o| st.rects.get(ix).copied().flatten().map(|b| rect_1d(o, b, vertical)));
+        if st.track.hover_enter(ix, rect, cross_base, dur_ms, Instant::now()) {
+            cx.notify(view_id);
+        }
+    }
+
+    pub fn keyed_hover_leave(handle: &KeyedLiquidHandle, view_id: EntityId, cx: &mut App) {
+        if handle.borrow_mut().track.hover_clear(Instant::now()) {
+            cx.notify(view_id);
+        }
+    }
+
+    fn paint_coalesced_axis(
+        layer: Div,
+        vertical: bool,
+        st: &LiquidStyle,
+        active: Option<LiquidSpan>,
+        hover: Option<(LiquidSpan, f32)>,
+    ) -> Div {
+        let place = |pos: f32, len: f32, sq: f32| -> Div {
+            let sq = sq.min(st.max_squeeze);
+            if vertical {
+                div().absolute().left(px(st.inset_a + sq)).right(px(st.inset_b + sq)).top(px(pos)).h(px(len))
+            } else {
+                div().absolute().top(px(st.inset_a + sq)).bottom(px(st.inset_b + sq)).left(px(pos)).w(px(len))
+            }
+        };
+        let radii_axis = |d: Div, r_start: f32, r_end: f32| -> Div {
+            if vertical {
+                with_radii(d, r_start, r_start, r_end, r_end)
+            } else {
+                with_radii(d, r_start, r_end, r_end, r_start)
+            }
+        };
+
+        match (active, hover.filter(|(_, op)| *op > 0.01)) {
+            (None, None) => layer,
+            (Some(a), None) => layer.child(
+                radii_axis(place(a.pos, a.len, a.squeeze), st.radius, st.radius)
+                    .bg(st.active_bg)
+                    .border_1()
+                    .border_color(st.active_border),
+            ),
+            (None, Some((h, op))) => layer.child(
+                radii_axis(place(h.pos, h.len, h.squeeze), st.radius, st.radius)
+                    .bg(st.hover_bg.opacity(op))
+                    .border_1()
+                    .border_color(st.hover_border.opacity(op)),
+            ),
+            (Some(a), Some((h, op))) => {
+                let mut co = coalesce_1d(a.pos, a.len, h.pos, h.len, st.cross_base, st.radius, st.capillary);
+                let eff_k = co.coupling * op;
+                co.bridge_alpha *= op;
+                co.union_border_alpha *= op;
+                co.seam_alpha *= op;
+                co.split_border_alpha = 1.0 - co.union_border_alpha;
+                if op < 0.99 {
+                    let inv = 1.0 - eff_k;
+                    let r_face = st.radius * inv * inv;
+                    if a.pos <= h.pos {
+                        co.a_r_end = r_face;
+                        co.h_r_start = r_face;
+                    } else {
+                        co.h_r_end = r_face;
+                        co.a_r_start = r_face;
+                    }
+                }
+                if co.overlap_boost > 0.55 && op > 0.7 {
+                    return layer.child(
+                        radii_axis(place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)), st.radius, st.radius)
+                            .bg(st.active_bg)
+                            .border_1()
+                            .border_color(st.union_border),
+                    );
+                }
+                let mut out = layer;
+                if co.bridge_alpha > 0.01 && co.bridge_len > 0.5 {
+                    let bsq = co.bridge_squeeze.clamp(0.0, st.max_squeeze + 3.0);
+                    out = out.child(
+                        place(co.bridge_start, co.bridge_len, bsq).bg(st.bridge_bg.opacity(co.bridge_alpha)),
+                    );
+                }
+                out = out.child(
+                    radii_axis(place(h.pos, h.len, h.squeeze), co.h_r_start, co.h_r_end)
+                        .bg(st.hover_bg.opacity(op))
+                        .when(co.split_border_alpha > 0.02, |d| {
+                            d.border_1().border_color(st.hover_border.opacity(op * co.split_border_alpha))
+                        }),
+                );
+                out = out.child(
+                    radii_axis(place(a.pos, a.len, a.squeeze), co.a_r_start, co.a_r_end)
+                        .bg(st.active_bg)
+                        .when(co.split_border_alpha > 0.02, |d| {
+                            d.border_1().border_color(st.active_border.opacity(co.split_border_alpha))
+                        }),
+                );
+                if co.seam_alpha > 0.01 {
+                    out = out.child(place(co.seam_center - 3.0, 6.0, 0.0).bg(st.bridge_bg.opacity(co.seam_alpha)));
+                }
+                if co.union_border_alpha > 0.01 {
+                    out = out.child(
+                        radii_axis(place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)), st.radius, st.radius)
+                            .border_1()
+                            .border_color(st.union_border.opacity(co.union_border_alpha)),
+                    );
+                }
+                out
+            }
+        }
     }
 
     #[cfg(test)]
     mod liquid_tests {
-        use super::{capsule, critically_damped, fast_exp_neg, fast_inv_sqrt, quintic_fade};
-        use std::time::Instant;
+        use super::*;
 
         #[test]
         fn scalar_math_kernels_stay_within_precision_bounds() {
@@ -449,23 +1010,52 @@ pub mod liquid {
             assert_eq!(quintic_fade(1.0), 1.0);
             assert_eq!(critically_damped(0.0, 10.5), 0.0);
             assert!((critically_damped(1.0, 10.5) - 1.0).abs() < 1e-6);
+
+            let mut prev = -1.0f32;
+            for i in 0..=100 {
+                let t = i as f32 * 0.01;
+                let v = overdamped_trail(t, 8.0, 1.28);
+                assert!(v >= prev - 1e-6 && v <= 1.0 + 1e-6, "non-monotonic overdamped at {t}: {v}");
+                prev = v;
+            }
+            assert_eq!(overdamped_trail(0.0, 8.0, 1.28), 0.0);
+            assert!((overdamped_trail(1.0, 8.0, 1.28) - 1.0).abs() < 1e-5);
         }
 
         #[test]
-        fn liquid_capsule_bridges_and_conserves_area_in_both_directions() {
+        fn liquid_capsule_and_coalescence_behave_smoothly() {
             let (base_h, base_w) = (30.0, 32.0);
-            let start = capsule(0.0, 108.0, base_h, base_w, 0.0, false);
-            assert!((start.top - 0.0).abs() < 1e-4 && (start.height - base_h).abs() < 1e-4);
-            let end = capsule(0.0, 108.0, base_h, base_w, 1.0, false);
-            assert!((end.top - 108.0).abs() < 1e-3 && (end.height - base_h).abs() < 1e-3);
+            let start = capsule_1d(0.0, 108.0, base_h, base_h, base_w, 0.0, false);
+            assert!((start.pos - 0.0).abs() < 1e-4 && (start.len - base_h).abs() < 1e-4);
+            let end = capsule_1d(0.0, 108.0, base_h, base_h, base_w, 1.0, false);
+            assert!((end.pos - 108.0).abs() < 1e-3 && (end.len - base_h).abs() < 1e-3);
 
-            let mid_down = capsule(0.0, 108.0, base_h, base_w, 0.35, false);
-            assert!(mid_down.height > base_h + 10.0, "downward liquid bridge should stretch: {:?}", mid_down);
-            assert!(mid_down.width < base_w, "width should narrow when stretched: {:?}", mid_down);
+            let var_mid = capsule_1d(10.0, 120.0, 60.0, 96.0, 26.0, 0.4, false);
+            assert!(var_mid.len > 96.0, "variable width stretch: {:?}", var_mid);
 
-            let mid_up = capsule(144.0, 36.0, base_h, base_w, 0.35, true);
-            assert!(mid_up.height > base_h + 10.0, "upward liquid bridge should stretch: {:?}", mid_up);
-            assert!(mid_up.top >= 35.9 && mid_up.top + mid_up.height <= 144.0 + base_h + 0.1);
+            let far = coalesce_1d(0.0, 20.0, 80.0, 20.0, 200.0, 6.0, 24.0);
+            assert_eq!(far.coupling, 0.0);
+            assert_eq!(far.union_border_alpha, 0.0);
+            assert_eq!(far.bridge_alpha, 0.0);
+
+            let near = coalesce_1d(20.0, 20.0, 50.0, 20.0, 200.0, 6.0, 24.0);
+            assert!(near.coupling > 0.0 && near.coupling < 1.0);
+            assert!(near.bridge_alpha > 0.0 && near.bridge_squeeze > 0.0);
+
+            let adj_above = coalesce_1d(40.0, 20.0, 20.0, 20.0, 200.0, 6.0, 24.0);
+            assert_eq!(adj_above.coupling, 1.0);
+            assert_eq!(adj_above.h_r_end, 0.0);
+            assert_eq!(adj_above.a_r_start, 0.0);
+            assert_eq!(adj_above.h_r_start, 6.0);
+            assert_eq!(adj_above.a_r_end, 6.0);
+            assert_eq!(adj_above.union_border_alpha, 1.0);
+            assert_eq!(adj_above.split_border_alpha, 0.0);
+            assert!(adj_above.seam_alpha > 0.0);
+
+            let same = coalesce_1d(40.0, 20.0, 40.0, 20.0, 200.0, 6.0, 24.0);
+            assert!(same.overlap_boost > 0.9);
+            assert_eq!(same.a_r_start, 6.0);
+            assert_eq!(same.h_r_end, 6.0);
         }
 
         #[test]
@@ -474,12 +1064,13 @@ pub mod liquid {
             let mut acc = 0.0f32;
             for i in 0..10_000u32 {
                 let t = (i % 101) as f32 * 0.01;
-                let c = capsule(0.0, 144.0, 30.0, 32.0, t, (i & 1) == 0);
-                acc += c.top + c.height + c.width + c.offset_x;
+                let c = capsule_1d(0.0, 144.0, 20.0, 24.0, 32.0, t, (i & 1) == 0);
+                let co = coalesce_1d(40.0, 20.0, c.pos, c.len, 32.0, 6.0, 24.0);
+                acc += c.pos + c.len + co.coupling + co.union_len;
             }
             let elapsed = t0.elapsed();
             std::hint::black_box(acc);
-            eprintln!("liquid::capsule 10,000 evals: {:?} ({:.2} ns/eval)", elapsed, elapsed.as_nanos() as f64 / 10_000.0);
+            eprintln!("liquid 10,000 capsule+coalesce evals: {:?} ({:.2} ns/eval)", elapsed, elapsed.as_nanos() as f64 / 10_000.0);
             assert!(elapsed.as_millis() < 20, "10k evaluations took {:?}", elapsed);
         }
     }
