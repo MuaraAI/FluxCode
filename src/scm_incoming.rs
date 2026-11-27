@@ -1,12 +1,11 @@
-
 use crate::i18n::tr;
-use crate::scm::{code_color, Commit};
+use crate::scm::{code_color, lane_geometry, Commit, ROW_H, SCROLLBAR_PAD};
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
-    h_flex, v_flex, Icon, IconName, Sizable,
+    h_flex, v_flex, Disableable, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::path::Path;
@@ -15,56 +14,33 @@ use std::time::{Duration, Instant};
 const EVERY: Duration = Duration::from_secs(300);
 pub const MAX_INCOMING: usize = 50;
 
-fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
-    if let Some(t) = target {
-        let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
-        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        let attempt: Option<Result<crate::remote::GitWire, String>> =
-            crate::remote::with_client(&t.distro.clone(), |c: &mut crate::remote::RemoteClient| c.git(&cwd, &owned, None));
-        if let Some(r) = attempt {
-            match r {
-                Ok(g) if g.success => return Ok(g.stdout),
-                Ok(g) => return Err(g.stderr.trim().to_string()),
-                Err(_) => {}
-            }
-        }
-    }
-    let mut cmd = match target {
-        Some(t) => {
-            let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
-            crate::remote::program_command_env(
-                t,
-                &cwd,
-                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never"), ("NO_COLOR", "1")],
-                "git",
-                args,
-            )
-        }
-        None => {
-            let mut c = crate::proc::command("git");
-            c.args(args).current_dir(dir);
-            c
-        }
-    };
-    cmd.env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .env("NO_COLOR", "1")
-        .stdin(std::process::Stdio::null());
-    crate::github::apply_env(&mut cmd);
-    let out = cmd.output().map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+fn quiet_git(
+    dir: &Path,
+    args: &[&str],
+    target: Option<&crate::remote::WslTarget>,
+) -> Result<String, String> {
+    crate::scm_git::run_step(dir, &crate::scm_git::git_step(args), target)
 }
 
-pub fn incoming(repo: &Path, target: Option<&crate::remote::WslTarget>) -> (Vec<Commit>, Option<String>) {
-    let head = quiet_git(repo, &["rev-parse", "@{u}"], target).ok().map(|s| s.trim().to_string());
+pub fn incoming(
+    repo: &Path,
+    target: Option<&crate::remote::WslTarget>,
+) -> (Vec<Commit>, Option<String>) {
+    let head = quiet_git(repo, &["rev-parse", "@{u}"], target)
+        .ok()
+        .map(|s| s.trim().to_string());
     let log = quiet_git(
         repo,
-        &["-c", "i18n.logOutputEncoding=UTF-8", "log", "HEAD..@{u}", "-n", &MAX_INCOMING.to_string(), "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"],
+        &[
+            "-c",
+            "i18n.logOutputEncoding=UTF-8",
+            "log",
+            "HEAD..@{u}",
+            "-n",
+            &MAX_INCOMING.to_string(),
+            "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
+            "-z",
+        ],
         target,
     )
     .map(|s| crate::scm::parse_log(&s))
@@ -100,7 +76,10 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;
             loop {
-                if this.update(cx, |this, cx| this.scm_fetch_quietly(cx)).is_err() {
+                if this
+                    .update(cx, |this, cx| this.scm_fetch_quietly(cx))
+                    .is_err()
+                {
                     break;
                 }
                 cx.background_executor().timer(EVERY).await;
@@ -110,26 +89,46 @@ impl Workbench {
     }
 
     pub(crate) fn scm_fetch_quietly(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else { return };
-        if self.scm.fetching || self.scm.status.upstream.is_none() || self.scm.busy.is_some() {
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
+        if self.scm.is_busy() || self.scm.status.upstream.is_none() {
             return;
         }
         self.scm.fetching = true;
+        cx.notify();
         self.scm.last_fetch = Some(Instant::now());
+        let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let res = cx.background_spawn(async move { quiet_git(&repo, &["fetch", "--quiet", "--prune"], wsl.as_ref()) }).await;
+            let res = cx
+                .background_spawn(async move {
+                    crate::scm_git::run_step(
+                        &repo,
+                        &crate::scm_git::Step::Remote(crate::scm_git::RemoteAction::Fetch),
+                        wsl.as_ref(),
+                    )
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
+                if this.scm.workspace_generation != generation {
+                    return;
+                }
                 this.scm.fetching = false;
                 _ = res;
                 this.scm_refresh(cx);
+                cx.notify();
             });
         })
         .detach();
     }
 
     pub(crate) fn scm_on_return(&mut self, cx: &mut Context<Self>) {
-        if self.scm.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(120)) {
+        if self
+            .scm
+            .last_fetch
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(120))
+        {
             self.scm_fetch_quietly(cx);
         }
     }
@@ -148,50 +147,112 @@ impl Workbench {
         if self.scm.incoming_files.contains_key(&hash) {
             return;
         }
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
+        let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let h = hash.clone();
-            let files = cx
-                .background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=", "--name-status", "-z", &h], wsl.as_ref()).map(|s| parse_name_status(&s)).unwrap_or_default() })
+            let res = cx
+                .background_spawn(async move {
+                    quiet_git(
+                        &repo,
+                        &[
+                            "-c",
+                            "core.quotepath=off",
+                            "show",
+                            "--format=",
+                            "--name-status",
+                            "-z",
+                            &h,
+                        ],
+                        wsl.as_ref(),
+                    )
+                    .map(|s| parse_name_status(&s))
+                    .map(|files| (repo, files))
+                })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.scm.incoming_files.insert(hash, files);
+                match res {
+                    Ok((repo, files)) => {
+                        if this.scm.workspace_generation != generation
+                            || this.scm.repo.as_ref() != Some(&repo)
+                        {
+                            return;
+                        }
+                        this.scm.incoming_files.insert(hash, files);
+                    }
+                    Err(e) => {
+                        if this.scm.workspace_generation == generation {
+                            this.scm.incoming_open = None;
+                            this.scm.error = Some(e);
+                        }
+                    }
+                }
                 cx.notify();
             });
         })
         .detach();
     }
 
-    fn scm_show_incoming_file(&mut self, hash: String, path: String, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else { return };
+    fn scm_show_incoming_file(
+        &mut self,
+        hash: String,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
+        let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
-        cx.spawn(async move |this, cx| {
-            let (h, p) = (hash.clone(), path.clone());
-            let text = cx.background_spawn(async move { quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=%h  %s%n%an, %ar%n", &h, "--", &p], wsl.as_ref()).unwrap_or_else(|e| e) }).await;
-            _ = this.update(cx, |this, cx| {
-                this.out_lines.clear();
-                let mut head = Line::new(&path, crate::term::LineKind::Cmd);
-                head.meta = crate::trf!("In {hash}, not pulled yet"; hash => &hash[..hash.len().min(8)]).into();
-                this.out_lines.push(head);
-                for l in text.lines() {
-                    let kind = if l.starts_with("+++") || l.starts_with("---") || l.starts_with("diff ") || l.starts_with("index ") {
-                        crate::term::LineKind::Dim
-                    } else if l.starts_with('+') {
-                        crate::term::LineKind::Success
-                    } else if l.starts_with('-') {
-                        crate::term::LineKind::Err
-                    } else if l.starts_with("@@") {
-                        crate::term::LineKind::Hunk
-                    } else {
-                        crate::term::LineKind::Normal
-                    };
-                    this.out_lines.push(Line::new(l, kind));
+        let short = hash[..hash.len().min(7)].to_string();
+        let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        let full_path = repo.join(&path);
+        let target = if wsl.is_some() || full_path.is_file() {
+            Some(full_path)
+        } else {
+            None
+        };
+        let virtual_key = std::path::PathBuf::from(format!("flux-diff://incoming/{hash}/{path}"));
+        cx.spawn_in(window, async move |this, cx| {
+            let (h, p, r) = (hash.clone(), path.clone(), repo.clone());
+            let res = cx
+                .background_spawn(async move {
+                    crate::scm_git::show_commit_diff(&r, &h, Some(&p), false, wsl.as_ref())
+                })
+                .await;
+            _ = this.update_in(cx, |this, window, cx| {
+                if this.scm.workspace_generation != generation
+                    || this.scm.repo.as_ref() != Some(&repo)
+                {
+                    return;
                 }
-                this.panel_open = true;
-                this.panel_tab = PanelTab::Output;
-                this.out_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                cx.notify();
+                let patch = match res {
+                    Ok(patch) => patch,
+                    Err(e) => {
+                        this.scm.error = Some(e);
+                        cx.notify();
+                        return;
+                    }
+                };
+                this.open_scm_diff_tab(
+                    crate::diff_view::ScmDiffSpec {
+                        virtual_key,
+                        tab_title: format!("{file_name} ({short})"),
+                        display_name: path,
+                        badge: short,
+                        patch,
+                        conflict_text: None,
+                        target,
+                        scm_stage: None,
+                        multi_file: false,
+                    },
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
@@ -211,8 +272,10 @@ impl Workbench {
             .group("scm-in-head")
             .px_2()
             .gap_1()
+            .items_center()
             .text_xs()
             .cursor_pointer()
+            .hover(|st| st.bg(c(theme::BG_HOVER)))
             .child(Icon::new(if open_list { IconName::ChevronDown } else { IconName::ChevronRight }).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
             .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr("Incoming")))
             .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(upstream.clone()))
@@ -227,19 +290,30 @@ impl Workbench {
             .label(tr("Pull"))
             .xsmall()
             .ghost()
-            .tooltip(if dirty { tr("Pull them in (your changes are set aside and put back: git pull --autostash)") } else { tr("Pull them in (git pull)") })
+            .disabled(s.is_busy())
+            .tooltip(if dirty {
+                tr("Pull them in (your changes are set aside and put back: git pull --autostash)")
+            } else {
+                tr("Pull them in (git pull)")
+            })
             .on_click(cx.listener(|this, _, w, cx| this.on_scm_pull(&ScmPull, w, cx)));
-        let later = Button::new("scm-in-later").icon(Icon::new(IconName::Close)).xsmall().ghost().tooltip(tr("Not now: hide this until more commits arrive")).on_click(cx.listener(|this, _, _, cx| {
-            this.scm.incoming_dismissed = this.scm.incoming_head.clone();
-            cx.notify();
-        }));
-        let mut col = v_flex().flex_none().pb_2().child(
+        let later = Button::new("scm-in-later")
+            .icon(Icon::new(IconName::Close))
+            .xsmall()
+            .ghost()
+            .tooltip(tr("Not now: hide this until more commits arrive"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.scm.incoming_dismissed = this.scm.incoming_head.clone();
+                cx.notify();
+            }));
+        let mut col = v_flex().w_full().min_w_0().flex_none().pb_2().child(
             h_flex()
-                .flex_none()
                 .w_full()
                 .min_w_0()
-                .pr_1()
+                .flex_none()
+                .pr(px(SCROLLBAR_PAD))
                 .gap_0p5()
+                .items_center()
                 .child(header.flex_1().min_w_0())
                 .child(pull)
                 .child(later),
@@ -247,27 +321,74 @@ impl Workbench {
         if !open_list {
             return Some(col.into_any_element());
         }
-        let last = s.incoming.len().saturating_sub(1);
+        let total = s.incoming.len();
+        let last = total.saturating_sub(1);
         for (i, cm) in s.incoming.iter().enumerate() {
             let open = s.incoming_open.as_deref() == Some(cm.hash.as_str());
             let hash = cm.hash.clone();
-            let lane = crate::scm::graph_lane(i == 0, i == last && !open, theme::BLUE, 0.45, false);
-            let tip: SharedString = format!("{}\n{} · {} · {}", cm.subject, cm.short, cm.author, cm.when).into();
+            let (line_top, line_bottom, dot_top) = lane_geometry(i, total, open);
+            let lane = div()
+                .relative()
+                .w(theme::u(14.))
+                .h_full()
+                .flex_none()
+                .child(
+                    div()
+                        .absolute()
+                        .left(theme::u(6.))
+                        .w(px(2.))
+                        .top(theme::u(line_top))
+                        .bottom(theme::u(line_bottom))
+                        .bg(c(theme::BLUE).opacity(0.45)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(theme::u(3.))
+                        .top(theme::u(dot_top))
+                        .size(theme::u(8.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(c(theme::BLUE))
+                        .bg(c(theme::BG_SIDE)),
+                );
+            let tip: SharedString =
+                format!("{}\n{} · {} · {}", cm.subject, cm.short, cm.author, cm.when).into();
             col = col.child(
                 crate::scm::scm_row()
                     .id(("scm-in", i))
                     .pl(theme::u(12.))
-                    .pr_2()
+                    .pr(px(SCROLLBAR_PAD))
                     .gap_1p5()
+                    .items_center()
                     .text_size(theme::u(11.5))
                     .cursor_pointer()
                     .when(open, |h| h.bg(c(theme::BG_HOVER)))
                     .hover(|st| st.bg(c(theme::BG_HOVER)))
                     .child(lane)
-                    .child(div().flex_1().min_w(theme::u(60.)).truncate().text_color(c(theme::FG)).child(cm.subject.clone()))
-                    .child(div().flex_none().max_w(theme::u(90.)).truncate().text_color(c(theme::FG_DIM)).child(cm.author.clone()))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
-                    .on_click(cx.listener(move |this, _, _, cx| this.scm_open_incoming(hash.clone(), cx))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG))
+                            .child(cm.subject.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .max_w(theme::u(90.))
+                            .truncate()
+                            .text_color(c(theme::FG_DIM))
+                            .child(cm.author.clone()),
+                    )
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                    })
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.scm_open_incoming(hash.clone(), cx)),
+                    ),
             );
             if !open {
                 continue;
@@ -278,7 +399,7 @@ impl Workbench {
                     col = col.child(
                         div()
                             .flex_none()
-                            .h(theme::u(crate::scm::ROW_H))
+                            .h(theme::u(ROW_H))
                             .pl(pad)
                             .flex()
                             .items_center()
@@ -291,34 +412,94 @@ impl Workbench {
                     for (k, (code, path)) in files.iter().enumerate().take(60) {
                         let (h, p) = (cm.hash.clone(), path.clone());
                         let name = path.rsplit('/').next().unwrap_or(path).to_string();
-                        let dir = path.rsplit_once('/').map(|(d, _)| d.replace('/', "\\")).unwrap_or_default();
+                        let dir = path
+                            .rsplit_once('/')
+                            .map(|(d, _)| d.replace('/', "\\"))
+                            .unwrap_or_default();
                         col = col.child(
                             crate::scm::scm_row()
                                 .id(("scm-in-file", i * 1000 + k))
                                 .relative()
-                                .when(i < last, |h| h.child(div().absolute().left(theme::u(18.)).top_0().bottom_0().w(px(2.)).bg(c(theme::BLUE).opacity(0.45))))
+                                .when(i < last, |h| {
+                                    h.child(
+                                        div()
+                                            .absolute()
+                                            .left(theme::u(18.))
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(px(2.))
+                                            .bg(c(theme::BLUE).opacity(0.45)),
+                                    )
+                                })
                                 .pl(pad)
-                                .pr_2()
+                                .pr(px(SCROLLBAR_PAD))
                                 .gap_1p5()
+                                .items_center()
                                 .text_xs()
                                 .cursor_pointer()
                                 .hover(|st| st.bg(c(theme::BG_HOVER)))
                                 .child(crate::files::file_icon_el(&name, theme::u(14.)))
-                                .child(div().flex_none().max_w(relative(0.6)).truncate().text_color(c(theme::FG)).child(name))
-                                .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir))
-                                .child(div().flex_none().w(theme::u(12.)).font_weight(FontWeight::BOLD).text_color(c(code_color(*code))).child(code.to_string()))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Show what changed")).build(w, cx))
-                                .on_click(cx.listener(move |this, _, _, cx| this.scm_show_incoming_file(h.clone(), p.clone(), cx))),
+                                .child(
+                                    div()
+                                        .flex_shrink(1.)
+                                        .min_w_0()
+                                        .max_w(relative(0.6))
+                                        .truncate()
+                                        .text_color(c(theme::FG))
+                                        .child(name),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(dir),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .w(theme::u(12.))
+                                        .text_right()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c(code_color(*code)))
+                                        .child(code.to_string()),
+                                )
+                                .tooltip(|w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tr(
+                                        "Show what changed",
+                                    ))
+                                    .build(w, cx)
+                                })
+                                .on_click(cx.listener(move |this, _, w, cx| {
+                                    this.scm_show_incoming_file(h.clone(), p.clone(), w, cx)
+                                })),
                         );
                     }
                     if files.len() > 60 {
-                        col = col.child(div().flex_none().pl(pad).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} more files"; n => files.len() - 60)));
+                        col = col.child(
+                            div()
+                                .flex_none()
+                                .pl(pad)
+                                .py_1()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(crate::trf!("… and {n} more files"; n => files.len() - 60)),
+                        );
                     }
                 }
             }
         }
         if n > s.incoming.len() {
-            col = col.child(div().flex_none().pl(theme::u(34.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("… and {n} older ones"; n => n - s.incoming.len())));
+            col = col.child(
+                div()
+                    .flex_none()
+                    .pl(theme::u(34.))
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(crate::trf!("… and {n} older ones"; n => n - s.incoming.len())),
+            );
         }
         Some(col.into_any_element())
     }
@@ -331,6 +512,13 @@ mod tests {
     #[test]
     fn name_status_with_renames() {
         let out = "M\0src/a.rs\0R100\0old.txt\0new.txt\0A\0docs/b.md\0";
-        assert_eq!(parse_name_status(out), [('M', "src/a.rs".to_string()), ('R', "new.txt".to_string()), ('A', "docs/b.md".to_string())]);
+        assert_eq!(
+            parse_name_status(out),
+            [
+                ('M', "src/a.rs".to_string()),
+                ('R', "new.txt".to_string()),
+                ('A', "docs/b.md".to_string())
+            ]
+        );
     }
 }

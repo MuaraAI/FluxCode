@@ -40,6 +40,7 @@ mod remote;
 mod scene;
 mod scene_art;
 mod scm;
+mod scm_git;
 mod scm_incoming;
 mod search;
 mod settings;
