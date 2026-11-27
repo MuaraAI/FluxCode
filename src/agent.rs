@@ -25,9 +25,18 @@ pub enum Status {
     Error(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthMethod {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Req {
     Initialize,
+    Authenticate,
+    Logout,
     NewSession,
     LoadSession,
     Prompt,
@@ -266,6 +275,7 @@ pub struct AgentState {
     pub replay: Option<(PathBuf, String)>,
     pub replay_gen: u64,
     pub account_wait: Option<worktree::Account>,
+    pub auth_key_input: Entity<InputState>,
     pub gflow_busy: bool,
     pub gflow_note: Option<(String, bool)>,
     pub(crate) input: Entity<TextareaState>,
@@ -372,6 +382,15 @@ pub struct Run {
     pub(crate) ctx_cache: opt::ContextCache,
     pub(crate) coalescer: opt::StreamCoalescer,
     pub(crate) notify_pending: bool,
+    pub(crate) auth_methods: Vec<AuthMethod>,
+    pub(crate) can_logout: bool,
+    pub(crate) auth_required: Option<String>,
+    pub(crate) auth_busy: bool,
+    pub(crate) auth_picker_open: bool,
+    pub(crate) auth_after_init: Option<(String, bool)>,
+    pub(crate) auth_api_key_mode: bool,
+    pub(crate) active_email: Option<String>,
+    pub(crate) active_tier: Option<String>,
 }
 
 static RUN_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -443,6 +462,15 @@ impl Run {
             coalescer: Default::default(),
             notify_pending: false,
             ask: None,
+            auth_methods: Vec::new(),
+            can_logout: false,
+            auth_required: None,
+            auth_busy: false,
+            auth_picker_open: false,
+            auth_after_init: None,
+            auth_api_key_mode: false,
+            active_email: None,
+            active_tier: None,
         }
     }
 
@@ -636,6 +664,11 @@ impl AgentState {
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type the name"))),
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type it again"))),
         ];
+        let auth_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(tr("Paste Gemini API key"))
+        });
         Self {
             run: Run::new(String::new(), None),
             runs: Vec::new(),
@@ -652,6 +685,7 @@ impl AgentState {
             lightbox: None,
             full: Default::default(),
             account_wait: None,
+            auth_key_input,
             gflow_busy: false,
             gflow_note: None,
             input,
@@ -893,6 +927,8 @@ impl Workbench {
             next.pending = std::mem::take(&mut r.pending);
             next.can_load = r.can_load;
             next.can_image = r.can_image;
+            next.can_logout = r.can_logout;
+            next.auth_methods = r.auth_methods.clone();
             next.commands = r.commands.clone();
             next.config = r.config.clone();
             next.thermal =
@@ -1264,6 +1300,193 @@ impl Workbench {
         cx.notify();
     }
 
+    pub(crate) fn agent_open_auth_picker(&mut self, cx: &mut Context<Self>) {
+        self.agent.auth_picker_open = true;
+        self.agent.auth_api_key_mode = false;
+        cx.notify();
+    }
+
+    pub(crate) fn agent_close_auth_picker(&mut self, cx: &mut Context<Self>) {
+        self.agent.auth_picker_open = false;
+        self.agent.auth_api_key_mode = false;
+        cx.notify();
+    }
+
+    pub(crate) fn agent_active_identity(&self) -> Option<worktree::ProfileIdentity> {
+        let fam = worktree::family(&agent_id())?;
+        let acc = self.agent_account();
+        Some(worktree::profile_identity(
+            fam,
+            acc.as_ref(),
+            self.agent.active_email.as_deref(),
+            self.agent.active_tier.as_deref(),
+        ))
+    }
+
+    pub(crate) fn agent_refresh_profile_identity(&mut self, cx: &mut Context<Self>) {
+        let Some(fam) = worktree::family(&agent_id()) else {
+            return;
+        };
+        let acc = self.agent_account();
+        let acc_name = acc.as_ref().map(|a| a.name.clone());
+        let acc_dir = acc.as_ref().map(|a| a.dir.clone());
+        let flow_profile = acc.as_ref().and_then(|a| a.flow_profile.clone());
+        let tier_live = self.agent.active_tier.clone();
+        let key = self.agent.key;
+        let fam_s = fam.to_string();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(260))
+                .await;
+            let detected = cx
+                .background_spawn(async move {
+                    let base = acc_dir.unwrap_or_else(worktree::default_home_dir);
+                    let email = match fam_s.as_str() {
+                        "antigravity" => worktree::detect_antigravity_email(&base),
+                        _ => None,
+                    };
+                    (email, base, fam_s, flow_profile)
+                })
+                .await;
+            let (email_opt, base, fam_s, flow_profile) = detected;
+            _ = this.update(cx, |this, cx| {
+                this.agent_with_run(key, cx, |this, cx| {
+                    let resolved = email_opt.or_else(|| {
+                        let a = this.agent_account();
+                        worktree::profile_identity(
+                            &fam_s,
+                            a.as_ref(),
+                            this.agent.active_email.as_deref(),
+                            this.agent.active_tier.as_deref(),
+                        )
+                        .email
+                    });
+                    if let Some(em) = resolved.as_deref() {
+                        this.agent.active_email = Some(em.to_string());
+                        if let Some(ref target_name) = acc_name {
+                            if let Some(saved) = this
+                                .settings
+                                .agent_accounts
+                                .iter_mut()
+                                .find(|a| a.family == fam_s && a.name == *target_name)
+                            {
+                                let changed = saved.email.as_deref() != Some(em)
+                                    || (tier_live.is_some() && saved.tier != tier_live);
+                                if changed {
+                                    saved.email = Some(em.to_string());
+                                    if tier_live.is_some() {
+                                        saved.tier = tier_live.clone();
+                                    }
+                                    this.settings.save();
+                                }
+                            }
+                            worktree::save_profile_meta(
+                                &base,
+                                Some(em),
+                                tier_live.as_deref(),
+                                None,
+                            );
+                        }
+                        if fam_s == "antigravity" && this.settings.agent_gflow_sync {
+                            if let Some(fp) = flow_profile.as_deref() {
+                                let flow_dir =
+                                    crate::gflow::gflow_home().join(format!("profile_{fp}"));
+                                if flow_dir.is_dir() && !flow_dir.join(".gflow_account").is_file() {
+                                    let _ = std::fs::write(flow_dir.join(".gflow_account"), em);
+                                }
+                            }
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn agent_start_auth_method(
+        &mut self,
+        method_id: String,
+        logout_first: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if method_id == "gemini-api-key" {
+            self.agent.auth_api_key_mode = true;
+            cx.notify();
+            return;
+        }
+        self.agent.auth_api_key_mode = false;
+        self.agent.auth_busy = true;
+        if self.agent.proc_id.is_some()
+            && matches!(
+                self.agent.status,
+                Status::Off | Status::Ready | Status::Starting
+            )
+        {
+            self.agent_send_authenticate(method_id, logout_first, cx);
+        } else {
+            if self.agent.proc_id.is_some() {
+                self.agent_stop(cx);
+            }
+            self.agent.auth_after_init = Some((method_id, logout_first));
+            self.agent_start(cx);
+        }
+        cx.notify();
+    }
+
+    fn agent_send_authenticate(
+        &mut self,
+        method_id: String,
+        logout_first: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.agent.auth_busy = true;
+        if logout_first && self.agent.can_logout {
+            self.agent.auth_after_init = Some((method_id, false));
+            self.agent_request(Req::Logout, "logout", json!({}));
+        } else {
+            self.agent_request(
+                Req::Authenticate,
+                "authenticate",
+                json!({ "methodId": method_id }),
+            );
+        }
+        cx.notify();
+    }
+
+    fn agent_submit_api_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self
+            .agent
+            .auth_key_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        if key.is_empty() {
+            return;
+        }
+        let target_dir = self
+            .agent_account()
+            .map(|a| a.dir)
+            .unwrap_or_else(|| crate::settings::config_dir().join("antigravity-default"));
+        match worktree::save_profile_api_key(&target_dir, &key) {
+            Ok(()) => {
+                self.agent
+                    .auth_key_input
+                    .update(cx, |s, cx| s.set_value("", window, cx));
+                self.agent.auth_api_key_mode = false;
+                self.agent.auth_picker_open = false;
+                self.agent.auth_required = None;
+                self.agent_stop(cx);
+                self.agent_start(cx);
+            }
+            Err(e) => {
+                self.agent.auth_required = Some(e);
+            }
+        }
+        cx.notify();
+    }
+
     fn agent_edit(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Item::User(t)) = self.agent.items.get(ix) else {
             return;
@@ -1412,11 +1635,24 @@ impl Workbench {
             for (k, v) in worktree::account_envs(&a) {
                 cmd.env(k, v);
             }
-        } else if self.settings.agent_gflow_mcp {
-            if let Ok(sel) = crate::gflow::select_profile("image", None, false) {
-                cmd.env("GFLOW_CLI_PROFILE", &sel.profile);
+            if let Some(api_key) = worktree::load_profile_api_key(&a.dir) {
+                cmd.env("GEMINI_API_KEY", api_key);
+            }
+        } else {
+            let default_key_dir = crate::settings::config_dir().join("antigravity-default");
+            if let Some(api_key) = worktree::load_profile_api_key(&default_key_dir) {
+                cmd.env("GEMINI_API_KEY", api_key);
+            }
+            if self.settings.agent_gflow_mcp {
+                if let Ok(crate::gflow::Selection { profile, .. }) =
+                    crate::gflow::select_profile("image", None, false)
+                {
+                    cmd.env("GFLOW_CLI_PROFILE", &profile);
+                }
             }
         }
+        self.agent.auth_required = None;
+        self.agent.auth_busy = false;
         self.agent.status = Status::Starting;
         self.agent.framer.clear();
         self.agent.coalescer.reset();
@@ -1467,6 +1703,8 @@ impl Workbench {
         self.agent.ctx_cache.clear();
         self.agent.thermal = opt::ThermalController::for_agent(&self.agent.agent);
         self.agent.loading_id = None;
+        self.agent.auth_busy = false;
+        self.agent.auth_after_init = None;
         self.sync_tray_agent_state();
         cx.notify();
     }
@@ -1999,8 +2237,43 @@ impl Workbench {
                         json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
                     );
                 }
+                Req::Authenticate => {
+                    self.agent.auth_busy = false;
+                    self.agent.auth_required = Some(m);
+                    self.agent.auth_picker_open = true;
+                    self.agent.status = Status::Off;
+                }
+                Req::Logout => {
+                    if let Some((method_id, _)) = self.agent.auth_after_init.take() {
+                        self.agent_request(
+                            Req::Authenticate,
+                            "authenticate",
+                            json!({ "methodId": method_id }),
+                        );
+                    } else {
+                        self.agent.auth_busy = false;
+                    }
+                }
+                Req::NewSession | Req::LoadSession => {
+                    let code = e.get("code").and_then(Value::as_i64);
+                    let low = m.to_ascii_lowercase();
+                    let is_auth_err = code == Some(-32000)
+                        || low.contains("authentication required")
+                        || low.contains("not logged")
+                        || low.contains("unauthenticated")
+                        || low.contains("unauthorized");
+                    if is_auth_err {
+                        self.agent.auth_busy = false;
+                        self.agent.auth_required = Some(m);
+                        self.agent.auth_picker_open = true;
+                        self.agent.status = Status::Off;
+                    } else {
+                        self.agent.status = Status::Error(m);
+                    }
+                }
                 _ => self.agent.status = Status::Error(m),
             }
+            cx.notify();
             return;
         }
         let result = msg.get("result").cloned().unwrap_or(Value::Null);
@@ -2014,6 +2287,34 @@ impl Workbench {
                     .pointer("/agentCapabilities/promptCapabilities/image")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                self.agent.can_logout = result.pointer("/agentCapabilities/auth/logout").is_some();
+                if let Some(methods) = result.get("authMethods").and_then(Value::as_array) {
+                    self.agent.auth_methods = methods
+                        .iter()
+                        .filter_map(|m| {
+                            let id = m.get("id").and_then(Value::as_str)?.to_string();
+                            let name = m
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&id)
+                                .to_string();
+                            let description = m
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            Some(AuthMethod {
+                                id,
+                                name,
+                                description,
+                            })
+                        })
+                        .collect();
+                }
+                if let Some((method_id, logout_first)) = self.agent.auth_after_init.take() {
+                    self.agent_send_authenticate(method_id, logout_first, cx);
+                    return;
+                }
                 let cwd = self.agent_cwd();
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
@@ -2029,16 +2330,47 @@ impl Workbench {
                     }
                 }
             }
+            Req::Logout => {
+                if let Some((method_id, _)) = self.agent.auth_after_init.take() {
+                    self.agent_request(
+                        Req::Authenticate,
+                        "authenticate",
+                        json!({ "methodId": method_id }),
+                    );
+                } else {
+                    self.agent.auth_busy = false;
+                }
+            }
+            Req::Authenticate => {
+                self.agent.auth_busy = false;
+                self.agent.auth_required = None;
+                self.agent.auth_picker_open = false;
+                self.agent.auth_api_key_mode = false;
+                if let Some(a) = self.agent_account() {
+                    worktree::save_profile_meta(&a.dir, None, None, Some("oauth"));
+                }
+                self.agent.status = Status::Starting;
+                let cwd = self.agent_cwd();
+                self.agent_request(
+                    Req::NewSession,
+                    "session/new",
+                    json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+                );
+            }
             Req::LoadSession => {
                 self.agent_take_config(&result);
                 self.agent.session = self.agent.loading_id.take();
                 self.agent.status = Status::Ready;
+                self.agent.auth_required = None;
+                self.agent.auth_picker_open = false;
+                self.agent.auth_busy = false;
                 self.agent.silent_load = false;
                 self.agent.hinted = false;
                 self.agent.ws_sig = 0;
                 self.agent.ctx_cache.clear();
                 self.agent_schedule_idle(true, cx);
                 self.agent_save();
+                self.agent_refresh_profile_identity(cx);
                 self.agent_flush_queue(cx);
             }
             Req::NewSession => {
@@ -2046,6 +2378,14 @@ impl Workbench {
                     .get("sessionId")
                     .and_then(Value::as_str)
                     .map(String::from);
+                self.agent.active_tier = result
+                    .pointer("/_meta/antigravity/tier/name")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                self.agent.auth_required = None;
+                self.agent.auth_picker_open = false;
+                self.agent.auth_busy = false;
+                self.agent.auth_api_key_mode = false;
                 self.agent.ctx_cache.clear();
                 self.agent_take_config(&result);
                 let harness = self.agent.agent.clone();
@@ -2081,6 +2421,7 @@ impl Workbench {
                 }
                 self.agent.status = Status::Ready;
                 self.agent_schedule_idle(true, cx);
+                self.agent_refresh_profile_identity(cx);
                 self.agent_flush_queue(cx);
                 self.agent_probe_next(cx);
             }
@@ -2705,6 +3046,9 @@ impl Workbench {
                     .when(self.agent_width >= 460., |h| {
                         h.children(self.render_agent_opt_badge(cx))
                     })
+                    .when(self.agent_width >= 540., |h| {
+                        h.children(self.render_agent_profile_pill(cx))
+                    })
                     .child(div().flex_1())
                     .child(div().flex_none().child(self.render_agent_tools(cx)))
                     .child(div().flex_none().child(self.render_agent_more(cx)))
@@ -2760,11 +3104,21 @@ impl Workbench {
         }
         self.agent.resume_id = None;
         self.agent.relaunch = false;
+        self.agent.auth_methods.clear();
+        self.agent.can_logout = false;
+        self.agent.auth_required = None;
+        self.agent.auth_busy = false;
+        self.agent.auth_picker_open = false;
+        self.agent.auth_after_init = None;
+        self.agent.auth_api_key_mode = false;
+        self.agent.active_email = None;
+        self.agent.active_tier = None;
         self.agent.config.clear();
         self.agent.usage = Default::default();
         self.agent.input.update(cx, |s, cx| {
             s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx)
         });
+        self.agent_refresh_profile_identity(cx);
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
         }
@@ -2998,12 +3352,119 @@ impl Workbench {
         )
     }
 
+    pub(crate) fn render_agent_profile_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = self.agent_active_identity()?;
+        let label = match &id.email {
+            Some(em) => em.clone(),
+            None if !id.synced => format!("{} · {}", id.name, tr("Sign in")),
+            None => id.name.clone(),
+        };
+        let tip: SharedString = match (&id.email, &id.tier) {
+            (Some(em), Some(tier)) => format!("{} ({em}) · {tier}", id.name).into(),
+            (Some(em), None) => format!("{} ({em})", id.name).into(),
+            (None, _) => {
+                crate::trf!("{name}: click to manage login or switch account"; name => id.name)
+                    .into()
+            }
+        };
+        let synced = id.synced;
+        let open_auth = !synced && self.agent.auth_required.is_some();
+        let dot_col = if self.agent.auth_busy {
+            theme::BLUE
+        } else if synced {
+            theme::GREEN
+        } else {
+            theme::WARN
+        };
+        Some(
+            h_flex()
+                .id("ag-profile-pill")
+                .flex_none()
+                .max_w(theme::u(240.))
+                .h(theme::u(22.))
+                .pl(px(3.))
+                .pr_2()
+                .gap_1p5()
+                .items_center()
+                .rounded_full()
+                .border_1()
+                .border_color(if theme::glass() {
+                    theme::glass_edge()
+                } else {
+                    c(theme::BORDER)
+                })
+                .bg(c(theme::BG_ELEVATED).opacity(if theme::glass() { 0.72 } else { 1.0 }))
+                .cursor_pointer()
+                .hover(|s| {
+                    s.bg(c(theme::BG_HOVER))
+                        .border_color(c(theme::ACCENT).opacity(0.45))
+                })
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    cx.stop_propagation();
+                    if open_auth {
+                        this.agent_open_auth_picker(cx);
+                    } else {
+                        this.agent.settings_tab = settings_modal::Tab::Agent;
+                        this.agent_open_options(w, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(theme::u(16.))
+                        .rounded_full()
+                        .bg(c(theme::ACCENT).opacity(0.12))
+                        .border_1()
+                        .border_color(c(theme::ACCENT).opacity(0.45))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(theme::u(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child(id.initial),
+                )
+                .child(div().size(px(5.)).flex_none().rounded_full().bg(c(dot_col)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(theme::u(11.))
+                        .text_color(c(theme::FG_STRONG))
+                        .child(label),
+                )
+                .when_some(id.tier.as_ref(), |h, tier| {
+                    let short_tier = tier.strip_prefix("Google AI ").unwrap_or(tier.as_str());
+                    h.child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .rounded(px(3.))
+                            .bg(c(theme::ACCENT).opacity(0.14))
+                            .text_size(theme::u(9.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(c(theme::ACCENT_TEXT))
+                            .child(short_tier.to_string()),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
     fn render_agent_opt_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.agent_full || (self.settings.agent_right && self.agent_width >= 460.) {
-            return None;
-        }
+        let wide_header =
+            self.agent_full || (self.settings.agent_right && self.agent_width >= 540.);
         let id = agent_id();
-        if crate::acp::locate(&id).is_none() || !opt::is_optimized(&id) {
+        let has_opt = crate::acp::locate(&id).is_some() && opt::is_optimized(&id);
+        let pill = (!wide_header)
+            .then(|| self.render_agent_profile_pill(cx))
+            .flatten();
+        let show_opt_in_strip = has_opt
+            && !(self.agent_full || (self.settings.agent_right && self.agent_width >= 460.));
+        if !show_opt_in_strip && pill.is_none() {
             return None;
         }
         let state_label = if self.agent.thermal.eco_active {
@@ -3013,30 +3474,47 @@ impl Workbench {
         } else {
             tr("Auto RAM & delta")
         };
-        Some(
-            h_flex()
-                .id("ag-opt-strip")
-                .flex_none()
-                .w_full()
-                .flex_wrap()
-                .items_center()
-                .px_3()
-                .py_1()
-                .gap_x_2()
-                .gap_y_1()
-                .border_b_1()
-                .border_color(c(theme::BORDER))
-                .cursor_pointer()
-                .hover(|s| s.bg(c(theme::BG_HOVER).opacity(0.45)))
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
-                .on_click(cx.listener(|this, _, w, cx| {
-                    this.agent.settings_tab = settings_modal::Tab::Agent;
-                    this.agent_open_options(w, cx);
-                }))
-                .child(menu::optimized_badge())
-                .child(div().text_xs().text_color(c(theme::FG_DIM)).child(state_label))
-                .into_any_element(),
-        )
+        let mut strip = h_flex()
+            .id("ag-opt-strip")
+            .relative()
+            .flex_none()
+            .w_full()
+            .flex_wrap()
+            .items_center()
+            .px_3()
+            .py_1()
+            .gap_x_2()
+            .gap_y_1()
+            .border_b_1()
+            .border_color(if theme::glass() {
+                theme::glass_edge()
+            } else {
+                c(theme::BORDER)
+            });
+        if theme::glass() {
+            strip = strip.bg(c(theme::BG_ELEVATED).opacity(0.32));
+        }
+        if show_opt_in_strip {
+            strip = strip.child(
+                h_flex()
+                    .id("ag-opt-strip-btn")
+                    .gap_1p5()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.88))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
+                    .on_click(cx.listener(|this, _, w, cx| {
+                        this.agent.settings_tab = settings_modal::Tab::Agent;
+                        this.agent_open_options(w, cx);
+                    }))
+                    .child(menu::optimized_badge())
+                    .child(div().text_xs().text_color(c(theme::FG_DIM)).child(state_label)),
+            );
+        }
+        if let Some(p) = pill {
+            strip = strip.child(p);
+        }
+        Some(strip.into_any_element())
     }
 
     pub(crate) fn render_agent_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3177,19 +3655,19 @@ impl Workbench {
             })
     }
 
-    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_history(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
         let archived_n = a.history.iter().filter(|c| c.archived).count();
         let working = a.working_ids();
-        let mut list = v_flex()
-            .id("ag-history")
-            .flex_1()
-            .min_h_0()
-            .px_2()
-            .gap_px()
-            .overflow_y_scroll();
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("ag-hist-liq", window, cx);
+        let row_cross = 260.0f32;
+        let mut active_ix = None;
+        let mut vis_ix = 0usize;
+        let mut rows_box = v_flex().w_full().gap_px();
         if a.history.is_empty() {
-            list = list.child(
+            rows_box = rows_box.child(
                 div()
                     .px_1()
                     .py_2()
@@ -3202,21 +3680,37 @@ impl Workbench {
             if chat.archived {
                 continue;
             }
+            let r_ix = vis_ix;
+            vis_ix += 1;
             let id = chat.id;
             let current = a.chat_id == Some(id);
+            if current {
+                active_ix = Some(r_ix);
+            }
             let working = working.contains(&id);
             let count = chat.messages.iter().filter(|m| m.0 == "user").count();
-            list = list.child(
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), r_ix, view_id);
+            let liq_h = liq.clone();
+            rows_box = rows_box.child(
                 h_flex()
                     .id(("ag-chat", i))
+                    .relative()
                     .w_full()
                     .px_2()
                     .py_1()
                     .gap_2()
-                    .rounded(px(4.))
+                    .rounded(px(5.))
                     .cursor_pointer()
-                    .when(current, |d| d.bg(c(theme::SELECT)))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .when(!motion && current, |d| d.bg(c(theme::SELECT)))
+                    .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(
+                                &liq_h, r_ix, true, row_cross, 150, view_id, cx,
+                            );
+                        }
+                    })
+                    .child(probe)
                     .child(
                         v_flex()
                             .flex_1()
@@ -3273,6 +3767,40 @@ impl Workbench {
                     .on_click(cx.listener(move |this, _, _, cx| this.agent_open_chat(id, cx))),
             );
         }
+        let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &liq, true, vis_ix, active_ix, row_cross, 180, motion,
+        );
+        let layer = frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-hist-liq-l",
+                true,
+                crate::ui::liquid::agent_liquid_style(row_cross, 5.0),
+                fr,
+            )
+        });
+        let inner = v_flex()
+            .id("ag-history-inner")
+            .relative()
+            .w_full()
+            .on_hover({
+                let h = liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(crate::ui::liquid::keyed_origin_probe(liq, view_id))
+            .children(layer)
+            .child(rows_box);
+        let list = v_flex()
+            .id("ag-history")
+            .flex_1()
+            .min_h_0()
+            .px_2()
+            .overflow_y_scroll()
+            .child(inner)
+            .child(self.render_remote_sessions(cx));
         v_flex()
             .size_full()
             .child(
@@ -3285,7 +3813,7 @@ impl Workbench {
                         .on_click(cx.listener(|this, _, _, cx| this.agent_new_chat(cx))),
                 ),
             )
-            .child(list.child(self.render_remote_sessions(cx)))
+            .child(list)
             .when(archived_n > 0, |v| {
                 v.child(
                     div()
@@ -4722,12 +5250,20 @@ impl Workbench {
         out
     }
 
-    fn render_slash_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_slash_popup(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let (list, sel) = self.agent.slash.as_ref()?;
         let name = agent_name();
-        let mut v = v_flex().mx_3().mb_1().py_1().glass_pop();
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("ag-slash-liq", window, cx);
+        let row_cross = 260.0f32;
+        let mut rows_box = v_flex().w_full();
         if list.is_empty() {
-            v = v.child(
+            rows_box = rows_box.child(
                 div()
                     .px_2()
                     .py_1()
@@ -4737,17 +5273,28 @@ impl Workbench {
             );
         }
         for (row, cmd) in list.iter().enumerate() {
-            v = v.child(
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+            let liq_h = liq.clone();
+            rows_box = rows_box.child(
                 h_flex()
                     .id(("ag-slash", row))
+                    .relative()
                     .mx_1()
                     .px_2()
                     .h(theme::u(24.))
                     .gap_2()
                     .rounded(px(4.))
                     .cursor_pointer()
-                    .when(row == *sel, |d| d.bg(c(theme::SELECT)))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .when(!motion && row == *sel, |d| d.bg(c(theme::SELECT)))
+                    .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(
+                                &liq_h, row, true, row_cross, 140, view_id, cx,
+                            );
+                        }
+                    })
+                    .child(probe)
                     .child(
                         div()
                             .flex_shrink_0()
@@ -4789,6 +5336,47 @@ impl Workbench {
                     })),
             );
         }
+        let active_ix = (!list.is_empty()).then_some((*sel).min(list.len().saturating_sub(1)));
+        let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &liq,
+            true,
+            list.len(),
+            active_ix,
+            row_cross,
+            150,
+            motion,
+        );
+        let layer = frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-slash-liq-l",
+                true,
+                crate::ui::liquid::agent_liquid_style(row_cross, 5.0),
+                fr,
+            )
+        });
+        let rows_inner = v_flex()
+            .id("ag-slash-rows")
+            .relative()
+            .w_full()
+            .on_hover({
+                let h = liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(crate::ui::liquid::keyed_origin_probe(liq, view_id))
+            .children(layer)
+            .child(rows_box);
+        let mut v = v_flex()
+            .relative()
+            .mx_3()
+            .mb_1()
+            .py_1()
+            .glass_pop()
+            .child(crate::ui::liquid::fresnel_top_sheen())
+            .child(rows_inner);
         let more = if self.agent.commands.is_empty()
             && !matches!(self.agent.status, Status::Ready | Status::Busy)
         {
@@ -4799,27 +5387,45 @@ impl Workbench {
         } else {
             String::new()
         };
-        Some(
-            v.child(
-                div()
-                    .px_3()
-                    .pt_1()
-                    .text_xs()
-                    .text_color(c(theme::FG_DIM))
-                    .child(format!(
-                        "{}{more}",
-                        tr("↑↓ choose · Tab fills · Enter runs · Esc closes")
-                    )),
+        v = v.child(
+            div()
+                .px_3()
+                .pt_1()
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .child(format!(
+                    "{}{more}",
+                    tr("↑↓ choose · Tab fills · Enter runs · Esc closes")
+                )),
+        );
+        Some(if !motion {
+            v.into_any_element()
+        } else {
+            v.with_animation(
+                "ag-slash-glass-in",
+                Animation::new(std::time::Duration::from_millis(145)),
+                |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 11.0, 5.0);
+                    el.opacity(pose.opacity).mt(px(pose.offset_px))
+                },
             )
-            .into_any_element(),
-        )
+            .into_any_element()
+        })
     }
 
-    fn render_mention_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_mention_popup(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let (_, hits, sel) = self.agent.mention.as_ref()?;
-        let mut list = v_flex().mx_3().mb_1().py_1().glass_pop();
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("ag-mention-liq", window, cx);
+        let row_cross = 260.0f32;
+        let mut rows_box = v_flex().w_full();
         if hits.is_empty() {
-            list = list.child(
+            rows_box = rows_box.child(
                 div()
                     .px_2()
                     .py_1()
@@ -4847,17 +5453,28 @@ impl Workbench {
                 let icon_el = crate::files::file_icon_el(&name, theme::u(13.));
                 (icon_el, name, dir)
             };
-            list = list.child(
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), row, view_id);
+            let liq_h = liq.clone();
+            rows_box = rows_box.child(
                 h_flex()
                     .id(("ag-mention", row))
+                    .relative()
                     .mx_1()
                     .px_2()
                     .h(theme::u(22.))
                     .gap_2()
                     .rounded(px(4.))
                     .cursor_pointer()
-                    .when(row == *sel, |d| d.bg(c(theme::SELECT)))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
+                    .when(!motion && row == *sel, |d| d.bg(c(theme::SELECT)))
+                    .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(
+                                &liq_h, row, true, row_cross, 140, view_id, cx,
+                            );
+                        }
+                    })
+                    .child(probe)
                     .child(icon_el)
                     .child(
                         div()
@@ -4883,17 +5500,68 @@ impl Workbench {
                     })),
             );
         }
-        Some(
-            list.child(
+        let active_ix = (!hits.is_empty()).then_some((*sel).min(hits.len().saturating_sub(1)));
+        let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &liq,
+            true,
+            hits.len(),
+            active_ix,
+            row_cross,
+            150,
+            motion,
+        );
+        let layer = frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-mention-liq-l",
+                true,
+                crate::ui::liquid::agent_liquid_style(row_cross, 5.0),
+                fr,
+            )
+        });
+        let rows_inner = v_flex()
+            .id("ag-mention-rows")
+            .relative()
+            .w_full()
+            .on_hover({
+                let h = liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(crate::ui::liquid::keyed_origin_probe(liq, view_id))
+            .children(layer)
+            .child(rows_box);
+        let list = v_flex()
+            .relative()
+            .mx_3()
+            .mb_1()
+            .py_1()
+            .glass_pop()
+            .child(crate::ui::liquid::fresnel_top_sheen())
+            .child(rows_inner)
+            .child(
                 div()
                     .px_3()
                     .pt_1()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
                     .child(tr("↑↓ choose · Tab or Enter adds · Esc closes")),
+            );
+        Some(if !motion {
+            list.into_any_element()
+        } else {
+            list.with_animation(
+                "ag-mention-glass-in",
+                Animation::new(std::time::Duration::from_millis(145)),
+                |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 11.0, 5.0);
+                    el.opacity(pose.opacity).mt(px(pose.offset_px))
+                },
             )
-            .into_any_element(),
-        )
+            .into_any_element()
+        })
     }
 
     pub(crate) fn render_agent(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -4960,7 +5628,7 @@ impl Workbench {
         if a.show_history {
             return v_flex()
                 .size_full()
-                .child(self.render_history(cx))
+                .child(self.render_history(window, cx))
                 .into_any_element();
         }
         if let Some(id) = &a.uninstall {
@@ -4968,21 +5636,26 @@ impl Workbench {
         }
 
         self.agent_sync_list();
-        let error = match &a.status {
-            Status::Error(e) => Some(
-                div()
-                    .mx_3()
-                    .mb_2()
-                    .p_2()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(c(theme::DANGER))
-                    .bg(c(theme::BG_ELEVATED))
-                    .text_xs()
-                    .text_color(c(theme::DANGER))
-                    .child(e.clone()),
-            ),
-            _ => None,
+        let auth_card = self.render_agent_auth_card(cx);
+        let error = if auth_card.is_some() {
+            None
+        } else {
+            match &a.status {
+                Status::Error(e) => Some(
+                    div()
+                        .mx_3()
+                        .mb_2()
+                        .p_2()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(c(theme::DANGER))
+                        .bg(c(theme::BG_ELEVATED))
+                        .text_xs()
+                        .text_color(c(theme::DANGER))
+                        .child(e.clone()),
+                ),
+                _ => None,
+            }
         };
         let log: AnyElement = if a.items.is_empty() {
             v_flex()
@@ -4991,12 +5664,17 @@ impl Workbench {
                 .px_3()
                 .pb_3()
                 .overflow_y_scroll()
-                .children(error.is_none().then(|| self.render_agent_welcome(on, cx)))
+                .children(
+                    (error.is_none() && auth_card.is_none())
+                        .then(|| self.render_agent_welcome(on, cx)),
+                )
+                .children(auth_card)
                 .children(error)
                 .into_any_element()
         } else {
             v_flex()
                 .size_full()
+                .children(auth_card)
                 .children(error)
                 .child(
                     list(
@@ -5263,13 +5941,316 @@ impl Workbench {
                 |v, ch| v.child(ch),
             )
             .children(self.render_queue(cx))
-            .children(self.render_slash_popup(cx))
+            .children(self.render_slash_popup(window, cx))
             .children(self.render_edit_strip(cx))
-            .children(self.render_mention_popup(cx))
+            .children(self.render_mention_popup(window, cx))
             .children(self.render_limit_banner(cx))
             .children(self.render_install_strip(window))
             .child(self.render_composer(window, cx))
             .into_any_element()
+    }
+
+    fn render_agent_auth_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let a = &self.agent;
+        if a.auth_required.is_none() && !a.auth_picker_open {
+            return None;
+        }
+        let id = agent_id();
+        let name = agent_name();
+        let identity = self.agent_active_identity();
+        let profile_label = identity
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| tr("Default account").to_string());
+        let initial = identity
+            .as_ref()
+            .map(|p| p.initial.clone())
+            .unwrap_or_else(|| "A".into());
+        let is_secondary = self.agent_account().is_some();
+        let needs_logout = !a.auth_methods.is_empty() && a.can_logout && a.auth_required.is_none();
+
+        let methods: Vec<AuthMethod> = if !a.auth_methods.is_empty() {
+            a.auth_methods.clone()
+        } else if worktree::family(&id) == Some("antigravity") {
+            vec![
+                AuthMethod {
+                    id: "oauth-personal".into(),
+                    name: tr("Log in with Google").into(),
+                    description: tr("Opens your system default browser so you can pick your Google account.").into(),
+                },
+                AuthMethod {
+                    id: "oauth-business".into(),
+                    name: tr("Log in with Gemini Enterprise").into(),
+                    description: tr("Sign in with a Google Workspace or Gemini Enterprise account in your browser.").into(),
+                },
+                AuthMethod {
+                    id: "gemini-api-key".into(),
+                    name: tr("Gemini API key").into(),
+                    description: tr("Use an isolated Gemini Developer API key for this profile.").into(),
+                },
+                AuthMethod {
+                    id: "agent-platform".into(),
+                    name: tr("Gemini Enterprise Agent Platform").into(),
+                    description: tr("Use Application Default Credentials on this PC.").into(),
+                },
+            ]
+        } else {
+            vec![AuthMethod {
+                id: "default".into(),
+                name: tr("Sign in with default browser").into(),
+                description: tr("Authenticates with the agent's native sign-in flow.").into(),
+            }]
+        };
+
+        let mut card = v_flex()
+            .id("ag-auth-card")
+            .relative()
+            .mx_3()
+            .mb_2()
+            .p_3()
+            .gap_2()
+            .glass_pop()
+            .overflow_hidden()
+            .child(crate::ui::liquid::fresnel_top_sheen())
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(theme::u(26.))
+                            .rounded_full()
+                            .bg(c(theme::ACCENT).opacity(0.12))
+                            .border_1()
+                            .border_color(c(theme::ACCENT).opacity(0.45))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(c(theme::ACCENT_TEXT))
+                            .child(initial),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c(theme::FG_STRONG))
+                                    .truncate()
+                                    .child(crate::trf!("Sign in to {name}"; name => name)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .truncate()
+                                    .child(match identity.as_ref().and_then(|p| p.email.as_deref()) {
+                                        Some(em) => format!("{profile_label} · {em}"),
+                                        None => crate::trf!(
+                                            "Profile: {profile} · opens your default browser account picker";
+                                            profile => profile_label
+                                        ),
+                                    }),
+                            ),
+                    )
+                    .when(a.auth_picker_open && a.auth_required.is_none(), |h| {
+                        h.child(
+                            Button::new("ag-auth-close")
+                                .icon(IconName::Close)
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| this.agent_close_auth_picker(cx))),
+                        )
+                    }),
+            );
+
+        if let Some(msg) = &a.auth_required {
+            card = card.child(
+                div()
+                    .px_2p5()
+                    .py_1p5()
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(c(theme::WARN).opacity(0.42))
+                    .bg(c(theme::WARN).opacity(0.10))
+                    .text_xs()
+                    .text_color(c(theme::FG_STRONG))
+                    .child(msg.clone()),
+            );
+        }
+
+        if a.auth_busy {
+            card = card.child(
+                h_flex()
+                    .px_2p5()
+                    .py_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(c(theme::ACCENT).opacity(0.35))
+                    .bg(c(theme::ACCENT).opacity(0.08))
+                    .child(
+                        gpui_kit::component::spinner::Spinner::new()
+                            .icon(gpui_kit::assets::IconName::LoaderCircle)
+                            .xsmall()
+                            .color(c(theme::ACCENT_TEXT)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr("Waiting for sign-in in your default browser…")),
+                    ),
+            );
+        } else {
+            let mut opts = v_flex().gap_1p5();
+            for (ix, m) in methods.into_iter().enumerate() {
+                let mid = m.id.clone();
+                let click_mid = mid.clone();
+                let is_oauth = mid.starts_with("oauth-");
+                let logout_first = needs_logout && is_oauth;
+                let primary = ix == 0;
+                opts = opts.child(
+                    h_flex()
+                        .id(("ag-auth-m", ix))
+                        .px_2p5()
+                        .py_1p5()
+                        .gap_2()
+                        .items_center()
+                        .rounded(px(5.))
+                        .border_1()
+                        .border_color(if primary {
+                            c(theme::ACCENT).opacity(0.45)
+                        } else {
+                            c(theme::BORDER)
+                        })
+                        .bg(if primary {
+                            c(theme::ACCENT).opacity(0.10)
+                        } else {
+                            c(theme::BG_ELEVATED).opacity(0.55)
+                        })
+                        .cursor_pointer()
+                        .hover(|s| {
+                            s.bg(c(theme::BG_HOVER))
+                                .border_color(c(theme::ACCENT).opacity(0.60))
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.agent_start_auth_method(click_mid.clone(), logout_first, cx);
+                        }))
+                        .child(
+                            Icon::new(if mid == "gemini-api-key" {
+                                gpui_kit::assets::IconName::KeyRound
+                            } else if is_oauth {
+                                gpui_kit::assets::IconName::Globe
+                            } else {
+                                gpui_kit::assets::IconName::ShieldCheck
+                            })
+                            .size(theme::u(14.))
+                            .flex_none()
+                            .text_color(c(if primary {
+                                theme::ACCENT_TEXT
+                            } else {
+                                theme::FG_MUTED
+                            })),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(m.name),
+                                )
+                                .when(!m.description.is_empty(), |v| {
+                                    v.child(
+                                        div()
+                                            .text_size(theme::u(11.))
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(m.description),
+                                    )
+                                }),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronRight)
+                                .size(theme::u(13.))
+                                .flex_none()
+                                .text_color(c(theme::FG_DIM)),
+                        ),
+                );
+            }
+            card = card.child(opts);
+        }
+
+        if a.auth_api_key_mode {
+            card = card.child(
+                h_flex()
+                    .pt_1()
+                    .gap_1p5()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(crate::ui::McInput::new(&a.auth_key_input).small()),
+                    )
+                    .child(
+                        Button::new("ag-auth-key-save")
+                            .label(tr("Save key"))
+                            .small()
+                            .primary()
+                            .on_click(
+                                cx.listener(|this, _, w, cx| this.agent_submit_api_key(w, cx)),
+                            ),
+                    ),
+            );
+        }
+
+        if is_secondary {
+            card = card.child(
+                h_flex()
+                    .pt_1()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr(
+                        "Or switch back to your already signed-in default profile:",
+                    )))
+                    .child(
+                        Button::new("ag-auth-def")
+                            .label(tr("Use default account"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.agent_use_account(None, cx)),
+                            ),
+                    ),
+            );
+        }
+
+        Some(if cx.reduce_motion() {
+            card.into_any_element()
+        } else {
+            card.with_animation(
+                "ag-auth-glass-in",
+                Animation::new(std::time::Duration::from_millis(170)),
+                |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 10.5, 7.0);
+                    el.opacity(pose.opacity).mt(px(pose.offset_px))
+                },
+            )
+            .into_any_element()
+        })
     }
 
     fn render_install_strip(&self, window: &mut Window) -> Option<AnyElement> {
@@ -5594,21 +6575,25 @@ impl Workbench {
                             .into_any_element()
                     }
                 };
-                let cards: Vec<AnyElement> = crate::smart_link::extract_unique_urls(&cleaned, true)
-                    .into_iter()
-                    .filter(|l| !a.link_previews.dismissed.contains(&l.url))
-                    .take(2)
-                    .enumerate()
-                    .map(|(k, link)| {
-                        let st = a.link_previews.get(&link.url);
-                        crate::smart_link::render_preview_card(
-                            SharedString::from(format!("ag-a-card-{i}-{k}")),
-                            &link,
-                            st,
-                            None,
-                        )
-                    })
-                    .collect();
+                let cards: Vec<AnyElement> = if !(busy && last_item) {
+                    crate::smart_link::extract_unique_urls(&cleaned, true)
+                        .into_iter()
+                        .filter(|l| !a.link_previews.dismissed.contains(&l.url))
+                        .take(2)
+                        .enumerate()
+                        .map(|(k, link)| {
+                            let st = a.link_previews.get(&link.url);
+                            crate::smart_link::render_preview_card(
+                                SharedString::from(format!("ag-a-card-{i}-{k}")),
+                                &link,
+                                st,
+                                None,
+                            )
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 if cards.is_empty() {
                     md_el
                 } else {
@@ -5841,9 +6826,17 @@ impl Workbench {
                     theme::FG_MUTED,
                     crate::trf!("Starts when {name} is ready"; name => name),
                 ),
+                Status::Error(_) if a.auth_required.is_some() => (
+                    theme::WARN,
+                    tr("Sign in above to run queued messages").to_string(),
+                ),
                 Status::Error(_) => (
                     theme::DANGER,
                     crate::trf!("{name} couldn't start"; name => name),
+                ),
+                _ if a.auth_required.is_some() => (
+                    theme::WARN,
+                    tr("Sign in above to run queued messages").to_string(),
                 ),
                 _ => (theme::FG_DIM, tr("Ready").to_string()),
             }
@@ -5869,17 +6862,20 @@ impl Workbench {
             .id("ag-queue-panel")
             .mx_3()
             .mb_1p5()
-            .rounded(px(4.))
+            .rounded(px(6.))
             .border_1()
-            .border_color(
-                c(if paused {
-                    theme::WARN
-                } else {
-                    theme::BORDER_STRONG
-                })
-                .opacity(if paused { 0.55 } else { 1.0 }),
-            )
-            .bg(c(theme::BG_ELEVATED))
+            .border_color(if paused {
+                c(theme::WARN).opacity(0.55)
+            } else if theme::glass() {
+                theme::glass_edge()
+            } else {
+                c(theme::BORDER_STRONG)
+            })
+            .bg(if theme::glass() {
+                theme::glass_pop_fill()
+            } else {
+                c(theme::BG_ELEVATED).into()
+            })
             .overflow_hidden()
             .child(
                 h_flex()
@@ -6104,7 +7100,7 @@ impl Workbench {
         Some(panel.into_any_element())
     }
 
-    fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_composer(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a = &self.agent;
         let view = self.agent_config_view();
         let busy = a.status == Status::Busy;
@@ -6258,10 +7254,19 @@ impl Workbench {
         let boxed = v_flex()
             .id("ag-composer")
             .relative()
-            .rounded(px(4.))
+            .rounded(px(6.))
             .border_1()
-            .border_color(c(theme::BORDER_STRONG))
-            .bg(c(theme::BG_ELEVATED))
+            .border_color(if theme::glass() {
+                theme::glass_pop_edge()
+            } else {
+                c(theme::BORDER_STRONG)
+            })
+            .bg(if theme::glass() {
+                theme::glass_pop_fill()
+            } else {
+                c(theme::BG_ELEVATED).into()
+            })
+            .child(crate::ui::liquid::fresnel_top_sheen())
             .cursor_text()
             .on_click(cx.listener(|this, _, w, cx| {
                 let h = this.agent.input.focus_handle(cx);

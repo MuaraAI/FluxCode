@@ -741,7 +741,11 @@ fn build_registry(installed: &[market::Installed]) -> (Registry, HashMap<String,
                                 resolve_ext_icon(&root, &ext.id, v, &mut icon_seq, &mut assets)
                             })
                             .unwrap_or_else(|| ExtIcon::Codicon("extensions".into()));
-                        if loc_kind == ViewContainerLocation::ActivityBar {
+                        if matches!(
+                            loc_kind,
+                            ViewContainerLocation::ActivityBar
+                                | ViewContainerLocation::SecondarySidebar
+                        ) {
                             summary.activity_views.push((id.to_string(), title.clone()));
                         }
                         ext_container_ids.insert(id.to_string());
@@ -1356,11 +1360,24 @@ pub fn activitybar_containers() -> Vec<ViewContainerDesc> {
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|r| {
-            r.containers
+            let mut out: Vec<ViewContainerDesc> = r
+                .containers
                 .iter()
-                .filter(|c| c.location == ViewContainerLocation::ActivityBar)
+                .filter(|c| match c.location {
+                    ViewContainerLocation::ActivityBar
+                    | ViewContainerLocation::SecondarySidebar => true,
+                    ViewContainerLocation::Panel => {
+                        r.views.iter().any(|v| v.container_id == c.id)
+                    }
+                })
                 .cloned()
-                .collect()
+                .collect();
+            out.sort_by_key(|c| match c.location {
+                ViewContainerLocation::ActivityBar => 0u8,
+                ViewContainerLocation::SecondarySidebar => 1u8,
+                ViewContainerLocation::Panel => 2u8,
+            });
+            out
         })
         .unwrap_or_default()
 }
@@ -1781,5 +1798,49 @@ mod tests {
             .any(|v| v.id == "antigravity.panel" && v.kind == ViewType::Webview));
         let rt = reg.runtimes.first().unwrap();
         assert!(rt.main.as_ref().is_some_and(|p| p.is_file()));
+    }
+
+    #[test]
+    fn sidebar_containers_include_secondary_sidebar_and_view_panels() {
+        let root = std::env::temp_dir().join(format!("fx-vsc-sec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("ai.side-1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{
+                "publisher": "ai", "name": "side", "version": "1.0.0", "displayName": "AI Side",
+                "contributes": {
+                    "viewsContainers": {
+                        "secondarySidebar": [{ "id": "ai-chat", "title": "AI Chat", "icon": "$(sparkle)" }],
+                        "panel": [
+                            { "id": "ai-panel", "title": "AI Panel", "icon": "$(terminal)" },
+                            { "id": "empty-panel", "title": "Empty", "icon": "$(info)" }
+                        ]
+                    },
+                    "views": {
+                        "ai-chat": [{ "type": "webview", "id": "ai.chatView", "name": "Chat" }],
+                        "ai-panel": [{ "type": "webview", "id": "ai.panelView", "name": "Panel" }]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let installed = vec![market::Installed {
+            id: "ai.side".into(),
+            folder: dir,
+            display: "AI Side".into(),
+            version: "1.0.0".into(),
+            ..Default::default()
+        }];
+        load(&installed);
+        let all = activitybar_containers();
+        assert!(all.iter().any(|c| c.id == "ai-chat" && c.location == ViewContainerLocation::SecondarySidebar));
+        assert!(all.iter().any(|c| c.id == "ai-panel" && c.location == ViewContainerLocation::Panel));
+        assert!(!all.iter().any(|c| c.id == "empty-panel"));
+
+        load(&[]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

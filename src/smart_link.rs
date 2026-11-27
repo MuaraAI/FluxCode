@@ -4,9 +4,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{h_flex, v_flex, Icon};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, img, px, AnyElement, App, ClickEvent, ClipboardItem, FontWeight,
-    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window,
+    div, img, px, AnyElement, App, ClickEvent, ClipboardItem, FontWeight, InteractiveElement as _,
+    IntoElement, ObjectFit, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledImage as _, Window,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -90,9 +90,10 @@ impl SmartLink {
             LinkKind::GitPullRequest | LinkKind::GitIssue => theme::GREEN,
             LinkKind::GitCommit | LinkKind::Package => theme::WARN,
             LinkKind::GitRepo => theme::FG_MUTED,
-            LinkKind::MediaImage | LinkKind::MediaAudio | LinkKind::Design | LinkKind::Discussion => {
-                theme::ACCENT_TEXT
-            }
+            LinkKind::MediaImage
+            | LinkKind::MediaAudio
+            | LinkKind::Design
+            | LinkKind::Discussion => theme::ACCENT_TEXT,
             LinkKind::GitFile
             | LinkKind::Docs
             | LinkKind::Document
@@ -144,9 +145,7 @@ impl LinkPreviewStore {
     }
 
     pub fn should_fetch(&self, url: &str) -> bool {
-        !self.entries.contains_key(url)
-            && self.in_flight < MAX_IN_FLIGHT
-            && is_safe_public_url(url)
+        !self.entries.contains_key(url) && self.in_flight < MAX_IN_FLIGHT && is_safe_public_url(url)
     }
 
     pub fn dismiss(&mut self, url: &str) {
@@ -427,7 +426,11 @@ pub fn is_safe_public_url(raw: &str) -> bool {
         return false;
     }
     if authority.starts_with('[') {
-        let inner = authority.trim_start_matches('[').split(']').next().unwrap_or("");
+        let inner = authority
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("");
         let low = inner.to_ascii_lowercase();
         if low == "::1" || low.starts_with("fc") || low.starts_with("fd") || low.starts_with("fe80")
         {
@@ -435,7 +438,11 @@ pub fn is_safe_public_url(raw: &str) -> bool {
         }
         return true;
     }
-    let host = authority.split(':').next().unwrap_or("").to_ascii_lowercase();
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if host.is_empty()
         || host == "localhost"
         || host.ends_with(".local")
@@ -494,7 +501,9 @@ pub fn parse_html_meta(html: &str) -> LinkPreview {
     let mut og_desc: Option<String> = None;
     let mut meta_desc: Option<String> = None;
 
-    let head_end = find_ascii_ci(html, "</head>").unwrap_or(html.len()).min(html.len());
+    let head_end = find_ascii_ci(html, "</head>")
+        .unwrap_or(html.len())
+        .min(html.len());
     let head = &html[..head_end];
 
     let mut pos = 0usize;
@@ -744,11 +753,7 @@ pub fn render_preview_card(
             .border_color(c(theme::BORDER))
             .bg(c(theme::BG_SIDE))
             .when_some(thumb, |d, p| {
-                d.child(
-                    img(p)
-                        .size_full()
-                        .object_fit(ObjectFit::Cover),
-                )
+                d.child(img(p).size_full().object_fit(ObjectFit::Cover))
             })
             .child(
                 div()
@@ -819,7 +824,12 @@ pub fn render_preview_card(
                 .size(theme::u(11.))
                 .text_color(c(link.icon_color())),
         )
-        .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(site));
+        .child(
+            div()
+                .flex_none()
+                .font_weight(FontWeight::MEDIUM)
+                .child(site),
+        );
 
     if let Some(b) = badge {
         let col = badge_tok.unwrap_or(theme::FG_MUTED);
@@ -837,7 +847,13 @@ pub fn render_preview_card(
         );
     }
     if let Some(auth) = author {
-        top_meta = top_meta.child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(auth));
+        top_meta = top_meta.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(c(theme::FG_DIM))
+                .child(auth),
+        );
     } else if link.host != link.provider.to_ascii_lowercase() {
         top_meta = top_meta.child(
             div()
@@ -977,7 +993,12 @@ pub fn render_rich_text_with_links(
             lines_el = lines_el.child(div().w_full().min_w_0().child(line.to_string()));
             continue;
         }
-        let mut row = h_flex().w_full().min_w_0().flex_wrap().items_center().gap_y(px(2.));
+        let mut row = h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .items_center()
+            .gap_y(px(2.));
         let mut word_count = 0usize;
         for part in parts {
             match part {
@@ -1048,7 +1069,10 @@ fn resolved_inline_label(
                 if link.is_youtube() {
                     return format!("{} · {}", link.provider, truncate_chars(title.trim(), 34));
                 }
-                if matches!(link.kind, LinkKind::Web | LinkKind::Docs | LinkKind::Discussion) {
+                if matches!(
+                    link.kind,
+                    LinkKind::Web | LinkKind::Docs | LinkKind::Discussion
+                ) {
                     return truncate_chars(title.trim(), 40);
                 }
             }
@@ -1180,8 +1204,14 @@ fn parse_youtube(
             None => provider.to_string(),
         };
         (LinkKind::YouTubeVideo, vid, lbl)
-    } else if segs.first().map(String::as_str) == Some("playlist") || list_id.is_some() && query_val(params, "v").is_none() {
-        (LinkKind::YouTubePlaylist, None, "YouTube Playlist".to_string())
+    } else if segs.first().map(String::as_str) == Some("playlist")
+        || list_id.is_some() && query_val(params, "v").is_none()
+    {
+        (
+            LinkKind::YouTubePlaylist,
+            None,
+            "YouTube Playlist".to_string(),
+        )
     } else if let Some(first) = segs.first().filter(|s| s.starts_with('@')) {
         (LinkKind::YouTubeChannel, None, format!("YouTube · {first}"))
     } else if let Some(v) = query_val(params, "v").filter(|s| is_yt_id(s)) {
@@ -1224,13 +1254,24 @@ fn parse_github(
     fragment: Option<&str>,
 ) -> SmartLink {
     let (kind, label, subtitle, github_api) = match segs {
-        [owner, repo, kind, num, ..] if (kind == "pull" || kind == "issues") && num.chars().all(|c| c.is_ascii_digit()) => {
+        [owner, repo, kind, num, ..]
+            if (kind == "pull" || kind == "issues") && num.chars().all(|c| c.is_ascii_digit()) =>
+        {
             let is_pr = kind == "pull";
             (
-                if is_pr { LinkKind::GitPullRequest } else { LinkKind::GitIssue },
+                if is_pr {
+                    LinkKind::GitPullRequest
+                } else {
+                    LinkKind::GitIssue
+                },
                 format!("{repo}#{num}"),
-                format!("{owner}/{repo} · {}", if is_pr { "Pull Request" } else { "Issue" }),
-                Some(format!("https://api.github.com/repos/{owner}/{repo}/issues/{num}")),
+                format!(
+                    "{owner}/{repo} · {}",
+                    if is_pr { "Pull Request" } else { "Issue" }
+                ),
+                Some(format!(
+                    "https://api.github.com/repos/{owner}/{repo}/issues/{num}"
+                )),
             )
         }
         [owner, repo, kind, sha, ..] if kind == "commit" && sha.len() >= 7 => {
@@ -1242,9 +1283,13 @@ fn parse_github(
                 None,
             )
         }
-        [owner, repo, kind, _branch, rest @ ..] if (kind == "blob" || kind == "tree") && !rest.is_empty() => {
+        [owner, repo, kind, _branch, rest @ ..]
+            if (kind == "blob" || kind == "tree") && !rest.is_empty() =>
+        {
             let tail = rest.last().map(String::as_str).unwrap_or("");
-            let line = fragment.and_then(|f| f.strip_prefix('L')).filter(|l| !l.is_empty());
+            let line = fragment
+                .and_then(|f| f.strip_prefix('L'))
+                .filter(|l| !l.is_empty());
             let lbl = match line {
                 Some(l) => format!("{repo}/{tail}:{l}"),
                 None => format!("{repo}/{tail}"),
@@ -1263,7 +1308,12 @@ fn parse_github(
             "GitHub Repository".into(),
             Some(format!("https://api.github.com/repos/{owner}/{repo}")),
         ),
-        [owner] => (LinkKind::GitRepo, format!("@{owner}"), "GitHub".into(), None),
+        [owner] => (
+            LinkKind::GitRepo,
+            format!("@{owner}"),
+            "GitHub".into(),
+            None,
+        ),
         _ => (LinkKind::Web, "GitHub".into(), "github.com".into(), None),
     };
 
@@ -1282,14 +1332,25 @@ fn parse_github(
 }
 
 fn parse_gitlab_like(raw: &str, clean_url: &str, host: &str, segs: &[String]) -> SmartLink {
-    let provider = if host == "gitlab.com" { "GitLab" } else { "Codeberg" };
+    let provider = if host == "gitlab.com" {
+        "GitLab"
+    } else {
+        "Codeberg"
+    };
     let dash_pos = segs.iter().position(|s| s == "-");
     let repo = match dash_pos {
         Some(ix) if ix > 0 => segs[ix - 1].as_str(),
-        _ => segs.get(1).or(segs.first()).map(String::as_str).unwrap_or(provider),
+        _ => segs
+            .get(1)
+            .or(segs.first())
+            .map(String::as_str)
+            .unwrap_or(provider),
     };
     let (kind, label, subtitle) = if let Some(ix) = dash_pos {
-        match (segs.get(ix + 1).map(String::as_str), segs.get(ix + 2).map(String::as_str)) {
+        match (
+            segs.get(ix + 1).map(String::as_str),
+            segs.get(ix + 2).map(String::as_str),
+        ) {
             (Some("merge_requests"), Some(num)) => (
                 LinkKind::GitPullRequest,
                 format!("{repo}!{num}"),
@@ -1303,7 +1364,11 @@ fn parse_gitlab_like(raw: &str, clean_url: &str, host: &str, segs: &[String]) ->
             _ => (LinkKind::GitRepo, repo.to_string(), host.to_string()),
         }
     } else if segs.len() >= 2 {
-        (LinkKind::GitRepo, format!("{}/{}", segs[0], segs[1]), host.to_string())
+        (
+            LinkKind::GitRepo,
+            format!("{}/{}", segs[0], segs[1]),
+            host.to_string(),
+        )
     } else {
         (LinkKind::GitRepo, provider.to_string(), host.to_string())
     };
@@ -1367,20 +1432,47 @@ fn parse_docs_site(
         };
         ("docs.rs", lbl)
     } else if host.ends_with(".wikipedia.org") && segs.first().map(String::as_str) == Some("wiki") {
-        let title = segs.get(1).map(|s| s.replace('_', " ")).unwrap_or_else(|| "Wikipedia".into());
-        ("Wikipedia", format!("Wikipedia · {}", truncate_chars(&title, 30)))
+        let title = segs
+            .get(1)
+            .map(|s| s.replace('_', " "))
+            .unwrap_or_else(|| "Wikipedia".into());
+        (
+            "Wikipedia",
+            format!("Wikipedia · {}", truncate_chars(&title, 30)),
+        )
     } else if host == "minecraft.wiki" && segs.first().map(String::as_str) == Some("w") {
-        let title = segs.get(1).map(|s| s.replace('_', " ")).unwrap_or_else(|| "Minecraft Wiki".into());
-        ("Minecraft Wiki", format!("MC Wiki · {}", truncate_chars(&title, 30)))
+        let title = segs
+            .get(1)
+            .map(|s| s.replace('_', " "))
+            .unwrap_or_else(|| "Minecraft Wiki".into());
+        (
+            "Minecraft Wiki",
+            format!("MC Wiki · {}", truncate_chars(&title, 30)),
+        )
     } else if host == "developer.mozilla.org" {
-        let tail = segs.last().map(|s| s.replace('_', " ")).unwrap_or_else(|| "MDN".into());
+        let tail = segs
+            .last()
+            .map(|s| s.replace('_', " "))
+            .unwrap_or_else(|| "MDN".into());
         ("MDN", format!("MDN · {}", truncate_chars(&tail, 30)))
     } else if host == "learn.microsoft.com" {
-        let tail = segs.last().map(|s| humanize_slug(s)).unwrap_or_else(|| "Microsoft Learn".into());
-        ("Microsoft Learn", format!("MS Learn · {}", truncate_chars(&tail, 28)))
+        let tail = segs
+            .last()
+            .map(|s| humanize_slug(s))
+            .unwrap_or_else(|| "Microsoft Learn".into());
+        (
+            "Microsoft Learn",
+            format!("MS Learn · {}", truncate_chars(&tail, 28)),
+        )
     } else if host == "doc.rust-lang.org" {
-        let tail = segs.last().map(|s| humanize_slug(s)).unwrap_or_else(|| "Rust Docs".into());
-        ("Rust Docs", format!("Rust Docs · {}", truncate_chars(&tail, 28)))
+        let tail = segs
+            .last()
+            .map(|s| humanize_slug(s))
+            .unwrap_or_else(|| "Rust Docs".into());
+        (
+            "Rust Docs",
+            format!("Rust Docs · {}", truncate_chars(&tail, 28)),
+        )
     } else if host == "arxiv.org" && segs.len() >= 2 {
         ("arXiv", format!("arXiv:{}", segs[1]))
     } else if host.starts_with("docs.") || segs.first().map(String::as_str) == Some("docs") {
@@ -1397,7 +1489,9 @@ fn parse_docs_site(
             kind: LinkKind::Docs,
             provider: p,
             label: format!("{host} · {}", truncate_chars(&tail, 28)),
-            subtitle: fragment.map(|f| format!("#{f}")).unwrap_or_else(|| host.to_string()),
+            subtitle: fragment
+                .map(|f| format!("#{f}"))
+                .unwrap_or_else(|| host.to_string()),
             video_id: None,
             timestamp: None,
             github_api: None,
@@ -1433,7 +1527,11 @@ fn parse_discussion_or_tool(
                 .map(|s| humanize_slug(s))
                 .or_else(|| segs.get(1).cloned())
                 .unwrap_or_else(|| "Question".into());
-            (LinkKind::Discussion, "Stack Overflow", format!("SO · {}", truncate_chars(&slug, 30)))
+            (
+                LinkKind::Discussion,
+                "Stack Overflow",
+                format!("SO · {}", truncate_chars(&slug, 30)),
+            )
         }
         "reddit.com" | "old.reddit.com" => {
             let lbl = if segs.first().map(String::as_str) == Some("r") && segs.len() >= 2 {
@@ -1453,8 +1551,15 @@ fn parse_discussion_or_tool(
         }
         "discord.gg" | "discord.com" => (LinkKind::Discussion, "Discord", "Discord".into()),
         "figma.com" => {
-            let name = segs.get(2).map(|s| humanize_slug(s)).unwrap_or_else(|| "Figma".into());
-            (LinkKind::Design, "Figma", format!("Figma · {}", truncate_chars(&name, 28)))
+            let name = segs
+                .get(2)
+                .map(|s| humanize_slug(s))
+                .unwrap_or_else(|| "Figma".into());
+            (
+                LinkKind::Design,
+                "Figma",
+                format!("Figma · {}", truncate_chars(&name, 28)),
+            )
         }
         "docs.google.com" => (LinkKind::Document, "Google Docs", "Google Docs".into()),
         "notion.so" | "notion.site" => (LinkKind::Document, "Notion", "Notion".into()),
@@ -1789,10 +1894,7 @@ fn fetch_youtube_oembed(link: &SmartLink) -> Option<LinkPreview> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let thumb_path = link
-        .video_id
-        .as_deref()
-        .and_then(fetch_youtube_thumbnail);
+    let thumb_path = link.video_id.as_deref().and_then(fetch_youtube_thumbnail);
     let badge = match link.kind {
         LinkKind::YouTubeShort => Some("Shorts".to_string()),
         LinkKind::YouTubePlaylist => Some("Playlist".to_string()),
@@ -1859,7 +1961,9 @@ fn fetch_github_api(api_url: &str, link: &SmartLink) -> Option<LinkPreview> {
         &[("Accept", "application/vnd.github+json")],
     )?;
     let json: Value = serde_json::from_slice(&raw).ok()?;
-    if json.get("message").is_some() && json.get("title").is_none() && json.get("full_name").is_none()
+    if json.get("message").is_some()
+        && json.get("title").is_none()
+        && json.get("full_name").is_none()
     {
         return None;
     }
@@ -2038,7 +2142,9 @@ fn decode_html_entities(s: &str) -> String {
                 "apos" | "#39" => Some('\''),
                 "nbsp" => Some(' '),
                 _ if ent.starts_with("#x") || ent.starts_with("#X") => {
-                    u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32)
+                    u32::from_str_radix(&ent[2..], 16)
+                        .ok()
+                        .and_then(char::from_u32)
                 }
                 _ if ent.starts_with('#') => ent[1..].parse::<u32>().ok().and_then(char::from_u32),
                 _ => None,
@@ -2100,7 +2206,8 @@ mod tests {
         assert_eq!(issue.kind, LinkKind::GitIssue);
         assert_eq!(issue.label, "FluxCode#42");
 
-        let file = parse_link("https://github.com/MuaraAI/FluxCode/blob/main/src/diff_view.rs#L120");
+        let file =
+            parse_link("https://github.com/MuaraAI/FluxCode/blob/main/src/diff_view.rs#L120");
         assert_eq!(file.kind, LinkKind::GitFile);
         assert_eq!(file.label, "FluxCode/diff_view.rs:120");
 
@@ -2115,7 +2222,10 @@ mod tests {
         let any = parse_link("https://example.org/blog/how-we-built-fast-diffs?utm_source=x");
         assert_eq!(any.kind, LinkKind::Web);
         assert_eq!(any.label, "example.org · how we built fast diffs");
-        assert_eq!(any.clean_url, "https://example.org/blog/how-we-built-fast-diffs");
+        assert_eq!(
+            any.clean_url,
+            "https://example.org/blog/how-we-built-fast-diffs"
+        );
     }
 
     #[test]
@@ -2151,7 +2261,10 @@ mod tests {
         assert_eq!(
             wiki_links,
             vec![
-                ("https://en.wikipedia.org/wiki/Rust_(programming_language)", None),
+                (
+                    "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+                    None
+                ),
                 ("https://youtu.be/dQw4w9WgXcQ", Some("Demo")),
             ]
         );
@@ -2172,14 +2285,19 @@ mod tests {
         </head></html>"#;
         let meta = parse_html_meta(html);
         assert_eq!(meta.title.as_deref(), Some("FluxCode & Fast Diffs"));
-        assert_eq!(meta.description.as_deref(), Some("Built for 'low-spec' laptops."));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("Built for 'low-spec' laptops.")
+        );
         assert_eq!(meta.site_name.as_deref(), Some("MuaraAI"));
 
         assert!(!is_safe_public_url("http://127.0.0.1:8080/secret"));
         assert!(!is_safe_public_url("http://192.168.1.1/admin"));
         assert!(!is_safe_public_url("http://localhost:3000"));
         assert!(!is_safe_public_url("file:///C:/Windows/win.ini"));
-        assert!(is_safe_public_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(is_safe_public_url(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ));
     }
 
     #[test]

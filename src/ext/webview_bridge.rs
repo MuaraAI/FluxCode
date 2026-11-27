@@ -1,9 +1,9 @@
 use crate::theme::Palette;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -12,14 +12,48 @@ const MAX_ACTIVE_CONNS: usize = 32;
 const MAX_POST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SSE_QUEUE: usize = 512;
 
+#[derive(Clone)]
+enum BridgeEvent {
+    Message(String),
+    Reload(u64),
+    ThemeCss(String),
+}
+
 type MsgCallback = Arc<dyn Fn(String, String) + Send + Sync>;
-type OutboundQueue = (Mutex<(u64, VecDeque<(u64, String)>)>, Condvar);
+type OutboundQueue = (Mutex<(u64, VecDeque<(u64, BridgeEvent)>)>, Condvar);
 
 struct WebviewSlot {
     html: Mutex<String>,
+    html_rev: AtomicU64,
     ext_folder: PathBuf,
     local_roots: Mutex<Vec<PathBuf>>,
     outbound: OutboundQueue,
+    sse_gen: AtomicU64,
+    active_sse: AtomicUsize,
+    closed: AtomicBool,
+}
+
+impl WebviewSlot {
+    fn push_event(&self, ev: BridgeEvent) {
+        let (lock, cv) = &self.outbound;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0 += 1;
+        let seq = guard.0;
+        if guard.1.len() >= MAX_SSE_QUEUE {
+            guard.1.pop_front();
+        }
+        guard.1.push_back((seq, ev));
+        cv.notify_all();
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        *self.html.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        let (lock, cv) = &self.outbound;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        guard.1.clear();
+        cv.notify_all();
+    }
 }
 
 struct BridgeState {
@@ -29,6 +63,7 @@ struct BridgeState {
     slots: Mutex<HashMap<String, Arc<WebviewSlot>>>,
     on_msg: MsgCallback,
     active_conns: AtomicUsize,
+    shutdown: AtomicBool,
 }
 
 pub struct WebviewBridge {
@@ -49,12 +84,17 @@ impl WebviewBridge {
             slots: Mutex::new(HashMap::new()),
             on_msg,
             active_conns: AtomicUsize::new(0),
+            shutdown: AtomicBool::new(false),
         });
         let bg = Arc::clone(&state);
         thread::Builder::new()
             .name("flux-webview-bridge".into())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
+                    if bg.shutdown.load(Ordering::Acquire) {
+                        drop(stream);
+                        break;
+                    }
                     if bg.active_conns.load(Ordering::Relaxed) >= MAX_ACTIVE_CONNS {
                         drop(stream);
                         continue;
@@ -84,7 +124,20 @@ impl WebviewBridge {
             .state
             .theme_css
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = css;
+            .unwrap_or_else(|e| e.into_inner()) = css.clone();
+        let slots: Vec<Arc<WebviewSlot>> = self
+            .state
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for slot in slots {
+            if !slot.closed.load(Ordering::Acquire) {
+                slot.push_event(BridgeEvent::ThemeCss(css.clone()));
+            }
+        }
     }
 
     pub fn register_webview(&self, handle: &str, ext_folder: PathBuf, local_roots: Vec<PathBuf>) {
@@ -101,18 +154,47 @@ impl WebviewBridge {
         }
         let slot = Arc::new(WebviewSlot {
             html: Mutex::new(String::new()),
+            html_rev: AtomicU64::new(0),
             ext_folder,
             local_roots: Mutex::new(roots),
             outbound: (Mutex::new((0, VecDeque::new())), Condvar::new()),
+            sse_gen: AtomicU64::new(0),
+            active_sse: AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
         });
+        if let Some(prev) = self
+            .state
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle.to_string(), slot)
+        {
+            prev.close();
+        }
+    }
+
+    pub fn remove_webview(&self, handle: &str) {
+        if let Some(slot) = self
+            .state
+            .slots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(handle)
+        {
+            slot.close();
+        }
+    }
+
+    pub fn has_sse_client(&self, handle: &str) -> bool {
         self.state
             .slots
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(handle.to_string(), slot);
+            .get(handle)
+            .is_some_and(|s| s.active_sse.load(Ordering::Acquire) > 0)
     }
 
-    pub fn set_html(&self, handle: &str, html: String) {
+    pub fn set_html(&self, handle: &str, html: String) -> u64 {
         let slot = self
             .state
             .slots
@@ -122,6 +204,11 @@ impl WebviewBridge {
             .cloned();
         if let Some(s) = slot {
             *s.html.lock().unwrap_or_else(|e| e.into_inner()) = html;
+            let rev = s.html_rev.fetch_add(1, Ordering::AcqRel) + 1;
+            s.push_event(BridgeEvent::Reload(rev));
+            rev
+        } else {
+            0
         }
     }
 
@@ -158,15 +245,7 @@ impl WebviewBridge {
             .get(handle)
             .cloned();
         if let Some(s) = slot {
-            let (lock, cv) = &s.outbound;
-            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-            guard.0 += 1;
-            let seq = guard.0;
-            if guard.1.len() >= MAX_SSE_QUEUE {
-                guard.1.pop_front();
-            }
-            guard.1.push_back((seq, json_msg));
-            cv.notify_all();
+            s.push_event(BridgeEvent::Message(json_msg));
         }
     }
 
@@ -180,6 +259,25 @@ impl WebviewBridge {
     #[allow(dead_code)]
     pub fn origin(&self) -> String {
         format!("http://127.0.0.1:{}", self.state.port)
+    }
+}
+
+impl Drop for WebviewBridge {
+    fn drop(&mut self) {
+        self.state.shutdown.store(true, Ordering::Release);
+        let slots: Vec<Arc<WebviewSlot>> = {
+            let mut map = self
+                .state
+                .slots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            map.drain().map(|(_, s)| s).collect()
+        };
+        for slot in slots {
+            slot.close();
+        }
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.state.port));
+        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(100));
     }
 }
 
@@ -349,12 +447,13 @@ fn handle_conn(mut stream: TcpStream, state: &BridgeState) -> std::io::Result<()
             );
         };
         let raw_html = slot.html.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let html_rev = slot.html_rev.load(Ordering::Acquire);
         let css = state
             .theme_css
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let full = render_document(&raw_html, handle, state.port, &state.token, &css);
+        let full = render_document(&raw_html, handle, html_rev, state.port, &state.token, &css);
         return respond(
             &mut stream,
             "200 OK",
@@ -426,7 +525,7 @@ fn handle_conn(mut stream: TcpStream, state: &BridgeState) -> std::io::Result<()
                 b"Unknown webview",
             );
         };
-        return serve_sse(stream, &slot);
+        return serve_sse(stream, &slot, state);
     }
 
     if let Some(handle) = path.strip_prefix("/msg/") {
@@ -461,20 +560,60 @@ fn handle_conn(mut stream: TcpStream, state: &BridgeState) -> std::io::Result<()
     respond(&mut stream, "404 Not Found", "text/plain", b"Not found")
 }
 
-fn serve_sse(mut stream: TcpStream, slot: &WebviewSlot) -> std::io::Result<()> {
+struct SseGuard<'a> {
+    counter: &'a AtomicUsize,
+}
+
+impl Drop for SseGuard<'_> {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn serve_sse(
+    mut stream: TcpStream,
+    slot: &WebviewSlot,
+    state: &BridgeState,
+) -> std::io::Result<()> {
+    let my_gen = slot.sse_gen.fetch_add(1, Ordering::AcqRel) + 1;
+    slot.active_sse.fetch_add(1, Ordering::AcqRel);
+    let _guard = SseGuard {
+        counter: &slot.active_sse,
+    };
+    // Wake any superseded SSE handler on this slot so it exits immediately.
+    slot.outbound.1.notify_all();
+
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n: connected\n\n"
+        concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/event-stream\r\n",
+            "Cache-Control: no-cache\r\n",
+            "Connection: keep-alive\r\n\r\n",
+            ": connected\n\n"
+        )
     )?;
     stream.flush()?;
 
     let (lock, cv) = &slot.outbound;
     let mut last_seq = 0u64;
     loop {
-        let mut items: Vec<(u64, String)> = Vec::new();
+        if state.shutdown.load(Ordering::Acquire)
+            || slot.closed.load(Ordering::Acquire)
+            || slot.sse_gen.load(Ordering::Acquire) != my_gen
+        {
+            break;
+        }
+        let mut items: Vec<(u64, BridgeEvent)> = Vec::new();
         {
             let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
             while !guard.1.iter().any(|(s, _)| *s > last_seq) {
+                if state.shutdown.load(Ordering::Acquire)
+                    || slot.closed.load(Ordering::Acquire)
+                    || slot.sse_gen.load(Ordering::Acquire) != my_gen
+                {
+                    return Ok(());
+                }
                 let (next_guard, res) = cv
                     .wait_timeout(guard, Duration::from_secs(15))
                     .unwrap_or_else(|e| e.into_inner());
@@ -483,9 +622,9 @@ fn serve_sse(mut stream: TcpStream, slot: &WebviewSlot) -> std::io::Result<()> {
                     break;
                 }
             }
-            for (seq, msg) in &guard.1 {
+            for (seq, ev) in &guard.1 {
                 if *seq > last_seq {
-                    items.push((*seq, msg.clone()));
+                    items.push((*seq, ev.clone()));
                 }
             }
         }
@@ -495,10 +634,22 @@ fn serve_sse(mut stream: TcpStream, slot: &WebviewSlot) -> std::io::Result<()> {
             }
             continue;
         }
-        for (seq, msg) in items {
+        for (seq, ev) in items {
             last_seq = seq;
-            let payload = msg.replace(['\r', '\n'], " ");
-            if write!(stream, "data: {payload}\n\n").is_err() {
+            let write_res = match ev {
+                BridgeEvent::Message(msg) => {
+                    let payload = msg.replace(['\r', '\n'], " ");
+                    write!(stream, "data: {payload}\n\n")
+                }
+                BridgeEvent::Reload(rev) => {
+                    write!(stream, "event: flux-reload\ndata: {rev}\n\n")
+                }
+                BridgeEvent::ThemeCss(css) => {
+                    let payload = serde_json::to_string(&css).unwrap_or_else(|_| "\"\"".into());
+                    write!(stream, "event: flux-theme\ndata: {payload}\n\n")
+                }
+            };
+            if write_res.is_err() {
                 return Ok(());
             }
         }
@@ -512,6 +663,7 @@ fn serve_sse(mut stream: TcpStream, slot: &WebviewSlot) -> std::io::Result<()> {
 fn render_document(
     raw_html: &str,
     handle: &str,
+    html_rev: u64,
     port: u16,
     token: &str,
     theme_css: &str,
@@ -525,6 +677,7 @@ fn render_document(
             "(function() {{\n",
             "  var HANDLE = {h_json};\n",
             "  var TOKEN = {t_json};\n",
+            "  var INITIAL_REV = {html_rev};\n",
             "  var STATE_KEY = 'flux_webview_state_' + HANDLE;\n",
             "  window.acquireVsCodeApi = function() {{\n",
             "    if (window.__fluxVsCodeApi) return window.__fluxVsCodeApi;\n",
@@ -561,6 +714,21 @@ fn render_document(
             "        window.dispatchEvent(new MessageEvent('message', {{ data: parsed }}));\n",
             "      }} catch (e) {{}}\n",
             "    }};\n",
+            "    es.addEventListener('flux-reload', function(ev) {{\n",
+            "      if (Number(ev.data) > INITIAL_REV) {{\n",
+            "        try {{ es.close(); }} catch (e) {{}}\n",
+            "        location.reload();\n",
+            "      }}\n",
+            "    }});\n",
+            "    es.addEventListener('flux-theme', function(ev) {{\n",
+            "      try {{\n",
+            "        var st = document.getElementById('fluxcode-vscode-theme');\n",
+            "        if (st) st.textContent = JSON.parse(ev.data);\n",
+            "      }} catch (e) {{}}\n",
+            "    }});\n",
+            "    window.addEventListener('beforeunload', function() {{\n",
+            "      try {{ es.close(); }} catch (e) {{}}\n",
+            "    }});\n",
             "  }} catch (e) {{}}\n",
             "}})();\n",
             "</script>",
@@ -568,10 +736,16 @@ fn render_document(
         theme_css = theme_css,
         h_json = serde_json::to_string(handle).unwrap_or_else(|_| "\"\"".into()),
         t_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".into()),
+        html_rev = html_rev,
     );
     if sanitized.trim().is_empty() {
         return format!(
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">{injected}</head><body><div style=\"padding:16px;opacity:0.7;\">Waiting for extension view content...</div></body></html>"
+            concat!(
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\">{injected}</head>",
+                "<body><div style=\"padding:16px;opacity:0.7;\">",
+                "Waiting for extension view content...</div></body></html>"
+            ),
+            injected = injected
         );
     }
     let lower = sanitized.to_ascii_lowercase();
@@ -602,7 +776,23 @@ fn rewrite_csp(html: &str, origin: &str) -> String {
     let tag_end = pos + rel_end + 1;
     let tag = &html[tag_start..tag_end];
     let replacement = format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self' {origin} data: blob: https:; script-src 'self' {origin} 'unsafe-inline' 'unsafe-eval' blob: https:; style-src 'self' {origin} 'unsafe-inline' data: https:; img-src 'self' {origin} data: blob: https:; font-src 'self' {origin} data: https:; connect-src 'self' {origin} ws: wss: https:;\">"
+        concat!(
+            "<meta http-equiv=\"Content-Security-Policy\" content=\"",
+            "default-src 'self' {origin} http://127.0.0.1:* http://localhost:* data: blob: https:; ",
+            "script-src 'self' {origin} http://127.0.0.1:* http://localhost:* ",
+            "'unsafe-inline' 'unsafe-eval' blob: https:; ",
+            "style-src 'self' {origin} http://127.0.0.1:* http://localhost:* ",
+            "'unsafe-inline' data: https:; ",
+            "img-src 'self' {origin} http://127.0.0.1:* http://localhost:* data: blob: https:; ",
+            "font-src 'self' {origin} http://127.0.0.1:* http://localhost:* data: https:; ",
+            "frame-src 'self' {origin} http://127.0.0.1:* http://localhost:* https: blob: data:; ",
+            "connect-src 'self' {origin} http://127.0.0.1:* http://localhost:* ",
+            "ws://127.0.0.1:* ws://localhost:* ws: wss: https:; ",
+            "worker-src 'self' {origin} blob:; ",
+            "media-src 'self' {origin} http://127.0.0.1:* http://localhost:* data: blob: https:;\"",
+            ">"
+        ),
+        origin = origin
     );
     if tag.is_empty() {
         return html.to_string();
@@ -838,6 +1028,55 @@ mod tests {
         }
         assert!(found_event);
 
+        // Second set_html emits flux-reload event and new CSP allows local iframes.
+        let rev2 = bridge.set_html("wv1", "<html><body>Updated</body></html>".into());
+        assert_eq!(rev2, 2);
+        let mut found_reload = false;
+        for _ in 0..12 {
+            line.clear();
+            if sse_reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.contains("event: flux-reload") {
+                found_reload = true;
+                break;
+            }
+        }
+        assert!(found_reload);
+        assert!(
+            page.contains("frame-src 'self'")
+                && page.contains("http://127.0.0.1:*")
+                && page.contains("http://localhost:*")
+        );
+
+        // Live theme update pushes flux-theme event without page reload.
+        bridge.update_theme_css(":root{--vscode-foreground:#111;}".into());
+        let mut found_theme = false;
+        for _ in 0..12 {
+            line.clear();
+            if sse_reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.contains("event: flux-theme") {
+                found_theme = true;
+                break;
+            }
+        }
+        assert!(found_theme);
+
+        // Removing the webview closes active SSE stream cleanly without leaking the thread.
+        bridge.remove_webview("wv1");
+        let mut eof = false;
+        for _ in 0..12 {
+            line.clear();
+            if sse_reader.read_line(&mut line).unwrap_or(0) == 0 {
+                eof = true;
+                break;
+            }
+        }
+        assert!(eof, "remove_webview must terminate active SSE loop");
+
+        drop(bridge);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

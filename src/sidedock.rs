@@ -92,6 +92,21 @@ impl Workbench {
     pub(crate) fn on_right(&self, view: SideView) -> bool {
         match view {
             SideView::Agent => self.settings.agent_right,
+            SideView::Ext(ix) => {
+                let key = self.view_id_key(view);
+                if self.settings.right_views.iter().any(|id| id == &key) {
+                    return true;
+                }
+                if self.settings.left_views.iter().any(|id| id == &key) {
+                    return false;
+                }
+                self.ext_containers
+                    .get(ix as usize)
+                    .and_then(|id| crate::ext::vsc_registry::container_by_id(id))
+                    .is_some_and(|c| {
+                        c.location == crate::ext::vsc_registry::ViewContainerLocation::SecondarySidebar
+                    })
+            }
             v => {
                 let key = self.view_id_key(v);
                 self.settings.right_views.iter().any(|id| id == &key)
@@ -158,7 +173,18 @@ impl Workbench {
         let key = self.view_id_key(view);
         match view {
             SideView::Agent => self.settings.agent_right = right,
-            _ if right => self.settings.right_views.push(key),
+            _ if right => {
+                self.settings.left_views.retain(|id| id != &key);
+                if !self.settings.right_views.iter().any(|id| id == &key) {
+                    self.settings.right_views.push(key);
+                }
+            }
+            SideView::Ext(_) => {
+                self.settings.right_views.retain(|id| id != &key);
+                if !self.settings.left_views.iter().any(|id| id == &key) {
+                    self.settings.left_views.push(key);
+                }
+            }
             _ => self.settings.right_views.retain(|id| id != &key),
         }
         self.settings.save();

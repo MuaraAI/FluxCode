@@ -424,6 +424,28 @@ pub fn harden_profile_acl(dir: &Path) -> bool {
     }
 }
 
+/// Registers a Flow profile directory + router slot for default-browser login without spawning an isolated browser.
+pub fn register_profile_slot_in(home: &Path, profile_name: &str) -> Result<PathBuf, String> {
+    if !is_safe_name(profile_name) {
+        return Err("Profile name may only contain letters, digits, '-' and '_'.".into());
+    }
+    let dir = home.join(format!("{PROFILE_PREFIX}{profile_name}"));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    harden_profile_acl(&dir);
+    let _ = fs::write(dir.join(".gflow_browser_strategy"), b"default-browser");
+    let mut state = load_state_in(home);
+    if !state.order.iter().any(|p| p == profile_name) {
+        state.order.push(profile_name.to_string());
+    }
+    state.auth_expired.remove(profile_name);
+    let _ = save_state_in(home, &state);
+    Ok(dir)
+}
+
+pub fn register_profile_slot(profile_name: &str) -> Result<PathBuf, String> {
+    register_profile_slot_in(&gflow_home(), profile_name)
+}
+
 /// Launches an isolated native browser window directly into Google Flow so the user can sign in once.
 pub fn launch_browser_login(profile_name: &str) -> Result<String, String> {
     if !is_safe_name(profile_name) {
@@ -1672,6 +1694,12 @@ mod tests {
         assert_eq!(
             call["result"]["structuredContent"]["profiles"][0]["name"],
             "akun1"
+        );
+        let dir = register_profile_slot_in(&root, "akun9").expect("slot");
+        assert!(dir.is_dir());
+        assert_eq!(
+            read_trimmed(&dir.join(".gflow_browser_strategy")).as_deref(),
+            Some("default-browser")
         );
         let _ = fs::remove_dir_all(&root);
     }

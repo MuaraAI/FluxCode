@@ -603,6 +603,10 @@ pub struct Workbench {
     pub(crate) ext: crate::ext::Ext,
     pub(crate) ext_containers: Vec<String>,
     pub(crate) ext_host: crate::ext::host::ExtHostState,
+    pub(crate) native_webviews: crate::ext::native_webview::NativeWebviewManager,
+    pub(crate) wv_frame_seq: u64,
+    pub(crate) ext_drawer_open: std::collections::HashSet<String>,
+    pub(crate) ext_submenu_open: Option<(String, String)>,
     pub(crate) mcbe: crate::ext::mcbe_view::McbeState,
     pub(crate) ink: Rc<RefCell<crate::fluxdoc::view::InkState>>,
     pub(crate) ink_bounds: Rc<std::cell::Cell<Option<[f32; 4]>>>,
@@ -770,6 +774,7 @@ impl Workbench {
         cx.on_app_quit(|this, _| {
             crate::wintitle::tray_hide();
             crate::instance::set_hidden(false);
+            this.native_webviews.shutdown();
             this.agent_stop_all();
             this.ext_host.host.shutdown();
             this.procs.kill_all();
@@ -832,17 +837,36 @@ impl Workbench {
                 .scm
                 .last_refresh
                 .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
-            if window.is_window_active() && !recent {
+            let active = window.is_window_active();
+            if active && !recent {
                 this.scm_refresh(cx);
             }
-            if window.is_window_active() {
+            if active {
                 crate::wintitle::capture_main_hwnd();
                 this.scm_on_return(cx);
                 this.ext_host.host.wake();
+                this.native_webviews.maintenance_tick(true);
+                cx.notify();
             } else {
                 this.ext_host.host.cool(true);
+                this.native_webviews.maintenance_tick(false);
             }
         }));
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_secs(10))
+                .await;
+            if this
+                .update_in(cx, |this, window, _| {
+                    this.native_webviews
+                        .maintenance_tick(window.is_window_active());
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
         let mut this = Self {
             root: None,
             workspace: Default::default(),
@@ -946,6 +970,10 @@ impl Workbench {
             ext,
             ext_containers: Vec::new(),
             ext_host,
+            native_webviews: crate::ext::native_webview::NativeWebviewManager::new(),
+            wv_frame_seq: 0,
+            ext_drawer_open: Default::default(),
+            ext_submenu_open: None,
             mcbe,
             ink: Rc::new(RefCell::new(crate::fluxdoc::view::InkState::new())),
             ink_bounds: Rc::new(std::cell::Cell::new(None)),
@@ -3896,10 +3924,28 @@ impl Workbench {
                 )))
             })
             .when_some(self.ext_container_id(view).map(str::to_string), |h, cid| {
+                let dock_icon = if right {
+                    IconName::PanelLeft
+                } else {
+                    IconName::PanelRight
+                };
+                let dock_tip = tr(if right {
+                    "Move to Left Side Bar"
+                } else {
+                    "Move to Right Side Bar"
+                });
                 h.child(
-                    div()
+                    h_flex()
                         .flex_none()
-                        .child(self.render_vsc_header_actions(&cid, cx)),
+                        .gap_0p5()
+                        .child(self.render_vsc_header_actions(&cid, cx))
+                        .child(tool_button(
+                            if right { "vsc-move-l" } else { "vsc-move-r" },
+                            dock_icon,
+                            dock_tip,
+                            cx,
+                            move |this, _, cx| this.move_view(view, !right, cx),
+                        )),
                 )
             })
             .when(view == SideView::Agent, |h| {
@@ -3957,7 +4003,10 @@ impl Workbench {
             SideView::Ext(ix) => self.render_vsc_sidebar_view(ix, window, cx),
         };
         let (_, view_dir, view_seq) = self.side_view_anim.get();
-        let animated_body: AnyElement = if !right && view_seq > 0 && !cx.reduce_motion() {
+        let skip_side_anim = matches!(view, SideView::Ext(_))
+            && crate::ext::native_webview::NativeWebviewManager::is_available();
+        let animated_body: AnyElement =
+            if !right && !skip_side_anim && view_seq > 0 && !cx.reduce_motion() {
             div()
                 .flex_1()
                 .min_h_0()
@@ -5575,6 +5624,37 @@ impl Render for Workbench {
             .then_some(self.right_closing)
             .flatten();
         let right_visible = right_on || right_close.is_some();
+        self.wv_frame_seq = self.wv_frame_seq.wrapping_add(1);
+        let wv_frame_seq = self.wv_frame_seq;
+        let preview_blocked = {
+            #[cfg(feature = "embedded-preview")]
+            {
+                self.preview_ask
+            }
+            #[cfg(not(feature = "embedded-preview"))]
+            {
+                false
+            }
+        };
+        let ext_wv_blocked = self.settings_open
+            || self.quick.open
+            || self.theme_menu
+            || self.menubar.open_index().is_some()
+            || self.agent.show_options
+            || self.agent.lightbox.is_some()
+            || self.workspace.ask.is_some()
+            || self.workspace.ask_closing.is_some()
+            || self.whats_new.is_some()
+            || full
+            || self.side_closing.is_some()
+            || self.right_closing.is_some()
+            || preview_blocked;
+        self.native_webviews.begin_frame(
+            wv_frame_seq,
+            ext_wv_blocked,
+            theme::palette().side,
+            crate::wintitle::capture_main_hwnd(),
+        );
         let panel_visible = self.panel_open || (motion && self.panel_closing.is_some());
         let editor_full_page = self.wiztree.page
             || self.mcbe.page
@@ -6175,7 +6255,40 @@ impl Render for Workbench {
             .children(self.render_lightbox(window, cx))
             .children(self.render_menubar_overlay(window, cx))
             .child(selection_guard())
+            .child(native_wv_commit(
+                wv_frame_seq,
+                self.native_webviews.clone(),
+                cx.entity().downgrade(),
+            ))
     }
+}
+
+fn native_wv_commit(
+    frame_seq: u64,
+    mgr: crate::ext::native_webview::NativeWebviewManager,
+    weak: WeakEntity<Workbench>,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, _, cx| {
+            let out = mgr.end_frame(frame_seq);
+            if out.evicted_handles.is_empty() && out.visibility_changes.is_empty() {
+                return;
+            }
+            cx.defer(move |cx| {
+                _ = weak.update(cx, |this, _| {
+                    for (h, vis) in out.visibility_changes {
+                        this.ext_host.host.set_webview_visibility(&h, vis);
+                    }
+                    for h in out.evicted_handles {
+                        this.ext_host.host.dispose_webview(&h);
+                    }
+                });
+            });
+        },
+    )
+    .absolute()
+    .size(px(0.))
 }
 
 fn selection_guard() -> impl IntoElement {

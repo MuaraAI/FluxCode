@@ -7,6 +7,7 @@ mod market_view;
 pub mod mcbe_types;
 pub mod mcbe_view;
 pub mod native;
+pub mod native_webview;
 pub mod view;
 pub mod vsc_registry;
 pub mod vsc_view;

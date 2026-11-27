@@ -1,4 +1,5 @@
 use super::host::{ExtStatus, HostAction, HostEvent, TreeNode};
+use super::native_webview::{NativeWebviewManager, NativeWebviewState, PhysicalRect};
 use super::vsc_registry::{self, codicon_to_icon, ExtIcon, ViewType, VscSvgIcon, WhenContext};
 use crate::i18n::tr;
 use crate::theme::{self, c};
@@ -7,7 +8,6 @@ use gpui_kit::assets::IconName as Ico;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     spinner::Spinner,
     tooltip::Tooltip,
     v_flex, Icon, Sizable,
@@ -105,23 +105,31 @@ impl Workbench {
         let roots = self.roots();
         let dark = theme::palette().dark;
         for v in views {
-            if let Err(e) = self.ext_host.host.activate_extension(
-                &v.ext_id,
-                &format!("onView:{}", v.id),
-                &roots,
-                dark,
-            ) {
+            let status = self.ext_host.status_for(&v.ext_id);
+            if status != ExtStatus::Active {
+                if let Err(e) = self.ext_host.host.activate_extension(
+                    &v.ext_id,
+                    &format!("onView:{}", v.id),
+                    &roots,
+                    dark,
+                ) {
+                    self.ext_host
+                        .ext_status
+                        .insert(v.ext_id.clone(), ExtStatus::Error(e));
+                    cx.notify();
+                    continue;
+                }
                 self.ext_host
                     .ext_status
-                    .insert(v.ext_id.clone(), ExtStatus::Error(e));
-                cx.notify();
-                continue;
+                    .entry(v.ext_id.clone())
+                    .or_insert(ExtStatus::Activating);
             }
-            self.ext_host
-                .ext_status
-                .entry(v.ext_id.clone())
-                .or_insert(ExtStatus::Activating);
             if v.kind == ViewType::Webview {
+                let already_resolved =
+                    status == ExtStatus::Active && self.ext_host.webviews.contains_key(&v.id);
+                if already_resolved {
+                    continue;
+                }
                 match self
                     .ext_host
                     .host
@@ -136,6 +144,7 @@ impl Workbench {
                                 url,
                                 title: v.name.clone(),
                                 has_html: false,
+                                html_rev: 0,
                             });
                     }
                     Err(e) => {
@@ -146,13 +155,34 @@ impl Workbench {
                 }
             } else {
                 let st = self.ext_host.trees.entry(v.id.clone()).or_default();
-                st.loading = true;
-                self.ext_host.host.request_tree_children(&v.id, None);
+                if st.roots.is_empty() || status != ExtStatus::Active {
+                    st.loading = true;
+                    self.ext_host.host.request_tree_children(&v.id, None);
+                }
             }
         }
         self.ext_host
             .host
             .update_theme_css(super::webview_bridge::theme_css(theme::palette()));
+        cx.notify();
+    }
+
+    pub(crate) fn reload_ext_container(&mut self, container_id: &str, cx: &mut Context<Self>) {
+        let views = vsc_registry::views_for_container(container_id);
+        for v in views {
+            if v.kind == ViewType::Webview {
+                if let Some(info) = self.ext_host.webviews.get(&v.id) {
+                    if !info.handle.is_empty() {
+                        self.native_webviews.reload(&info.handle);
+                    }
+                } else {
+                    self.activate_ext_container(container_id, cx);
+                    return;
+                }
+            } else {
+                self.ext_host.host.request_tree_children(&v.id, None);
+            }
+        }
         cx.notify();
     }
 
@@ -239,6 +269,11 @@ impl Workbench {
                     self.run_in_terminal(&cmd, cx);
                 }
                 HostAction::FocusContainer(cid) => self.open_ext_container_by_id(&cid, cx),
+                HostAction::WebviewHtmlUpdated { handle, rev } => {
+                    if rev > 0 && !self.ext_host.host.has_sse_client(&handle) {
+                        self.native_webviews.reload(&handle);
+                    }
+                }
             }
         }
         if let Some(note) = self.ext_host.host_notice.take() {
@@ -255,7 +290,17 @@ impl Workbench {
         let views = vsc_registry::views_for_container(container_id);
         let empty_cfg = HashMap::new();
         let mut row = h_flex().flex_none().gap_0p5();
-        for v in views {
+        let mut has_webview = false;
+        let mut ext_browser: Option<(String, String)> = None;
+        for v in &views {
+            if v.kind == ViewType::Webview {
+                has_webview = true;
+                if ext_browser.is_none() {
+                    if let Some(info) = self.ext_host.webviews.get(&v.id) {
+                        ext_browser = Some((info.url.clone(), v.name.clone()));
+                    }
+                }
+            }
             let ctx = self.build_when_context(Some(&v.id), &empty_cfg);
             for (idx, item) in vsc_registry::view_title_menus(&v.id, &ctx)
                 .into_iter()
@@ -273,38 +318,36 @@ impl Workbench {
                         Some(ExtIcon::Codicon(n)) => Icon::new(codicon_to_icon(&n)),
                         _ => Icon::new(Ico::Ellipsis),
                     };
-                    let weak = cx.entity().downgrade();
-                    let vid_for_sub = v.id.clone();
+                    let cid_for_sub = container_id.to_string();
+                    let open_here = self.ext_submenu_open.as_ref()
+                        == Some(&(cid_for_sub.clone(), sub_id.clone()));
                     row = row.child(
-                        Button::new(("vsc-sub", idx))
-                            .icon(sub_icon)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(label)
-                            .dropdown_menu(move |mut menu: PopupMenu, _, cx| {
-                                let items = if let Some(wb) = weak.upgrade() {
-                                    wb.read(cx).submenu_entries(&sub_id, &vid_for_sub)
+                        div()
+                            .id(("vsc-sub", idx))
+                            .size(theme::u(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .text_color(c(if open_here {
+                                theme::FG_STRONG
+                            } else {
+                                theme::FG_MUTED
+                            }))
+                            .when(open_here, |d| d.bg(c(theme::BG_HOVER)))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                            .tooltip(move |w, cx| Tooltip::new(label.clone()).build(w, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let key = (cid_for_sub.clone(), sub_id.clone());
+                                if this.ext_submenu_open.as_ref() == Some(&key) {
+                                    this.ext_submenu_open = None;
                                 } else {
-                                    Vec::new()
-                                };
-                                menu = menu.min_w(px(210.));
-                                for (cmd_id, title) in items {
-                                    let w2 = weak.clone();
-                                    menu = menu.item(PopupMenuItem::new(title).on_click(
-                                        move |_, window, cx| {
-                                            _ = w2.update(cx, |this, cx| {
-                                                this.execute_ext_command(
-                                                    &cmd_id,
-                                                    Vec::new(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        },
-                                    ));
+                                    this.ext_submenu_open = Some(key);
                                 }
-                                menu
-                            }),
+                                cx.notify();
+                            }))
+                            .child(sub_icon.size(theme::u(14.))),
                     );
                 } else if let Some(cmd) = vsc_registry::command_by_id(&item.command_or_submenu) {
                     let icon_el = cmd
@@ -335,6 +378,49 @@ impl Workbench {
                     );
                 }
             }
+        }
+        if has_webview {
+            let cid_rel = container_id.to_string();
+            let reload_tip = tr("Reload View").to_string();
+            row = row.child(
+                div()
+                    .id("vsc-wv-reload")
+                    .size(theme::u(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .tooltip(move |w, cx| Tooltip::new(reload_tip.clone()).build(w, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.reload_ext_container(&cid_rel, cx);
+                    }))
+                    .child(Icon::new(gpui_kit::component::IconName::RefreshCw).size(theme::u(13.))),
+            );
+        }
+        if let Some((url_tab, title_tab)) = ext_browser {
+            let pop_tip = tr("Open in Browser").to_string();
+            row = row.child(
+                div()
+                    .id("vsc-wv-popout")
+                    .size(theme::u(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_color(c(theme::FG_MUTED))
+                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                    .tooltip(move |w, cx| Tooltip::new(pop_tip.clone()).build(w, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.open_url(&url_tab);
+                        this.status = crate::trf!("Opened {name}"; name => title_tab).into();
+                        cx.notify();
+                    }))
+                    .child(Icon::new(Ico::ExternalLink).size(theme::u(13.))),
+            );
         }
         row.into_any_element()
     }
@@ -375,6 +461,340 @@ impl Workbench {
 
         let ext_status = self.ext_host.status_for(&container.ext_id);
         let node_ok = super::host::ExtHost::node_available();
+        let native_ok = NativeWebviewManager::is_available();
+        let visible_views: Vec<_> = views
+            .iter()
+            .filter(|v| v.when.eval(&base_ctx))
+            .collect();
+        let has_webview = visible_views.iter().any(|v| v.kind == ViewType::Webview);
+
+        let submenu_bar: Option<AnyElement> =
+            if let Some((sub_cid, sub_id)) = &self.ext_submenu_open {
+                if sub_cid == &container_id {
+                    let entries = visible_views
+                        .first()
+                        .map(|v| self.submenu_entries(sub_id, &v.id))
+                        .unwrap_or_default();
+                    if entries.is_empty() {
+                        None
+                    } else {
+                        let mut bar = h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .gap_1()
+                            .px_2p5()
+                            .py_1p5()
+                            .border_b_1()
+                            .border_color(c(theme::BORDER))
+                            .bg(c(theme::BG_ELEVATED));
+                        for (sidx, (cmd_id, title)) in entries.into_iter().enumerate() {
+                            bar = bar.child(
+                                Button::new(("vsc-sub-item", sidx))
+                                    .label(title)
+                                    .xsmall()
+                                    .outline()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.ext_submenu_open = None;
+                                        this.execute_ext_command(&cmd_id, Vec::new(), window, cx);
+                                    })),
+                            );
+                        }
+                        Some(bar.into_any_element())
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        if has_webview && native_ok {
+            let show_status = !node_ok || ext_status != ExtStatus::Active;
+            let status_banner = show_status.then(|| {
+                div()
+                    .w_full()
+                    .px_2p5()
+                    .py_1p5()
+                    .border_b_1()
+                    .border_color(c(theme::BORDER))
+                    .child(self.render_vsc_status_row(
+                        &container.ext_id,
+                        &container_id,
+                        &ext_status,
+                        node_ok,
+                        cx,
+                    ))
+            });
+
+            let mut root = v_flex()
+                .id(("vsc-panel", ix as usize))
+                .size_full()
+                .min_h_0()
+                .overflow_hidden()
+                .children(submenu_bar)
+                .children(status_banner);
+
+            let tree_views: Vec<_> = visible_views
+                .iter()
+                .copied()
+                .filter(|v| v.kind == ViewType::Tree)
+                .collect();
+            if !tree_views.is_empty() {
+                let mut tree_col = v_flex()
+                    .id(("vsc-tree-strip", ix as usize))
+                    .w_full()
+                    .max_h(theme::u(180.))
+                    .overflow_y_scroll()
+                    .px_2()
+                    .py_1p5()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(c(theme::BORDER));
+                for tv in tree_views {
+                    if let Some(tree) = self.ext_host.trees.get(&tv.id) {
+                        if !tree.roots.is_empty() {
+                            tree_col = tree_col.child(self.render_vsc_tree(&tv.id, tree, cx));
+                        }
+                    }
+                }
+                root = root.child(tree_col);
+            }
+
+            if let Some(wv_view) = visible_views.iter().find(|v| v.kind == ViewType::Webview) {
+                let info_opt = self.ext_host.webviews.get(&wv_view.id);
+                let frame_seq = self.wv_frame_seq;
+                let wv_mgr = self.native_webviews.clone();
+                let wv_state = info_opt
+                    .map(|info| wv_mgr.state(&info.handle))
+                    .unwrap_or(NativeWebviewState::Loading);
+
+                let viewport = div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .relative()
+                    .overflow_hidden()
+                    .when_some(info_opt, |box_el, info| {
+                        let handle = info.handle.clone();
+                        let url = info.url.clone();
+                        let title = wv_view.name.clone();
+                        let url_fallback = url.clone();
+                        let wv_mgr_c = wv_mgr.clone();
+                        let overlay_hint = if wv_state == NativeWebviewState::Failed {
+                            Some(
+                                v_flex()
+                                    .size_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .p_4()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(c(theme::DANGER))
+                                            .child(tr("Extension view failed to load.")),
+                                    )
+                                    .child(
+                                        Button::new("vsc-native-fallback")
+                                            .label(tr("Open in Browser"))
+                                            .small()
+                                            .primary()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.open_url(&url_fallback);
+                                                this.status = crate::trf!(
+                                                    "Opened {name}";
+                                                    name => title
+                                                )
+                                                .into();
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .into_any_element(),
+                            )
+                        } else if wv_state == NativeWebviewState::Loading || !info.has_html {
+                            Some(
+                                h_flex()
+                                    .size_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(Spinner::new().icon(Ico::LoaderCircle).xsmall())
+                                    .child(tr("Loading extension UI..."))
+                                    .into_any_element(),
+                            )
+                        } else {
+                            None
+                        };
+                        let canvas_el = canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let scale = window.scale_factor();
+                                let rect = PhysicalRect::from_logical(
+                                    f32::from(bounds.origin.x),
+                                    f32::from(bounds.origin.y),
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height),
+                                    scale,
+                                );
+                                wv_mgr_c.present_slot(frame_seq, &handle, &url, rect);
+                            },
+                        )
+                        .size_full();
+                        box_el
+                            .children(overlay_hint)
+                            .when(wv_state != NativeWebviewState::Failed, |b| {
+                                b.child(canvas_el.absolute().inset_0())
+                            })
+                    })
+                    .when(info_opt.is_none(), |box_el| {
+                        box_el.child(
+                            h_flex()
+                                .size_full()
+                                .items_center()
+                                .justify_center()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(Spinner::new().icon(Ico::LoaderCircle).xsmall())
+                                .child(tr("Starting extension host...")),
+                        )
+                    });
+                root = root.child(viewport);
+            }
+
+            let cmds = vsc_registry::commands_for_ext(&container.ext_id, &base_ctx);
+            let logs_len = self
+                .ext_host
+                .output_logs
+                .get(&container.ext_id)
+                .map(|l| l.len())
+                .unwrap_or(0);
+            if !cmds.is_empty() || logs_len > 0 {
+                let drawer_open = self.ext_drawer_open.contains(&container_id);
+                let cid_drawer = container_id.clone();
+                let mut footer = v_flex()
+                    .flex_none()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(c(theme::BORDER))
+                    .bg(c(theme::BG_SIDE))
+                    .child(
+                        h_flex()
+                            .id("vsc-drawer-toggle")
+                            .w_full()
+                            .h(theme::u(28.))
+                            .px_2p5()
+                            .gap_1p5()
+                            .items_center()
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                            .child(
+                                Icon::new(if drawer_open {
+                                    Ico::ChevronDown
+                                } else {
+                                    Ico::ChevronRight
+                                })
+                                .size(theme::u(12.)),
+                            )
+                            .child(div().flex_1().child(tr("Commands & Output")))
+                            .when(logs_len > 0, |h| {
+                                h.child(
+                                    div()
+                                        .px_1p5()
+                                        .rounded(px(4.))
+                                        .bg(c(theme::BG_ELEVATED))
+                                        .text_xs()
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(logs_len.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.ext_drawer_open.remove(&cid_drawer) {
+                                    this.ext_drawer_open.insert(cid_drawer.clone());
+                                }
+                                cx.notify();
+                            })),
+                    );
+                if drawer_open {
+                    let mut body = v_flex()
+                        .id(("vsc-drawer-body", ix as usize))
+                        .w_full()
+                        .max_h(theme::u(180.))
+                        .overflow_y_scroll()
+                        .px_2p5()
+                        .pb_2()
+                        .gap_1p5();
+                    for (cidx, cmd) in cmds.into_iter().take(12).enumerate() {
+                        let cmd_id = cmd.id.clone();
+                        let key_hint = vsc_registry::keybinding_for_command(&cmd.id);
+                        body = body.child(
+                            h_flex()
+                                .id(("vsc-dcmd", cidx))
+                                .w_full()
+                                .min_w_0()
+                                .px_1p5()
+                                .py_0p5()
+                                .gap_2()
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(c(theme::FG))
+                                        .child(cmd.display_label()),
+                                )
+                                .when_some(key_hint, |h, k| {
+                                    h.child(
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(c(theme::FG_DIM))
+                                            .child(k),
+                                    )
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.execute_ext_command(&cmd_id, Vec::new(), window, cx);
+                                })),
+                        );
+                    }
+                    if let Some(logs) = self.ext_host.output_logs.get(&container.ext_id) {
+                        if !logs.is_empty() {
+                            let mut pre = v_flex()
+                                .w_full()
+                                .p_1p5()
+                                .gap_0p5()
+                                .rounded(px(4.))
+                                .bg(c(theme::BG_EDITOR))
+                                .border_1()
+                                .border_color(c(theme::BORDER));
+                            for line in logs.iter().rev().take(20).rev() {
+                                pre = pre.child(
+                                    div()
+                                        .text_xs()
+                                        .font_family("Cascadia Code")
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(line.clone()),
+                                );
+                            }
+                            body = body.child(pre);
+                        }
+                    }
+                    footer = footer.child(body);
+                }
+                root = root.child(footer);
+            }
+
+            return root.into_any_element();
+        }
+
         let status_row =
             self.render_vsc_status_row(&container.ext_id, &container_id, &ext_status, node_ok, cx);
 
@@ -385,6 +805,7 @@ impl Workbench {
             .px_3()
             .py_2()
             .gap_3()
+            .children(submenu_bar)
             .child(status_row);
 
         for (vidx, view) in views.iter().enumerate() {

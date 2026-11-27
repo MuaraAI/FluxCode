@@ -464,7 +464,7 @@ impl Workbench {
     pub(crate) fn render_agent_menu(
         &self,
         top: bool,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let m = self.agent.menu.open?;
@@ -476,6 +476,10 @@ impl Workbench {
         let search = searchable(m, total);
         let rows = self.agent_menu_filtered(cx);
         let sel = st.sel.min(rows.len().saturating_sub(1));
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("ag-menu-liq", window, cx);
+        let row_cross = 280.0f32;
         let vh = window.viewport_size().height / px(1.);
         let u = |v: f32| f32::from(theme::u(v));
         let chrome = u(34.)
@@ -501,18 +505,13 @@ impl Workbench {
         };
         let max_list = (room - chrome).clamp(90., if top { 460. } else { 520. });
 
-        let mut list = v_flex()
-            .id("ag-menu-list")
-            .max_h(px(max_list))
-            .overflow_y_scroll()
-            .track_scroll(&st.scroll)
-            .pb_1();
+        let mut rows_box = v_flex().w_full().pb_1();
         let mut last: Option<SharedString> = None;
         let (mut child, mut sel_child) = (0usize, 0usize);
         for (i, r) in rows.iter().enumerate() {
             if !r.group.is_empty() && last.as_ref() != Some(&r.group) {
                 let cols = matches!(r.trail, Trail::Cols(..));
-                list = list.child(
+                rows_box = rows_box.child(
                     h_flex()
                         .flex_none()
                         .mx_1()
@@ -558,12 +557,21 @@ impl Workbench {
             if i == sel {
                 sel_child = child;
             }
-            list = list.child(self.render_menu_row(i, r, i == sel, cx));
+            rows_box = rows_box.child(self.render_menu_row(
+                i,
+                r,
+                i == sel,
+                &liq,
+                motion,
+                row_cross,
+                view_id,
+                cx,
+            ));
             child += 1;
         }
         if rows.is_empty() {
             let q = st.query.read(cx).value().trim().to_string();
-            list = list.child(
+            rows_box = rows_box.child(
                 div()
                     .flex_none()
                     .px_3()
@@ -578,6 +586,45 @@ impl Workbench {
                     }),
             );
         }
+        let active_ix = (!rows.is_empty()).then_some(sel);
+        let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &liq,
+            true,
+            rows.len(),
+            active_ix,
+            row_cross,
+            190,
+            motion,
+        );
+        let layer = frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-menu-liq-l",
+                true,
+                crate::ui::liquid::agent_liquid_style(row_cross, 6.0),
+                fr,
+            )
+        });
+        let rows_inner = v_flex()
+            .id("ag-menu-inner")
+            .relative()
+            .w_full()
+            .on_hover({
+                let h = liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(crate::ui::liquid::keyed_origin_probe(liq, view_id))
+            .children(layer)
+            .child(rows_box);
+        let list = v_flex()
+            .id("ag-menu-list")
+            .max_h(px(max_list))
+            .overflow_y_scroll()
+            .track_scroll(&st.scroll)
+            .child(rows_inner);
         if st.reveal.replace(false) {
             st.scroll.scroll_to_item(sel_child);
         }
@@ -590,6 +637,7 @@ impl Workbench {
         let bg = gpui_kit::Hsla::from(rgb(theme::palette().swatches()[1]));
         let menu = v_flex()
             .id("ag-menu")
+            .relative()
             .key_context("AgentMenu")
             .when(!search, |d| d.track_focus(&st.focus))
             .occlude()
@@ -597,6 +645,7 @@ impl Workbench {
             .glass_pop()
             .when(!theme::glass(), |d| d.bg(bg))
             .overflow_hidden()
+            .child(crate::ui::liquid::fresnel_top_sheen())
             .on_mouse_down_out(cx.listener(|this, _, w, cx| this.agent_menu_close(true, w, cx)))
             .child(
                 h_flex()
@@ -643,10 +692,37 @@ impl Workbench {
             .when(m == Menu::Agent, |v| {
                 v.child(self.render_agent_menu_footer(cx))
             });
-        Some(menu.into_any_element())
+        Some(if !motion {
+            menu.into_any_element()
+        } else {
+            menu.with_animation(
+                SharedString::from(format!("ag-menu-glass-in-{m:?}")),
+                Animation::new(std::time::Duration::from_millis(160)),
+                move |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 11.5, 6.0);
+                    el.opacity(pose.opacity).mt(px(if top {
+                        pose.offset_px
+                    } else {
+                        -pose.offset_px
+                    }))
+                },
+            )
+            .into_any_element()
+        })
     }
 
-    fn render_menu_row(&self, i: usize, r: &Row, sel: bool, cx: &mut Context<Self>) -> AnyElement {
+    #[allow(clippy::too_many_arguments)]
+    fn render_menu_row(
+        &self,
+        i: usize,
+        r: &Row,
+        sel: bool,
+        liq: &crate::ui::liquid::KeyedLiquidHandle,
+        motion: bool,
+        row_cross: f32,
+        view_id: EntityId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let lead: Option<AnyElement> = match &r.lead {
             Lead::Agent(id) => Some(
                 div()
@@ -773,8 +849,11 @@ impl Workbench {
                     .text_color(c(theme::FG_DIM))
                     .child(r.sub.clone())
             });
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), i, view_id);
+            let liq_h = liq.clone();
             return v_flex()
                 .id(("ag-menu-row", i))
+                .relative()
                 .flex_none()
                 .mx_1()
                 .px_2()
@@ -783,8 +862,16 @@ impl Workbench {
                 .gap_1()
                 .rounded(px(5.))
                 .cursor_pointer()
-                .when(sel, |h| h.bg(c(theme::SELECT)))
-                .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
+                .when(!motion && sel, |h| h.bg(c(theme::SELECT)))
+                .when(!motion && !sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
+                .on_hover(move |entered: &bool, _, cx| {
+                    if *entered && motion {
+                        crate::ui::liquid::keyed_hover_enter(
+                            &liq_h, i, true, row_cross, 140, view_id, cx,
+                        );
+                    }
+                })
+                .child(probe)
                 .child(top_line)
                 .children(badges_row)
                 .children(sub_row)
@@ -795,8 +882,11 @@ impl Workbench {
                 .into_any_element();
         }
 
+        let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), i, view_id);
+        let liq_h = liq.clone();
         h_flex()
             .id(("ag-menu-row", i))
+            .relative()
             .flex_none()
             .mx_1()
             .px_2()
@@ -806,8 +896,16 @@ impl Workbench {
             .when(r.wrap, |h| h.items_start())
             .rounded(px(5.))
             .cursor_pointer()
-            .when(sel, |h| h.bg(c(theme::SELECT)))
-            .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
+            .when(!motion && sel, |h| h.bg(c(theme::SELECT)))
+            .when(!motion && !sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
+            .on_hover(move |entered: &bool, _, cx| {
+                if *entered && motion {
+                    crate::ui::liquid::keyed_hover_enter(
+                        &liq_h, i, true, row_cross, 140, view_id, cx,
+                    );
+                }
+            })
+            .child(probe)
             .children(lead)
             .child(if r.wrap {
                 v_flex()
