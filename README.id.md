@@ -49,6 +49,11 @@ Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis
 
 ## FluxCode vs Zed vs VS Code
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/advantages-id-dark.svg">
+  <img src="assets/benchmarks/advantages-id-light.svg" width="100%" alt="Perbandingan vertikal bergaya benchmark antara FluxCode vs Zed dan VS Code meliputi kecepatan buka, RAM, ukuran disk, agen AI bawaan, ekstensi VS Code, WizTree, file non-teks, terminal, Git, privasi, dan catatan jujur.">
+</picture>
+
 | Fitur | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Teknologi | Rust + GPUI | Rust + GPUI | TypeScript + Electron |

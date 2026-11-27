@@ -49,6 +49,11 @@ Single 16 MB binary, 10 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree 
 
 ## FluxCode vs Zed vs VS Code
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/advantages-dark.svg">
+  <img src="assets/benchmarks/advantages-light.svg" width="100%" alt="Vertical benchmark-styled comparison of FluxCode vs Zed and VS Code across speed, RAM, disk size, built-in AI agents, VS Code extensions, WizTree disk analyzer, non-text files, terminal, Git, privacy, and honest trade-offs.">
+</picture>
+
 | Feature | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Engine | Rust + GPUI | Rust + GPUI | TypeScript + Electron |
