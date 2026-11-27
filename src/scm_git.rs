@@ -206,18 +206,16 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
         .filter_map(|r| {
             let f: Vec<&str> = r.trim_start_matches('\n').split('\x1f').collect();
             (f.len() >= 7).then(|| {
-                let raw_refs: Vec<&str> = f[5]
+                let refs: Vec<String> = f[5]
                     .split(", ")
-                    .filter(|s| !s.is_empty() && *s != "origin/HEAD")
+                    .filter(|s| {
+                        !s.is_empty() && !matches!(*s, "origin/HEAD" | "refs/remotes/origin/HEAD")
+                    })
+                    .map(str::to_string)
                     .collect();
-                let is_head = raw_refs
+                let is_head = refs
                     .iter()
-                    .any(|s| *s == "HEAD" || s.starts_with("HEAD -> "));
-                let refs = raw_refs
-                    .into_iter()
-                    .filter(|s| *s != "HEAD")
-                    .map(|s| s.replace("HEAD -> ", ""))
-                    .collect();
+                    .any(|s| s == "HEAD" || s.starts_with("HEAD -> "));
                 let parents: Vec<String> = f[6].split_whitespace().map(str::to_string).collect();
                 let merge = parents.len() > 1;
                 Commit {
@@ -247,6 +245,7 @@ pub(crate) enum Step {
     },
     Git(Vec<String>, Option<String>),
     WorkspaceGit(Vec<String>),
+    Preview(Vec<String>),
     Resolve {
         path: String,
         expected: String,
@@ -352,17 +351,19 @@ pub(crate) fn run_step(
             discard,
         } => return update_paths(dir, *group, files, *discard, target),
         Step::Git(a, i) => ("git", a, i.clone()),
+        Step::Preview(a) => ("git", a, None),
         Step::Gh(a) => ("gh", a, None),
     };
-    let target = matches!(step, Step::Git(..)).then_some(target).flatten();
+    let preview = matches!(step, Step::Preview(_));
+    let target = (prog == "git").then_some(target).flatten();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let network = prog == "git" && matches!(refs.first(), Some(&("fetch" | "pull" | "push")));
     let mut cmd = match &target {
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
             let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            // The helper can time out before an operation finishes, so network writes are never retried.
-            if !network {
+            // Preview output is capped locally. An RPC failure can leave a Git write in flight.
+            if !network && !preview {
                 if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| {
                     c.git(&cwd, &owned, input.as_deref())
                 }) {
@@ -381,7 +382,11 @@ pub(crate) fn run_step(
                                 g.stderr.trim()
                             ))
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            return Err(
+                                crate::trf!("Git helper failed. Refresh to check the result: {error}"; error => e),
+                            )
+                        }
                     }
                 }
             }
@@ -422,7 +427,11 @@ pub(crate) fn run_step(
             let _ = stdin.write_all(text.as_bytes());
         }
     }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    let out = if preview {
+        preview_output(child)?
+    } else {
+        child.wait_with_output().map_err(|e| e.to_string())?
+    };
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if out.status.success() {
@@ -443,6 +452,45 @@ pub(crate) fn run_step(
             msg
         ))
     }
+}
+
+fn preview_output(mut child: std::process::Child) -> Result<std::process::Output, String> {
+    use std::io::{self, Read};
+
+    let mut stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
+    let mut stderr = child.stderr.take().ok_or("Git stderr is unavailable")?;
+    std::thread::scope(|scope| {
+        let errors = scope.spawn(move || {
+            let mut captured = Vec::new();
+            stderr.by_ref().take(8192).read_to_end(&mut captured)?;
+            io::copy(&mut stderr, &mut io::sink())?;
+            Ok::<_, io::Error>(captured)
+        });
+        let mut captured = Vec::new();
+        let read = stdout
+            .by_ref()
+            .take(MAX_DIFF_BYTES as u64 + 1)
+            .read_to_end(&mut captured);
+        let oversized = captured.len() > MAX_DIFF_BYTES;
+        if oversized || read.is_err() {
+            let _ = child.kill();
+        }
+        drop(stdout);
+        let status = child.wait().map_err(|e| e.to_string());
+        let stderr = errors
+            .join()
+            .map_err(|_| "Git stderr reader failed".to_string())?
+            .map_err(|e| e.to_string());
+        if oversized {
+            return Err(tr("The diff is too large to preview.").into());
+        }
+        read.map_err(|e| e.to_string())?;
+        Ok(std::process::Output {
+            status: status?,
+            stdout: captured,
+            stderr: stderr?,
+        })
+    })
 }
 
 fn remote_error(error: String) -> String {
@@ -587,10 +635,11 @@ pub(crate) fn file_diff(
     }
     args.push("--");
     args.extend(file_paths(std::slice::from_ref(file)));
-    let patch = run_step(dir, &git_step(&args), target)?;
-    if patch.len() > MAX_DIFF_BYTES {
-        return Err(tr("The diff is too large to preview.").to_string());
-    }
+    let patch = run_step(
+        dir,
+        &Step::Preview(args.into_iter().map(str::to_string).collect()),
+        target,
+    )?;
     Ok((patch, conflict, open_path))
 }
 
@@ -638,11 +687,7 @@ pub(crate) fn show_commit_diff(
         args.push("--".into());
         args.push(rel.into());
     }
-    let patch = run_step(dir, &Step::Git(args, None), target)?;
-    if patch.len() > MAX_DIFF_BYTES {
-        return Err(tr("The diff is too large to preview.").to_string());
-    }
-    Ok(patch)
+    run_step(dir, &Step::Preview(args), target)
 }
 
 fn patch_hunk(patch: &str, index: usize) -> Option<String> {
@@ -855,6 +900,7 @@ pub(crate) fn snapshot(
                 "-n",
                 "80",
                 "--topo-order",
+                "--decorate=full",
                 "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
                 "-z",
             ]),
@@ -1194,5 +1240,22 @@ mod tests {
         let patch = show_commit_diff(&repo.0, "HEAD", Some("small.txt"), true, None).unwrap();
         assert!(patch.contains("+one\n+two"));
         assert!(show_commit_diff(&repo.0, "deadbeefdeadbeef", None, true, None).is_err());
+
+        repo.write(
+            "small.txt",
+            &"large preview line\n".repeat(MAX_DIFF_BYTES / 16),
+        );
+        let file = repo.status().changes.remove(0);
+        let too_large = tr("The diff is too large to preview.");
+        assert_eq!(
+            file_diff(&repo.0, &file, Group::Changes, None).unwrap_err(),
+            too_large
+        );
+        repo.change(Group::Changes, false).unwrap();
+        commit(&repo.0, "large patch", false, false, None).unwrap();
+        assert_eq!(
+            show_commit_diff(&repo.0, "HEAD", Some("small.txt"), true, None).unwrap_err(),
+            too_large
+        );
     }
 }

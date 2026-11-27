@@ -273,6 +273,37 @@ fn manage_rows() -> Vec<Row> {
     ]
 }
 
+fn file_history_rows(log: &str, path: &str) -> Vec<Row> {
+    let mut fields = log.split('\0').peekable();
+    let mut rows = Vec::new();
+    let mut path = path;
+    while let Some(header) = fields.find(|field| !field.is_empty()) {
+        let commit_path = path;
+        while fields.peek().is_some_and(|field| !field.is_empty()) {
+            let status = fields.next().unwrap_or_default().trim_start_matches('\n');
+            let Some(old) = fields.next() else { break };
+            if status.starts_with(['R', 'C']) {
+                let Some(new) = fields.next() else { break };
+                if status.starts_with('R') && new == path {
+                    path = old;
+                }
+            }
+        }
+        if let Some(commit) = crate::scm_git::parse_log(header).into_iter().next() {
+            rows.push(Row {
+                label: commit.subject,
+                detail: format!("{} · {} · {}", commit.short, commit.author, commit.when),
+                action: RowAction::ShowFile {
+                    hash: commit.hash,
+                    short: commit.short,
+                    path: commit_path.into(),
+                },
+            });
+        }
+    }
+    rows
+}
+
 fn load_choices(
     repo: &Path,
     wsl: Option<&crate::remote::WslTarget>,
@@ -284,25 +315,16 @@ fn load_choices(
         let log = git(&[
             "--literal-pathspecs",
             "log",
+            "--follow",
             "-n",
             "200",
-            "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
+            "--format=%x00%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
+            "--name-status",
             "-z",
             "--",
             path,
         ])?;
-        return Ok(crate::scm_git::parse_log(&log)
-            .into_iter()
-            .map(|commit| Row {
-                label: commit.subject,
-                detail: format!("{} · {} · {}", commit.short, commit.author, commit.when),
-                action: RowAction::ShowFile {
-                    hash: commit.hash,
-                    short: commit.short,
-                    path: path.into(),
-                },
-            })
-            .collect());
+        return Ok(file_history_rows(&log, path));
     }
     if matches!(choice, Choice::OpenWorktree | Choice::RemoveWorktree) {
         return Ok(git(&["worktree", "list", "--porcelain", "-z"])?
@@ -755,6 +777,23 @@ fn worktree_start(target: &GitRef) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_history_uses_the_path_before_each_rename() {
+        let log = concat!(
+            "\0c\x1fc\x1fedit\x1fdev\x1ftoday\x1f\x1fb\0\nM\0new name.txt\0",
+            "\0b\x1fb\x1frename\x1fdev\x1ftoday\x1f\x1fa\0\nR100\0old\nname.txt\0new name.txt\0",
+            "\0a\x1fa\x1fadd\x1fdev\x1ftoday\x1f\x1f\0\nA\0old\nname.txt\0",
+        );
+        let rows = super::file_history_rows(log, "new name.txt");
+        let paths = rows
+            .iter()
+            .filter_map(|row| match &row.action {
+                super::RowAction::ShowFile { path, .. } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["new name.txt", "new name.txt", "old\nname.txt"]);
+    }
     use super::{checkout_args, form_args, parse_refs, worktree_start, Choice, Form, RefKind};
 
     #[test]

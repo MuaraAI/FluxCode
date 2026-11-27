@@ -2247,6 +2247,10 @@ pub const ID: &[(&str, &str)] = &[
     ),
     ("The diff is too large to preview.", "Diff terlalu besar untuk ditampilkan."),
     (
+        "Git helper failed. Refresh to check the result: {error}",
+        "Helper Git gagal. Refresh untuk memeriksa hasilnya: {error}",
+    ),
+    (
         "The untracked file is too large to preview.",
         "File untracked terlalu besar untuk ditampilkan.",
     ),

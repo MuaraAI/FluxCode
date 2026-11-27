@@ -42,36 +42,32 @@ pub struct RefBadge {
     pub label: String,
 }
 
-pub fn parse_ref_badge(raw: &str, is_head_commit: bool, index: usize) -> RefBadge {
-    if let Some(tag) = raw.strip_prefix("tag: ") {
-        return RefBadge {
-            kind: RefKind::Tag,
-            label: tag.to_string(),
-        };
-    }
-    if raw.starts_with("origin/") || raw.starts_with("upstream/") {
-        return RefBadge {
-            kind: RefKind::Remote,
-            label: raw.to_string(),
-        };
-    }
-    let kind = if is_head_commit && index == 0 {
-        RefKind::Head
+fn parse_ref_badge(raw: &str) -> RefBadge {
+    let (kind, label) = if let Some(head) = raw.strip_prefix("HEAD -> ") {
+        (
+            RefKind::Head,
+            head.strip_prefix("refs/heads/").unwrap_or(head),
+        )
+    } else if raw == "HEAD" {
+        (RefKind::Head, raw)
+    } else if let Some(tag) = raw.strip_prefix("tag: ") {
+        (RefKind::Tag, tag.strip_prefix("refs/tags/").unwrap_or(tag))
+    } else if let Some(remote) = raw.strip_prefix("refs/remotes/") {
+        (RefKind::Remote, remote)
     } else {
-        RefKind::Branch
+        (
+            RefKind::Branch,
+            raw.strip_prefix("refs/heads/").unwrap_or(raw),
+        )
     };
     RefBadge {
         kind,
-        label: raw.to_string(),
+        label: label.to_string(),
     }
 }
 
-pub fn sort_ref_badges(refs: &[String], is_head_commit: bool) -> Vec<RefBadge> {
-    let mut badges: Vec<RefBadge> = refs
-        .iter()
-        .enumerate()
-        .map(|(i, r)| parse_ref_badge(r, is_head_commit, i))
-        .collect();
+pub fn sort_ref_badges(refs: &[String]) -> Vec<RefBadge> {
+    let mut badges: Vec<RefBadge> = refs.iter().map(|r| parse_ref_badge(r)).collect();
     badges.sort_by_key(|b| b.kind.sort_key());
     badges
 }
@@ -93,7 +89,7 @@ pub struct GraphRow {
 
 impl GraphRow {
     pub fn row_width(&self) -> Pixels {
-        let cols = self.row_lanes.clamp(1, MAX_VISIBLE_LANES) as f32;
+        let cols = self.row_lanes.clamp(1, MAX_VISIBLE_LANES + 1) as f32;
         theme::u(LEFT_PAD + cols * LANE_PITCH + 4.)
     }
 }
@@ -104,7 +100,7 @@ pub fn rails_width(lanes: &[(usize, usize)]) -> Pixels {
         .map(|(c, _)| c + 1)
         .max()
         .unwrap_or(1)
-        .clamp(1, MAX_VISIBLE_LANES) as f32;
+        .clamp(1, MAX_VISIBLE_LANES + 1) as f32;
     theme::u(LEFT_PAD + cols * LANE_PITCH + 4.)
 }
 
@@ -255,8 +251,23 @@ pub fn lane_color(color_ix: usize) -> Hsla {
 }
 
 fn lane_x(col: usize, scale: f32) -> f32 {
-    let clamped = col.min(MAX_VISIBLE_LANES.saturating_sub(1)) as f32;
-    (LEFT_PAD + clamped * LANE_PITCH + LANE_PITCH * 0.5) * scale
+    (LEFT_PAD + (col as f32 + 0.5) * LANE_PITCH) * scale
+}
+
+fn paint_overflow(window: &mut Window, x0: f32, mid: f32, scale: f32) {
+    let x = x0 + lane_x(MAX_VISIBLE_LANES, scale);
+    let diameter = px(1.5 * scale);
+    for offset in [-2.5, 0., 2.5] {
+        let center = point(px(x + offset * scale), px(mid));
+        window.paint_quad(quad(
+            Bounds::centered_at(center, size(diameter, diameter)),
+            diameter,
+            c(theme::FG_MUTED),
+            px(0.),
+            transparent_black(),
+            BorderStyle::default(),
+        ));
+    }
 }
 
 pub fn render_graph_cell(row: GraphRow) -> AnyElement {
@@ -273,8 +284,15 @@ pub fn render_graph_cell(row: GraphRow) -> AnyElement {
             let bot = y0 + h;
             let pt = |x: f32, y: f32| point(px(x0 + x), px(y));
             let stroke = px(STROKE_W);
+            if row.row_lanes > MAX_VISIBLE_LANES {
+                paint_overflow(window, x0, mid, scale);
+            }
 
-            for &(lane, col_ix) in &row.pass_lanes {
+            for &(lane, col_ix) in row
+                .pass_lanes
+                .iter()
+                .filter(|(lane, _)| *lane < MAX_VISIBLE_LANES)
+            {
                 let lx = lane_x(lane, scale);
                 let mut pb = PathBuilder::stroke(stroke);
                 pb.move_to(pt(lx, y0));
@@ -284,6 +302,9 @@ pub fn render_graph_cell(row: GraphRow) -> AnyElement {
                 }
             }
 
+            if row.col >= MAX_VISIBLE_LANES {
+                return;
+            }
             let cx = lane_x(row.col, scale);
             let node_col = lane_color(row.color);
 
@@ -304,7 +325,11 @@ pub fn render_graph_cell(row: GraphRow) -> AnyElement {
                 }
             }
 
-            for &(from_lane, col_ix) in &row.in_edges {
+            for &(from_lane, col_ix) in row
+                .in_edges
+                .iter()
+                .filter(|(lane, _)| *lane < MAX_VISIBLE_LANES)
+            {
                 let fx = lane_x(from_lane, scale);
                 let mut pb = PathBuilder::stroke(stroke);
                 pb.move_to(pt(fx, y0));
@@ -314,7 +339,11 @@ pub fn render_graph_cell(row: GraphRow) -> AnyElement {
                 }
             }
 
-            for &(to_lane, col_ix) in &row.out_edges {
+            for &(to_lane, col_ix) in row
+                .out_edges
+                .iter()
+                .filter(|(lane, _)| *lane < MAX_VISIBLE_LANES)
+            {
                 let tx = lane_x(to_lane, scale);
                 let mut pb = PathBuilder::stroke(stroke);
                 pb.move_to(pt(cx, mid));
@@ -402,7 +431,10 @@ pub fn render_rails_cell(lanes: Vec<(usize, usize)>) -> AnyElement {
             let y0 = f32::from(bounds.origin.y);
             let bot = y0 + f32::from(bounds.size.height);
             let stroke = px(STROKE_W);
-            for &(lane, col_ix) in &lanes {
+            if lanes.iter().any(|(lane, _)| *lane >= MAX_VISIBLE_LANES) {
+                paint_overflow(window, x0, (y0 + bot) / 2., scale);
+            }
+            for &(lane, col_ix) in lanes.iter().filter(|(lane, _)| *lane < MAX_VISIBLE_LANES) {
                 let lx = lane_x(lane, scale);
                 let mut pb = PathBuilder::stroke(stroke);
                 pb.move_to(point(px(x0 + lx), px(y0)));
@@ -459,17 +491,36 @@ mod tests {
     }
 
     #[test]
+    fn wide_merges_reserve_a_separate_overflow_position() {
+        let log = [cm("merge", &["a", "b", "c", "d", "e", "f", "g", "h"], true)];
+        let graph = compute_graph(&log);
+        let row = &graph.rows[0];
+        let limit = super::MAX_VISIBLE_LANES;
+        assert!(row.row_lanes > limit + 1);
+        assert!(super::lane_x(limit, 1.) > super::lane_x(limit - 1, 1.));
+        assert_eq!(row.row_width(), super::rails_width(&row.after_lanes));
+    }
+
+    #[test]
     fn ref_badges_prioritize_branches_and_remotes_over_tags() {
-        let refs = vec!["tag: v1.0.168".into(), "origin/main".into(), "main".into()];
-        let sorted = sort_ref_badges(&refs, true);
+        let refs = vec![
+            "tag: refs/tags/v1.0.168".into(),
+            "refs/remotes/fork/main".into(),
+            "refs/heads/origin/topic".into(),
+        ];
+        let sorted = sort_ref_badges(&refs);
         assert_eq!(sorted[0].kind, RefKind::Branch);
         assert_eq!(sorted[1].kind, RefKind::Remote);
-        assert_eq!(sorted[1].label, "origin/main");
+        assert_eq!(sorted[1].label, "fork/main");
         assert_eq!(sorted[2].kind, RefKind::Tag);
         assert_eq!(sorted[2].label, "v1.0.168");
 
-        let head_first = sort_ref_badges(&["test/fix".into(), "origin/test/fix".into()], true);
+        let head_first = sort_ref_badges(&[
+            "refs/remotes/fork/test/fix".into(),
+            "HEAD -> refs/heads/test/fix".into(),
+        ]);
         assert_eq!(head_first[0].kind, RefKind::Head);
+        assert_eq!(head_first[0].label, "test/fix");
         assert_eq!(head_first[1].kind, RefKind::Remote);
     }
 }

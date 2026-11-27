@@ -1986,7 +1986,7 @@ impl Workbench {
                         after_lanes: if i + 1 < n { vec![(0, 0)] } else { Vec::new() },
                     });
                     let after_lanes = grow.after_lanes.clone();
-                    let badges = crate::scm_graph::sort_ref_badges(&cm.refs, cm.is_head);
+                    let badges = crate::scm_graph::sort_ref_badges(&cm.refs);
                     let primary_badge = badges.first().cloned();
                     let extra_badge = badges.get(1).cloned();
                     let has_refs = !badges.is_empty();
@@ -2084,7 +2084,12 @@ impl Workbench {
                                 h.child(div().flex_none().text_size(theme::u(10.)).text_color(c(theme::FG_DIM)).child(format!("+{}", badges.len() - 2)))
                             })
                             .tooltip({
-                                let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
+                                let refs = if badges.is_empty() {
+                                    String::new()
+                                } else {
+                                    let labels = badges.iter().map(|badge| badge.label.as_str()).collect::<Vec<_>>();
+                                    format!("\n{}", labels.join(", "))
+                                };
                                 let tip = format!("{}  {}\n{} · {}{refs}", cm.short, cm.subject, cm.author, cm.when);
                                 move |w, cx| Tooltip::new(tip.clone()).build(w, cx)
                             })
@@ -2960,7 +2965,7 @@ mod tests {
         let out = "h1\x1fs1\x1fFix bug\x1fAna\x1f2 hours ago\x1fHEAD -> main, origin/main, origin/HEAD\x1fp1\0\nh2\x1fs2\x1fMerge\x1fBudi\x1f1 day ago\x1f\x1fp1 p2\0";
         let log = parse_log(out);
         assert_eq!(log.len(), 2);
-        assert_eq!(log[0].refs, vec!["main", "origin/main"]);
+        assert_eq!(log[0].refs, vec!["HEAD -> main", "origin/main"]);
         assert!(log[1].merge && !log[0].merge);
     }
 
