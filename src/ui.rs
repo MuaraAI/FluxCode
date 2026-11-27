@@ -377,12 +377,12 @@ impl RenderOnce for McToggle {
         };
 
         let sc = theme::scale();
-        let w = if small { 38.0 } else { 46.0 } * sc;
-        let h = if small { 22.0 } else { 26.0 } * sc;
-        let track_h = if small { 18.0 } else { 22.0 } * sc;
+        let w = if small { 28.0 } else { 34.0 } * sc;
+        let h = if small { 16.0 } else { 18.0 } * sc;
+        let track_h = if small { 13.0 } else { 15.0 } * sc;
         let track_top = (h - track_h) * 0.5;
-        let thumb_w = if small { 18.0 } else { 22.0 } * sc;
-        let thumb_h = if small { 20.0 } else { 24.0 } * sc;
+        let thumb_w = if small { 12.0 } else { 14.0 } * sc;
+        let thumb_h = if small { 14.0 } else { 16.0 } * sc;
         let travel = (w - thumb_w).max(0.0);
         let dark = theme::live_dark();
         let motion = !cx.reduce_motion() && seq > 0;
@@ -394,9 +394,9 @@ impl RenderOnce for McToggle {
             let th_w = thumb_w * j.sx;
             let th_h = thumb_h * j.sy;
             let cx_thumb = thumb_w * 0.5 + travel * j.pos;
-            let left = (cx_thumb - th_w * 0.5).clamp(-1.5 * sc, w - th_w + 1.5 * sc);
+            let left = (cx_thumb - th_w * 0.5).clamp(-1.0 * sc, w - th_w + 1.0 * sc);
             let top =
-                ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-2.0 * sc, h - th_h + 2.0 * sc);
+                ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-1.5 * sc, h - th_h + 1.5 * sc);
             let split_x = (left + th_w * 0.5).clamp(0.0, w);
 
             // Theme-synced KiwEssentials Ore-UI block toggle with jelly bounce and I/O glyphs.
@@ -423,9 +423,11 @@ impl RenderOnce for McToggle {
             } else {
                 c(theme::BORDER_STRONG).opacity(0.78)
             };
-            let glyph_w = (2.0 * sc).max(1.5);
-            let glyph_h = (8.0 * sc).max(6.0);
-            let o_sz = (6.0 * sc).max(5.0);
+            let glyph_w = (1.5 * sc).max(1.2);
+            let glyph_h = (if small { 5.0 } else { 6.0 } * sc).max(4.5);
+            let o_sz = (if small { 4.5 } else { 5.0 } * sc).max(4.0);
+            let track_rad = if small { 3.5 } else { 4.0 } * sc;
+            let thumb_rad = if small { 2.5 } else { 3.0 } * sc;
 
             let track = div()
                 .absolute()
@@ -433,7 +435,7 @@ impl RenderOnce for McToggle {
                 .top(px(track_top + tby))
                 .w(px(w))
                 .h(px(track_h))
-                .rounded(px(4.5 * sc))
+                .rounded(px(track_rad))
                 .border_1()
                 .border_color(track_border)
                 .overflow_hidden()
@@ -444,17 +446,17 @@ impl RenderOnce for McToggle {
                         .top_0()
                         .left_0()
                         .right_0()
-                        .h(px(1.5 * sc))
+                        .h(px(1.0 * sc))
                         .bg(off_shade),
                 )
                 .child(
                     div()
                         .absolute()
-                        .right(px(thumb_w * 0.5 - o_sz * 0.5 - 1.5 * sc))
+                        .right(px((thumb_w * 0.5 - o_sz * 0.5 - 1.0 * sc).max(1.5)))
                         .top(px((track_h - 2.0 * sc - o_sz) * 0.5))
                         .size(px(o_sz))
-                        .rounded(px(1.5))
-                        .border(px(1.4 * sc))
+                        .rounded(px(1.2))
+                        .border(px(1.2 * sc))
                         .border_color(c(theme::FG_MUTED).opacity(0.75))
                         .opacity((1.0 - j.fill).clamp(0.18, 1.0)),
                 )
@@ -473,13 +475,13 @@ impl RenderOnce for McToggle {
                                 .top_0()
                                 .left_0()
                                 .right_0()
-                                .h(px(1.5 * sc))
+                                .h(px(1.0 * sc))
                                 .bg(accent_hi),
                         )
                         .child(
                             div()
                                 .absolute()
-                                .left(px(thumb_w * 0.5 - glyph_w * 0.5 - 1.5 * sc))
+                                .left(px((thumb_w * 0.5 - glyph_w * 0.5 - 1.0 * sc).max(1.5)))
                                 .top(px((track_h - 2.0 * sc - glyph_h) * 0.5))
                                 .w(px(glyph_w))
                                 .h(px(glyph_h))
@@ -495,7 +497,7 @@ impl RenderOnce for McToggle {
                 .top(px(top))
                 .w(px(th_w))
                 .h(px(th_h))
-                .rounded(px(3.5 * sc))
+                .rounded(px(thumb_rad))
                 .border_1()
                 .border_color(thumb_border)
                 .overflow_hidden()
@@ -506,7 +508,7 @@ impl RenderOnce for McToggle {
                         .top_0()
                         .left_0()
                         .right_0()
-                        .h(px(1.5 * sc))
+                        .h(px(1.0 * sc))
                         .bg(thumb_bevel),
                 )
                 .child(
@@ -515,7 +517,7 @@ impl RenderOnce for McToggle {
                         .bottom_0()
                         .left_0()
                         .right_0()
-                        .h(px(2.0 * sc))
+                        .h(px(1.5 * sc))
                         .bg(thumb_lip),
                 );
 

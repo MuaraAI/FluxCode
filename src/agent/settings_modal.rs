@@ -8,7 +8,7 @@ use crate::workbench::Workbench;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
-    h_flex, v_flex, Icon, IconName, Sizable,
+    h_flex, v_flex, Disableable, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
@@ -954,6 +954,7 @@ impl Workbench {
                     Button::new("ag-set-acc-def")
                         .label(tr(if current.is_none() { "Active" } else { "Use" }))
                         .xsmall()
+                        .disabled(current.is_none())
                         .when(current.is_none(), |b| b.primary())
                         .when(current.is_some(), |b| b.ghost())
                         .on_click(cx.listener(|this, _, _, cx| this.agent_use_account(None, cx))),
@@ -1005,6 +1006,7 @@ impl Workbench {
                         Button::new(SharedString::from(format!("ag-set-acc-{name}")))
                             .label(tr(if on { "Active" } else { "Use" }))
                             .xsmall()
+                            .disabled(on)
                             .when(on, |b| b.primary())
                             .when(!on, |b| b.ghost())
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1114,6 +1116,7 @@ impl Workbench {
             .gap_2()
             .child(
                 crate::ui::McToggle::new("ag-gf-mcp")
+                    .small()
                     .checked(self.settings.agent_gflow_mcp)
                     .on_click(move |on: &bool, _, cx| {
                         let on = *on;
@@ -1137,6 +1140,7 @@ impl Workbench {
             .gap_2()
             .child(
                 crate::ui::McToggle::new("ag-gf-sync")
+                    .small()
                     .checked(self.settings.agent_gflow_sync)
                     .on_click(move |on: &bool, _, cx| {
                         let on = *on;
