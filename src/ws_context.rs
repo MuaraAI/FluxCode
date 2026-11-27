@@ -351,8 +351,7 @@ pub fn overview(i: &Inputs) -> String {
             let _ = write!(
                 line,
                 ", tracking {up} ({} ahead, {} behind)",
-                g.ahead,
-                g.behind
+                g.ahead, g.behind
             );
         }
         let changed: Vec<String> = g
