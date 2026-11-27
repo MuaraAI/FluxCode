@@ -9,6 +9,7 @@ compatible with the GPL v3.
 | [GPUI](https://gpui.rs) (from the Zed repository) and [GPUI Fast](https://github.com/longbridge/gpui-fast) | Apache-2.0 | UI framework, GPU rendering; `vendor/gpui-fast-windows` is a modified copy of its Windows renderer (changes listed in its FLUXCODE.md) |
 | [GPUI Kit](https://github.com/longbridge/gpui-kit) (`gpui-kit`, `gpui-component`, `gpui-base`) | Apache-2.0 | Widgets and the code editor |
 | [Lucide](https://lucide.dev) icons (through `gpui-kit-assets`) | ISC | Icons |
+| [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) | MIT | Default file and folder icons |
 | [syntect](https://github.com/trishume/syntect) and [two-face](https://github.com/CosmicHorrorDev/two-face) | MIT | Syntax highlighting |
 | Language grammars from [bat](https://github.com/sharkdp/bat) (through two-face) | each under its own license, listed in two-face | Syntax highlighting for about 200 languages |
 | `serde`, `serde_json`, `lsp-types`, `futures`, `anyhow`, `chrono`, `image`, `base64`, `miniz_oxide`, `sha1_smol`, `embed-resource` and the other crates in `Cargo.lock` | MIT or Apache-2.0 | Data formats, archives, build |

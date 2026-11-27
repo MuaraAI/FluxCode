@@ -1,7 +1,6 @@
-
-use crate::i18n::tr;
 use crate::agent_ctx::{self, RemoteSession};
 use crate::core;
+use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
 use crate::workbench::{tool_button, SideView, Workbench};
 use gpui_kit::component::{
@@ -11,8 +10,8 @@ use gpui_kit::component::{
     text::TextView,
     v_flex, Icon, IconName, Selectable, Sizable,
 };
-use serde::{Deserialize, Serialize};
 use gpui_kit::{prelude::FluentBuilder, *};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -37,22 +36,22 @@ pub(crate) enum Req {
 }
 
 mod activity;
-pub(crate) mod shots;
+mod catalog;
 pub(crate) mod chats;
 mod follow;
 mod full;
 mod limit;
-mod opt;
-mod saver;
-mod table;
-pub(crate) mod updates;
-mod tidy;
-pub(crate) mod worktree;
-mod catalog;
 mod menu;
+pub(crate) mod opt;
+mod saver;
 mod settings_modal;
+pub(crate) mod shots;
+mod table;
+mod tidy;
+pub(crate) mod updates;
 mod usage;
 mod web;
+pub(crate) mod worktree;
 pub(crate) use menu::Menu;
 
 const MODE_ID: &str = "__mode";
@@ -69,7 +68,11 @@ pub struct ConfigOpt {
 
 impl ConfigOpt {
     fn current_name(&self) -> &str {
-        self.choices.iter().find(|c| c.0 == self.current).map(|c| c.1.as_str()).unwrap_or(&self.current)
+        self.choices
+            .iter()
+            .find(|c| c.0 == self.current)
+            .map(|c| c.1.as_str())
+            .unwrap_or(&self.current)
     }
 }
 
@@ -77,11 +80,25 @@ pub fn model_groups(choices: &[(String, String, String)]) -> Vec<(String, Vec<(S
     let mut free = Vec::new();
     let mut by: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for (value, name, _) in choices {
-        let provider = value.split_once('/').or_else(|| name.split_once('/')).map(|(p, _)| p).unwrap_or("").to_string();
-        let short = name.split_once('/').map(|(_, n)| n).unwrap_or(name).trim().to_string();
+        let provider = value
+            .split_once('/')
+            .or_else(|| name.split_once('/'))
+            .map(|(p, _)| p)
+            .unwrap_or("")
+            .to_string();
+        let short = name
+            .split_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(name)
+            .trim()
+            .to_string();
         let is_free = value.ends_with("-free") || short.to_lowercase().ends_with(" free");
         if is_free {
-            let clean = short.strip_suffix(" Free").or_else(|| short.strip_suffix(" free")).unwrap_or(&short).to_string();
+            let clean = short
+                .strip_suffix(" Free")
+                .or_else(|| short.strip_suffix(" free"))
+                .unwrap_or(&short)
+                .to_string();
             free.push((value.clone(), clean));
             continue;
         }
@@ -102,12 +119,21 @@ pub enum Item {
     User(String),
     Text(String),
     Thought(String),
-    Tool { id: String, title: String, status: String, kind: String },
+    Tool {
+        id: String,
+        title: String,
+        status: String,
+        kind: String,
+    },
     Plan(Vec<(String, String)>),
     Note(String, bool),
     Branch(String),
     Web(web::Web),
-    Images { tool: Option<String>, shots: Vec<shots::Shot>, hidden: bool },
+    Images {
+        tool: Option<String>,
+        shots: Vec<shots::Shot>,
+        hidden: bool,
+    },
 }
 
 pub struct Queued {
@@ -160,7 +186,9 @@ pub struct Chat {
 
 fn when_label(ms: u64) -> String {
     use chrono::{Datelike, Local, TimeZone};
-    let Some(t) = Local.timestamp_millis_opt(ms as i64).single() else { return String::new() };
+    let Some(t) = Local.timestamp_millis_opt(ms as i64).single() else {
+        return String::new();
+    };
     let now = Local::now();
     let days = (now.date_naive() - t.date_naive()).num_days();
     if days == 0 {
@@ -179,7 +207,10 @@ const RECENT: usize = 4096;
 const HISTORY_MAX: usize = 200;
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn ago(ms: u64) -> String {
@@ -198,8 +229,14 @@ fn transcript(items: &[Item]) -> String {
     let mut lines: Vec<String> = items
         .iter()
         .filter_map(|i| match i {
-            Item::User(t) => Some(format!("User: {}", t.chars().take(2000).collect::<String>())),
-            Item::Text(t) if !t.trim().is_empty() => Some(format!("Assistant: {}", t.chars().take(2000).collect::<String>())),
+            Item::User(t) => Some(format!(
+                "User: {}",
+                t.chars().take(2000).collect::<String>()
+            )),
+            Item::Text(t) if !t.trim().is_empty() => Some(format!(
+                "Assistant: {}",
+                t.chars().take(2000).collect::<String>()
+            )),
             _ => None,
         })
         .collect();
@@ -229,6 +266,8 @@ pub struct AgentState {
     pub replay: Option<(PathBuf, String)>,
     pub replay_gen: u64,
     pub account_wait: Option<worktree::Account>,
+    pub gflow_busy: bool,
+    pub gflow_note: Option<(String, bool)>,
     pub(crate) input: Entity<TextareaState>,
     pub history: Vec<Chat>,
     pub show_history: bool,
@@ -240,13 +279,21 @@ pub struct AgentState {
     pub slash: Option<(Vec<SlashCmd>, usize)>,
     pub show_options: bool,
     pub editing: Option<usize>,
-    pub installing: Option<(String, crate::acp::Tracker, Entity<crate::flux_anim::InstallAnim>)>,
+    pub installing: Option<(
+        String,
+        crate::acp::Tracker,
+        Entity<crate::flux_anim::InstallAnim>,
+    )>,
     pub ask_inputs: Vec<Entity<InputState>>,
     pub ask_clear: Vec<usize>,
     pub ask_missing: Option<String>,
     pub uninstall: Option<String>,
     pub uninstall_inputs: [Entity<InputState>; 2],
-    pub install_err: Option<(String, String, Option<Entity<crate::flux_anim::InstallAnim>>)>,
+    pub install_err: Option<(
+        String,
+        String,
+        Option<Entity<crate::flux_anim::InstallAnim>>,
+    )>,
     pub(crate) updates: Vec<updates::Pending>,
     pub(crate) updates_hidden: bool,
     pub menu: menu::MenuState,
@@ -271,7 +318,7 @@ pub struct Run {
     pub(crate) account: Option<String>,
     pub(crate) status: Status,
     pub(crate) proc_id: Option<u32>,
-    pub(crate) buf: String,
+    pub(crate) framer: opt::StreamFramer,
     pub(crate) log_tail: Vec<String>,
     pub(crate) next_id: u64,
     pub(crate) pending: HashMap<u64, Req>,
@@ -322,74 +369,79 @@ pub struct Run {
     pub(crate) table_sorts: HashMap<String, (usize, bool)>,
     pub(crate) thermal: opt::ThermalController,
     pub(crate) ctx_cache: opt::ContextCache,
+    pub(crate) coalescer: opt::StreamCoalescer,
+    pub(crate) notify_pending: bool,
 }
 
 static RUN_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Run {
     pub(crate) fn new(agent: String, folder: Option<PathBuf>) -> Self {
+        let thermal = opt::ThermalController::for_agent(&agent);
         Self {
             key: RUN_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             agent,
             folder,
             account: None,
-        status: Status::Off,
-        proc_id: None,
-        buf: String::new(),
-        log_tail: Vec::new(),
-        next_id: 0,
-        pending: HashMap::new(),
-        session: None,
-        queue: Vec::new(),
-        queue_paused: false,
-        pending_steer: None,
-        turn_start_ix: 0,
-        active_user_prompt: None,
-        open_thoughts: HashSet::new(),
-        can_image: false,
-        items: Vec::new(),
-        permission: None,
-        perm_queue: Default::default(),
-        changes: Vec::new(),
-        tool_paths: HashMap::new(),
-        changes_folded: false,
-        limit: Default::default(),
-        open_groups: HashSet::new(),
-        worktree: None,
-        worktree_busy: false,
-        list: {
-            let l = ListState::new(0, ListAlignment::Top, px(600.));
-            l.set_follow_mode(FollowMode::Tail);
-            l
-        },
-        list_seen: Default::default(),
-        view_start: Default::default(),
-        remeasure: Default::default(),
-        follow: true,
-        chat_id: None,
-        carry: None,
-        can_load: false,
-        pending_load: None,
-        loading_id: None,
-        hinted: false,
-        ws_sig: 0,
-        commands: Vec::new(),
-        config: Vec::new(),
-        quiet_stop: false,
-        compacting: false,
-        compact_from: 0,
-        last_active: None,
-        silent_load: false,
-        resume_id: None,
-        relaunch: false,
-        usage: Default::default(),
-        web_open: HashSet::new(),
-        times: Default::default(),
-        open_thought: None,
-        table_sorts: HashMap::new(),
-        thermal: Default::default(),
-        ctx_cache: Default::default(),
-        ask: None,
+            status: Status::Off,
+            proc_id: None,
+            framer: Default::default(),
+            log_tail: Vec::new(),
+            next_id: 0,
+            pending: HashMap::new(),
+            session: None,
+            queue: Vec::new(),
+            queue_paused: false,
+            pending_steer: None,
+            turn_start_ix: 0,
+            active_user_prompt: None,
+            open_thoughts: HashSet::new(),
+            can_image: false,
+            items: Vec::new(),
+            permission: None,
+            perm_queue: Default::default(),
+            changes: Vec::new(),
+            tool_paths: HashMap::new(),
+            changes_folded: false,
+            limit: Default::default(),
+            open_groups: HashSet::new(),
+            worktree: None,
+            worktree_busy: false,
+            list: {
+                let l = ListState::new(0, ListAlignment::Top, px(600.));
+                l.set_follow_mode(FollowMode::Tail);
+                l
+            },
+            list_seen: Default::default(),
+            view_start: Default::default(),
+            remeasure: Default::default(),
+            follow: true,
+            chat_id: None,
+            carry: None,
+            can_load: false,
+            pending_load: None,
+            loading_id: None,
+            hinted: false,
+            ws_sig: 0,
+            commands: Vec::new(),
+            config: Vec::new(),
+            quiet_stop: false,
+            compacting: false,
+            compact_from: 0,
+            last_active: None,
+            silent_load: false,
+            resume_id: None,
+            relaunch: false,
+            usage: Default::default(),
+            web_open: HashSet::new(),
+            times: Default::default(),
+            open_thought: None,
+            table_sorts: HashMap::new(),
+            thermal,
+            ctx_cache: Default::default(),
+            coalescer: Default::default(),
+            notify_pending: false,
+            ask: None,
         }
     }
 
@@ -398,13 +450,17 @@ impl Run {
     }
 
     pub(crate) fn working(&self) -> bool {
-        (self.status == Status::Busy && self.usage.probe.is_none()) || self.permission.is_some() || self.ask.is_some()
+        (self.status == Status::Busy && self.usage.probe.is_none())
+            || self.permission.is_some()
+            || self.ask.is_some()
     }
 
     pub(crate) fn has_active_work(&self) -> bool {
         self.working()
-            || (self.status == Status::Starting && (!self.queue.is_empty() || self.pending_steer.is_some()))
-            || (self.live() && (( !self.queue.is_empty() && !self.queue_paused) || self.pending_steer.is_some()))
+            || (self.status == Status::Starting
+                && (!self.queue.is_empty() || self.pending_steer.is_some()))
+            || (self.live()
+                && ((!self.queue.is_empty() && !self.queue_paused) || self.pending_steer.is_some()))
     }
 }
 
@@ -438,7 +494,10 @@ pub fn agent_id() -> String {
     if !c.is_empty() && c != "auto" && !crate::acp::hidden(&c) {
         return c;
     }
-    crate::acp::installed().into_iter().next().unwrap_or_else(|| "opencode-v2".into())
+    crate::acp::installed()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "opencode-v2".into())
 }
 
 #[derive(Clone)]
@@ -450,18 +509,30 @@ pub struct SlashCmd {
 }
 
 fn builtin_commands() -> Vec<SlashCmd> {
-    let c = |name: &str, desc: &str, takes_input: bool| SlashCmd { name: name.into(), desc: desc.into(), builtin: true, takes_input };
+    let c = |name: &str, desc: &str, takes_input: bool| SlashCmd {
+        name: name.into(),
+        desc: desc.into(),
+        builtin: true,
+        takes_input,
+    };
     vec![
         c("new", crate::i18n::tr("Start a new chat"), false),
-        c("history", crate::i18n::tr("Saved chats and agent sessions for this folder"), false),
+        c(
+            "history",
+            crate::i18n::tr("Saved chats and agent sessions for this folder"),
+            false,
+        ),
         c("stop", crate::i18n::tr("Turn the agent off"), false),
     ]
 }
 
 pub fn agent_name() -> &'static str {
-    static NAMES: std::sync::Mutex<Option<HashMap<String, &'static str>>> = std::sync::Mutex::new(None);
+    static NAMES: std::sync::Mutex<Option<HashMap<String, &'static str>>> =
+        std::sync::Mutex::new(None);
     let id = agent_id();
-    let Ok(mut g) = NAMES.lock() else { return "Agent" };
+    let Ok(mut g) = NAMES.lock() else {
+        return "Agent";
+    };
     let map = g.get_or_insert_with(HashMap::new);
     if let Some(n) = map.get(&id) {
         return n;
@@ -479,8 +550,19 @@ pub(crate) fn find_opencode() -> Option<PathBuf> {
             if cfg!(windows) {
                 candidates.push(dir.join("opencode.exe"));
                 if dir.join("opencode.cmd").is_file() {
-                    candidates.push(dir.join("node_modules").join("@opencode").join("cli").join("bin").join("opencode.exe"));
-                    candidates.push(dir.join("node_modules").join("opencode-ai").join("bin").join("opencode.exe"));
+                    candidates.push(
+                        dir.join("node_modules")
+                            .join("@opencode")
+                            .join("cli")
+                            .join("bin")
+                            .join("opencode.exe"),
+                    );
+                    candidates.push(
+                        dir.join("node_modules")
+                            .join("opencode-ai")
+                            .join("bin")
+                            .join("opencode.exe"),
+                    );
                 }
             } else {
                 candidates.push(dir.join("opencode"));
@@ -490,17 +572,30 @@ pub(crate) fn find_opencode() -> Option<PathBuf> {
     for var in ["USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOME"] {
         if let Ok(base) = std::env::var(var) {
             let b = Path::new(&base);
-            candidates.push(b.join(".opencode").join("bin").join(if cfg!(windows) { "opencode.exe" } else { "opencode" }));
+            candidates.push(b.join(".opencode").join("bin").join(if cfg!(windows) {
+                "opencode.exe"
+            } else {
+                "opencode"
+            }));
             candidates.push(b.join("Programs").join("opencode").join("opencode.exe"));
-            candidates.push(b.join("npm").join("node_modules").join("@opencode").join("cli").join("bin").join("opencode.exe"));
-            candidates.push(b.join("npm").join("node_modules").join("opencode-ai").join("bin").join("opencode.exe"));
+            candidates.push(
+                b.join("npm")
+                    .join("node_modules")
+                    .join("@opencode")
+                    .join("cli")
+                    .join("bin")
+                    .join("opencode.exe"),
+            );
+            candidates.push(
+                b.join("npm")
+                    .join("node_modules")
+                    .join("opencode-ai")
+                    .join("bin")
+                    .join("opencode.exe"),
+            );
         }
     }
     candidates.into_iter().find(|p| p.is_file())
-}
-
-fn agent_cmd() -> Option<std::process::Command> {
-    crate::acp::locate(&agent_id()).map(|l| l.command())
 }
 
 fn sessions_cmd() -> Option<std::process::Command> {
@@ -521,13 +616,21 @@ impl AgentState {
                 .submit_on_enter(true)
                 .placeholder(crate::trf!("Ask {name}…"; name => agent_name()))
         });
-        let sub = cx.subscribe_in(&input, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
-            InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => this.agent_slash_accept(window, cx),
-            InputEvent::PressEnter { shift: false, .. } if this.agent.mention.is_some() => this.agent_mention_accept(window, cx),
-            InputEvent::PressEnter { shift: false, .. } => this.agent_send(window, cx),
-            InputEvent::Change => this.agent_update_mention(cx),
-            _ => {}
-        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Workbench, _, ev: &InputEvent, window, cx| match ev {
+                InputEvent::PressEnter { shift: false, .. } if this.agent.slash.is_some() => {
+                    this.agent_slash_accept(window, cx)
+                }
+                InputEvent::PressEnter { shift: false, .. } if this.agent.mention.is_some() => {
+                    this.agent_mention_accept(window, cx)
+                }
+                InputEvent::PressEnter { shift: false, .. } => this.agent_send(window, cx),
+                InputEvent::Change => this.agent_update_mention(cx),
+                _ => {}
+            },
+        );
         let uninstall_inputs = [
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type the name"))),
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Type it again"))),
@@ -548,6 +651,8 @@ impl AgentState {
             lightbox: None,
             full: Default::default(),
             account_wait: None,
+            gflow_busy: false,
+            gflow_note: None,
             input,
             history: {
                 let mut h: Vec<Chat> = crate::settings::load_json(HISTORY_FILE);
@@ -581,7 +686,10 @@ impl AgentState {
             ask_clear: Vec::new(),
             ask_missing: None,
             uninstall: None,
-            _sub_un: uninstall_inputs.iter().map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify())).collect(),
+            _sub_un: uninstall_inputs
+                .iter()
+                .map(|i| cx.subscribe(i, |_: &mut Workbench, _, _: &InputEvent, cx| cx.notify()))
+                .collect(),
             uninstall_inputs,
             _sub: sub,
         }
@@ -606,22 +714,56 @@ impl AgentState {
         if old.is_some_and(|c| c.messages == messages) {
             return;
         }
-        let renamed = old.map(|c| (c.renamed, c.title.clone())).filter(|(r, _)| *r);
+        let renamed = old
+            .map(|c| (c.renamed, c.title.clone()))
+            .filter(|(r, _)| *r);
         let keep = old.is_some_and(|c| c.keep);
         let pinned = old.is_some_and(|c| c.pinned);
         let folder = folder.or_else(|| old.and_then(|c| c.folder.clone()));
-        let account = self.run.account.clone().or_else(|| old.and_then(|c| c.account.clone()));
-        let session = self.run.session.clone().or_else(|| self.run.resume_id.clone()).or_else(|| old.and_then(|c| c.session.clone()));
+        let account = self
+            .run
+            .account
+            .clone()
+            .or_else(|| old.and_then(|c| c.account.clone()));
+        let session = self
+            .run
+            .session
+            .clone()
+            .or_else(|| self.run.resume_id.clone())
+            .or_else(|| old.and_then(|c| c.session.clone()));
         let title = match &renamed {
             Some((_, t)) => t.clone(),
             None => messages
                 .iter()
                 .find(|m| m.0 == "user")
-                .map(|m| m.1.lines().next().unwrap_or("").chars().take(70).collect::<String>())
+                .map(|m| {
+                    m.1.lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(70)
+                        .collect::<String>()
+                })
                 .unwrap_or_default(),
         };
         self.history.retain(|c| c.id != id);
-        self.history.insert(0, Chat { id, title, renamed: renamed.is_some(), updated: now_ms(), messages, archived: false, keep, folder, agent: Some(agent_id()), account, session, pinned });
+        self.history.insert(
+            0,
+            Chat {
+                id,
+                title,
+                renamed: renamed.is_some(),
+                updated: now_ms(),
+                messages,
+                archived: false,
+                keep,
+                folder,
+                agent: Some(agent_id()),
+                account,
+                session,
+                pinned,
+            },
+        );
         self.history.truncate(HISTORY_MAX);
         crate::settings::save_json(HISTORY_FILE, &self.history);
     }
@@ -631,11 +773,18 @@ impl AgentState {
     }
 
     pub fn run_of(&self, id: u32) -> Option<u64> {
-        self.runs.iter().find(|r| r.proc_id == Some(id)).map(|r| r.key)
+        self.runs
+            .iter()
+            .find(|r| r.proc_id == Some(id))
+            .map(|r| r.key)
     }
 
     pub(crate) fn working_ids(&self) -> Vec<u64> {
-        std::iter::once(&self.run).chain(&self.runs).filter(|r| r.working()).filter_map(|r| r.chat_id).collect()
+        std::iter::once(&self.run)
+            .chain(&self.runs)
+            .filter(|r| r.working())
+            .filter_map(|r| r.chat_id)
+            .collect()
     }
 
     fn append_user(&mut self, text: &str) {
@@ -648,27 +797,47 @@ impl AgentState {
     fn append(&mut self, thought: bool, text: &str) {
         match (self.items.last_mut(), thought) {
             (Some(Item::Text(t)), false) | (Some(Item::Thought(t)), true) => t.push_str(text),
-            _ => self.items.push(if thought { Item::Thought(text.into()) } else { Item::Text(text.into()) }),
+            _ => self.items.push(if thought {
+                Item::Thought(text.into())
+            } else {
+                Item::Text(text.into())
+            }),
         }
     }
 }
 
 impl Workbench {
     fn agent_chat_title(&self) -> String {
-        self.agent.chat_id.and_then(|id| self.agent.history.iter().find(|c| c.id == id)).map(|c| c.title.clone()).unwrap_or_default()
+        self.agent
+            .chat_id
+            .and_then(|id| self.agent.history.iter().find(|c| c.id == id))
+            .map(|c| c.title.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn agent_save(&mut self) {
-        let folder = self.agent.folder.clone().or_else(|| self.root.clone()).map(|r| r.display().to_string());
+        let folder = self
+            .agent
+            .folder
+            .clone()
+            .or_else(|| self.root.clone())
+            .map(|r| r.display().to_string());
         self.agent.save_chat(folder);
     }
 
-    pub(crate) fn agent_with_run(&mut self, key: u64, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>)) -> bool {
+    pub(crate) fn agent_with_run(
+        &mut self,
+        key: u64,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Self, &mut Context<Self>),
+    ) -> bool {
         if self.agent.run.key == key {
             f(self, cx);
             return true;
         }
-        let Some(ix) = self.agent.runs.iter().position(|r| r.key == key) else { return false };
+        let Some(ix) = self.agent.runs.iter().position(|r| r.key == key) else {
+            return false;
+        };
         let front = self.agent.run.key;
         std::mem::swap(&mut self.agent.run, &mut self.agent.runs[ix]);
         set_choice(&self.agent.run.agent);
@@ -679,15 +848,26 @@ impl Workbench {
             std::mem::swap(&mut self.agent.run, &mut self.agent.runs[ix]);
         }
         set_choice(&self.agent.run.agent);
-        self.agent.runs.retain(|r| r.live() || r.status != Status::Off);
+        self.agent
+            .runs
+            .retain(|r| r.live() || r.status != Status::Off);
         true
     }
 
-    fn agent_switch_to(&mut self, mut next: Run, new_session: bool, cx: &mut Context<Self>) -> bool {
+    fn agent_switch_to(
+        &mut self,
+        mut next: Run,
+        new_session: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         self.agent_save();
         let next_cwd = match &next.worktree {
             Some(w) => w.path.clone(),
-            None => next.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
+            None => next
+                .folder
+                .clone()
+                .or_else(|| self.root.clone())
+                .unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
         };
         let cur = &self.agent.run;
         let handoff = !next.live()
@@ -703,7 +883,9 @@ impl Workbench {
         if handoff {
             let r = &mut self.agent.run;
             next.proc_id = r.proc_id.take();
-            next.buf = std::mem::take(&mut r.buf);
+            next.framer = std::mem::take(&mut r.framer);
+            next.coalescer = std::mem::take(&mut r.coalescer);
+            next.notify_pending = false;
             next.log_tail = std::mem::take(&mut r.log_tail);
             next.next_id = r.next_id;
             next.pending = std::mem::take(&mut r.pending);
@@ -711,7 +893,8 @@ impl Workbench {
             next.can_image = r.can_image;
             next.commands = r.commands.clone();
             next.config = r.config.clone();
-            next.thermal = std::mem::take(&mut r.thermal);
+            next.thermal =
+                std::mem::replace(&mut r.thermal, opt::ThermalController::for_agent(&r.agent));
             next.ctx_cache.clear();
             r.ctx_cache.clear();
             next.folder = Some(next_cwd);
@@ -734,6 +917,15 @@ impl Workbench {
             old.chat_id = Some(now_ms());
         }
         if old.chat_id.is_some() && (old.live() || matches!(old.status, Status::Error(_))) {
+            if old.status == Status::Ready && !old.working() {
+                if let Some(pid) = old.proc_id {
+                    let ws = self.procs.job_working_set_mb(pid);
+                    if old.thermal.should_trim(ws, std::time::Instant::now(), true) {
+                        self.procs.cool_job(pid, true, None);
+                        old.thermal.record_trim();
+                    }
+                }
+            }
             self.agent.runs.push(old);
         } else if let Some(id) = old.proc_id {
             self.procs.kill(id);
@@ -753,7 +945,11 @@ impl Workbench {
                 }
                 self.agent.status = Status::Starting;
                 let cwd = self.agent_cwd();
-                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
+                self.agent_request(
+                    Req::NewSession,
+                    "session/new",
+                    json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+                );
             }
             self.agent_schedule_idle(false, cx);
         }
@@ -782,8 +978,11 @@ impl Workbench {
     }
 
     fn agent_take_config(&mut self, v: &Value) {
-        let Some(opts) = v.get("configOptions").and_then(Value::as_array) else { return };
-        let str_of = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let Some(opts) = v.get("configOptions").and_then(Value::as_array) else {
+            return;
+        };
+        let str_of =
+            |o: &Value, k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         self.agent.config = opts
             .iter()
             .filter(|o| o.get("type").and_then(Value::as_str).unwrap_or("select") == "select")
@@ -795,7 +994,18 @@ impl Workbench {
                 choices: o
                     .get("options")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(|c| (str_of(c, "value"), str_of(c, "name"), str_of(c, "description"))).filter(|c| !c.0.is_empty()).collect())
+                    .map(|a| {
+                        a.iter()
+                            .map(|c| {
+                                (
+                                    str_of(c, "value"),
+                                    str_of(c, "name"),
+                                    str_of(c, "description"),
+                                )
+                            })
+                            .filter(|c| !c.0.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default(),
             })
             .filter(|o| !o.id.is_empty() && !o.choices.is_empty())
@@ -803,7 +1013,9 @@ impl Workbench {
                 if o.category.is_empty() {
                     o.category = match o.id.as_str() {
                         "model" => "model",
-                        "effort" | "reasoning" | "reasoning_effort" | "thought_level" => "thought_level",
+                        "effort" | "reasoning" | "reasoning_effort" | "thought_level" => {
+                            "thought_level"
+                        }
                         "mode" | "agent" => "mode",
                         _ => "",
                     }
@@ -817,16 +1029,33 @@ impl Workbench {
                 let choices: Vec<(String, String, String)> = m
                     .get("availableModes")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(|c| (str_of(c, "id"), str_of(c, "name"), str_of(c, "description"))).filter(|c| !c.0.is_empty()).collect())
+                    .map(|a| {
+                        a.iter()
+                            .map(|c| (str_of(c, "id"), str_of(c, "name"), str_of(c, "description")))
+                            .filter(|c| !c.0.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if !choices.is_empty() {
-                    self.agent.config.push(ConfigOpt { id: MODE_ID.into(), name: "Mode".into(), category: "mode".into(), current: str_of(m, "currentModeId"), choices });
+                    self.agent.config.push(ConfigOpt {
+                        id: MODE_ID.into(),
+                        name: "Mode".into(),
+                        category: "mode".into(),
+                        current: str_of(m, "currentModeId"),
+                        choices,
+                    });
                 }
             }
         }
     }
 
-    pub(crate) fn agent_set_option(&mut self, id: &str, value: String, remember: bool, cx: &mut Context<Self>) {
+    pub(crate) fn agent_set_option(
+        &mut self,
+        id: &str,
+        value: String,
+        remember: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.agent_set_option_opts(id, value, remember, !remember, false, cx);
     }
 
@@ -857,11 +1086,22 @@ impl Workbench {
             o.current = value.clone();
         }
         if let Some(session) = self.agent.session.clone() {
-            let req = Req::SetOption { silent, apply_effort };
+            let req = Req::SetOption {
+                silent,
+                apply_effort,
+            };
             if id == MODE_ID {
-                self.agent_request(req, "session/set_mode", json!({ "sessionId": session, "modeId": value }));
+                self.agent_request(
+                    req,
+                    "session/set_mode",
+                    json!({ "sessionId": session, "modeId": value }),
+                );
             } else {
-                self.agent_request(req, "session/set_config_option", json!({ "sessionId": session, "configId": id, "value": value }));
+                self.agent_request(
+                    req,
+                    "session/set_config_option",
+                    json!({ "sessionId": session, "configId": id, "value": value }),
+                );
             }
         }
         cx.notify();
@@ -897,12 +1137,27 @@ impl Workbench {
             if v.iter().any(|o| o.category == f.category) {
                 continue;
             }
-            let current = self.settings.agent_options.get(&format!("{cli}:{FLAG_PREFIX}{}", f.id)).cloned().unwrap_or_else(|| crate::acp::FLAG_DEFAULT.into());
+            let current = self
+                .settings
+                .agent_options
+                .get(&format!("{cli}:{FLAG_PREFIX}{}", f.id))
+                .cloned()
+                .unwrap_or_else(|| crate::acp::FLAG_DEFAULT.into());
             let mut choices = crate::acp::flag_choices(&agent, f.id);
             if !choices.iter().any(|c| c.0 == current) {
-                choices.push((current.clone(), crate::acp::model_label(&current), String::new()));
+                choices.push((
+                    current.clone(),
+                    crate::acp::model_label(&current),
+                    String::new(),
+                ));
             }
-            v.push(ConfigOpt { id: format!("{FLAG_PREFIX}{}", f.id), name: f.name.into(), category: f.category.into(), current, choices });
+            v.push(ConfigOpt {
+                id: format!("{FLAG_PREFIX}{}", f.id),
+                name: f.name.into(),
+                category: f.category.into(),
+                current,
+                choices,
+            });
         }
         v
     }
@@ -912,7 +1167,10 @@ impl Workbench {
         crate::acp::flag_opts(&agent_id())
             .iter()
             .filter_map(|f| {
-                let v = self.settings.agent_options.get(&format!("{cli}:{FLAG_PREFIX}{}", f.id))?;
+                let v = self
+                    .settings
+                    .agent_options
+                    .get(&format!("{cli}:{FLAG_PREFIX}{}", f.id))?;
                 (v != crate::acp::FLAG_DEFAULT).then(|| [f.flag.to_string(), v.clone()])
             })
             .flatten()
@@ -954,7 +1212,15 @@ impl Workbench {
         self.settings.save();
         if level == "full" {
             while let Some(p) = &self.agent.permission {
-                let Some(oid) = p.options.iter().find(|o| o.2.starts_with("allow_once")).or_else(|| p.options.iter().find(|o| o.2.starts_with("allow"))).map(|o| o.0.clone()) else { break };
+                let Some(oid) = p
+                    .options
+                    .iter()
+                    .find(|o| o.2.starts_with("allow_once"))
+                    .or_else(|| p.options.iter().find(|o| o.2.starts_with("allow")))
+                    .map(|o| o.0.clone())
+                else {
+                    break;
+                };
                 self.agent_answer_permission(Some(oid), cx);
             }
         }
@@ -962,11 +1228,20 @@ impl Workbench {
     }
 
     pub(crate) fn agent_toggle_full(&mut self, on: bool, cx: &mut Context<Self>) {
-        let level = if on { "full" } else { self.settings.access_off() };
+        let level = if on {
+            "full"
+        } else {
+            self.settings.access_off()
+        };
         self.agent_set_access(level, cx);
     }
 
-    pub(crate) fn on_agent_show_options(&mut self, _: &crate::workbench::AgentShowOptions, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_show_options(
+        &mut self,
+        _: &crate::workbench::AgentShowOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.agent_open_options(window, cx);
     }
 
@@ -988,7 +1263,9 @@ impl Workbench {
     }
 
     fn agent_edit(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Item::User(t)) = self.agent.items.get(ix) else { return };
+        let Some(Item::User(t)) = self.agent.items.get(ix) else {
+            return;
+        };
         let t = t.clone();
         self.agent.editing = Some(ix);
         self.agent.input.update(cx, |s, cx| {
@@ -1003,7 +1280,9 @@ impl Workbench {
 
     fn agent_cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.agent.editing.take().is_some() {
-            self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+            self.agent
+                .input
+                .update(cx, |s, cx| s.set_value("", window, cx));
             cx.notify();
         }
     }
@@ -1014,8 +1293,16 @@ impl Workbench {
         self.agent.open_thoughts.retain(|k| *k < ix);
         self.agent.open_groups.retain(|k| *k < ix);
         self.agent.table_sorts.clear();
-        self.agent.items.push(Item::Note(crate::i18n::tr("Edited: the answer starts over from this message.").into(), false));
-        self.agent.carry = self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))).then(|| transcript(&self.agent.items));
+        self.agent.items.push(Item::Note(
+            crate::i18n::tr("Edited: the answer starts over from this message.").into(),
+            false,
+        ));
+        self.agent.carry = self
+            .agent
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::User(_) | Item::Text(_)))
+            .then(|| transcript(&self.agent.items));
         self.agent.queue = vec![Queued { text, files }];
         self.agent.queue_paused = false;
         self.agent.pending_steer = None;
@@ -1038,7 +1325,11 @@ impl Workbench {
                 self.agent.session = None;
                 self.agent.status = Status::Starting;
                 let cwd = self.agent_cwd();
-                self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
+                self.agent_request(
+                    Req::NewSession,
+                    "session/new",
+                    json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+                );
             }
             Status::Starting => {}
             _ => self.agent_start(cx),
@@ -1057,11 +1348,24 @@ impl Workbench {
 
     fn agent_mcp_servers(&self) -> Value {
         let s = &self.settings;
-        Value::Array(crate::browser::mcp_server(&s.agent_browser, s.agent_browser_headless, self.root.as_deref()).into_iter().collect())
+        let mut list: Vec<Value> = crate::browser::mcp_server(
+            &s.agent_browser,
+            s.agent_browser_headless,
+            self.root.as_deref(),
+        )
+        .into_iter()
+        .collect();
+        if let Some(gf) = crate::gflow::mcp_server_entry(s.agent_gflow_mcp) {
+            list.push(gf);
+        }
+        Value::Array(list)
     }
 
     pub(crate) fn agent_browser_setup(&mut self, cx: &mut Context<Self>) {
-        if !matches!(crate::browser::state(&self.settings.agent_browser), crate::browser::State::NotInstalled(_)) {
+        if !matches!(
+            crate::browser::state(&self.settings.agent_browser),
+            crate::browser::State::NotInstalled(_)
+        ) {
             return;
         }
         let task = cx.background_spawn(async move { crate::browser::install() });
@@ -1080,38 +1384,47 @@ impl Workbench {
     }
 
     fn agent_start(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy) {
+        if matches!(
+            self.agent.status,
+            Status::Starting | Status::Ready | Status::Busy
+        ) {
             return;
         }
         self.agent_browser_setup(cx);
         if self.agent.folder.is_none() {
             self.agent.folder = self.root.clone();
         }
-        let Some(mut cmd) = agent_cmd() else {
+        let id = agent_id();
+        let Some(launch) = crate::acp::locate(&id) else {
             self.agent.status = Status::Error(
                 crate::trf!("{name} isn't installed yet. Download it from the agent menu above, or pick another agent."; name => agent_name()),
             );
             cx.notify();
             return;
         };
+        let mut cmd = launch.command();
         cmd.args(self.agent_flag_args());
-        cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
-        if crate::acp::is_opencode(&agent_id()) {
-            // Keep all ACP tools, FFF search, and models intact; disable only redundant watcher/update/debug overhead.
-            cmd.env("OPENCODE_DISABLE_FILEWATCHER", "1")
-                .env("OPENCODE_FILEWATCHER_DISABLE", "1")
-                .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
-                .env("OPENCODE_LOG_LEVEL", "error");
-        }
+        opt::apply_agent_runtime_env(&mut cmd, &id, &launch.cmd);
         crate::github::apply_env(&mut cmd);
         if let Some(a) = self.agent_account() {
-            let (k, v) = worktree::account_env(&a);
-            cmd.env(k, v);
+            for (k, v) in worktree::account_envs(&a) {
+                cmd.env(k, v);
+            }
+        } else if self.settings.agent_gflow_mcp {
+            if let Ok(sel) = crate::gflow::select_profile("image", None, false) {
+                cmd.env("GFLOW_CLI_PROFILE", &sel.profile);
+            }
         }
         self.agent.status = Status::Starting;
-        self.agent.buf.clear();
+        self.agent.framer.clear();
+        self.agent.coalescer.reset();
+        self.agent.notify_pending = false;
+        self.agent.thermal = opt::ThermalController::for_agent(&id);
         self.agent.log_tail.clear();
-        match self.procs.spawn_isolated(cmd, Some(self.agent_cwd().as_path()), &agent_id()) {
+        match self
+            .procs
+            .spawn_isolated(cmd, Some(self.agent_cwd().as_path()), &id)
+        {
             Ok(id) => {
                 self.agent.proc_id = Some(id);
                 self.agent_request(
@@ -1124,7 +1437,9 @@ impl Workbench {
                     }),
                 );
             }
-            Err(e) => self.agent.status = Status::Error(format!("{} could not start: {e}", agent_name())),
+            Err(e) => {
+                self.agent.status = Status::Error(format!("{} could not start: {e}", agent_name()))
+            }
         }
         cx.notify();
     }
@@ -1144,8 +1459,11 @@ impl Workbench {
         self.agent.queue_paused = false;
         self.agent.hinted = false;
         self.agent.ws_sig = 0;
+        self.agent.framer.clear();
+        self.agent.coalescer.reset();
+        self.agent.notify_pending = false;
         self.agent.ctx_cache.clear();
-        self.agent.thermal = Default::default();
+        self.agent.thermal = opt::ThermalController::for_agent(&self.agent.agent);
         self.agent.loading_id = None;
         self.sync_tray_agent_state();
         cx.notify();
@@ -1193,7 +1511,9 @@ impl Workbench {
         if text.is_empty() && self.agent.attachments.is_empty() {
             return;
         }
-        self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.agent
+            .input
+            .update(cx, |s, cx| s.set_value("", window, cx));
         self.agent.mention = None;
         self.agent.slash = None;
         match text.as_str() {
@@ -1236,7 +1556,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_agent_force_send(&mut self, _: &crate::workbench::AgentForceSend, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_force_send(
+        &mut self,
+        _: &crate::workbench::AgentForceSend,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.agent_force_send_input(window, cx);
     }
 
@@ -1248,7 +1573,9 @@ impl Workbench {
             }
             return;
         }
-        self.agent.input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.agent
+            .input
+            .update(cx, |s, cx| s.set_value("", window, cx));
         self.agent.mention = None;
         self.agent.slash = None;
         if let Some(ix) = self.agent.editing.take() {
@@ -1312,7 +1639,12 @@ impl Workbench {
         })
     }
 
-    fn agent_dispatch_item(&mut self, item: Queued, interrupted: Option<InterruptedTask>, cx: &mut Context<Self>) {
+    fn agent_dispatch_item(
+        &mut self,
+        item: Queued,
+        interrupted: Option<InterruptedTask>,
+        cx: &mut Context<Self>,
+    ) {
         let shown = item.text.clone();
         if interrupted.is_some() {
             self.agent.items.push(Item::Note(
@@ -1322,10 +1654,21 @@ impl Workbench {
         }
         self.agent.turn_start_ix = self.agent.items.len();
         self.agent.active_user_prompt = (!item.text.trim().is_empty()).then(|| item.text.clone());
-        self.agent.items.push(Item::User(if shown.is_empty() { "(attachments)".into() } else { shown }));
+        self.agent.items.push(Item::User(if shown.is_empty() {
+            "(attachments)".into()
+        } else {
+            shown
+        }));
         if !item.files.is_empty() {
-            let names: Vec<String> = item.files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
-            self.agent.items.push(Item::Note(crate::trf!("Attached: {0}"; 0 => names.join(", ")), false));
+            let names: Vec<String> = item
+                .files
+                .iter()
+                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .collect();
+            self.agent.items.push(Item::Note(
+                crate::trf!("Attached: {0}"; 0 => names.join(", ")),
+                false,
+            ));
         }
         let prompt_text = build_steer_prompt(&item.text, interrupted.as_ref());
         self.agent_prompt(prompt_text, item.text, item.files, cx);
@@ -1370,7 +1713,11 @@ impl Workbench {
         let text = item.text;
         self.agent.input.update(cx, |s, cx| {
             let cur = s.value().trim().to_string();
-            let merged = if cur.is_empty() { text.clone() } else { format!("{text}\n{cur}") };
+            let merged = if cur.is_empty() {
+                text.clone()
+            } else {
+                format!("{text}\n{cur}")
+            };
             let end = merged.len();
             s.set_value(merged, window, cx);
             s.set_selected_range(end..end, cx);
@@ -1404,8 +1751,16 @@ impl Workbench {
         cx.notify();
     }
 
-    fn agent_prompt(&mut self, text: String, context_text: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let Some(session) = self.agent.session.clone() else { return };
+    fn agent_prompt(
+        &mut self,
+        text: String,
+        context_text: String,
+        files: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.agent.session.clone() else {
+            return;
+        };
         self.agent_wake_thermal();
         let mut prompt = Vec::new();
         if let Some(earlier) = self.agent.carry.take() {
@@ -1422,7 +1777,11 @@ impl Workbench {
         }
         self.agent.limit.hit = None;
         self.agent.status = Status::Busy;
-        self.agent_request(Req::Prompt, "session/prompt", json!({ "sessionId": session, "prompt": prompt }));
+        self.agent_request(
+            Req::Prompt,
+            "session/prompt",
+            json!({ "sessionId": session, "prompt": prompt }),
+        );
     }
 
     fn agent_close_thought(&mut self) {
@@ -1434,9 +1793,15 @@ impl Workbench {
     }
 
     fn agent_send_probe(&mut self, command: &str) {
-        let Some(session) = self.agent.session.clone() else { return };
+        let Some(session) = self.agent.session.clone() else {
+            return;
+        };
         self.agent.status = Status::Busy;
-        self.agent_request(Req::Probe, "session/prompt", json!({ "sessionId": session, "prompt": [{ "type": "text", "text": command }] }));
+        self.agent_request(
+            Req::Probe,
+            "session/prompt",
+            json!({ "sessionId": session, "prompt": [{ "type": "text", "text": command }] }),
+        );
     }
 
     fn agent_cancel(&mut self, cx: &mut Context<Self>) {
@@ -1450,7 +1815,13 @@ impl Workbench {
     fn agent_cancel_internal(&mut self, _user_stop: bool, cx: &mut Context<Self>) {
         if let (Status::Busy, Some(s)) = (&self.agent.status, self.agent.session.clone()) {
             self.agent_write(json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": s } }));
-            let waiting: Vec<Permission> = self.agent.permission.take().into_iter().chain(self.agent.perm_queue.drain(..)).collect();
+            let waiting: Vec<Permission> = self
+                .agent
+                .permission
+                .take()
+                .into_iter()
+                .chain(self.agent.perm_queue.drain(..))
+                .collect();
             for p in waiting {
                 self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": { "outcome": "cancelled" } } }));
             }
@@ -1461,7 +1832,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn agent_on_output(&mut self, text: &str, err: bool, cx: &mut Context<Self>) {
+    pub(crate) fn agent_on_output(
+        &mut self,
+        text: &str,
+        err: bool,
+        cx: &mut Context<Self>,
+    ) -> opt::NotifyAction {
         if err {
             for l in text.lines().filter(|l| !l.trim().is_empty()) {
                 self.agent.log_tail.push(l.to_string());
@@ -1470,26 +1846,39 @@ impl Workbench {
             if n > 40 {
                 self.agent.log_tail.drain(..n - 40);
             }
-            return;
+            return opt::NotifyAction::None;
         }
-        self.agent.buf.push_str(text);
-        if let Some(end) = self.agent.buf.rfind('\n') {
-            let msgs: Vec<Value> = self.agent.buf[..end]
-                .split('\n')
-                .filter_map(|line| {
-                    let trimmed = line.trim();
-                    (!trimmed.is_empty()).then(|| serde_json::from_str::<Value>(trimmed).ok()).flatten()
-                })
-                .collect();
-            self.agent.buf.drain(..=end);
-            if self.agent.buf.is_empty() && self.agent.buf.capacity() > 65_536 {
-                self.agent.buf.shrink_to(4096);
+        let mut msgs: Vec<Value> = Vec::new();
+        let count = self.agent.framer.push_and_drain(text, |line| {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                msgs.push(v);
             }
-            for msg in msgs {
-                self.agent_on_message(msg, cx);
+        });
+        let mut urgent = false;
+        for msg in &msgs {
+            if msg.get("method").is_some() {
+                let su = msg
+                    .pointer("/params/update/sessionUpdate")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let stream_text = matches!(
+                    su,
+                    "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk"
+                );
+                if !stream_text || msg.get("id").is_some() {
+                    urgent = true;
+                }
+            } else {
+                urgent = true;
             }
+        }
+        for msg in msgs {
+            self.agent_on_message(msg, cx);
         }
         self.agent_follow();
+        self.agent
+            .coalescer
+            .on_batch(count, urgent, std::time::Instant::now())
     }
 
     pub(crate) fn agent_on_exit(&mut self, cx: &mut Context<Self>) {
@@ -1499,9 +1888,22 @@ impl Workbench {
         self.agent.pending_steer = None;
         self.agent.active_user_prompt = None;
         if self.agent.status != Status::Off {
-            let tail = self.agent.log_tail.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("\n");
+            let tail = self
+                .agent
+                .log_tail
+                .iter()
+                .rev()
+                .take(3)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             let name = agent_name();
-            self.agent.status = Status::Error(if tail.is_empty() { format!("{name} stopped.") } else { format!("{name} stopped:\n{tail}") });
+            self.agent.status = Status::Error(if tail.is_empty() {
+                format!("{name} stopped.")
+            } else {
+                format!("{name} stopped:\n{tail}")
+            });
         }
         self.sync_tray_agent_state();
         cx.notify();
@@ -1516,35 +1918,62 @@ impl Workbench {
             }
             return;
         }
-        let Some(id) = msg.get("id").and_then(Value::as_u64) else { return };
-        let Some(kind) = self.agent.pending.remove(&id) else { return };
+        let Some(id) = msg.get("id").and_then(Value::as_u64) else {
+            return;
+        };
+        let Some(kind) = self.agent.pending.remove(&id) else {
+            return;
+        };
         if let Some(e) = msg.get("error") {
-            let m = e.get("message").and_then(Value::as_str).unwrap_or("Agent error").to_string();
+            let m = e
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Agent error")
+                .to_string();
             match kind {
                 Req::Prompt => {
                     self.agent_close_thought();
                     self.agent.active_user_prompt = None;
                     let low = m.to_lowercase();
                     let quiet = std::mem::take(&mut self.agent.quiet_stop);
-                    let was_steer_cancel = self.agent.pending_steer.is_some() && (quiet || low.contains("cancel") || low.contains("abort"));
+                    let was_steer_cancel = self.agent.pending_steer.is_some()
+                        && (quiet || low.contains("cancel") || low.contains("abort"));
                     self.agent.status = Status::Ready;
                     if was_steer_cancel {
                         self.agent_flush_queue(cx);
                         return;
                     }
-                    let model_problem = ["credential", "api key", "apikey", "unauthorized", "401", "403", "quota", "rate limit", "model"]
-                        .iter()
-                        .any(|k| low.contains(k));
+                    let model_problem = [
+                        "credential",
+                        "api key",
+                        "apikey",
+                        "unauthorized",
+                        "401",
+                        "403",
+                        "quota",
+                        "rate limit",
+                        "model",
+                    ]
+                    .iter()
+                    .any(|k| low.contains(k));
                     self.agent_check_limit(&m, cx);
                     self.agent.items.push(Item::Note(m, true));
-                    let models = self.agent.config.iter().find(|o| o.category == "model").map_or(0, |o| o.choices.len());
+                    let models = self
+                        .agent
+                        .config
+                        .iter()
+                        .find(|o| o.category == "model")
+                        .map_or(0, |o| o.choices.len());
                     if model_problem && models > 1 {
                         self.agent.items.push(Item::Note(crate::i18n::tr("This looks like a problem with the model. Pick another one with the model button under the message box, then send again.").into(), false));
                     }
                     self.sync_tray_agent_state();
                 }
                 Req::SetOption { silent: true, .. } => {}
-                Req::SetOption { silent: false, .. } => self.agent.items.push(Item::Note(crate::trf!("Couldn't change the setting: {m}"; m => m), true)),
+                Req::SetOption { silent: false, .. } => self.agent.items.push(Item::Note(
+                    crate::trf!("Couldn't change the setting: {m}"; m => m),
+                    true,
+                )),
                 Req::Probe => {
                     self.agent.status = Status::Ready;
                     if std::mem::take(&mut self.agent.compacting) {
@@ -1559,7 +1988,11 @@ impl Workbench {
                     self.agent.loading_id = None;
                     self.agent.carry = Some(transcript(&self.agent.items));
                     let cwd = self.agent_cwd();
-                    self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
+                    self.agent_request(
+                        Req::NewSession,
+                        "session/new",
+                        json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+                    );
                 }
                 _ => self.agent.status = Status::Error(m),
             }
@@ -1568,8 +2001,14 @@ impl Workbench {
         let result = msg.get("result").cloned().unwrap_or(Value::Null);
         match kind {
             Req::Initialize => {
-                self.agent.can_load = result.pointer("/agentCapabilities/loadSession").and_then(Value::as_bool).unwrap_or(false);
-                self.agent.can_image = result.pointer("/agentCapabilities/promptCapabilities/image").and_then(Value::as_bool).unwrap_or(false);
+                self.agent.can_load = result
+                    .pointer("/agentCapabilities/loadSession")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.agent.can_image = result
+                    .pointer("/agentCapabilities/promptCapabilities/image")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let cwd = self.agent_cwd();
                 match self.agent.pending_load.take() {
                     Some(id) if self.agent.can_load => self.agent_load_session(id),
@@ -1577,7 +2016,11 @@ impl Workbench {
                         if std::mem::take(&mut self.agent.silent_load) {
                             self.agent.carry = Some(transcript(&self.agent.items));
                         }
-                        self.agent_request(Req::NewSession, "session/new", json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }))
+                        self.agent_request(
+                            Req::NewSession,
+                            "session/new",
+                            json!({ "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+                        )
                     }
                 }
             }
@@ -1594,7 +2037,10 @@ impl Workbench {
                 self.agent_flush_queue(cx);
             }
             Req::NewSession => {
-                self.agent.session = result.get("sessionId").and_then(Value::as_str).map(String::from);
+                self.agent.session = result
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(String::from);
                 self.agent.ctx_cache.clear();
                 self.agent_take_config(&result);
                 let harness = self.agent.agent.clone();
@@ -1604,7 +2050,11 @@ impl Workbench {
                     if o.category == "thought_level" {
                         continue;
                     }
-                    let Some(v) = self.settings.agent_options.get(&format!("{harness}:{}", o.id)) else {
+                    let Some(v) = self
+                        .settings
+                        .agent_options
+                        .get(&format!("{harness}:{}", o.id))
+                    else {
                         continue;
                     };
                     if o.current != *v && o.choices.iter().any(|c| c.0 == *v) {
@@ -1649,20 +2099,40 @@ impl Workbench {
                 self.agent_close_thought();
                 self.agent_recount();
                 self.agent.active_user_prompt = None;
-                let stop = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
+                let stop = result
+                    .get("stopReason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("end_turn");
                 let quiet = std::mem::take(&mut self.agent.quiet_stop);
                 if stop != "end_turn" && !quiet {
-                    self.agent.items.push(Item::Note(stop.replace('_', " "), false));
+                    self.agent
+                        .items
+                        .push(Item::Note(stop.replace('_', " "), false));
                 }
                 self.agent.permission = None;
                 self.agent.perm_queue.clear();
                 self.agent.status = Status::Ready;
-                let last = self.agent.items.iter().rev().take_while(|i| !matches!(i, Item::User(_))).find_map(|i| if let Item::Text(t) = i { Some(t.clone()) } else { None });
+                let last = self
+                    .agent
+                    .items
+                    .iter()
+                    .rev()
+                    .take_while(|i| !matches!(i, Item::User(_)))
+                    .find_map(|i| {
+                        if let Item::Text(t) = i {
+                            Some(t.clone())
+                        } else {
+                            None
+                        }
+                    });
                 if let Some(t) = last {
                     self.agent_check_limit(&t, cx);
                 }
                 self.agent_save();
-                if self.agent.bg && self.agent.queue.is_empty() && self.agent.pending_steer.is_none() {
+                if self.agent.bg
+                    && self.agent.queue.is_empty()
+                    && self.agent.pending_steer.is_none()
+                {
                     self.status = crate::trf!("{name} finished in “{chat}”."; name => agent_name(), chat => self.agent_chat_title()).into();
                 }
                 self.agent_schedule_idle(false, cx);
@@ -1684,7 +2154,9 @@ impl Workbench {
         if method != "session/update" {
             return;
         }
-        let Some(u) = params.get("update") else { return };
+        let Some(u) = params.get("update") else {
+            return;
+        };
         if u.get("sessionUpdate").and_then(Value::as_str) == Some("config_option_update") {
             self.agent_take_config(u);
             return;
@@ -1698,7 +2170,11 @@ impl Workbench {
                         .filter_map(|c| {
                             Some(SlashCmd {
                                 name: c.get("name")?.as_str()?.to_string(),
-                                desc: c.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                                desc: c
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
                                 builtin: false,
                                 takes_input: c.get("input").is_some_and(|i| !i.is_null()),
                             })
@@ -1709,7 +2185,11 @@ impl Workbench {
             return;
         }
         if u.get("sessionUpdate").and_then(Value::as_str) == Some("usage_update") {
-            self.agent.usage.live.get_or_insert_with(Default::default).take(u);
+            self.agent
+                .usage
+                .live
+                .get_or_insert_with(Default::default)
+                .take(u);
             return;
         }
         if self.agent.compacting {
@@ -1717,14 +2197,22 @@ impl Workbench {
         }
         if let Some((_, buf)) = self.agent.usage.probe.as_mut() {
             if u.get("sessionUpdate").and_then(Value::as_str) == Some("agent_message_chunk") {
-                buf.push_str(u.pointer("/content/text").and_then(Value::as_str).unwrap_or(""));
+                buf.push_str(
+                    u.pointer("/content/text")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                );
             }
             return;
         }
         if self.agent.silent_load {
             return;
         }
-        let text = |u: &Value| u.pointer("/content/text").and_then(Value::as_str).unwrap_or("").to_string();
+        fn text_of(u: &Value) -> &str {
+            u.pointer("/content/text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        }
         let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         let kind_now = u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("");
         if kind_now != "agent_thought_chunk" {
@@ -1733,11 +2221,18 @@ impl Workbench {
         match kind_now {
             "tool_call" => {
                 if let Some(id) = s(u, "toolCallId") {
-                    self.agent.times.entry(id).or_insert((std::time::Instant::now(), None));
+                    self.agent
+                        .times
+                        .entry(id)
+                        .or_insert((std::time::Instant::now(), None));
                 }
             }
-            "tool_call_update" if matches!(s(u, "status").as_deref(), Some("completed" | "failed")) => {
-                if let Some((start, end @ None)) = s(u, "toolCallId").and_then(|id| self.agent.times.get_mut(&id)) {
+            "tool_call_update"
+                if matches!(s(u, "status").as_deref(), Some("completed" | "failed")) =>
+            {
+                if let Some((start, end @ None)) =
+                    s(u, "toolCallId").and_then(|id| self.agent.times.get_mut(&id))
+                {
                     *end = Some(start.elapsed());
                 }
             }
@@ -1745,10 +2240,10 @@ impl Workbench {
         }
         self.agent_take_images(u);
         match u.get("sessionUpdate").and_then(Value::as_str).unwrap_or("") {
-            "agent_message_chunk" => self.agent.append(false, &text(u)),
-            "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(&text(u)),
+            "agent_message_chunk" => self.agent.append(false, text_of(u)),
+            "user_message_chunk" if self.agent.loading_id.is_some() => self.agent.append_user(text_of(u)),
             "agent_thought_chunk" => {
-                self.agent.append(true, &text(u));
+                self.agent.append(true, text_of(u));
                 let key = format!("think-{}", self.agent.items.len().saturating_sub(1));
                 self.agent.times.entry(key.clone()).or_insert((std::time::Instant::now(), None));
                 self.agent.open_thought = Some(key);
@@ -1786,8 +2281,6 @@ impl Workbench {
                             if let Some(k) = s(u, "kind") {
                                 *kind = k;
                             }
-                        }
-                        if *tid == id {
                             if let Some(t) = s(u, "title") {
                                 *title = t;
                             }
@@ -1832,9 +2325,19 @@ impl Workbench {
         if found.is_empty() {
             return;
         }
-        let tool = u.get("toolCallId").and_then(Value::as_str).map(String::from);
+        let tool = u
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .map(String::from);
         if tool.is_some() {
-            if let Some(Item::Images { shots, .. }) = self.agent.items.iter_mut().rev().take(RECENT).find(|i| matches!(i, Item::Images { tool: t, .. } if *t == tool)) {
+            if let Some(Item::Images { shots, .. }) = self
+                .agent
+                .items
+                .iter_mut()
+                .rev()
+                .take(RECENT)
+                .find(|i| matches!(i, Item::Images { tool: t, .. } if *t == tool))
+            {
                 for s in found {
                     if !shots.contains(&s) {
                         shots.push(s);
@@ -1843,34 +2346,52 @@ impl Workbench {
                 return;
             }
         }
-        self.agent.items.push(Item::Images { tool, shots: found, hidden: false });
+        self.agent.items.push(Item::Images {
+            tool,
+            shots: found,
+            hidden: false,
+        });
     }
 
     fn agent_on_request(&mut self, id: Value, method: &str, params: Value, cx: &mut Context<Self>) {
         let respond = |this: &mut Self, result: Result<Value, String>| {
             let msg = match result {
                 Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
-                Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": e } }),
+                Err(e) => {
+                    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": e } })
+                }
             };
             this.agent_write(msg);
         };
-        let path = params.get("path").and_then(Value::as_str).map(PathBuf::from);
+        let path = params
+            .get("path")
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
         match (method, path) {
             ("session/request_permission", _) => {
-                let title = params.pointer("/toolCall/title").and_then(Value::as_str).unwrap_or("The agent wants to run a tool").to_string();
+                let title = params
+                    .pointer("/toolCall/title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("The agent wants to run a tool")
+                    .to_string();
                 let options: Vec<(String, String, String)> = params
                     .get("options")
                     .and_then(Value::as_array)
                     .map(|a| {
                         a.iter()
                             .map(|o| {
-                                let g = |k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                                let g = |k: &str| {
+                                    o.get(k).and_then(Value::as_str).unwrap_or("").to_string()
+                                };
                                 (g("optionId"), g("name"), g("kind"))
                             })
                             .collect()
                     })
                     .unwrap_or_default();
-                let kind = params.pointer("/toolCall/kind").and_then(Value::as_str).unwrap_or("other");
+                let kind = params
+                    .pointer("/toolCall/kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("other");
                 let reads = matches!(kind, "read" | "search" | "fetch" | "think");
                 let writes = matches!(kind, "edit" | "delete" | "move");
                 let auto = match self.settings.access() {
@@ -1885,19 +2406,38 @@ impl Workbench {
                     if let Some((oid, ..)) = options.iter().find(|o| o.2.starts_with(want)) {
                         let oid = oid.clone();
                         if !allow {
-                            self.agent.items.push(Item::Note(crate::trf!("Refused (read only): {0}"; 0 => title), false));
+                            self.agent.items.push(Item::Note(
+                                crate::trf!("Refused (read only): {0}"; 0 => title),
+                                false,
+                            ));
                             cx.notify();
                         }
-                        respond(self, Ok(json!({ "outcome": { "outcome": "selected", "optionId": oid } })));
+                        respond(
+                            self,
+                            Ok(json!({ "outcome": { "outcome": "selected", "optionId": oid } })),
+                        );
                         return;
                     }
                 }
-                let detail = ["/toolCall/rawInput/command", "/toolCall/rawInput/cmd", "/toolCall/rawInput/filePath", "/toolCall/rawInput/file_path", "/toolCall/rawInput/path", "/toolCall/locations/0/path"]
-                    .iter()
-                    .find_map(|p| params.pointer(p).and_then(Value::as_str))
-                    .filter(|d| !d.trim().is_empty() && !title.contains(d.trim()))
-                    .map(str::to_string);
-                let req = Permission { rpc_id: id.clone(), title, options, kind: kind.to_string(), detail };
+                let detail = [
+                    "/toolCall/rawInput/command",
+                    "/toolCall/rawInput/cmd",
+                    "/toolCall/rawInput/filePath",
+                    "/toolCall/rawInput/file_path",
+                    "/toolCall/rawInput/path",
+                    "/toolCall/locations/0/path",
+                ]
+                .iter()
+                .find_map(|p| params.pointer(p).and_then(Value::as_str))
+                .filter(|d| !d.trim().is_empty() && !title.contains(d.trim()))
+                .map(str::to_string);
+                let req = Permission {
+                    rpc_id: id.clone(),
+                    title,
+                    options,
+                    kind: kind.to_string(),
+                    detail,
+                };
                 if self.agent.permission.is_some() {
                     self.agent.perm_queue.push_back(req);
                 } else {
@@ -1947,16 +2487,27 @@ impl Workbench {
                 respond(self, Err(crate::i18n::tr("FluxCode is in read-only mode: files can't be changed. Describe the change instead.").into()));
             }
             ("fs/write_text_file", Some(p)) => {
-                let content = params.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+                let content = params
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 let before = std::fs::read_to_string(&p).ok();
                 let crlf = before.as_deref().is_some_and(|b| b.contains("\r\n"));
                 let r = core::write_text(&p, &content, crlf);
                 if r.is_ok() {
                     if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                        self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
+                        self.agent.changes.push(Change {
+                            path: p.clone(),
+                            before,
+                            added: 0,
+                            removed: 0,
+                            counted: false,
+                        });
                     }
                     if let Some(ch) = self.agent.changes.iter_mut().find(|ch| ch.path == p) {
-                        (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
+                        (ch.added, ch.removed) =
+                            crate::diff::counts(ch.before.as_deref().unwrap_or(""), &content);
                         ch.counted = true;
                     }
                     self.agent_follow_edit(p.clone());
@@ -1995,9 +2546,20 @@ impl Workbench {
             self.agent_switch_to(run, false, cx);
             return;
         }
-        let Some(chat) = self.agent.history.iter().find(|c| c.id == id).cloned() else { return };
-        let folder = chat.folder.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
-        let mut next = Run::new(chat.agent.clone().unwrap_or_else(|| self.settings.agent_cli.clone()), folder);
+        let Some(chat) = self.agent.history.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let folder = chat
+            .folder
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+        let mut next = Run::new(
+            chat.agent
+                .clone()
+                .unwrap_or_else(|| self.settings.agent_cli.clone()),
+            folder,
+        );
         next.account = chat.account.clone();
         next.items = chat
             .messages
@@ -2090,7 +2652,11 @@ impl Workbench {
         self.agent.input.focus_handle(cx)
     }
 
-    pub(crate) fn render_agent_dock(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_agent_dock(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         v_flex()
             .size_full()
             .min_w_0()
@@ -2116,6 +2682,9 @@ impl Workbench {
                             .child(self.render_agent_picker(cx)),
                     )
                     .child(div().flex_none().child(self.render_agent_switch(cx)))
+                    .when(self.agent_width >= 460., |h| {
+                        h.children(self.render_agent_opt_badge(cx))
+                    })
                     .child(div().flex_1())
                     .child(div().flex_none().child(self.render_agent_tools(cx)))
                     .child(div().flex_none().child(self.render_agent_more(cx)))
@@ -2131,7 +2700,17 @@ impl Workbench {
                     ))),
             )
             .children(self.render_worktree_strip(cx))
-            .child(h_flex().flex_1().min_h_0().justify_center().child(div().h_full().w_full().when(self.agent_full && self.settings.agent_right, |d| d.max_w(theme::u(860.))).child(self.render_agent(window, cx))))
+            .child(
+                h_flex().flex_1().min_h_0().justify_center().child(
+                    div()
+                        .h_full()
+                        .w_full()
+                        .when(self.agent_full && self.settings.agent_right, |d| {
+                            d.max_w(theme::u(860.))
+                        })
+                        .child(self.render_agent(window, cx)),
+                ),
+            )
             .into_any_element()
     }
 
@@ -2150,7 +2729,12 @@ impl Workbench {
         self.settings.save();
         set_choice(cli);
         let name = agent_name();
-        if self.agent.items.iter().any(|i| matches!(i, Item::User(_) | Item::Text(_))) {
+        if self
+            .agent
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::User(_) | Item::Text(_)))
+        {
             self.agent.carry = Some(transcript(&self.agent.items));
             self.agent.items.push(Item::Branch(crate::trf!("Continued with {name}. It gets the conversation with {old} above as context."; name => name, old => old)));
         }
@@ -2158,21 +2742,34 @@ impl Workbench {
         self.agent.relaunch = false;
         self.agent.config.clear();
         self.agent.usage = Default::default();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
+        self.agent.input.update(cx, |s, cx| {
+            s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx)
+        });
         if !self.agent.queue.is_empty() {
             self.agent_start(cx);
         }
         cx.notify();
     }
 
-    pub(crate) fn on_agent_use_opencode(&mut self, _: &crate::workbench::AgentUseOpenCode, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_use_opencode(
+        &mut self,
+        _: &crate::workbench::AgentUseOpenCode,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.agent_use("opencode-v2", w, cx);
     }
 
     pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = agent_id();
         let open = self.agent.menu.open == Some(Menu::Agent);
-        let mut button = Button::new("ag-pick").label(agent_name()).ghost().xsmall().dropdown_caret(true).selected(open).tooltip(tr("Choose the agent"));
+        let mut button = Button::new("ag-pick")
+            .label(agent_name())
+            .ghost()
+            .xsmall()
+            .dropdown_caret(true)
+            .selected(open)
+            .tooltip(tr("Choose the agent"));
         if let Some(path) = crate::acp::icon_asset(&current) {
             button = button.icon(Icon::new(IconName::Bot).path(path));
         }
@@ -2182,7 +2779,12 @@ impl Workbench {
         }))
     }
 
-    pub(crate) fn agent_install(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn agent_install(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.agent.installing.is_some() {
             return;
         }
@@ -2197,7 +2799,8 @@ impl Workbench {
             return;
         }
         let tracker = crate::acp::Tracker::default();
-        let title: SharedString = crate::trf!("Installing {name}"; name => crate::acp::display_name(&id)).into();
+        let title: SharedString =
+            crate::trf!("Installing {name}"; name => crate::acp::display_name(&id)).into();
         let anim = cx.new(|cx| crate::flux_anim::InstallAnim::new(tracker.clone(), title, cx));
         self.agent.installing = Some((id.clone(), tracker.clone(), anim));
         self.agent.install_err = None;
@@ -2212,19 +2815,29 @@ impl Workbench {
                     crate::acp::fetch_icons_soon();
                     match (find(&crate::acp::registry()), fetched) {
                         (Some(e), _) => Ok(e),
-                        (None, Err(e)) => Err(format!("{}: {e}", tr("Could not read the ACP registry"))),
-                        (None, Ok(())) => Err(tr("This agent is no longer in the ACP registry.").to_string()),
+                        (None, Err(e)) => {
+                            Err(format!("{}: {e}", tr("Could not read the ACP registry")))
+                        }
+                        (None, Ok(())) => {
+                            Err(tr("This agent is no longer in the ACP registry.").to_string())
+                        }
                     }
                 }
             };
             let res = entry.and_then(|e| crate::acp::install(&e, &tracker));
-            tracker.phase(if res.is_ok() { crate::acp::Phase::Done } else { crate::acp::Phase::Failed });
+            tracker.phase(if res.is_ok() {
+                crate::acp::Phase::Done
+            } else {
+                crate::acp::Phase::Failed
+            });
             res
         });
         cx.spawn_in(window, async move |this, cx| {
             let res = task.await;
             if res.is_ok() {
-                cx.background_executor().timer(std::time::Duration::from_millis(800)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(800))
+                    .await;
             }
             _ = this.update_in(cx, |this, window, cx| {
                 let anim = this.agent.installing.take().map(|(_, _, a)| a);
@@ -2238,7 +2851,12 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn agent_ask_uninstall(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn agent_ask_uninstall(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.agent.uninstall = Some(id.to_string());
         for i in &self.agent.uninstall_inputs {
             i.update(cx, |s, cx| s.set_value("", window, cx));
@@ -2250,11 +2868,18 @@ impl Workbench {
 
     fn render_uninstall(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let name = crate::acp::display_name(id);
-        let typed: Vec<String> = self.agent.uninstall_inputs.iter().map(|i| i.read(cx).value().to_string()).collect();
+        let typed: Vec<String> = self
+            .agent
+            .uninstall_inputs
+            .iter()
+            .map(|i| i.read(cx).value().to_string())
+            .collect();
         let ok = typed.iter().all(|t| t.trim() == name);
         let folder = crate::acp::agents_dir().join(id);
         let id2 = id.to_string();
-        let mismatch = typed.iter().any(|t| !t.trim().is_empty() && !name.starts_with(t.trim()));
+        let mismatch = typed
+            .iter()
+            .any(|t| !t.trim().is_empty() && !name.starts_with(t.trim()));
         v_flex()
             .size_full()
             .p_4()
@@ -2317,8 +2942,88 @@ impl Workbench {
         cx.notify();
     }
 
+    pub(crate) fn agent_panel_width(&self) -> f32 {
+        let w = self.agent.compose_w.get();
+        if w > 0. {
+            w
+        } else if self.agent_full {
+            900.
+        } else if self.settings.agent_right {
+            self.agent_width
+        } else {
+            self.sidebar_width
+        }
+    }
+
+    pub(crate) fn render_agent_opt_badge(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = agent_id();
+        if crate::acp::locate(&id).is_none() || !opt::is_optimized(&id) {
+            return None;
+        }
+        Some(
+            div()
+                .id("ag-opt-badge")
+                .flex_none()
+                .cursor_pointer()
+                .rounded(px(4.))
+                .hover(|s| s.opacity(0.88))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
+                .on_click(cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.agent.settings_tab = settings_modal::Tab::Agent;
+                    this.agent_open_options(w, cx);
+                }))
+                .child(menu::optimized_badge())
+                .into_any_element(),
+        )
+    }
+
+    fn render_agent_opt_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.agent_full || (self.settings.agent_right && self.agent_width >= 460.) {
+            return None;
+        }
+        let id = agent_id();
+        if crate::acp::locate(&id).is_none() || !opt::is_optimized(&id) {
+            return None;
+        }
+        let state_label = if self.agent.thermal.eco_active {
+            tr("EcoQoS idle")
+        } else if self.agent.thermal.trims_done > 0 {
+            tr("RAM trimmed")
+        } else {
+            tr("Auto RAM & delta")
+        };
+        Some(
+            h_flex()
+                .id("ag-opt-strip")
+                .flex_none()
+                .w_full()
+                .flex_wrap()
+                .items_center()
+                .px_3()
+                .py_1()
+                .gap_x_2()
+                .gap_y_1()
+                .border_b_1()
+                .border_color(c(theme::BORDER))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER).opacity(0.45)))
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
+                .on_click(cx.listener(|this, _, w, cx| {
+                    this.agent.settings_tab = settings_modal::Tab::Agent;
+                    this.agent_open_options(w, cx);
+                }))
+                .child(menu::optimized_badge())
+                .child(div().text_xs().text_color(c(theme::FG_DIM)).child(state_label))
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn render_agent_switch(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
+        let on = matches!(
+            self.agent.status,
+            Status::Starting | Status::Ready | Status::Busy
+        );
         let working = self.agent.working();
         let dot = if working {
             theme::ACCENT
@@ -2340,13 +3045,27 @@ impl Workbench {
             .items_center()
             .rounded(px(3.))
             .border_1()
-            .border_color(if on { c(theme::BORDER_STRONG) } else { c(theme::BORDER) })
-            .bg(if on { c(theme::BG_ELEVATED) } else { gpui_kit::transparent_black() })
+            .border_color(if on {
+                c(theme::BORDER_STRONG)
+            } else {
+                c(theme::BORDER)
+            })
+            .bg(if on {
+                c(theme::BG_ELEVATED)
+            } else {
+                gpui_kit::transparent_black()
+            })
             .cursor_pointer()
             .text_xs()
             .text_color(c(if on { theme::FG_STRONG } else { theme::FG_DIM }))
-            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)).text_color(c(theme::FG_STRONG)))
-            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+            .hover(|s| {
+                s.bg(c(theme::BG_HOVER))
+                    .border_color(c(theme::BORDER_STRONG))
+                    .text_color(c(theme::FG_STRONG))
+            })
+            .tooltip(move |w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.agent_set_on(!on, cx)))
             .child(div().flex_none().size(px(6.)).rounded_full().bg(c(dot)))
             .child(if on { tr("On") } else { tr("Off") })
@@ -2363,16 +3082,30 @@ impl Workbench {
                         .xsmall()
                         .ghost()
                         .selected(self.agent.usage.open)
-                        .tooltip(if self.agent_model_free().is_some() { crate::i18n::tr("Usage: context (free model, no limits)") } else { crate::i18n::tr("Usage: limits, context and cost") })
+                        .tooltip(if self.agent_model_free().is_some() {
+                            crate::i18n::tr("Usage: context (free model, no limits)")
+                        } else {
+                            crate::i18n::tr("Usage: limits, context and cost")
+                        })
                         .on_click(cx.listener(|this, _, _, cx| this.agent_usage_toggle(cx))),
                 )
             })
             .child(
                 Button::new("ag-history-btn")
-                    .icon(if self.agent.show_history { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::MessageSquareCode) } else { gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock) })
+                    .icon(if self.agent.show_history {
+                        gpui_kit::component::Icon::new(
+                            gpui_kit::assets::IconName::MessageSquareCode,
+                        )
+                    } else {
+                        gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Clock)
+                    })
                     .xsmall()
                     .ghost()
-                    .tooltip(if self.agent.show_history { crate::i18n::tr("Back to the chat") } else { crate::i18n::tr("Saved chats") })
+                    .tooltip(if self.agent.show_history {
+                        crate::i18n::tr("Back to the chat")
+                    } else {
+                        crate::i18n::tr("Saved chats")
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.agent.show_history = !this.agent.show_history;
                         if this.agent.show_history {
@@ -2403,11 +3136,19 @@ impl Workbench {
                 let full = self.agent_full;
                 h.child(
                     Button::new("ag-full")
-                        .icon(if full { IconName::Minimize } else { IconName::Maximize })
+                        .icon(if full {
+                            IconName::Minimize
+                        } else {
+                            IconName::Maximize
+                        })
                         .xsmall()
                         .ghost()
                         .selected(full)
-                        .tooltip(if full { crate::i18n::tr("Back beside the editor") } else { crate::i18n::tr("Fill the window") })
+                        .tooltip(if full {
+                            crate::i18n::tr("Back beside the editor")
+                        } else {
+                            crate::i18n::tr("Fill the window")
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.agent_full = !this.agent_full;
                             cx.notify();
@@ -2420,9 +3161,22 @@ impl Workbench {
         let a = &self.agent;
         let archived_n = a.history.iter().filter(|c| c.archived).count();
         let working = a.working_ids();
-        let mut list = v_flex().id("ag-history").flex_1().min_h_0().px_2().gap_px().overflow_y_scroll();
+        let mut list = v_flex()
+            .id("ag-history")
+            .flex_1()
+            .min_h_0()
+            .px_2()
+            .gap_px()
+            .overflow_y_scroll();
         if a.history.is_empty() {
-            list = list.child(div().px_1().py_2().text_sm().text_color(c(theme::FG_DIM)).child(tr("No saved chats yet. Chats are saved after each answer.")));
+            list = list.child(
+                div()
+                    .px_1()
+                    .py_2()
+                    .text_sm()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("No saved chats yet. Chats are saved after each answer.")),
+            );
         }
         for (i, chat) in a.history.iter().enumerate() {
             if chat.archived {
@@ -2447,16 +3201,30 @@ impl Workbench {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_sm().truncate().text_color(c(theme::FG_STRONG)).child(chat.title.clone()))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .truncate()
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(chat.title.clone()),
+                            )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(c(theme::FG_DIM))
                                     .when(working, |d| d.text_color(c(theme::ACCENT_TEXT)))
                                     .child(if working {
-                                        format!("{} · {count} message{}", tr("Working"), if count == 1 { "" } else { "s" })
+                                        format!(
+                                            "{} · {count} message{}",
+                                            tr("Working"),
+                                            if count == 1 { "" } else { "s" }
+                                        )
                                     } else {
-                                        format!("{} · {count} message{}", ago(chat.updated), if count == 1 { "" } else { "s" })
+                                        format!(
+                                            "{} · {count} message{}",
+                                            ago(chat.updated),
+                                            if count == 1 { "" } else { "s" }
+                                        )
                                     }),
                             ),
                     )
@@ -2530,7 +3298,9 @@ impl Workbench {
                 Some(o) => json!({ "outcome": "selected", "optionId": o }),
                 None => json!({ "outcome": "cancelled" }),
             };
-            self.agent_write(json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": outcome } }));
+            self.agent_write(
+                json!({ "jsonrpc": "2.0", "id": p.rpc_id, "result": { "outcome": outcome } }),
+            );
         }
         self.agent.permission = self.agent.perm_queue.pop_front();
         cx.notify();
@@ -2559,7 +3329,10 @@ impl Workbench {
     }
 
     fn agent_track_edit(&mut self, u: &Value, kind: &str, done: bool) {
-        let has_diff = u.get("content").and_then(Value::as_array).is_some_and(|c| c.iter().any(|x| x.get("type").and_then(Value::as_str) == Some("diff")));
+        let has_diff = u.get("content").and_then(Value::as_array).is_some_and(|c| {
+            c.iter()
+                .any(|x| x.get("type").and_then(Value::as_str) == Some("diff"))
+        });
         if !matches!(kind, "edit" | "delete" | "move") && !has_diff {
             return;
         }
@@ -2568,32 +3341,80 @@ impl Workbench {
         let scratch = |p: &Path| p.starts_with(&temp) && !cwd.starts_with(&temp);
         let abs = |p: &str| -> PathBuf {
             let p = PathBuf::from(p);
-            if p.is_absolute() { p } else { cwd.join(p) }
+            if p.is_absolute() {
+                p
+            } else {
+                cwd.join(p)
+            }
         };
         let mut touched: Vec<PathBuf> = Vec::new();
-        for c in u.get("content").and_then(Value::as_array).into_iter().flatten() {
+        for c in u
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             if c.get("type").and_then(Value::as_str) != Some("diff") {
                 continue;
             }
-            let Some(p) = c.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
+            let Some(p) = c
+                .get("path")
+                .and_then(Value::as_str)
+                .map(abs)
+                .filter(|p| !scratch(p))
+            else {
+                continue;
+            };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
-                let before = before_edit(std::fs::read_to_string(&p).ok(), c.get("oldText").and_then(Value::as_str), c.get("newText").and_then(Value::as_str).unwrap_or(""));
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
+                let before = before_edit(
+                    std::fs::read_to_string(&p).ok(),
+                    c.get("oldText").and_then(Value::as_str),
+                    c.get("newText").and_then(Value::as_str).unwrap_or(""),
+                );
+                self.agent.changes.push(Change {
+                    path: p.clone(),
+                    before,
+                    added: 0,
+                    removed: 0,
+                    counted: false,
+                });
             }
             touched.push(p);
         }
-        for l in u.get("locations").and_then(Value::as_array).into_iter().flatten() {
-            let Some(p) = l.get("path").and_then(Value::as_str).map(abs).filter(|p| !scratch(p)) else { continue };
+        for l in u
+            .get("locations")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(p) = l
+                .get("path")
+                .and_then(Value::as_str)
+                .map(abs)
+                .filter(|p| !scratch(p))
+            else {
+                continue;
+            };
             if !self.agent.changes.iter().any(|ch| ch.path == p) {
                 if done {
                     continue; // too late to know how it looked before
                 }
                 let before = std::fs::read_to_string(&p).ok();
-                self.agent.changes.push(Change { path: p.clone(), before, added: 0, removed: 0, counted: false });
+                self.agent.changes.push(Change {
+                    path: p.clone(),
+                    before,
+                    added: 0,
+                    removed: 0,
+                    counted: false,
+                });
             }
             touched.push(p);
         }
-        let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("").to_string();
+        let id = u
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if !done {
             let known = self.agent.tool_paths.entry(id).or_default();
             for p in touched {
@@ -2612,7 +3433,8 @@ impl Workbench {
             let after = std::fs::read_to_string(&p).unwrap_or_default();
             if let Some(ix) = self.agent.changes.iter().position(|ch| ch.path == p) {
                 let ch = &mut self.agent.changes[ix];
-                (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
+                (ch.added, ch.removed) =
+                    crate::diff::counts(ch.before.as_deref().unwrap_or(""), &after);
                 ch.counted = true;
                 if ch.added == 0 && ch.removed == 0 && ch.before.is_some() && p.exists() {
                     self.agent.changes.remove(ix);
@@ -2631,7 +3453,10 @@ impl Workbench {
         self.agent.tool_paths.clear();
         self.agent.changes.retain_mut(|ch| {
             let after = std::fs::read_to_string(&ch.path).ok();
-            (ch.added, ch.removed) = crate::diff::counts(ch.before.as_deref().unwrap_or(""), after.as_deref().unwrap_or(""));
+            (ch.added, ch.removed) = crate::diff::counts(
+                ch.before.as_deref().unwrap_or(""),
+                after.as_deref().unwrap_or(""),
+            );
             ch.counted = true;
             match (&ch.before, &after) {
                 (None, None) => false,
@@ -2642,12 +3467,20 @@ impl Workbench {
     }
 
     fn agent_show_diff(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ch) = self.agent.changes.get(ix) else { return };
+        let Some(ch) = self.agent.changes.get(ix) else {
+            return;
+        };
         let target = ch.path.clone();
         let after = std::fs::read_to_string(&ch.path).unwrap_or_default();
-        let rel = self.rel_display(&ch.path.to_string_lossy()).replace('\\', "/");
+        let rel = self
+            .rel_display(&ch.path.to_string_lossy())
+            .replace('\\', "/");
         let text = crate::diff::unified(&rel, ch.before.as_deref().unwrap_or(""), &after);
-        let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "changes".into());
+        let name = ch
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "changes".into());
         let dir = std::env::temp_dir().join("fluxcode-diff");
         let file = dir.join(format!("{name}.diff"));
         if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&file, text).is_ok() {
@@ -2655,7 +3488,12 @@ impl Workbench {
                 self.close(i, window, cx);
             }
             self.open_file_now(file.clone(), window, cx);
-            if let Some(d) = self.docs.iter_mut().find(|d| d.path == file).and_then(|d| d.diff.as_mut()) {
+            if let Some(d) = self
+                .docs
+                .iter_mut()
+                .find(|d| d.path == file)
+                .and_then(|d| d.diff.as_mut())
+            {
                 d.target = Some(target);
             }
         }
@@ -2681,7 +3519,6 @@ impl Workbench {
         cx.notify();
     }
 
-
     pub(crate) fn agent_update_mention(&mut self, cx: &mut Context<Self>) {
         let (text, cursor) = {
             let s = self.agent.input.read(cx);
@@ -2695,7 +3532,13 @@ impl Workbench {
                 .chain(self.agent.commands.iter().cloned())
                 .filter(|c| c.name.to_lowercase().contains(&q))
                 .collect();
-            list.sort_by_key(|c| (!c.name.to_lowercase().starts_with(&q), !c.builtin, c.name.len()));
+            list.sort_by_key(|c| {
+                (
+                    !c.name.to_lowercase().starts_with(&q),
+                    !c.builtin,
+                    c.name.len(),
+                )
+            });
             list.truncate(12);
             self.agent.slash = Some((list, 0));
             self.agent.mention = None;
@@ -2732,7 +3575,9 @@ impl Workbench {
     }
 
     pub(crate) fn agent_mention_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((at, hits, sel)) = self.agent.mention.take() else { return };
+        let Some((at, hits, sel)) = self.agent.mention.take() else {
+            return;
+        };
         let Some(&ix) = hits.get(sel) else {
             cx.notify();
             return;
@@ -2756,7 +3601,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_agent_mention_up(&mut self, _: &crate::workbench::AgentMentionUp, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_up(
+        &mut self,
+        _: &crate::workbench::AgentMentionUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some((_, sel)) = self.agent.slash.as_mut() {
             *sel = sel.saturating_sub(1);
             return cx.notify();
@@ -2768,7 +3618,12 @@ impl Workbench {
         window.dispatch_action(Box::new(gpui_kit::component::input::MoveUp), cx);
     }
 
-    pub(crate) fn on_agent_mention_down(&mut self, _: &crate::workbench::AgentMentionDown, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_down(
+        &mut self,
+        _: &crate::workbench::AgentMentionDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some((list, sel)) = self.agent.slash.as_mut() {
             if *sel + 1 < list.len() {
                 *sel += 1;
@@ -2784,7 +3639,12 @@ impl Workbench {
         window.dispatch_action(Box::new(gpui_kit::component::input::MoveDown), cx);
     }
 
-    pub(crate) fn on_agent_mention_accept(&mut self, _: &crate::workbench::AgentMentionAccept, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_accept(
+        &mut self,
+        _: &crate::workbench::AgentMentionAccept,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.agent.slash.is_some() {
             return self.agent_slash_fill(w, cx).map_or((), |_| ());
         }
@@ -2793,7 +3653,12 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_agent_mention_close(&mut self, _: &crate::workbench::AgentMentionClose, _w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_mention_close(
+        &mut self,
+        _: &crate::workbench::AgentMentionClose,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.agent.mention.take().is_some() || self.agent.slash.take().is_some() {
             cx.notify();
         } else if self.agent.editing.is_some() {
@@ -2801,7 +3666,11 @@ impl Workbench {
         }
     }
 
-    fn agent_slash_fill(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<SlashCmd> {
+    fn agent_slash_fill(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<SlashCmd> {
         let (list, sel) = self.agent.slash.take()?;
         let cmd = list.get(sel)?.clone();
         let text = format!("/{} ", cmd.name);
@@ -2848,8 +3717,13 @@ impl Workbench {
                             keep = true;
                             if let Some(id) = this.agent.proc_id {
                                 let ws = this.procs.job_working_set_mb(id);
-                                if this.agent.thermal.should_trim(ws, std::time::Instant::now(), true) {
+                                if this.agent.thermal.should_trim(
+                                    ws,
+                                    std::time::Instant::now(),
+                                    true,
+                                ) {
                                     this.procs.cool_job(id, true, None);
+                                    this.agent.thermal.record_trim();
                                 }
                             }
                         }
@@ -2859,7 +3733,9 @@ impl Workbench {
                     return;
                 }
             }
-            let wait1 = s1_d.saturating_sub(elapsed).max(std::time::Duration::from_secs(1));
+            let wait1 = s1_d
+                .saturating_sub(elapsed)
+                .max(std::time::Duration::from_secs(1));
             cx.background_executor().timer(wait1).await;
             elapsed += wait1;
             let mut keep = false;
@@ -2873,8 +3749,13 @@ impl Workbench {
                         keep = true;
                         if let Some(id) = this.agent.proc_id {
                             let ws = this.procs.job_working_set_mb(id);
-                            if this.agent.thermal.should_trim(ws, std::time::Instant::now(), false) {
+                            if this
+                                .agent
+                                .thermal
+                                .should_trim(ws, std::time::Instant::now(), false)
+                            {
                                 this.procs.cool_job(id, true, None);
+                                this.agent.thermal.record_trim();
                                 this.agent.thermal.stage = 1;
                             }
                         }
@@ -2884,7 +3765,9 @@ impl Workbench {
             if !keep {
                 return;
             }
-            let wait2 = s2_d.saturating_sub(elapsed).max(std::time::Duration::from_secs(5));
+            let wait2 = s2_d
+                .saturating_sub(elapsed)
+                .max(std::time::Duration::from_secs(5));
             cx.background_executor().timer(wait2).await;
             _ = this.update(cx, |this, cx| {
                 this.agent_with_run(key, cx, |this, _| {
@@ -2895,8 +3778,14 @@ impl Workbench {
                     {
                         if let Some(id) = this.agent.proc_id {
                             let ws = this.procs.job_working_set_mb(id);
-                            let trim = this.agent.thermal.should_trim(ws, std::time::Instant::now(), true);
+                            let trim =
+                                this.agent
+                                    .thermal
+                                    .should_trim(ws, std::time::Instant::now(), true);
                             this.procs.cool_job(id, trim, Some(true));
+                            if trim {
+                                this.agent.thermal.record_trim();
+                            }
                             this.agent.thermal.stage = 2;
                             this.agent.thermal.eco_active = true;
                         }
@@ -2911,10 +3800,15 @@ impl Workbench {
             return;
         }
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_secs(mins as u64 * 60)).await;
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(mins as u64 * 60))
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.agent_with_run(key, cx, |this, cx| {
-                    if this.agent.last_active == Some(stamp) && this.agent.status == Status::Ready && this.agent.permission.is_none() {
+                    if this.agent.last_active == Some(stamp)
+                        && this.agent.status == Status::Ready
+                        && this.agent.permission.is_none()
+                    {
                         this.agent_idle_stop(mins, cx);
                     }
                 });
@@ -2945,7 +3839,6 @@ impl Workbench {
         self.rel_display(full)
     }
 
-
     fn agent_chips(&self, cx: &App) -> Vec<(String, String, AnyElement, bool)> {
         let text = self.agent.input.read(cx).value().to_string();
         self.agent_chips_for(&text, cx)
@@ -2954,7 +3847,10 @@ impl Workbench {
     fn agent_chips_for(&self, text: &str, cx: &App) -> Vec<(String, String, AnyElement, bool)> {
         let off = |k: &str| self.agent.off_ctx.contains(k);
         fn chip_ico(name: impl Into<Icon>) -> AnyElement {
-            name.into().size(theme::u(12.)).flex_none().into_any_element()
+            name.into()
+                .size(theme::u(12.))
+                .flex_none()
+                .into_any_element()
         }
         let mut chips = Vec::new();
         if let Some(d) = self
@@ -2974,40 +3870,88 @@ impl Workbench {
                 if !range.is_empty() {
                     let v = ed.value();
                     let (a, b) = agent_ctx::line_span(&v, range.start, range.end);
-                    let label = if a == b { crate::trf!("Selection · line {a}"; a => a) } else { crate::trf!("Selection · lines {a}-{b}"; a => a, b => b) };
-                    chips.push(("sel".into(), label, chip_ico(gpui_kit::assets::IconName::TextCursorInput), !off("sel")));
+                    let label = if a == b {
+                        crate::trf!("Selection · line {a}"; a => a)
+                    } else {
+                        crate::trf!("Selection · lines {a}-{b}"; a => a, b => b)
+                    };
+                    chips.push((
+                        "sel".into(),
+                        label,
+                        chip_ico(gpui_kit::assets::IconName::TextCursorInput),
+                        !off("sel"),
+                    ));
                 }
             }
         }
         if agent_ctx::wants_error(text) {
             if let Some(p) = self.problems.first() {
-                let name = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = p
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let kind = p.message.split(':').next().unwrap_or("Error").to_string();
-                chips.push(("err".into(), format!("{kind} · {name}:{}", p.line), chip_ico(IconName::CircleX), !off("err")));
+                chips.push((
+                    "err".into(),
+                    format!("{kind} · {name}:{}", p.line),
+                    chip_ico(IconName::CircleX),
+                    !off("err"),
+                ));
             } else if self.agent_last_failure().is_some() {
-                chips.push(("err".into(), crate::i18n::tr("Last failed command").into(), chip_ico(IconName::CircleX), !off("err")));
+                chips.push((
+                    "err".into(),
+                    crate::i18n::tr("Last failed command").into(),
+                    chip_ico(IconName::CircleX),
+                    !off("err"),
+                ));
             }
         }
         if agent_ctx::wants_output(text) && !self.terms[self.term_ix].lines.is_empty() {
-            chips.push(("out".into(), crate::i18n::tr("Terminal output").into(), chip_ico(IconName::SquareTerminal), !off("out")));
+            chips.push((
+                "out".into(),
+                crate::i18n::tr("Terminal output").into(),
+                chip_ico(IconName::SquareTerminal),
+                !off("out"),
+            ));
         }
         let mentions = agent_ctx::mentions(text);
         let has_wiz_mention = mentions
             .iter()
             .any(|m| m.eq_ignore_ascii_case("wiztree") || m.eq_ignore_ascii_case("wizztree"));
-        let wants_wiz = self.wiztree.page || self.wiztree.pin_agent || has_wiz_mention || agent_ctx::wants_disk(text);
+        let wants_wiz = self.wiztree.page
+            || self.wiztree.pin_agent
+            || has_wiz_mention
+            || agent_ctx::wants_disk(text);
         if wants_wiz && (self.wiztree.tree.is_some() || self.root.is_some()) {
             let label = match &self.wiztree.tree {
                 Some(t) if self.wiztree.focus != 0 => {
-                    let name = t.nodes.get(self.wiztree.focus as usize).map(|n| n.name.as_str()).unwrap_or("WizTree");
+                    let name = t
+                        .nodes
+                        .get(self.wiztree.focus as usize)
+                        .map(|n| n.name.as_str())
+                        .unwrap_or("WizTree");
                     format!("WizTree · {name}")
                 }
                 _ => "WizTree".to_string(),
             };
-            chips.push(("wiztree".into(), label, chip_ico(gpui_kit::assets::IconName::HardDrive), !off("wiztree")));
+            chips.push((
+                "wiztree".into(),
+                label,
+                chip_ico(gpui_kit::assets::IconName::HardDrive),
+                !off("wiztree"),
+            ));
         }
         if self.root.is_some() && self.agent_ws_signature(cx) != self.agent.ws_sig {
-            chips.insert(0, ("ws".into(), crate::i18n::tr("Workspace").into(), chip_ico(IconName::FolderOpen), !off("ws")));
+            chips.insert(
+                0,
+                (
+                    "ws".into(),
+                    crate::i18n::tr("Workspace").into(),
+                    chip_ico(IconName::FolderOpen),
+                    !off("ws"),
+                ),
+            );
         }
         for m in mentions {
             if m.eq_ignore_ascii_case("wiztree") || m.eq_ignore_ascii_case("wizztree") {
@@ -3015,7 +3959,10 @@ impl Workbench {
             }
             if let Some(root) = &self.root {
                 if root.join(&m).exists() {
-                    let name = Path::new(&m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(m.clone());
+                    let name = Path::new(&m)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or(m.clone());
                     let key = format!("@{m}");
                     let on = !off(&key);
                     chips.push((key, name, chip_ico(gpui_kit::assets::IconName::AtSign), on));
@@ -3029,7 +3976,10 @@ impl Workbench {
         let mut tabs = Vec::new();
         if let Some(d) = self.active.map(|ix| &self.docs[ix]) {
             let line = d.cursor_position(cx).line + 1;
-            tabs.push(format!("{} (active, line {line})", self.rel_path(&d.path.to_string_lossy())));
+            tabs.push(format!(
+                "{} (active, line {line})",
+                self.rel_path(&d.path.to_string_lossy())
+            ));
         }
         for (i, d) in self.docs.iter().enumerate() {
             if Some(i) != self.active {
@@ -3041,7 +3991,11 @@ impl Workbench {
 
     fn agent_ws_signature(&self, cx: &App) -> u64 {
         let (roots, tabs) = self.agent_ws_parts(cx);
-        let wiz = self.wiztree.tree.as_deref().filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
+        let wiz = self
+            .wiztree
+            .tree
+            .as_deref()
+            .filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
         crate::ws_context::signature(&crate::ws_context::Inputs {
             roots: &roots,
             files: &self.all_files,
@@ -3054,8 +4008,13 @@ impl Workbench {
 
     fn agent_last_failure(&self) -> Option<String> {
         for lines in [&self.terms[self.term_ix].lines, &self.out_lines] {
-            let end = lines.iter().rposition(|l| l.kind == crate::term::LineKind::Status && l.err)?;
-            let start = lines[..end].iter().rposition(|l| l.kind == crate::term::LineKind::Cmd).unwrap_or(0);
+            let end = lines
+                .iter()
+                .rposition(|l| l.kind == crate::term::LineKind::Status && l.err)?;
+            let start = lines[..end]
+                .iter()
+                .rposition(|l| l.kind == crate::term::LineKind::Cmd)
+                .unwrap_or(0);
             let body: Vec<&str> = lines[start..=end].iter().map(|l| l.text.as_ref()).collect();
             let tail = body.len().saturating_sub(60);
             return Some(body[tail..].join("\n"));
@@ -3076,7 +4035,11 @@ impl Workbench {
             match key.as_str() {
                 "ws" => {
                     let (roots, tabs) = self.agent_ws_parts(cx);
-                    let wiz = self.wiztree.tree.as_deref().filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
+                    let wiz = self
+                        .wiztree
+                        .tree
+                        .as_deref()
+                        .filter(|t| self.root.as_ref().is_some_and(|r| t.root == *r));
                     let git = self.scm.repo.as_ref().map(|_| &self.scm.status);
                     let inputs = crate::ws_context::Inputs {
                         roots: &roots,
@@ -3114,10 +4077,18 @@ impl Workbench {
                     if let Some((path, body, line)) = active_info {
                         if body.len() < 200_000 {
                             let rel = self.rel_path(&path.to_string_lossy());
-                            match self.agent.ctx_cache.encode_file(&path, &rel, &body, Some(line)) {
+                            match self
+                                .agent
+                                .ctx_cache
+                                .encode_file(&path, &rel, &body, Some(line))
+                            {
                                 opt::FilePayload::Full => blocks.push(resource(&path, body)),
-                                opt::FilePayload::Unchanged(note) => blocks.push(json!({ "type": "text", "text": note })),
-                                opt::FilePayload::Delta(diff) => blocks.push(json!({ "type": "text", "text": diff })),
+                                opt::FilePayload::Unchanged(note) => {
+                                    blocks.push(json!({ "type": "text", "text": note }))
+                                }
+                                opt::FilePayload::Delta(diff) => {
+                                    blocks.push(json!({ "type": "text", "text": diff }))
+                                }
                             }
                         }
                     }
@@ -3141,7 +4112,12 @@ impl Workbench {
                 "err" => {
                     let mut t = String::from("The most recent error in FluxCode (the user is probably asking about it):\n");
                     for p in &self.problems {
-                        t.push_str(&format!("- {} at {}:{}\n", p.message, self.rel_path(&p.path.to_string_lossy()), p.line));
+                        t.push_str(&format!(
+                            "- {} at {}:{}\n",
+                            p.message,
+                            self.rel_path(&p.path.to_string_lossy()),
+                            p.line
+                        ));
                     }
                     if let Some(f) = self.agent_last_failure() {
                         t.push_str(&format!("```\n{f}\n```\n"));
@@ -3150,8 +4126,15 @@ impl Workbench {
                 }
                 "out" => {
                     let n = self.terms[self.term_ix].lines.len();
-                    let tail: Vec<&str> = self.terms[self.term_ix].lines[n.saturating_sub(60)..].iter().map(|l| l.text.as_ref()).collect();
-                    ambient.push((0.8, 1800, format!("Recent terminal output:\n```\n{}\n```", tail.join("\n"))));
+                    let tail: Vec<&str> = self.terms[self.term_ix].lines[n.saturating_sub(60)..]
+                        .iter()
+                        .map(|l| l.text.as_ref())
+                        .collect();
+                    ambient.push((
+                        0.8,
+                        1800,
+                        format!("Recent terminal output:\n```\n{}\n```", tail.join("\n")),
+                    ));
                 }
                 "wiztree" => {
                     if self.wiztree.tree.is_none() {
@@ -3184,14 +4167,23 @@ impl Workbench {
                                     let rel = self.rel_path(&p.to_string_lossy());
                                     match self.agent.ctx_cache.encode_file(&p, &rel, &text, None) {
                                         opt::FilePayload::Full => blocks.push(resource(&p, text)),
-                                        opt::FilePayload::Unchanged(note) => blocks.push(json!({ "type": "text", "text": note })),
-                                        opt::FilePayload::Delta(diff) => blocks.push(json!({ "type": "text", "text": diff })),
+                                        opt::FilePayload::Unchanged(note) => {
+                                            blocks.push(json!({ "type": "text", "text": note }))
+                                        }
+                                        opt::FilePayload::Delta(diff) => {
+                                            blocks.push(json!({ "type": "text", "text": diff }))
+                                        }
                                     }
                                 }
                             }
                         } else if p.is_dir() {
                             let names: Vec<String> = std::fs::read_dir(&p)
-                                .map(|rd| rd.flatten().take(200).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                                .map(|rd| {
+                                    rd.flatten()
+                                        .take(200)
+                                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             blocks.push(json!({ "type": "text", "text": format!("Contents of the folder {}:\n{}", &k[1..], names.join("\n")) }));
                         }
@@ -3201,7 +4193,10 @@ impl Workbench {
             }
         }
         if !ambient.is_empty() {
-            let spec: Vec<(f64, usize, usize)> = ambient.iter().map(|(e, min_b, s)| (*e, *min_b, s.len())).collect();
+            let spec: Vec<(f64, usize, usize)> = ambient
+                .iter()
+                .map(|(e, min_b, s)| (*e, *min_b, s.len()))
+                .collect();
             let budgets = opt::boltzmann_allocate(&spec, 18_000, 1.6);
             for ((_, _, text), budget) in ambient.into_iter().zip(budgets) {
                 let out = if text.len() > budget {
@@ -3243,12 +4238,15 @@ impl Workbench {
         blocks
     }
 
-
     fn agent_load_session(&mut self, id: String) {
         let cwd = self.agent_cwd();
         self.agent.loading_id = Some(id.clone());
         self.agent.status = Status::Starting;
-        self.agent_request(Req::LoadSession, "session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }));
+        self.agent_request(
+            Req::LoadSession,
+            "session/load",
+            json!({ "sessionId": id, "cwd": cwd, "mcpServers": self.agent_mcp_servers() }),
+        );
     }
 
     fn agent_open_remote(&mut self, id: String, cx: &mut Context<Self>) {
@@ -3260,10 +4258,16 @@ impl Workbench {
                 if self.agent.can_load {
                     self.agent_load_session(id);
                 } else {
-                    self.agent.items.push(Item::Note(format!("{} can't reopen saved sessions.", agent_name()), true));
+                    self.agent.items.push(Item::Note(
+                        format!("{} can't reopen saved sessions.", agent_name()),
+                        true,
+                    ));
                 }
             }
-            Status::Starting | Status::Busy => self.agent.items.push(Item::Note(crate::i18n::tr("Wait for the current answer, then open the session again.").into(), true)),
+            Status::Starting | Status::Busy => self.agent.items.push(Item::Note(
+                crate::i18n::tr("Wait for the current answer, then open the session again.").into(),
+                true,
+            )),
             _ => {
                 self.agent.pending_load = Some(id);
                 self.agent_start(cx);
@@ -3284,12 +4288,17 @@ impl Workbench {
             self.agent.remote_state = 2;
             self.agent.remote.clear();
             if crate::acp::locate(&agent_id()).is_none() {
-                self.agent.remote_err = Some(format!("{} isn't installed, so its sessions can't be read.", agent_name()));
+                self.agent.remote_err = Some(format!(
+                    "{} isn't installed, so its sessions can't be read.",
+                    agent_name()
+                ));
             }
             return;
         };
         let harness = agent_name();
-        cmd.args(["session", "list", "--format", "json", "-n", "40"]).current_dir(&root).env("NO_COLOR", "1");
+        cmd.args(["session", "list", "--format", "json", "-n", "40"])
+            .current_dir(&root)
+            .env("NO_COLOR", "1");
         if crate::acp::is_opencode(&agent_id()) {
             cmd.arg("--standalone");
         }
@@ -3314,9 +4323,15 @@ impl Workbench {
         .detach();
     }
 
-
-    pub(crate) fn on_agent_insert_code(&mut self, _: &crate::workbench::AgentInsertCode, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(code) = PENDING_INSERT.lock().ok().and_then(|mut p| p.take()) else { return };
+    pub(crate) fn on_agent_insert_code(
+        &mut self,
+        _: &crate::workbench::AgentInsertCode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(code) = PENDING_INSERT.lock().ok().and_then(|mut p| p.take()) else {
+            return;
+        };
         match self.active.filter(|ix| self.docs[*ix].image.is_none()) {
             Some(ix) => {
                 let name = self.docs[ix].name.clone();
@@ -3326,7 +4341,12 @@ impl Workbench {
                     let h = ed.focus_handle(cx);
                     h.focus(window, cx);
                 }
-                self.status = if lines == 1 { crate::trf!("Inserted 1 line into {name}"; name => name) } else { crate::trf!("Inserted {lines} lines into {name}"; lines => lines, name => name) }.into();
+                self.status = if lines == 1 {
+                    crate::trf!("Inserted 1 line into {name}"; name => name)
+                } else {
+                    crate::trf!("Inserted {lines} lines into {name}"; lines => lines, name => name)
+                }
+                .into();
             }
             None => {
                 cx.write_to_clipboard(ClipboardItem::new_string(code));
@@ -3335,7 +4355,6 @@ impl Workbench {
         }
         cx.notify();
     }
-
 
     fn render_remote_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
         let a = &self.agent;
@@ -3351,13 +4370,34 @@ impl Workbench {
                 .child(format!("{} SESSIONS IN THIS FOLDER", name.to_uppercase())),
         );
         if a.remote_state == 1 {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("Reading {name}'s sessions…"; name => name)));
+            v = v.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(crate::trf!("Reading {name}'s sessions…"; name => name)),
+            );
         }
         if let Some(e) = &a.remote_err {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(e.clone()));
+            v = v.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(e.clone()),
+            );
         }
         if a.remote_state == 2 && a.remote.is_empty() && a.remote_err.is_none() {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{name} has no saved sessions for this folder.")));
+            v = v.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(format!("{name} has no saved sessions for this folder.")),
+            );
         }
         for (i, s) in a.remote.iter().enumerate() {
             let id = s.id.clone();
@@ -3373,17 +4413,38 @@ impl Workbench {
                     .cursor_pointer()
                     .when(current, |d| d.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(Icon::new(gpui_kit::assets::IconName::MessagesSquare).size(theme::u(14.)).text_color(c(theme::FG_DIM)))
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::MessagesSquare)
+                            .size(theme::u(14.))
+                            .text_color(c(theme::FG_DIM)),
+                    )
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_sm().truncate().text_color(c(theme::FG_STRONG)).child(s.title.clone()))
-                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(format!("{} · {}", s.harness, ago(s.updated)))),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .truncate()
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(s.title.clone()),
+                            )
+                            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(format!(
+                                "{} · {}",
+                                s.harness,
+                                ago(s.updated)
+                            ))),
                     )
-                    .when(current, |h| h.child(div().text_xs().text_color(c(theme::GREEN)).child("open")))
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Resume this session here")).build(w, cx))
-                    .on_click(cx.listener(move |this, _, _, cx| this.agent_open_remote(id.clone(), cx))),
+                    .when(current, |h| {
+                        h.child(div().text_xs().text_color(c(theme::GREEN)).child("open"))
+                    })
+                    .tooltip(|w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tr("Resume this session here"))
+                            .build(w, cx)
+                    })
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.agent_open_remote(id.clone(), cx)),
+                    ),
             );
         }
         v.into_any_element()
@@ -3395,7 +4456,10 @@ impl Workbench {
         }
         match &self.agent.status {
             Status::Busy => Some((theme::BLUE, crate::i18n::tr("Working…").into())),
-            Status::Starting if self.agent.loading_id.is_some() => Some((theme::FG_MUTED, crate::i18n::tr("Opening the session…").into())),
+            Status::Starting if self.agent.loading_id.is_some() => Some((
+                theme::FG_MUTED,
+                crate::i18n::tr("Opening the session…").into(),
+            )),
             Status::Starting => Some((theme::FG_MUTED, crate::i18n::tr("Starting…").into())),
             _ => None,
         }
@@ -3472,8 +4536,16 @@ impl Workbench {
     }
 
     fn render_context_chips(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let chips: Vec<_> = self.agent_chips(cx).into_iter().filter(|c| c.0 != "ws").collect();
-        let hidden: Vec<(String, String)> = chips.iter().filter(|c| !c.3).map(|c| (c.0.clone(), c.1.clone())).collect();
+        let chips: Vec<_> = self
+            .agent_chips(cx)
+            .into_iter()
+            .filter(|c| c.0 != "ws")
+            .collect();
+        let hidden: Vec<(String, String)> = chips
+            .iter()
+            .filter(|c| !c.3)
+            .map(|c| (c.0.clone(), c.1.clone()))
+            .collect();
         let mut out: Vec<AnyElement> = chips
             .into_iter()
             .filter(|c| c.3)
@@ -3483,9 +4555,21 @@ impl Workbench {
                 let thumb = key
                     .strip_prefix('@')
                     .and_then(|m| self.root.as_ref().map(|r| r.join(m)))
-                    .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg")));
+                    .filter(|p| {
+                        p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                            matches!(
+                                e.to_ascii_lowercase().as_str(),
+                                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg"
+                            )
+                        })
+                    });
                 let lead: AnyElement = match thumb {
-                    Some(p) => img(p).flex_none().size(theme::u(14.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element(),
+                    Some(p) => img(p)
+                        .flex_none()
+                        .size(theme::u(14.))
+                        .rounded(px(3.))
+                        .object_fit(ObjectFit::Cover)
+                        .into_any_element(),
                     None => icon,
                 };
                 let go_tip: SharedString =
@@ -3514,21 +4598,34 @@ impl Workbench {
                             .child(div().min_w_0().truncate().child(label)),
                     )
                     .child(
-                        chip_x(SharedString::from(format!("ag-chip-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.agent.off_ctx.insert(close_key.clone());
-                            if close_key == "wiztree" {
-                                this.wiztree.pin_agent = false;
-                            }
-                            cx.notify();
-                        }))
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Leave it out of the message")).build(w, cx)),
+                        chip_x(
+                            SharedString::from(format!("ag-chip-x-{i}")),
+                            IconName::Close,
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.agent.off_ctx.insert(close_key.clone());
+                                if close_key == "wiztree" {
+                                    this.wiztree.pin_agent = false;
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr(
+                                "Leave it out of the message",
+                            ))
+                            .build(w, cx)
+                        }),
                     )
                     .into_any_element()
             })
             .collect();
         if !hidden.is_empty() {
-            let names = hidden.iter().map(|h| h.1.as_str()).collect::<Vec<_>>().join(", ");
+            let names = hidden
+                .iter()
+                .map(|h| h.1.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             let tip: SharedString = crate::trf!("Send again: {names}"; names => names).into();
             let keys: Vec<String> = hidden.into_iter().map(|h| h.0).collect();
             out.push(
@@ -3545,7 +4642,9 @@ impl Workbench {
                     .cursor_pointer()
                     .text_color(c(theme::FG_DIM))
                     .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                    })
                     .child(Icon::new(IconName::Plus).size(theme::u(12.)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -3563,13 +4662,16 @@ impl Workbench {
     fn render_slash_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (list, sel) = self.agent.slash.as_ref()?;
         let name = agent_name();
-        let mut v = v_flex()
-            .mx_3()
-            .mb_1()
-            .py_1()
-            .glass_pop();
+        let mut v = v_flex().mx_3().mb_1().py_1().glass_pop();
         if list.is_empty() {
-            v = v.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No command matches")));
+            v = v.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("No command matches")),
+            );
         }
         for (row, cmd) in list.iter().enumerate() {
             v = v.child(
@@ -3583,8 +4685,25 @@ impl Workbench {
                     .cursor_pointer()
                     .when(row == *sel, |d| d.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(div().flex_shrink_0().max_w(relative(0.6)).truncate().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(format!("/{}", cmd.name)))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(cmd.desc.clone()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(relative(0.6))
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(format!("/{}", cmd.name)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(cmd.desc.clone()),
+                    )
                     .child(
                         div()
                             .flex_none()
@@ -3593,7 +4712,11 @@ impl Workbench {
                             .text_xs()
                             .text_color(c(theme::FG_DIM))
                             .bg(c(theme::BG_ELEVATED))
-                            .child(if cmd.builtin { "FluxCode".to_string() } else { name.to_string() }),
+                            .child(if cmd.builtin {
+                                "FluxCode".to_string()
+                            } else {
+                                name.to_string()
+                            }),
                     )
                     .on_click(cx.listener(move |this, _, w, cx| {
                         if let Some(s) = this.agent.slash.as_mut() {
@@ -3603,23 +4726,44 @@ impl Workbench {
                     })),
             );
         }
-        let more = if self.agent.commands.is_empty() && !matches!(self.agent.status, Status::Ready | Status::Busy) {
-            format!(" · {}", crate::trf!("{name}'s own commands appear once it is on"; name => name))
+        let more = if self.agent.commands.is_empty()
+            && !matches!(self.agent.status, Status::Ready | Status::Busy)
+        {
+            format!(
+                " · {}",
+                crate::trf!("{name}'s own commands appear once it is on"; name => name)
+            )
         } else {
             String::new()
         };
-        Some(v.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(format!("{}{more}", tr("↑↓ choose · Tab fills · Enter runs · Esc closes")))).into_any_element())
+        Some(
+            v.child(
+                div()
+                    .px_3()
+                    .pt_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(format!(
+                        "{}{more}",
+                        tr("↑↓ choose · Tab fills · Enter runs · Esc closes")
+                    )),
+            )
+            .into_any_element(),
+        )
     }
 
     fn render_mention_popup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, hits, sel) = self.agent.mention.as_ref()?;
-        let mut list = v_flex()
-            .mx_3()
-            .mb_1()
-            .py_1()
-            .glass_pop();
+        let mut list = v_flex().mx_3().mb_1().py_1().glass_pop();
         if hits.is_empty() {
-            list = list.child(div().px_2().py_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("No file matches")));
+            list = list.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("No file matches")),
+            );
         }
         for (row, &ix) in hits.iter().enumerate() {
             let (icon_el, name, dir): (AnyElement, String, String) = if ix == usize::MAX {
@@ -3638,11 +4782,7 @@ impl Workbench {
                     None => (String::new(), rel.clone()),
                 };
                 let icon_el = crate::files::file_icon_el(&name, theme::u(13.));
-                (
-                    icon_el,
-                    name,
-                    dir,
-                )
+                (icon_el, name, dir)
             };
             list = list.child(
                 h_flex()
@@ -3656,8 +4796,22 @@ impl Workbench {
                     .when(row == *sel, |d| d.bg(c(theme::SELECT)))
                     .hover(|s| s.bg(c(theme::BG_HOVER)))
                     .child(icon_el)
-                    .child(div().flex_none().text_xs().text_color(c(theme::FG_STRONG)).child(name))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(dir))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(dir),
+                    )
                     .on_click(cx.listener(move |this, _, w, cx| {
                         if let Some(m) = this.agent.mention.as_mut() {
                             m.2 = row;
@@ -3666,7 +4820,17 @@ impl Workbench {
                     })),
             );
         }
-        Some(list.child(div().px_3().pt_1().text_xs().text_color(c(theme::FG_DIM)).child(tr("↑↓ choose · Tab or Enter adds · Esc closes"))).into_any_element())
+        Some(
+            list.child(
+                div()
+                    .px_3()
+                    .pt_1()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("↑↓ choose · Tab or Enter adds · Esc closes")),
+            )
+            .into_any_element(),
+        )
     }
 
     pub(crate) fn render_agent(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -3693,9 +4857,22 @@ impl Workbench {
             .size_full()
             .child(body)
             .child(probe)
-            .children(self.render_agent_menu(true, window, cx).map(|m| div().absolute().top_1().left_2().right_2().child(deferred(m))))
+            .children(self.render_agent_menu(true, window, cx).map(|m| {
+                div()
+                    .absolute()
+                    .top_1()
+                    .left_2()
+                    .right_2()
+                    .child(deferred(m))
+            }))
             .children(self.render_usage_modal(cx))
-            .children(self.render_saver_panel(cx).map(|p| div().absolute().right_3().bottom(theme::u(118.)).child(deferred(p))))
+            .children(self.render_saver_panel(cx).map(|p| {
+                div()
+                    .absolute()
+                    .right_3()
+                    .bottom(theme::u(118.))
+                    .child(deferred(p))
+            }))
             .into_any_element()
     }
 
@@ -3703,7 +4880,10 @@ impl Workbench {
         let a = &self.agent;
         let (dot, label) = match &a.status {
             Status::Off => (theme::FG_DIM, crate::i18n::tr("Off").to_string()),
-            Status::Starting if a.loading_id.is_some() => (theme::FG_MUTED, crate::i18n::tr("Opening the session…").into()),
+            Status::Starting if a.loading_id.is_some() => (
+                theme::FG_MUTED,
+                crate::i18n::tr("Opening the session…").into(),
+            ),
             Status::Starting => (theme::FG_MUTED, crate::i18n::tr("Starting…").into()),
             Status::Ready => (theme::GREEN, crate::i18n::tr("Ready").into()),
             Status::Busy => (theme::BLUE, crate::i18n::tr("Working…").into()),
@@ -3711,9 +4891,14 @@ impl Workbench {
         };
         let on = matches!(a.status, Status::Starting | Status::Ready | Status::Busy);
         let _ = (dot, label);
-        let header = div();
+        let header = self
+            .render_agent_opt_strip(cx)
+            .unwrap_or_else(|| div().into_any_element());
         if a.show_history {
-            return v_flex().size_full().child(header).child(self.render_history(cx)).into_any_element();
+            return v_flex()
+                .size_full()
+                .child(self.render_history(cx))
+                .into_any_element();
         }
         if let Some(id) = &a.uninstall {
             return self.render_uninstall(id, cx);
@@ -3721,7 +4906,19 @@ impl Workbench {
 
         self.agent_sync_list();
         let error = match &a.status {
-            Status::Error(e) => Some(div().mx_3().mb_2().p_2().rounded(px(4.)).border_1().border_color(c(theme::DANGER)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::DANGER)).child(e.clone())),
+            Status::Error(e) => Some(
+                div()
+                    .mx_3()
+                    .mb_2()
+                    .p_2()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(c(theme::DANGER))
+                    .bg(c(theme::BG_ELEVATED))
+                    .text_xs()
+                    .text_color(c(theme::DANGER))
+                    .child(e.clone()),
+            ),
             _ => None,
         };
         let log: AnyElement = if a.items.is_empty() {
@@ -3745,7 +4942,9 @@ impl Workbench {
                             let start = this.agent.view_start.get();
                             match (start > 0, ix) {
                                 (true, 0) => this.render_agent_pager(start, cx),
-                                (pager, _) => this.render_agent_item(start + ix - pager as usize, window, cx),
+                                (pager, _) => {
+                                    this.render_agent_item(start + ix - pager as usize, window, cx)
+                                }
                             }
                         }),
                     )
@@ -3755,24 +4954,42 @@ impl Workbench {
                 .into_any_element()
         };
         let permission = a.permission.as_ref().map(|p| self.render_permission(p, cx));
-        
+
         let folded = a.changes_folded;
         let changes = (!a.changes.is_empty()).then(|| {
-            let (add, del) = a.changes.iter().fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
-            let files = if a.changes.len() == 1 { crate::i18n::tr("1 file").to_string() } else { crate::trf!("{n} files"; n => a.changes.len()) };
+            let (add, del) = a
+                .changes
+                .iter()
+                .fold((0, 0), |t, ch| (t.0 + ch.added, t.1 + ch.removed));
+            let files = if a.changes.len() == 1 {
+                crate::i18n::tr("1 file").to_string()
+            } else {
+                crate::trf!("{n} files"; n => a.changes.len())
+            };
             let counts = |added: usize, removed: usize| {
                 h_flex()
                     .flex_none()
                     .gap_1()
                     .font_family("Cascadia Code")
                     .child(div().text_color(c(theme::GREEN)).child(format!("+{added}")))
-                    .child(div().text_color(c(theme::DANGER)).child(format!("-{removed}")))
+                    .child(
+                        div()
+                            .text_color(c(theme::DANGER))
+                            .child(format!("-{removed}")),
+                    )
             };
             let rows = a.changes.iter().enumerate().map(|(i, ch)| {
                 let path = ch.path.clone();
-                let name = ch.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = ch
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let rel = self.rel_display(&ch.path.to_string_lossy());
-                let dir = rel.rsplit_once(['\\', '/']).map(|(d, _)| d.to_string()).unwrap_or_default();
+                let dir = rel
+                    .rsplit_once(['\\', '/'])
+                    .map(|(d, _)| d.to_string())
+                    .unwrap_or_default();
                 let icon_el = crate::files::file_icon_el(&name, theme::u(13.));
                 h_flex()
                     .id(("ag-ch", i))
@@ -3792,14 +5009,38 @@ impl Workbench {
                                 this.agent_show_diff(i, w, cx)
                             }))
                             .child(icon_el)
-                            .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(name))
-                            .when(ch.before.is_none(), |h| h.child(div().flex_none().text_color(c(theme::GREEN)).child(crate::i18n::tr("new"))))
-                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(dir)),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(c(theme::FG))
+                                    .child(name),
+                            )
+                            .when(ch.before.is_none(), |h| {
+                                h.child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(c(theme::GREEN))
+                                        .child(crate::i18n::tr("new")),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(dir),
+                            ),
                     )
                     .child(if ch.counted {
                         counts(ch.added, ch.removed).into_any_element()
                     } else {
-                        div().flex_none().text_color(c(theme::FG_DIM)).child("…").into_any_element()
+                        div()
+                            .flex_none()
+                            .text_color(c(theme::FG_DIM))
+                            .child("…")
+                            .into_any_element()
                     })
                     .child(
                         div()
@@ -3813,7 +5054,12 @@ impl Workbench {
                             .cursor_pointer()
                             .text_color(c(theme::FG_DIM))
                             .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx))
+                            .tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr(
+                                    "Open the file",
+                                ))
+                                .build(w, cx)
+                            })
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.jump_to_file_smooth(path.clone(), None, w, cx)
                             }))
@@ -3831,9 +5077,16 @@ impl Workbench {
                             .cursor_pointer()
                             .text_color(c(theme::FG_DIM))
                             .hover(|s| s.bg(c(theme::BG_ELEVATED)).text_color(c(theme::FG_STRONG)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Undo this file")).build(w, cx))
+                            .tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr(
+                                    "Undo this file",
+                                ))
+                                .build(w, cx)
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| this.agent_undo(i, cx)))
-                            .child(Icon::new(gpui_kit::assets::IconName::Undo2).size(theme::u(13.))),
+                            .child(
+                                Icon::new(gpui_kit::assets::IconName::Undo2).size(theme::u(13.)),
+                            ),
                     )
             });
             v_flex()
@@ -3864,24 +5117,70 @@ impl Workbench {
                                     this.agent.changes_folded = !this.agent.changes_folded;
                                     cx.notify();
                                 }))
-                                .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).flex_none().size(theme::u(12.)).text_color(c(theme::FG_DIM)))
-                                .child(Icon::new(gpui_kit::assets::IconName::FileDiff).flex_none().size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                                .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::i18n::tr("Changes")))
-                                .child(div().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(files))
+                                .child(
+                                    Icon::new(if folded {
+                                        IconName::ChevronRight
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
+                                    .flex_none()
+                                    .size(theme::u(12.))
+                                    .text_color(c(theme::FG_DIM)),
+                                )
+                                .child(
+                                    Icon::new(gpui_kit::assets::IconName::FileDiff)
+                                        .flex_none()
+                                        .size(theme::u(13.))
+                                        .text_color(c(theme::FG_MUTED)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(crate::i18n::tr("Changes")),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(files),
+                                )
                                 .child(counts(add, del))
                                 .child(div().flex_1()),
                         )
-                        .child(change_btn("ag-undo-all", gpui_kit::assets::IconName::Undo2, crate::i18n::tr("Undo all")).on_click(cx.listener(|this, _, _, cx| {
-                            for i in (0..this.agent.changes.len()).rev() {
-                                this.agent_undo(i, cx);
-                            }
-                        })))
-                        .child(change_btn("ag-keep-all", IconName::Check, tr("Keep all")).on_click(cx.listener(|this, _, _, cx| {
-                            this.agent.changes.clear();
-                            cx.notify();
-                        }))),
+                        .child(
+                            change_btn(
+                                "ag-undo-all",
+                                gpui_kit::assets::IconName::Undo2,
+                                crate::i18n::tr("Undo all"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                for i in (0..this.agent.changes.len()).rev() {
+                                    this.agent_undo(i, cx);
+                                }
+                            })),
+                        )
+                        .child(
+                            change_btn("ag-keep-all", IconName::Check, tr("Keep all")).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.agent.changes.clear();
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
                 )
-                .when(!folded, |v| v.child(v_flex().id("ag-changes").max_h(theme::u(156.)).overflow_y_scroll().py_0p5().children(rows)))
+                .when(!folded, |v| {
+                    v.child(
+                        v_flex()
+                            .id("ag-changes")
+                            .max_h(theme::u(156.))
+                            .overflow_y_scroll()
+                            .py_0p5()
+                            .children(rows),
+                    )
+                })
         });
 
         v_flex()
@@ -3893,16 +5192,13 @@ impl Workbench {
                 this.agent_attach(paths.paths().to_vec(), cx);
             }))
             .child(header)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .child(log),
-            )
+            .child(div().flex_1().min_h_0().relative().child(log))
             .children(self.render_agent_ask(cx))
             .when_some(permission, |v, p| v.child(p))
-            .when_some(changes.filter(|_| !(self.agent_full && self.agent_docked_visible())), |v, ch| v.child(ch))
+            .when_some(
+                changes.filter(|_| !(self.agent_full && self.agent_docked_visible())),
+                |v, ch| v.child(ch),
+            )
             .children(self.render_queue(cx))
             .children(self.render_slash_popup(cx))
             .children(self.render_edit_strip(cx))
@@ -3920,19 +5216,43 @@ impl Workbench {
         let (id, tracker, _) = self.agent.installing.as_ref()?;
         let snap = tracker.get();
         window.request_animation_frame();
-        let frac = snap.fraction().filter(|_| matches!(snap.phase, crate::acp::Phase::Download | crate::acp::Phase::Unpack));
-        let bar = div().relative().w_full().h(px(3.)).rounded(px(2.)).bg(c(theme::BG_HOVER)).overflow_hidden().child(match frac {
-            Some(f) => div().absolute().left_0().top_0().bottom_0().rounded(px(2.)).bg(c(theme::ACCENT)).w(relative(f)).into_any_element(),
-            None => div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .w(relative(0.3))
-                .rounded(px(2.))
-                .bg(c(theme::ACCENT))
-                .with_animation("ag-inst-slide", Animation::new(std::time::Duration::from_millis(1300)).repeat(), |d, t| d.left(relative(-0.3 + 1.3 * t)))
-                .into_any_element(),
+        let frac = snap.fraction().filter(|_| {
+            matches!(
+                snap.phase,
+                crate::acp::Phase::Download | crate::acp::Phase::Unpack
+            )
         });
+        let bar = div()
+            .relative()
+            .w_full()
+            .h(px(3.))
+            .rounded(px(2.))
+            .bg(c(theme::BG_HOVER))
+            .overflow_hidden()
+            .child(match frac {
+                Some(f) => div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .rounded(px(2.))
+                    .bg(c(theme::ACCENT))
+                    .w(relative(f))
+                    .into_any_element(),
+                None => div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .w(relative(0.3))
+                    .rounded(px(2.))
+                    .bg(c(theme::ACCENT))
+                    .with_animation(
+                        "ag-inst-slide",
+                        Animation::new(std::time::Duration::from_millis(1300)).repeat(),
+                        |d, t| d.left(relative(-0.3 + 1.3 * t)),
+                    )
+                    .into_any_element(),
+            });
         Some(
             v_flex()
                 .mx_3()
@@ -3954,10 +5274,16 @@ impl Workbench {
         )
     }
 
-
-    fn render_agent_item(&mut self, i: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_agent_item(
+        &mut self,
+        i: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let a = &self.agent;
-        let Some(item) = a.items.get(i) else { return div().into_any_element() };
+        let Some(item) = a.items.get(i) else {
+            return div().into_any_element();
+        };
         let speaker = |who: &str, icon: Icon| {
             h_flex()
                 .pt_1()
@@ -3970,9 +5296,17 @@ impl Workbench {
         };
         let busy = a.status == Status::Busy;
         let run_of = |k: usize| self.agent_run_of(k);
-        let joined_up = |k: usize| is_step(k.checked_sub(1).and_then(|j| a.items.get(j))) || run_of(k).is_some_and(|r| r.0 == k);
+        let joined_up = |k: usize| {
+            is_step(k.checked_sub(1).and_then(|j| a.items.get(j)))
+                || run_of(k).is_some_and(|r| r.0 == k)
+        };
         let last_item = i + 1 == a.items.len();
-        let mut col = v_flex().w_full().min_w_0().px_3().pt_2().when(last_item, |v| v.pb_3());
+        let mut col = v_flex()
+            .w_full()
+            .min_w_0()
+            .px_3()
+            .pt_2()
+            .when(last_item, |v| v.pb_3());
         let top = a.view_start.get();
         let mut is_group_head = false;
         if let Some((first, last)) = run_of(i) {
@@ -3982,7 +5316,10 @@ impl Workbench {
             if i == head {
                 is_group_head = true;
                 let members = &a.items[first..=last];
-                let thoughts = members.iter().filter(|m| matches!(m, Item::Thought(_))).count();
+                let thoughts = members
+                    .iter()
+                    .filter(|m| matches!(m, Item::Thought(_)))
+                    .count();
                 let tools = members.len() - thoughts;
                 let total: std::time::Duration = (first..=last)
                     .filter_map(|k| {
@@ -3993,19 +5330,26 @@ impl Workbench {
                         a.times.get(&key).and_then(|t| t.1)
                     })
                     .sum();
-                col = col.child(self.render_step_group(activity::Group {
-                    first,
-                    last,
-                    thoughts,
-                    tools,
-                    running: live_tail,
-                    open,
-                    total: (!total.is_zero()).then_some(total),
-                    joined_down: open || live_tail,
-                }, cx));
+                col = col.child(self.render_step_group(
+                    activity::Group {
+                        first,
+                        last,
+                        thoughts,
+                        tools,
+                        running: live_tail,
+                        open,
+                        total: (!total.is_zero()).then_some(total),
+                        joined_down: open || live_tail,
+                    },
+                    cx,
+                ));
             }
             if !open && !(live_tail && i == last) {
-                return if i == head { col.into_any_element() } else { div().into_any_element() };
+                return if i == head {
+                    col.into_any_element()
+                } else {
+                    div().into_any_element()
+                };
             }
         }
         let pull_up = joined_up(i) && !is_group_head;
@@ -4046,7 +5390,7 @@ impl Workbench {
                 })
                 .into_any_element()
         };
-    col.child(match item {
+        col.child(match item {
             Item::User(t) => {
                 let group = SharedString::from(format!("ag-user-{i}"));
                 let editing = a.editing == Some(i);
@@ -4074,23 +5418,37 @@ impl Workbench {
                                     .cursor_pointer()
                                     .text_color(c(theme::FG_DIM))
                                     .when(editing, |d| d.text_color(c(theme::ACCENT_TEXT)))
-                                    .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Edit this message")).build(w, cx))
-                                    .on_click(cx.listener(move |this, _, w, cx| this.agent_edit(i, w, cx)))
-                                    .child(Icon::new(gpui_kit::assets::IconName::Pencil).size(theme::u(13.))),
+                                    .hover(|s| {
+                                        s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))
+                                    })
+                                    .tooltip(|w, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr(
+                                            "Edit this message",
+                                        ))
+                                        .build(w, cx)
+                                    })
+                                    .on_click(
+                                        cx.listener(move |this, _, w, cx| {
+                                            this.agent_edit(i, w, cx)
+                                        }),
+                                    )
+                                    .child(
+                                        Icon::new(gpui_kit::assets::IconName::Pencil)
+                                            .size(theme::u(13.)),
+                                    ),
                             )
                             .child(
-                        div()
-                            .max_w(relative(0.88))
-                            .px_2p5()
-                            .py_1p5()
-                            .rounded(px(4.))
-                            .bg(c(theme::BG_ELEVATED))
-                            .border_1()
-                            .border_color(c(theme::BORDER_STRONG))
-                            .text_sm()
-                            .text_color(c(theme::FG_STRONG))
-                            .child(t.clone()),
+                                div()
+                                    .max_w(relative(0.88))
+                                    .px_2p5()
+                                    .py_1p5()
+                                    .rounded(px(4.))
+                                    .bg(c(theme::BG_ELEVATED))
+                                    .border_1()
+                                    .border_color(c(theme::BORDER_STRONG))
+                                    .text_sm()
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(t.clone()),
                             ),
                     )
                     .into_any_element()
@@ -4098,18 +5456,27 @@ impl Workbench {
             Item::Text(t) => {
                 let cleaned = tidy::answer(t);
                 if !cleaned.contains('|') {
-                    render_md(SharedString::from(format!("ag-md-{i}")), cleaned.into_owned())
+                    render_md(
+                        SharedString::from(format!("ag-md-{i}")),
+                        cleaned.into_owned(),
+                    )
                 } else {
                     let segs = table::split_markdown_tables(&cleaned);
                     if segs.len() == 1 && matches!(&segs[0], table::Segment::Markdown(_)) {
-                        render_md(SharedString::from(format!("ag-md-{i}")), cleaned.into_owned())
+                        render_md(
+                            SharedString::from(format!("ag-md-{i}")),
+                            cleaned.into_owned(),
+                        )
                     } else {
                         let mut table_ix = 0usize;
                         let mut children: Vec<AnyElement> = Vec::with_capacity(segs.len());
                         for (seg_ix, seg) in segs.into_iter().enumerate() {
                             match seg {
                                 table::Segment::Markdown(md) => {
-                                    children.push(render_md(SharedString::from(format!("ag-md-{i}-{seg_ix}")), md));
+                                    children.push(render_md(
+                                        SharedString::from(format!("ag-md-{i}-{seg_ix}")),
+                                        md,
+                                    ));
                                 }
                                 table::Segment::Table(tbl) => {
                                     children.push(self.render_md_table(i, table_ix, &tbl, cx));
@@ -4117,18 +5484,35 @@ impl Workbench {
                                 }
                             }
                         }
-                        v_flex().w_full().min_w_0().gap_1().children(children).into_any_element()
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_1()
+                            .children(children)
+                            .into_any_element()
                     }
                 }
             }
             Item::Thought(t) => {
                 let open = a.open_thoughts.contains(&i);
-                let last = t.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("").to_string();
+                let last = t
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .last()
+                    .unwrap_or("")
+                    .to_string();
                 let step = activity::Step {
                     key: format!("think-{i}"),
                     kind: "think",
                     title: "",
-                    status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str()) && a.status == Status::Busy { "in_progress" } else { "completed" },
+                    status: if a.open_thought.as_deref() == Some(format!("think-{i}").as_str())
+                        && a.status == Status::Busy
+                    {
+                        "in_progress"
+                    } else {
+                        "completed"
+                    },
                     joined_up: joined_up(i),
                     pull_up,
                     joined_down: is_step(a.items.get(i + 1)),
@@ -4137,13 +5521,14 @@ impl Workbench {
                     open,
                     detail: open.then(|| tidy::thought(t)),
                 };
-                let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> = Box::new(move |this, cx| {
-                    if !this.agent.open_thoughts.remove(&i) {
-                        this.agent.open_thoughts.insert(i);
-                    }
-                    this.agent.remeasure.borrow_mut().push(i..i + 1);
-                    cx.notify();
-                });
+                let toggle: Box<dyn Fn(&mut Workbench, &mut Context<Workbench>)> =
+                    Box::new(move |this, cx| {
+                        if !this.agent.open_thoughts.remove(&i) {
+                            this.agent.open_thoughts.insert(i);
+                        }
+                        this.agent.remeasure.borrow_mut().push(i..i + 1);
+                        cx.notify();
+                    });
                 self.render_step(step, Some(toggle), cx)
             }
             Item::Branch(t) => h_flex()
@@ -4152,13 +5537,22 @@ impl Workbench {
                 .text_xs()
                 .text_color(c(theme::FG_DIM))
                 .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
-                .child(Icon::new(gpui_kit::assets::IconName::GitBranch).size(theme::u(12.)).flex_none())
+                .child(
+                    Icon::new(gpui_kit::assets::IconName::GitBranch)
+                        .size(theme::u(12.))
+                        .flex_none(),
+                )
                 .child(div().max_w(relative(0.75)).text_center().child(t.clone()))
                 .child(div().flex_1().h(px(1.)).bg(c(theme::BORDER)))
                 .into_any_element(),
             Item::Web(w) => self.render_web_item(i, w, cx),
             Item::Images { shots, hidden, .. } => self.render_shots(i, shots, *hidden, cx),
-            Item::Tool { id, title, status, kind } => self.render_step(
+            Item::Tool {
+                id,
+                title,
+                status,
+                kind,
+            } => self.render_step(
                 activity::Step {
                     key: id.clone(),
                     kind,
@@ -4191,7 +5585,15 @@ impl Workbench {
                     h_flex()
                         .gap_1p5()
                         .child(Icon::new(icon).size(theme::u(12.)).text_color(c(col)))
-                        .child(div().text_color(c(if st == "completed" { theme::FG_DIM } else { theme::FG })).child(t.clone()))
+                        .child(
+                            div()
+                                .text_color(c(if st == "completed" {
+                                    theme::FG_DIM
+                                } else {
+                                    theme::FG
+                                }))
+                                .child(t.clone()),
+                        )
                 }))
                 .into_any_element(),
             Item::Note(t, err) => h_flex()
@@ -4200,11 +5602,15 @@ impl Workbench {
                 .text_xs()
                 .line_height(theme::u(18.))
                 .text_color(c(if *err { theme::DANGER } else { theme::FG_DIM }))
-                .child(line_icon(Icon::new(if *err { IconName::CircleX } else { IconName::Info })))
+                .child(line_icon(Icon::new(if *err {
+                    IconName::CircleX
+                } else {
+                    IconName::Info
+                })))
                 .child(div().flex_1().min_w_0().child(t.clone()))
                 .into_any_element(),
         })
-    .into_any_element()
+        .into_any_element()
     }
 
     pub(crate) fn agent_attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -4217,10 +5623,16 @@ impl Workbench {
     }
 
     fn agent_pick_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach files".into()) });
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files".into()),
+        });
         cx.spawn_in(window, async move |this, cx| {
             let picked = paths.await.ok()?.ok()??;
-            this.update(cx, |this, cx| this.agent_attach(picked, cx)).ok()
+            this.update(cx, |this, cx| this.agent_attach(picked, cx))
+                .ok()
         })
         .detach();
     }
@@ -4229,11 +5641,19 @@ impl Workbench {
         use base64::Engine;
         let mut out = Vec::new();
         for p in files {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
             if p.is_dir() {
                 let names: Vec<String> = std::fs::read_dir(p)
-                    .map(|rd| rd.flatten().take(300).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                    .map(|rd| {
+                        rd.flatten()
+                            .take(300)
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 out.push(json!({ "type": "text", "text": format!("The user attached the folder {} ({}). It contains:\n{}", name, p.display(), names.join("\n")) }));
                 continue;
@@ -4277,14 +5697,26 @@ impl Workbench {
         let paused = a.queue_paused;
         let total = a.queue.len();
         let (dot_col, state_label): (theme::Tok, String) = if a.pending_steer.is_some() {
-            (theme::ACCENT, tr("Interrupting for priority task…").to_string())
+            (
+                theme::ACCENT,
+                tr("Interrupting for priority task…").to_string(),
+            )
         } else if paused {
             (theme::WARN, tr("Paused").to_string())
         } else {
             match &a.status {
-                Status::Busy => (theme::BLUE, crate::trf!("Runs next after {name} finishes"; name => name)),
-                Status::Starting => (theme::FG_MUTED, crate::trf!("Starts when {name} is ready"; name => name)),
-                Status::Error(_) => (theme::DANGER, crate::trf!("{name} couldn't start"; name => name)),
+                Status::Busy => (
+                    theme::BLUE,
+                    crate::trf!("Runs next after {name} finishes"; name => name),
+                ),
+                Status::Starting => (
+                    theme::FG_MUTED,
+                    crate::trf!("Starts when {name} is ready"; name => name),
+                ),
+                Status::Error(_) => (
+                    theme::DANGER,
+                    crate::trf!("{name} couldn't start"; name => name),
+                ),
                 _ => (theme::FG_DIM, tr("Ready").to_string()),
             }
         };
@@ -4311,7 +5743,14 @@ impl Workbench {
             .mb_1p5()
             .rounded(px(4.))
             .border_1()
-            .border_color(c(if paused { theme::WARN } else { theme::BORDER_STRONG }).opacity(if paused { 0.55 } else { 1.0 }))
+            .border_color(
+                c(if paused {
+                    theme::WARN
+                } else {
+                    theme::BORDER_STRONG
+                })
+                .opacity(if paused { 0.55 } else { 1.0 }),
+            )
             .bg(c(theme::BG_ELEVATED))
             .overflow_hidden()
             .child(
@@ -4330,9 +5769,20 @@ impl Workbench {
                             .flex_none()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(c(theme::FG_STRONG))
-                            .child(if total > 0 { crate::trf!("Queue ({n})"; n => total) } else { tr("Priority").to_string() }),
+                            .child(if total > 0 {
+                                crate::trf!("Queue ({n})"; n => total)
+                            } else {
+                                tr("Priority").to_string()
+                            }),
                     )
-                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(state_label))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG_DIM))
+                            .child(state_label),
+                    )
                     .when(total > 0 && (busy || paused), |h| {
                         h.child(
                             h_flex()
@@ -4344,7 +5794,11 @@ impl Workbench {
                                 .items_center()
                                 .rounded(px(3.))
                                 .cursor_pointer()
-                                .text_color(c(if paused { theme::ACCENT_TEXT } else { theme::FG_MUTED }))
+                                .text_color(c(if paused {
+                                    theme::ACCENT_TEXT
+                                } else {
+                                    theme::FG_MUTED
+                                }))
                                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                                 .tooltip(move |w, cx| {
                                     gpui_kit::component::tooltip::Tooltip::new(if paused {
@@ -4354,7 +5808,9 @@ impl Workbench {
                                     })
                                     .build(w, cx)
                                 })
-                                .on_click(cx.listener(|this, _, _, cx| this.agent_queue_toggle_pause(cx)))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.agent_queue_toggle_pause(cx)),
+                                )
                                 .child(if paused { tr("Resume") } else { tr("Pause") }),
                         )
                     })
@@ -4371,16 +5827,30 @@ impl Workbench {
                                 .cursor_pointer()
                                 .text_color(c(theme::FG_DIM))
                                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::DANGER)))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Clear all queued messages")).build(w, cx))
+                                .tooltip(|w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tr(
+                                        "Clear all queued messages",
+                                    ))
+                                    .build(w, cx)
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| this.agent_queue_clear(cx)))
                                 .child(tr("Clear")),
                         )
                     }),
             );
 
-        let mut rows = v_flex().id("ag-queue-rows").max_h(theme::u(152.)).overflow_y_scroll();
+        let mut rows = v_flex()
+            .id("ag-queue-rows")
+            .max_h(theme::u(152.))
+            .overflow_y_scroll();
         if let Some(steer) = &a.pending_steer {
-            let preview = steer.item.text.lines().next().unwrap_or("(attachments)").to_string();
+            let preview = steer
+                .item
+                .text
+                .lines()
+                .next()
+                .unwrap_or("(attachments)")
+                .to_string();
             rows = rows.child(
                 h_flex()
                     .id("ag-q-steering")
@@ -4390,15 +5860,33 @@ impl Workbench {
                     .items_center()
                     .bg(c(theme::ACCENT).opacity(0.08))
                     .text_xs()
-                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::ACCENT_TEXT)).child(tr("NOW")))
-                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_STRONG)).child(preview)),
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::ACCENT_TEXT))
+                            .child(tr("NOW")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG_STRONG))
+                            .child(preview),
+                    ),
             );
         }
         for (i, q) in a.queue.iter().enumerate() {
             let preview = if q.text.trim().is_empty() {
                 "(attachments)".to_string()
             } else {
-                q.text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+                q.text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             };
             let is_first = i == 0;
             let is_last = i + 1 == total;
@@ -4495,13 +5983,22 @@ impl Workbench {
         let has_text = !a.input.read(cx).value().trim().is_empty() || !a.attachments.is_empty();
         let weak = cx.entity().downgrade();
         let attachments = a.attachments.iter().enumerate().map(|(i, p)| {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let path = p.clone();
             let image = crate::files::is_image(p) && !name.to_lowercase().ends_with(".svg");
-            let name_tip: SharedString = crate::trf!("{name} · click to open"; name => name.clone()).into();
+            let name_tip: SharedString =
+                crate::trf!("{name} · click to open"; name => name.clone()).into();
             let preview = p.clone();
             let lead = if image {
-                img(p.clone()).flex_none().size(theme::u(16.)).rounded(px(3.)).object_fit(ObjectFit::Cover).into_any_element()
+                img(p.clone())
+                    .flex_none()
+                    .size(theme::u(16.))
+                    .rounded(px(3.))
+                    .object_fit(ObjectFit::Cover)
+                    .into_any_element()
             } else {
                 crate::files::file_icon_el(&name, theme::u(12.))
             };
@@ -4523,12 +6020,21 @@ impl Workbench {
                                 gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
                                     v_flex()
                                         .gap_1()
-                                        .child(img(p.clone()).max_w(px(260.)).max_h(px(200.)).rounded(px(4.)).object_fit(ObjectFit::Contain))
+                                        .child(
+                                            img(p.clone())
+                                                .max_w(px(260.))
+                                                .max_h(px(200.))
+                                                .rounded(px(4.))
+                                                .object_fit(ObjectFit::Contain),
+                                        )
                                         .child(div().text_xs().child(label.clone()))
                                 })
                                 .build(w, cx)
                             } else {
-                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr("Open the file")).build(w, cx)
+                                gpui_kit::component::tooltip::Tooltip::new(crate::i18n::tr(
+                                    "Open the file",
+                                ))
+                                .build(w, cx)
                             }
                         })
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -4540,13 +6046,17 @@ impl Workbench {
                         .child(lead)
                         .child(div().min_w_0().truncate().child(name)),
                 )
-                .child(chip_x(SharedString::from(format!("ag-att-x-{i}")), IconName::Close, cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    if i < this.agent.attachments.len() {
-                        this.agent.attachments.remove(i);
-                    }
-                    cx.notify();
-                })))
+                .child(chip_x(
+                    SharedString::from(format!("ag-att-x-{i}")),
+                    IconName::Close,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if i < this.agent.attachments.len() {
+                            this.agent.attachments.remove(i);
+                        }
+                        cx.notify();
+                    }),
+                ))
                 .into_any_element()
         });
         let mut chips: Vec<AnyElement> = attachments.collect();
@@ -4781,7 +6291,17 @@ impl Workbench {
             .mx_3()
             .mb_3()
             .child(boxed.child(box_probe))
-            .when_some(menu, |d, m| d.child(div().absolute().left_0().right_0().bottom_full().mb_1p5().child(deferred(m))))
+            .when_some(menu, |d, m| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_full()
+                        .mb_1p5()
+                        .child(deferred(m)),
+                )
+            })
     }
 
     fn render_browser_setting(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -4790,30 +6310,54 @@ impl Workbench {
         let state = crate::browser::state(&setting);
         let current = match &state {
             State::Off => "off",
-            _ => crate::browser::chosen(&setting).map(|b| b.id).unwrap_or("off"),
+            _ => crate::browser::chosen(&setting)
+                .map(|b| b.id)
+                .unwrap_or("off"),
         };
-        let mut choices: Vec<(&'static str, String)> = crate::browser::browsers().iter().map(|b| (b.id, b.name.to_string())).collect();
+        let mut choices: Vec<(&'static str, String)> = crate::browser::browsers()
+            .iter()
+            .map(|b| (b.id, b.name.to_string()))
+            .collect();
         choices.push(("off", crate::i18n::tr("Off").to_string()));
-        let buttons = h_flex().gap_1().flex_wrap().children(choices.into_iter().map(|(id, name)| {
-            let label = if id == "chrome" { format!("{name} ({})", crate::i18n::tr("recommended")) } else { name };
-            Button::new(SharedString::from(format!("ag-opt-browser-{id}")))
-                .label(label)
-                .xsmall()
-                .when(current == id, |b| b.primary())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings.agent_browser = id.to_string();
-                    this.settings.save();
-                    this.agent_browser_setup(cx);
-                    cx.notify();
-                }))
-        }));
+        let buttons = h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(choices.into_iter().map(|(id, name)| {
+                let label = if id == "chrome" {
+                    format!("{name} ({})", crate::i18n::tr("recommended"))
+                } else {
+                    name
+                };
+                Button::new(SharedString::from(format!("ag-opt-browser-{id}")))
+                    .label(label)
+                    .xsmall()
+                    .when(current == id, |b| b.primary())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings.agent_browser = id.to_string();
+                        this.settings.save();
+                        this.agent_browser_setup(cx);
+                        cx.notify();
+                    }))
+            }));
         let (note, install): (String, bool) = match &state {
             State::Off => (crate::i18n::tr("Agents have no browser.").into(), false),
-            State::NoBrowser => (crate::i18n::tr("No Chrome, Brave, Edge or Chromium found on this PC.").into(), false),
+            State::NoBrowser => (
+                crate::i18n::tr("No Chrome, Brave, Edge or Chromium found on this PC.").into(),
+                false,
+            ),
             State::NoNode(e) => (e.clone(), false),
-            State::NotInstalled(b) => (crate::trf!("{name} is found; its tools for agents ({pkg}, about 15 MB) aren't installed yet."; name => b.name, pkg => crate::browser::PACKAGE), true),
-            State::Installing(b) => (crate::trf!("Installing the tools for {name}…"; name => b.name), false),
-            State::Ready(b, v) => (crate::trf!("Agents open pages in {name} (its own profile, not yours) through {pkg} {v}. Applies from the next session."; name => b.name, pkg => crate::browser::PACKAGE, v => v), false),
+            State::NotInstalled(b) => (
+                crate::trf!("{name} is found; its tools for agents ({pkg}, about 15 MB) aren't installed yet."; name => b.name, pkg => crate::browser::PACKAGE),
+                true,
+            ),
+            State::Installing(b) => (
+                crate::trf!("Installing the tools for {name}…"; name => b.name),
+                false,
+            ),
+            State::Ready(b, v) => (
+                crate::trf!("Agents open pages in {name} (its own profile, not yours) through {pkg} {v}. Applies from the next session."; name => b.name, pkg => crate::browser::PACKAGE, v => v),
+                false,
+            ),
         };
         let headless = self.settings.agent_browser_headless;
         v_flex()
@@ -4884,7 +6428,12 @@ impl Workbench {
             _ => (gpui_kit::assets::IconName::Wrench, false),
         };
         let exact = p.detail.clone();
-        let mut options: Vec<(usize, String, String, String)> = p.options.iter().enumerate().map(|(i, (o, n, k))| (i, o.clone(), n.clone(), k.clone())).collect();
+        let mut options: Vec<(usize, String, String, String)> = p
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, (o, n, k))| (i, o.clone(), n.clone(), k.clone()))
+            .collect();
         options.sort_by_key(|o| match o.3.as_str() {
             "allow_once" => 0,
             "allow_always" => 1,
@@ -4905,7 +6454,9 @@ impl Workbench {
                 k if k.starts_with("reject") => b.ghost(),
                 _ => b,
             };
-            b.on_click(cx.listener(move |this, _, _, cx| this.agent_answer_permission(Some(oid.clone()), cx)))
+            b.on_click(cx.listener(move |this, _, _, cx| {
+                this.agent_answer_permission(Some(oid.clone()), cx)
+            }))
         });
         v_flex()
             .id("ag-permission")
@@ -4989,7 +6540,12 @@ impl Workbench {
 }
 
 impl Workbench {
-    fn render_model_menu(&self, m: &ConfigOpt, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_model_menu(
+        &self,
+        m: &ConfigOpt,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let current = m.current_name();
         let mut short = current.rsplit('/').next().unwrap_or(current).to_string();
         if let Some(s) = short.strip_suffix(" Free") {
@@ -5001,7 +6557,12 @@ impl Workbench {
         if let Some(s) = short.strip_suffix(" (recommended)") {
             short = s.to_string();
         }
-        let effort = self.agent_config_view().into_iter().find(|o| o.category == "thought_level").filter(|e| e.current != "default").map(|e| e.current_name().to_string());
+        let effort = self
+            .agent_config_view()
+            .into_iter()
+            .find(|o| o.category == "thought_level")
+            .filter(|e| e.current != "default")
+            .map(|e| e.current_name().to_string());
         let tip: SharedString = match &effort {
             Some(e) => crate::trf!("Model: {m} · effort {e}"; m => current, e => e).into(),
             None => crate::trf!("Model: {m}"; m => current).into(),
@@ -5032,7 +6593,11 @@ impl Workbench {
 
     fn render_access_menu(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.settings.access().to_string();
-        let (icon, label) = menu::ACCESS.iter().find(|l| l.0 == level).map(|l| (l.1, l.2)).unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
+        let (icon, label) = menu::ACCESS
+            .iter()
+            .find(|l| l.0 == level)
+            .map(|l| (l.1, l.2))
+            .unwrap_or((gpui_kit::assets::IconName::PencilLine, "Edit files"));
         let short = match level.as_str() {
             "read" => tr("Read only"),
             "full" => tr("Full access"),
@@ -5042,8 +6607,20 @@ impl Workbench {
         let tip: SharedString = crate::trf!("Permissions: {level}"; level => tr(label)).into();
         chip_button("ag-access", self.agent.menu.open == Some(Menu::Access), tip)
             .flex_none()
-            .child(Icon::new(icon).size(theme::u(13.)).flex_none().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })))
-            .when(!narrow, |h| h.child(div().whitespace_nowrap().text_color(c(if full { theme::WARN } else { theme::FG_MUTED })).child(short)))
+            .child(
+                Icon::new(icon)
+                    .size(theme::u(13.))
+                    .flex_none()
+                    .text_color(c(if full { theme::WARN } else { theme::FG_MUTED })),
+            )
+            .when(!narrow, |h| {
+                h.child(
+                    div()
+                        .whitespace_nowrap()
+                        .text_color(c(if full { theme::WARN } else { theme::FG_MUTED }))
+                        .child(short),
+                )
+            })
             .on_click(cx.listener(|this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_toggle(Menu::Access, w, cx)
@@ -5055,7 +6632,13 @@ impl Workbench {
         let id = agent_id();
         let installed = crate::acp::locate(&id).is_some();
         let any = !crate::acp::installed().is_empty();
-        let mut col = v_flex().size_full().min_h(theme::u(240.)).items_center().justify_center().gap_2().px_4();
+        let mut col = v_flex()
+            .size_full()
+            .min_h(theme::u(240.))
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .px_4();
         if let Some((_, _, anim)) = &self.agent.installing {
             return col.child(anim.clone()).into_any_element();
         }
@@ -5082,7 +6665,8 @@ impl Workbench {
                 err_card
                     .with_animation(
                         SharedString::from(format!("ag-err-in-{who}")),
-                        Animation::new(std::time::Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(std::time::Duration::from_millis(200))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |el, t| el.opacity(t).mt(px((1. - t) * 8.)),
                     )
                     .into_any_element()
@@ -5107,41 +6691,61 @@ impl Workbench {
             } else {
                 tr("Off for now. Your first message turns it on. Type @ to add a file.")
             };
-            let skills: Vec<SlashCmd> = self.agent.commands.iter().filter(|c| !c.builtin).take(12).cloned().collect();
+            let skills: Vec<SlashCmd> = self
+                .agent
+                .commands
+                .iter()
+                .filter(|c| !c.builtin)
+                .take(12)
+                .cloned()
+                .collect();
             let chips = (!skills.is_empty()).then(|| {
                 v_flex()
                     .w_full()
                     .max_w(theme::u(340.))
                     .pt_3()
                     .gap_1p5()
-                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(crate::trf!("Skills and commands from {name}"; name => name)))
-                    .child(h_flex().flex_wrap().gap_1().children(skills.into_iter().enumerate().map(|(i, s)| {
-                        let fill = format!("/{} ", s.name);
-                        let desc: SharedString = s.desc.clone().into();
+                    .child(
                         div()
-                            .id(("ag-skill", i))
-                            .px_2()
-                            .py_0p5()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(c(theme::BORDER))
-                            .cursor_pointer()
                             .text_xs()
-                            .text_color(c(theme::FG))
-                            .hover(|st| st.border_color(c(theme::BORDER_STRONG)).bg(c(theme::BG_HOVER)))
-                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(desc.clone()).build(w, cx))
-                            .child(format!("/{}", s.name))
-                            .on_click(cx.listener(move |this, _, w, cx| {
-                                let f = fill.clone();
-                                this.agent.input.update(cx, |st, cx| {
-                                    let end = f.len();
-                                    st.set_value(f.clone(), w, cx);
-                                    st.set_selected_range(end..end, cx);
-                                });
-                                let h = this.agent.input.focus_handle(cx);
-                                h.focus(w, cx);
-                            }))
-                    })))
+                            .text_color(c(theme::FG_MUTED))
+                            .child(crate::trf!("Skills and commands from {name}"; name => name)),
+                    )
+                    .child(h_flex().flex_wrap().gap_1().children(
+                        skills.into_iter().enumerate().map(|(i, s)| {
+                            let fill = format!("/{} ", s.name);
+                            let desc: SharedString = s.desc.clone().into();
+                            div()
+                                .id(("ag-skill", i))
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(c(theme::BORDER))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(c(theme::FG))
+                                .hover(|st| {
+                                    st.border_color(c(theme::BORDER_STRONG))
+                                        .bg(c(theme::BG_HOVER))
+                                })
+                                .tooltip(move |w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(desc.clone())
+                                        .build(w, cx)
+                                })
+                                .child(format!("/{}", s.name))
+                                .on_click(cx.listener(move |this, _, w, cx| {
+                                    let f = fill.clone();
+                                    this.agent.input.update(cx, |st, cx| {
+                                        let end = f.len();
+                                        st.set_value(f.clone(), w, cx);
+                                        st.set_selected_range(end..end, cx);
+                                    });
+                                    let h = this.agent.input.focus_handle(cx);
+                                    h.focus(w, cx);
+                                }))
+                        }),
+                    ))
             });
             let room = (!self.settings.agent_right).then(|| {
                 let link = |id: &'static str, icon: IconName, label: &'static str| {
@@ -5156,27 +6760,61 @@ impl Workbench {
                         .cursor_pointer()
                         .text_xs()
                         .text_color(c(theme::FG))
-                        .hover(|st| st.border_color(c(theme::BORDER_STRONG)).bg(c(theme::BG_HOVER)))
-                        .child(Icon::new(icon).size(theme::u(12.)).text_color(c(theme::FG_MUTED)))
+                        .hover(|st| {
+                            st.border_color(c(theme::BORDER_STRONG))
+                                .bg(c(theme::BG_HOVER))
+                        })
+                        .child(
+                            Icon::new(icon)
+                                .size(theme::u(12.))
+                                .text_color(c(theme::FG_MUTED)),
+                        )
                         .child(tr(label))
                 };
                 v_flex()
                     .pt_3()
                     .gap_1p5()
                     .items_center()
-                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr("Need more room?")))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(tr("Need more room?")),
+                    )
                     .child(
                         h_flex()
                             .flex_wrap()
                             .justify_center()
                             .gap_1()
-                            .child(link("ag-room-full", IconName::Maximize, "Fill the window").on_click(cx.listener(|this, _, w, cx| this.agent_fill_window(w, cx))))
-                            .child(link("ag-room-right", IconName::PanelRight, "Move to the right").on_click(cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx)))),
+                            .child(
+                                link("ag-room-full", IconName::Maximize, "Fill the window")
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| this.agent_fill_window(w, cx)),
+                                    ),
+                            )
+                            .child(
+                                link("ag-room-right", IconName::PanelRight, "Move to the right")
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| this.agent_move_dock(w, cx)),
+                                    ),
+                            ),
                     )
             });
             return col
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("Ask {name}"; name => name)))
-                .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(hint))
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(theme::FG_STRONG))
+                        .child(crate::trf!("Ask {name}"; name => name)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_center()
+                        .text_color(c(theme::FG_DIM))
+                        .child(hint),
+                )
                 .children(room)
                 .children(chips)
                 .children(err_box)
@@ -5186,39 +6824,65 @@ impl Workbench {
         if let Some(k) = crate::acp::known(&id) {
             ids.push(k.id);
         }
-        ids.extend(crate::acp::KNOWN.iter().map(|k| k.id).filter(|k| *k != id && crate::acp::locate(k).is_none()).take(if any { 0 } else { 3 }));
-        let title = if any { crate::trf!("{name} isn't installed"; name => name) } else { tr("Pick an agent to start").into() };
+        ids.extend(
+            crate::acp::KNOWN
+                .iter()
+                .map(|k| k.id)
+                .filter(|k| *k != id && crate::acp::locate(k).is_none())
+                .take(if any { 0 } else { 3 }),
+        );
+        let title = if any {
+            crate::trf!("{name} isn't installed"; name => name)
+        } else {
+            tr("Pick an agent to start").into()
+        };
         let note = if any {
             tr("Download it, or pick an agent you have in the menu above.")
         } else {
             tr("Every agent here speaks the Agent Client Protocol. FluxCode downloads it into its own folder and starts it only while you use it.")
         };
-        let list = v_flex().w_full().max_w(theme::u(300.)).pt_2().gap_1().children(ids.into_iter().map(|k| {
-            let known = crate::acp::known(k).expect("a known agent");
-            let kid = k.to_string();
-            h_flex()
-                .id(SharedString::from(format!("ag-get-{k}")))
-                .w_full()
-                .px_2()
-                .py_1()
-                .gap_2p5()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(c(theme::BORDER))
-                .cursor_pointer()
-                .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
-                .child(agent_glyph(k, 20.))
-                .child(two_line(known.name, known.by))
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(c(theme::FG_MUTED))
-                        .child(Icon::new(gpui_kit::assets::IconName::Download).size(theme::u(14.)))
-                        .child(if k == "commandcode" { tr("Get") } else { tr("Download") }),
-                )
-                .on_click(cx.listener(move |this, _, w, cx| this.agent_install(kid.clone(), w, cx)))
-        }));
+        let list = v_flex()
+            .w_full()
+            .max_w(theme::u(300.))
+            .pt_2()
+            .gap_1()
+            .children(ids.into_iter().map(|k| {
+                let known = crate::acp::known(k).expect("a known agent");
+                let kid = k.to_string();
+                h_flex()
+                    .id(SharedString::from(format!("ag-get-{k}")))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .gap_2p5()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .cursor_pointer()
+                    .hover(|s| {
+                        s.bg(c(theme::BG_HOVER))
+                            .border_color(c(theme::BORDER_STRONG))
+                    })
+                    .child(agent_glyph(k, 20.))
+                    .child(two_line(known.name, known.by))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(
+                                Icon::new(gpui_kit::assets::IconName::Download).size(theme::u(14.)),
+                            )
+                            .child(if k == "commandcode" {
+                                tr("Get")
+                            } else {
+                                tr("Download")
+                            }),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, w, cx| this.agent_install(kid.clone(), w, cx)),
+                    )
+            }));
         let missing_env = crate::acp::missing_runtime_for(&id);
         col.child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(title))
             .child(div().text_xs().text_center().text_color(c(theme::FG_DIM)).child(note))
@@ -5251,9 +6915,19 @@ impl Workbench {
 pub(crate) fn agent_glyph(id: &str, size: f32) -> AnyElement {
     let s = theme::u(size);
     match crate::acp::icon_asset(id) {
-        Some(path) => svg().path(SharedString::from(path)).flex_none().size(s).text_color(c(theme::FG)).into_any_element(),
+        Some(path) => svg()
+            .path(SharedString::from(path))
+            .flex_none()
+            .size(s)
+            .text_color(c(theme::FG))
+            .into_any_element(),
         None => {
-            let letter: String = crate::acp::display_name(id).chars().next().unwrap_or('?').to_uppercase().collect();
+            let letter: String = crate::acp::display_name(id)
+                .chars()
+                .next()
+                .unwrap_or('?')
+                .to_uppercase()
+                .collect();
             div()
                 .flex_none()
                 .size(s)
@@ -5297,7 +6971,10 @@ fn chip_button(id: &'static str, open: bool, tip: SharedString) -> Stateful<Div>
 }
 
 fn chevron() -> Icon {
-    Icon::new(IconName::ChevronDown).size(theme::u(12.)).flex_none().text_color(c(theme::FG_DIM))
+    Icon::new(IconName::ChevronDown)
+        .size(theme::u(12.))
+        .flex_none()
+        .text_color(c(theme::FG_DIM))
 }
 
 fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
@@ -5306,11 +6983,18 @@ fn two_line(title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div
         .flex_1()
         .min_w_0()
         .child(div().truncate().child(title.into()))
-        .when(!sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(sub)))
+        .when(!sub.is_empty(), |v| {
+            v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(sub))
+        })
 }
 
 fn line_icon(icon: Icon) -> Div {
-    div().flex_none().h(theme::u(18.)).flex().items_center().child(icon.size(theme::u(12.)))
+    div()
+        .flex_none()
+        .h(theme::u(18.))
+        .flex()
+        .items_center()
+        .child(icon.size(theme::u(12.)))
 }
 
 fn icon_btn(id: &'static str, icon: Icon, tip: &'static str) -> Stateful<Div> {
@@ -5340,7 +7024,11 @@ fn send_btn(id: &'static str, active: bool, tip: &'static str) -> Stateful<Div> 
         .rounded(px(3.))
         .cursor_pointer()
         .when(active, |d| d.bg(c(theme::ACCENT)).hover(|s| s.opacity(0.9)))
-        .when(!active, |d| d.border_1().border_color(c(theme::BORDER_STRONG)).hover(|s| s.bg(c(theme::BG_HOVER))))
+        .when(!active, |d| {
+            d.border_1()
+                .border_color(c(theme::BORDER_STRONG))
+                .hover(|s| s.bg(c(theme::BG_HOVER)))
+        })
         .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
 }
 
@@ -5357,7 +7045,11 @@ fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
         .border_1()
         .text_xs()
         .border_color(c(theme::BORDER))
-        .bg(if on { c(theme::BG_SIDE) } else { gpui_kit::transparent_black() })
+        .bg(if on {
+            c(theme::BG_SIDE)
+        } else {
+            gpui_kit::transparent_black()
+        })
         .text_color(c(if on { theme::FG } else { theme::FG_DIM }))
         .hover(|s| {
             s.bg(c(theme::BG_HOVER))
@@ -5367,7 +7059,11 @@ fn chip_shell(id: SharedString, on: bool) -> Stateful<Div> {
         .active(|s| s.opacity(0.84))
 }
 
-fn chip_x(id: SharedString, icon: IconName, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
+fn chip_x(
+    id: SharedString,
+    icon: IconName,
+    f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -5405,12 +7101,14 @@ fn change_btn(id: &'static str, icon: impl Into<Icon>, tip: &'static str) -> Sta
 pub(crate) const CHAT_SCROLL_KEY: u64 = u64::MAX - 1;
 
 fn chat_text_style() -> gpui_kit::component::text::TextViewStyle {
-    gpui_kit::component::text::TextViewStyle::default().paragraph_gap(rems(0.6)).heading_font_size(|level, _| match level {
-        1 => px(17.),
-        2 => px(16.),
-        3 => px(15.),
-        _ => px(14.),
-    })
+    gpui_kit::component::text::TextViewStyle::default()
+        .paragraph_gap(rems(0.6))
+        .heading_font_size(|level, _| match level {
+            1 => px(17.),
+            2 => px(16.),
+            3 => px(15.),
+            _ => px(14.),
+        })
 }
 
 impl Workbench {
@@ -5429,8 +7127,15 @@ impl Workbench {
         let mut seen = a.list_seen.borrow_mut();
         let ptr = items.as_ptr() as usize;
         const TAIL: usize = 16;
-        let tail: Vec<u64> = items[n.saturating_sub(TAIL)..].iter().map(item_size_sig).collect();
-        let replaced = n < seen.len || (ptr != seen.ptr && seen.len > 0 && n > 0 && items.first().map(item_size_sig) != Some(seen.first));
+        let tail: Vec<u64> = items[n.saturating_sub(TAIL)..]
+            .iter()
+            .map(item_size_sig)
+            .collect();
+        let replaced = n < seen.len
+            || (ptr != seen.ptr
+                && seen.len > 0
+                && n > 0
+                && items.first().map(item_size_sig) != Some(seen.first));
         let mut start = a.view_start.get().min(n);
         if replaced || seen.len == 0 {
             start = n.saturating_sub(WINDOW);
@@ -5452,7 +7157,10 @@ impl Workbench {
                 from = seen.len.saturating_sub(2);
             }
             if start < seen.start && !replaced {
-                a.list.scroll_to(ListOffset { item_ix: row(seen.start), offset_in_item: px(0.) });
+                a.list.scroll_to(ListOffset {
+                    item_ix: row(seen.start),
+                    offset_in_item: px(0.),
+                });
             } else if a.list.is_following_tail() || replaced {
                 a.list.scroll_to_end();
             }
@@ -5465,7 +7173,9 @@ impl Workbench {
             let base = n.saturating_sub(TAIL);
             for (k, sig) in tail.iter().enumerate() {
                 let ix = base + k;
-                let old = ix.checked_sub(seen.len.saturating_sub(seen.tail.len())).and_then(|o| seen.tail.get(o));
+                let old = ix
+                    .checked_sub(seen.len.saturating_sub(seen.tail.len()))
+                    .and_then(|o| seen.tail.get(o));
                 if ix < seen.len && old != Some(sig) {
                     from = from.min(ix);
                     break;
@@ -5489,7 +7199,11 @@ impl Workbench {
         let from = from.min(seen.run_start.len()).min(n);
         seen.run_start.truncate(from);
         seen.run_end.retain(|&f, _| f < from);
-        if let Some(&f) = from.checked_sub(1).and_then(|k| seen.run_start.get(k)).filter(|f| **f != usize::MAX) {
+        if let Some(&f) = from
+            .checked_sub(1)
+            .and_then(|k| seen.run_start.get(k))
+            .filter(|f| **f != usize::MAX)
+        {
             seen.run_end.insert(f, from - 1);
         }
         for i in from..n {
@@ -5536,10 +7250,16 @@ impl Workbench {
                     .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                     .child(Icon::new(IconName::ChevronUp).size(theme::u(12.)))
                     .child(crate::trf!("Show {n} earlier"; n => more))
-                    .child(div().text_color(c(theme::FG_DIM)).child(crate::trf!("· {n} hidden"; n => start)))
+                    .child(
+                        div()
+                            .text_color(c(theme::FG_DIM))
+                            .child(crate::trf!("· {n} hidden"; n => start)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.agent.list.pause_following_tail();
-                        this.agent.view_start.set(this.agent.view_start.get().saturating_sub(PAGE));
+                        this.agent
+                            .view_start
+                            .set(this.agent.view_start.get().saturating_sub(PAGE));
                         cx.notify();
                     })),
             )
@@ -5561,7 +7281,9 @@ fn before_edit(disk: Option<String>, old: Option<&str>, new: &str) -> Option<Str
     let d = disk?;
     match old {
         None if d == new => None,
-        Some(o) if !new.is_empty() && !o.is_empty() && d.contains(new) && !d.contains(o) => Some(d.replacen(new, o, 1)),
+        Some(o) if !new.is_empty() && !o.is_empty() && d.contains(new) && !d.contains(o) => {
+            Some(d.replacen(new, o, 1))
+        }
         _ => Some(d),
     }
 }
@@ -5585,7 +7307,12 @@ fn item_size_sig(item: &Item) -> u64 {
     match item {
         Item::User(t) | Item::Text(t) | Item::Thought(t) | Item::Branch(t) => t.len().hash(&mut h),
         Item::Note(t, e) => (t.len(), *e).hash(&mut h),
-        Item::Tool { title, status, kind, .. } => (title.len(), status, kind).hash(&mut h),
+        Item::Tool {
+            title,
+            status,
+            kind,
+            ..
+        } => (title.len(), status, kind).hash(&mut h),
         Item::Plan(e) => (e.len(), e.iter().filter(|x| x.1 == "completed").count()).hash(&mut h),
         Item::Web(w) => (w.results.len(), &w.status, w.query.len()).hash(&mut h),
         Item::Images { shots, hidden, .. } => (shots.len(), *hidden).hash(&mut h),
@@ -5596,7 +7323,10 @@ fn item_size_sig(item: &Item) -> u64 {
 fn opencode_config_file() -> Option<PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
     let dir = PathBuf::from(home).join(".config").join("opencode");
-    ["opencode.jsonc", "opencode.json"].iter().map(|n| dir.join(n)).find(|p| p.is_file())
+    ["opencode.jsonc", "opencode.json"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file())
 }
 
 static PENDING_INSERT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -5630,7 +7360,10 @@ fn summarize_turn_progress(items: &[Item], changes: &[Change]) -> String {
     let tools: Vec<String> = items
         .iter()
         .filter_map(|i| match i {
-            Item::Tool { title, status, .. } => Some(format!("  - [{status}] {}", truncate_chars(title.trim(), 120))),
+            Item::Tool { title, status, .. } => Some(format!(
+                "  - [{status}] {}",
+                truncate_chars(title.trim(), 120)
+            )),
             _ => None,
         })
         .collect();
@@ -5645,7 +7378,11 @@ fn summarize_turn_progress(items: &[Item], changes: &[Change]) -> String {
             .iter()
             .take(12)
             .map(|ch| {
-                let n = ch.path.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                let n = ch
+                    .path
+                    .file_name()
+                    .map(|x| x.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 format!("{n} (+{}/-{})", ch.added, ch.removed)
             })
             .collect();
@@ -5655,7 +7392,10 @@ fn summarize_turn_progress(items: &[Item], changes: &[Change]) -> String {
         Item::Text(t) if !t.trim().is_empty() => Some(t.trim()),
         _ => None,
     }) {
-        lines.push(format!("Last assistant output before pause: {}", truncate_chars(partial, 500)));
+        lines.push(format!(
+            "Last assistant output before pause: {}",
+            truncate_chars(partial, 500)
+        ));
     }
     if lines.is_empty() {
         "Started analyzing the request; no tool calls or edits completed yet.".to_string()
@@ -5699,7 +7439,12 @@ mod tests {
             progress: summarize_turn_progress(
                 &[
                     Item::User("obfuscate script.js".into()),
-                    Item::Tool { id: "1".into(), title: "Read script.js".into(), status: "completed".into(), kind: "read".into() },
+                    Item::Tool {
+                        id: "1".into(),
+                        title: "Read script.js".into(),
+                        status: "completed".into(),
+                        kind: "read".into(),
+                    },
                     Item::Text("Checking JS parser availability.".into()),
                 ],
                 &[],
@@ -5716,8 +7461,14 @@ mod tests {
     #[test]
     fn before_an_edit() {
         use super::before_edit;
-        assert_eq!(before_edit(Some("a\nold\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
-        assert_eq!(before_edit(Some("a\nnew\nb".into()), Some("old"), "new").as_deref(), Some("a\nold\nb"));
+        assert_eq!(
+            before_edit(Some("a\nold\nb".into()), Some("old"), "new").as_deref(),
+            Some("a\nold\nb")
+        );
+        assert_eq!(
+            before_edit(Some("a\nnew\nb".into()), Some("old"), "new").as_deref(),
+            Some("a\nold\nb")
+        );
         assert_eq!(before_edit(Some("x".into()), None, "x"), None);
         assert_eq!(before_edit(None, None, "x"), None);
     }
@@ -5732,8 +7483,17 @@ mod tests {
             c("opencode/glm-5.3-flash-free", "opencode/GLM-5.3-Flash Free"),
         ]);
         assert_eq!(g[0].0, "free");
-        assert_eq!(g[0].1, vec![("opencode/glm-5.3-flash-free".to_string(), "GLM-5.3-Flash".to_string())]);
-        assert_eq!(g.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["free", "claude-agent", "my-ai-gweh", "opencode"]);
+        assert_eq!(
+            g[0].1,
+            vec![(
+                "opencode/glm-5.3-flash-free".to_string(),
+                "GLM-5.3-Flash".to_string()
+            )]
+        );
+        assert_eq!(
+            g.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
+            vec!["free", "claude-agent", "my-ai-gweh", "opencode"]
+        );
         assert_eq!(g[1].1[0].1, "Sonnet 5.5");
     }
 }

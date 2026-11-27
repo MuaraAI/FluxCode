@@ -1,13 +1,11 @@
-
-use crate::i18n::tr;
 use crate::core;
 use crate::files;
+use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
-    h_flex,
-    v_flex, Selectable, Sizable,
+    h_flex, v_flex, Selectable, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,7 +59,9 @@ impl Workbench {
                         let remote = wsl.as_ref().and_then(|t| {
                             let distro = t.distro.clone();
                             let linux = t.linux_path(r)?;
-                            crate::remote::with_client(&distro, |c| c.search(&linux, &query, case, word).ok())?
+                            crate::remote::with_client(&distro, |c| {
+                                c.search(&linux, &query, case, word).ok()
+                            })?
                         });
                         if let Some(wire) = remote {
                             all.total += wire.total;
@@ -69,7 +69,14 @@ impl Workbench {
                             for f in wire.files {
                                 all.files.push(core::FileHits {
                                     path: t_unc(&wsl, &f.path),
-                                    hits: f.hits.into_iter().map(|h| core::Hit { line: h.line, text: h.text }).collect(),
+                                    hits: f
+                                        .hits
+                                        .into_iter()
+                                        .map(|h| core::Hit {
+                                            line: h.line,
+                                            text: h.text,
+                                        })
+                                        .collect(),
                                 });
                             }
                             continue;
@@ -104,7 +111,11 @@ impl Workbench {
             if self.search_closed.contains(&f) {
                 continue;
             }
-            let shown = if self.search_unfolded.contains(&f) { fh.hits.len() } else { fh.hits.len().min(FOLD) };
+            let shown = if self.search_unfolded.contains(&f) {
+                fh.hits.len()
+            } else {
+                fh.hits.len().min(FOLD)
+            };
             rows.extend((0..shown).map(|h| (f, Some(h))));
             if shown < fh.hits.len() {
                 rows.push((f, Some(MORE)));
@@ -122,7 +133,12 @@ impl Workbench {
             crate::trf!("{0}{1} results in {2} files"; 0 => self.search.total, 1 => if self.search.truncated { "+" } else { "" }, 2 => self.search.files.len())
         };
         let toggle = |id: &'static str, label: &'static str, on: bool, tip: &'static str| {
-            Button::new(id).label(label).xsmall().ghost().selected(on).tooltip(tip)
+            Button::new(id)
+                .label(label)
+                .xsmall()
+                .ghost()
+                .selected(on)
+                .tooltip(tip)
         };
         let rows = self.search_rows.len();
         v_flex()
@@ -140,14 +156,21 @@ impl Workbench {
                             .flex_wrap()
                             .items_center()
                             .gap_1()
-                            .child(toggle("s-case", "Aa", self.match_case, tr("Match Case")).on_click(cx.listener(|this, _, _, cx| {
-                                this.match_case = !this.match_case;
-                                this.run_search(cx);
-                            })))
-                            .child(toggle("s-word", "ab", self.whole_word, tr("Match Whole Word")).on_click(cx.listener(|this, _, _, cx| {
-                                this.whole_word = !this.whole_word;
-                                this.run_search(cx);
-                            })))
+                            .child(
+                                toggle("s-case", "Aa", self.match_case, tr("Match Case")).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.match_case = !this.match_case;
+                                        this.run_search(cx);
+                                    }),
+                                ),
+                            )
+                            .child(
+                                toggle("s-word", "ab", self.whole_word, tr("Match Whole Word"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.whole_word = !this.whole_word;
+                                        this.run_search(cx);
+                                    })),
+                            )
                             .child(div().flex_1())
                             .child(
                                 div()
@@ -180,8 +203,16 @@ impl Workbench {
                                     .hover(|s| s.bg(c(theme::BG_HOVER)));
                                 match h {
                                     None => {
-                                        let name = fh.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                                        let rel = fh.path.parent().map(|p| this.rel_display(&p.to_string_lossy())).unwrap_or_default();
+                                        let name = fh
+                                            .path
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        let rel = fh
+                                            .path
+                                            .parent()
+                                            .map(|p| this.rel_display(&p.to_string_lossy()))
+                                            .unwrap_or_default();
                                         let closed = this.search_closed.contains(&f);
                                         row.cursor_pointer()
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -248,10 +279,24 @@ impl Workbench {
                                         let hit = &fh.hits[h];
                                         let (path, line) = (fh.path.clone(), hit.line);
                                         let query = this.search_input.read(cx).value();
-                                        let marks = match_ranges(&hit.text, &query, this.match_case)
-                                            .into_iter()
-                                            .map(|r| (r, HighlightStyle { background_color: Some(c(theme::ACCENT).opacity(0.28)), color: Some(c(theme::FG_STRONG)), ..Default::default() }));
-                                        let text = StyledText::new(SharedString::from(hit.text.clone())).with_highlights(marks);
+                                        let marks =
+                                            match_ranges(&hit.text, &query, this.match_case)
+                                                .into_iter()
+                                                .map(|r| {
+                                                    (
+                                                        r,
+                                                        HighlightStyle {
+                                                            background_color: Some(
+                                                                c(theme::ACCENT).opacity(0.28),
+                                                            ),
+                                                            color: Some(c(theme::FG_STRONG)),
+                                                            ..Default::default()
+                                                        },
+                                                    )
+                                                });
+                                        let text =
+                                            StyledText::new(SharedString::from(hit.text.clone()))
+                                                .with_highlights(marks);
                                         row.pl(px(28.))
                                             .child(
                                                 div()
@@ -269,7 +314,13 @@ impl Workbench {
                                                     .child(text),
                                             )
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.open_location(path.clone(), line, 0, window, cx);
+                                                this.open_location(
+                                                    path.clone(),
+                                                    line,
+                                                    0,
+                                                    window,
+                                                    cx,
+                                                );
                                             }))
                                     }
                                 }
@@ -288,7 +339,13 @@ fn match_ranges(text: &str, query: &str, case: bool) -> Vec<std::ops::Range<usiz
     if query.is_empty() {
         return Vec::new();
     }
-    let fold = |s: &str| if case { s.to_string() } else { s.to_ascii_lowercase() };
+    let fold = |s: &str| {
+        if case {
+            s.to_string()
+        } else {
+            s.to_ascii_lowercase()
+        }
+    };
     let (hay, needle) = (fold(text), fold(query));
     let mut out = Vec::new();
     let mut from = 0;
@@ -318,7 +375,10 @@ mod tests {
 
     #[test]
     fn every_match_in_a_row_is_found() {
-        assert_eq!(match_ranges("Foo foo FOO", "foo", false), vec![0..3, 4..7, 8..11]);
+        assert_eq!(
+            match_ranges("Foo foo FOO", "foo", false),
+            vec![0..3, 4..7, 8..11]
+        );
         assert_eq!(match_ranges("Foo foo FOO", "foo", true), vec![4..7]);
         assert_eq!(match_ranges("é foo", "FOO", false), vec![3..6]);
         assert!(match_ranges("abc", "", false).is_empty());
