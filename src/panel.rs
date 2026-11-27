@@ -265,7 +265,6 @@ fn mono_kind(k: LineKind) -> bool {
             | LineKind::Dim
             | LineKind::Success
             | LineKind::Frame
-            | LineKind::Hunk
             | LineKind::Code
             | LineKind::Caret
             | LineKind::Blank
@@ -286,7 +285,7 @@ pub(crate) struct Problem {
     pub message: String,
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     let n = |p: &Path| {
         p.to_string_lossy()
             .replace('/', "\\")
@@ -298,6 +297,65 @@ fn same_path(a: &Path, b: &Path) -> bool {
     } else {
         a == b
     }
+}
+
+fn clean_path_parts(path: &Path) -> Vec<String> {
+    let raw = path.to_string_lossy();
+    let trimmed = if cfg!(windows) {
+        if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string()
+        }
+    } else {
+        raw.into_owned()
+    };
+    let unified = trimmed.replace('\\', "/");
+    unified
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .map(|part| {
+            if cfg!(windows) {
+                part.to_ascii_lowercase()
+            } else {
+                part.to_string()
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn repo_rel_path(repo: &Path, path: &Path) -> Option<String> {
+    let base = clean_path_parts(repo);
+    let raw = path.to_string_lossy();
+    let trimmed = if cfg!(windows) {
+        if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string()
+        }
+    } else {
+        raw.into_owned()
+    };
+    let unified = trimmed.replace('\\', "/");
+    let parts: Vec<&str> = unified
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    if base.is_empty() || parts.len() <= base.len() {
+        return None;
+    }
+    let matches = parts.iter().zip(&base).all(|(a, b)| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            *a == b
+        }
+    });
+    matches.then(|| parts[base.len()..].join("/"))
+}
+
+pub(crate) fn path_in_repo(repo: &Path, path: &Path) -> bool {
+    same_path(repo, path) || repo_rel_path(repo, path).is_some()
 }
 
 impl Workbench {
@@ -1786,7 +1844,6 @@ impl Workbench {
                 let col = match k {
                     LineKind::Err | LineKind::Caret => theme::DANGER,
                     LineKind::Warn => theme::WARN,
-                    LineKind::Hunk => theme::BLUE,
                     LineKind::Dim => theme::FG_DIM,
                     LineKind::Success => theme::GREEN,
                     LineKind::Code => theme::FG_STRONG,
@@ -1973,8 +2030,7 @@ impl Workbench {
                 | LineKind::Warn
                 | LineKind::Dim
                 | LineKind::Success
-                | LineKind::Frame
-                | LineKind::Hunk => (cols.mono, 2),
+                | LineKind::Frame => (cols.mono, 2),
                 LineKind::Code if !marked => (cols.mono, 2),
                 LineKind::CardMsg | LineKind::CardHint => (cols.card, 0),
                 LineKind::Result if l.err => (cols.result, 0),
@@ -3938,5 +3994,32 @@ mod tests {
             RunVerdict::NotRunnable(_)
         ));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn repo_rel_path_handles_slashes_and_windows_unc_prefixes() {
+        let repo = Path::new(r"\\?\D:\App\Repo");
+        let file = Path::new("d:/app/repo/src/scm_git.rs");
+        if cfg!(windows) {
+            assert_eq!(
+                super::repo_rel_path(repo, file).as_deref(),
+                Some("src/scm_git.rs")
+            );
+            assert!(super::path_in_repo(repo, file));
+            assert!(!super::path_in_repo(
+                repo,
+                Path::new(r"D:\Other\src\scm_git.rs")
+            ));
+        } else {
+            let u_repo = Path::new("/work/repo");
+            assert_eq!(
+                super::repo_rel_path(u_repo, Path::new("/work/repo/src/lib.rs")).as_deref(),
+                Some("src/lib.rs")
+            );
+            assert!(!super::path_in_repo(
+                u_repo,
+                Path::new("/work/repo2/src/lib.rs")
+            ));
+        }
     }
 }

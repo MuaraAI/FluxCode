@@ -348,9 +348,20 @@ pub fn overview(i: &Inputs) -> String {
         let branch = g.branch.as_deref().unwrap_or("(detached)");
         let mut line = format!("Git: branch {branch}");
         if let Some(up) = &g.upstream {
-            let _ = write!(line, ", tracking {up} ({} ahead, {} behind)", g.ahead, g.behind);
+            let _ = write!(
+                line,
+                ", tracking {up} ({} ahead, {} behind)",
+                g.ahead, g.behind
+            );
         }
-        let changed: Vec<String> = g.conflicts.iter().chain(&g.staged).chain(&g.changes).map(|c| format!("{} {}", c.code, c.path)).collect();
+        let changed: Vec<String> = g
+            .conflicts
+            .iter()
+            .chain(&g.staged)
+            .chain(&g.changes)
+            .chain(&g.untracked)
+            .map(|c| format!("{} {}", c.code, c.path))
+            .collect();
         if changed.is_empty() {
             line.push_str("; no uncommitted changes");
         } else {
@@ -394,7 +405,13 @@ pub fn git_signature(g: Option<&RepoStatus>) -> u64 {
         g.branch.hash(&mut h);
         g.ahead.hash(&mut h);
         g.behind.hash(&mut h);
-        for c in g.conflicts.iter().chain(&g.staged).chain(&g.changes) {
+        for c in g
+            .conflicts
+            .iter()
+            .chain(&g.staged)
+            .chain(&g.changes)
+            .chain(&g.untracked)
+        {
             c.code.hash(&mut h);
             c.path.hash(&mut h);
         }
@@ -413,6 +430,7 @@ pub fn git_delta(g: &RepoStatus) -> String {
         .iter()
         .chain(&g.staged)
         .chain(&g.changes)
+        .chain(&g.untracked)
         .map(|c| format!("{} {}", c.code, c.path))
         .collect();
     if changed.is_empty() {

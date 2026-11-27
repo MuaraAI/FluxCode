@@ -82,6 +82,8 @@ pub fn placeholder() -> &'static str {
 }
 
 pub struct QuickOpen {
+    pub(crate) git_picker: Option<crate::scm_refs::Picker>,
+    git_scroll: ScrollHandle,
     pub open: bool,
     pub picker: Picker,
     pub input: Entity<InputState>,
@@ -111,6 +113,8 @@ impl QuickOpen {
         );
         (
             Self {
+                git_picker: None,
+                git_scroll: ScrollHandle::new(),
                 open: false,
                 picker: Picker::Standard,
                 input,
@@ -133,6 +137,13 @@ impl QuickOpen {
 impl Workbench {
     pub(crate) fn quick_filter(&mut self, cx: &mut Context<Self>) {
         let q = self.quick.input.read(cx).value().to_string();
+        if let Some(picker) = &self.quick.git_picker {
+            self.quick.hits = picker.hits(&q);
+            self.quick.sel = 0;
+            self.quick.git_scroll.scroll_to_item(0);
+            cx.notify();
+            return;
+        }
         self.quick.mode = match self.quick.picker {
             Picker::Themes => Mode::Themes,
             Picker::IconThemes => Mode::IconThemes,
@@ -363,7 +374,10 @@ impl Workbench {
                     return;
                 }
                 _ = this.update(cx, |this, cx| {
-                    if this.quick.open && this.quick.mode == Mode::Files {
+                    if this.quick.open
+                        && this.quick.git_picker.is_none()
+                        && this.quick.mode == Mode::Files
+                    {
                         this.quick.hits = hits;
                         this.quick.sel = 0;
                         cx.notify();
@@ -384,6 +398,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.quick.git_picker = None;
         if self.root.is_none() {
             self.on_open_folder_from_quick(window, cx);
             return;
@@ -405,6 +420,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.quick.git_picker = None;
         self.quick.open = true;
         self.quick.picker = Picker::Standard;
         let p = prefix.to_string();
@@ -420,6 +436,7 @@ impl Workbench {
     }
 
     pub(crate) fn open_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick.git_picker = None;
         self.quick.open = true;
         self.quick.picker = Picker::Themes;
         self.begin_theme_preview();
@@ -433,6 +450,7 @@ impl Workbench {
     }
 
     pub(crate) fn open_icon_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick.git_picker = None;
         self.quick.open = true;
         self.quick.picker = Picker::IconThemes;
         self.quick.input.update(cx, |s, cx| {
@@ -509,6 +527,7 @@ impl Workbench {
     pub(crate) fn quick_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.open = false;
         self.quick.picker = Picker::Standard;
+        self.quick.git_picker = None;
         self.cancel_theme_preview(window, cx);
         if let Some(ed) = self
             .active
@@ -534,7 +553,9 @@ impl Workbench {
 
     pub(crate) fn on_quick_up(&mut self, _: &QuickUp, window: &mut Window, cx: &mut Context<Self>) {
         self.quick.sel = self.quick.sel.saturating_sub(1);
-        if self.quick.mode == Mode::Themes {
+        if self.quick.git_picker.is_some() {
+            self.quick.git_scroll.scroll_to_item(self.quick.sel);
+        } else if self.quick.mode == Mode::Themes {
             if let Some(&ix) = self.quick.hits.get(self.quick.sel) {
                 if let Some(p) = theme::all().get(ix) {
                     self.preview_theme(p.id, window, cx);
@@ -552,6 +573,9 @@ impl Workbench {
     ) {
         if self.quick.sel + 1 < self.quick.hits.len() {
             self.quick.sel += 1;
+            if self.quick.git_picker.is_some() {
+                self.quick.git_scroll.scroll_to_item(self.quick.sel);
+            }
         }
         if self.quick.mode == Mode::Themes {
             if let Some(&ix) = self.quick.hits.get(self.quick.sel) {
@@ -564,6 +588,10 @@ impl Workbench {
     }
 
     pub(crate) fn quick_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick.git_picker.is_some() {
+            self.scm_accept_picker(window, cx);
+            return;
+        }
         match self.quick.mode {
             Mode::Themes => {
                 let Some(&ix) = self.quick.hits.get(self.quick.sel) else {
@@ -734,6 +762,16 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let q = &self.quick;
+        if let Some(picker) = &q.git_picker {
+            let list = v_flex()
+                .id("quick-list")
+                .max_h(theme::u(420.))
+                .overflow_y_scroll()
+                .py_1()
+                .track_scroll(&q.git_scroll)
+                .children(self.scm_picker_rows(picker, cx));
+            return self.quick_frame(list, cx).into_any_element();
+        }
         let motion = !cx.reduce_motion();
         let view_id = window.current_view();
         let liq = crate::ui::liquid::keyed_state("quick-row-liq", window, cx);
@@ -1359,7 +1397,7 @@ impl Workbench {
 
     fn quick_frame(&self, list: Stateful<Div>, cx: &mut Context<Self>) -> impl IntoElement {
         let q = &self.quick;
-        let motion = !cx.reduce_motion();
+        let motion = q.git_picker.is_none() && !cx.reduce_motion();
         let fade =
             || Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint());
         let scrim = div()
