@@ -45,6 +45,7 @@ mod search;
 mod settings;
 mod shell;
 mod sidedock;
+mod smart_link;
 mod term;
 mod theme;
 mod theme_menu;

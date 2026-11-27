@@ -445,7 +445,8 @@ impl Ctx<'_> {
     }
 
     fn rich(&self, id: ElementId, s: &str, color: Hsla) -> AnyElement {
-        let i = inline(s);
+        let mut i = inline(s);
+        format_bare_links(&mut i);
         let acc = accent(self.sh);
         let mut hl: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
         for (r, m) in &i.runs {
@@ -2068,6 +2069,69 @@ mod tests {
         assert_eq!(p, std::path::PathBuf::from("docs").join("README-annotated.png"));
         let p2 = super::annotated_png_path(std::path::Path::new("notes.flux"));
         assert_eq!(p2, std::path::PathBuf::from(".").join("notes-annotated.png"));
+    }
+
+    #[test]
+    fn format_bare_links_rewrites_auto_links_and_keeps_custom_labels() {
+        let mut parsed = super::super::inline(
+            "See https://github.com/MuaraAI/FluxCode/pull/138 and **bold** and [Keep me](https://example.com).",
+        );
+        super::format_bare_links(&mut parsed);
+        assert!(parsed.text.contains("FluxCode#138"));
+        assert!(!parsed.text.contains("https://github.com/MuaraAI/FluxCode/pull/138"));
+        assert!(parsed.text.contains("Keep me"));
+        assert_eq!(&parsed.text[parsed.links[0].0.clone()], "FluxCode#138");
+        assert_eq!(parsed.links[0].1, "https://github.com/MuaraAI/FluxCode/pull/138");
+        assert_eq!(&parsed.text[parsed.links[1].0.clone()], "Keep me");
+        assert!(parsed.runs.iter().any(|(r, m)| m.bold && &parsed.text[r.clone()] == "bold"));
+    }
+}
+
+fn format_bare_links(i: &mut super::Inline) {
+    if i.links.is_empty() {
+        return;
+    }
+    let mut out = String::with_capacity(i.text.len());
+    let mut cursor = 0usize;
+    let mut delta: isize = 0;
+    let mut new_links = Vec::with_capacity(i.links.len());
+    let mut remaps: Vec<(std::ops::Range<usize>, usize, usize)> = Vec::new();
+    for (r, url) in &i.links {
+        let raw_slice = &i.text[r.clone()];
+        let disp = if raw_slice == url {
+            crate::smart_link::inline_display_label(url)
+        } else {
+            raw_slice.to_string()
+        };
+        out.push_str(&i.text[cursor..r.start]);
+        let new_start = (r.start as isize + delta) as usize;
+        out.push_str(&disp);
+        let new_end = new_start + disp.len();
+        delta += disp.len() as isize - (r.end - r.start) as isize;
+        cursor = r.end;
+        remaps.push((r.clone(), new_start, new_end));
+        new_links.push((new_start..new_end, url.clone()));
+    }
+    out.push_str(&i.text[cursor..]);
+    if !remaps.is_empty() {
+        let shift = |pos: usize, after_end: bool| -> usize {
+            let mut d: isize = 0;
+            for (orig, ns, ne) in &remaps {
+                if pos > orig.end || (after_end && pos == orig.end) {
+                    d += (*ne - *ns) as isize - (orig.end - orig.start) as isize;
+                } else if pos >= orig.start {
+                    return if pos == orig.start { *ns } else { *ne };
+                }
+            }
+            (pos as isize + d).max(0) as usize
+        };
+        for (run_r, _) in &mut i.runs {
+            let a = shift(run_r.start, false);
+            let b = shift(run_r.end, true).max(a);
+            *run_r = a..b;
+        }
+        i.text = out;
+        i.links = new_links;
     }
 }
 

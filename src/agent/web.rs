@@ -140,8 +140,7 @@ impl Workbench {
         let rows = (!running && n > 0).then(|| {
             v_flex().gap_px().children(shown.into_iter().map(|(k, (t, url))| {
                 let u = url.clone();
-                let d = domain(url);
-                let initial: String = d.chars().next().map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_default();
+                let parsed = crate::smart_link::parse_link(url);
                 let row = h_flex()
                     .id(SharedString::from(format!("ag-web-{i}-{k}")))
                     .h(theme::u(26.))
@@ -161,13 +160,14 @@ impl Workbench {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(theme::u(9.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(c(theme::FG_MUTED))
-                            .child(initial),
+                            .child(
+                                Icon::new(parsed.icon())
+                                    .size(theme::u(11.))
+                                    .text_color(c(parsed.icon_color())),
+                            ),
                     )
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG)).child(shown_title(t, url, repeated(t))))
-                    .child(div().flex_none().max_w(relative(0.4)).truncate().text_xs().text_color(c(theme::FG_DIM)).child(d))
+                    .child(div().flex_none().max_w(relative(0.4)).truncate().text_xs().text_color(c(theme::FG_DIM)).child(parsed.provider))
                     .tooltip({
                         let u = url.clone();
                         move |w, cx| gpui_kit::component::tooltip::Tooltip::new(u.clone()).build(w, cx)

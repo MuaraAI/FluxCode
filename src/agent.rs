@@ -307,6 +307,7 @@ pub struct AgentState {
     pub compose_w: std::rc::Rc<std::cell::Cell<f32>>,
     pub settings_tab: settings_modal::Tab,
     pub settings_focus: FocusHandle,
+    pub link_previews: crate::smart_link::LinkPreviewStore,
     _sub: Subscription,
     _sub_un: Vec<Subscription>,
 }
@@ -682,6 +683,7 @@ impl AgentState {
             compose_w: std::rc::Rc::new(std::cell::Cell::new(0.)),
             settings_tab: Default::default(),
             settings_focus: cx.focus_handle(),
+            link_previews: Default::default(),
             ask_inputs: crate::agent_ask::make_inputs(window, cx),
             ask_clear: Vec::new(),
             ask_missing: None,
@@ -1646,6 +1648,9 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let shown = item.text.clone();
+        if !shown.trim().is_empty() {
+            self.agent_queue_link_previews(&shown, false, cx);
+        }
         if interrupted.is_some() {
             self.agent.items.push(Item::Note(
                 crate::i18n::tr("Priority send: handling this first, then continuing the paused task if unfinished.").into(),
@@ -2126,6 +2131,7 @@ impl Workbench {
                         }
                     });
                 if let Some(t) = last {
+                    self.agent_queue_link_previews(&t, true, cx);
                     self.agent_check_limit(&t, cx);
                 }
                 self.agent_save();
@@ -2581,7 +2587,21 @@ impl Workbench {
             None => next.carry = Some(earlier),
         }
         next.chat_id = Some(id);
+        let recent_msgs: Vec<(bool, String)> = next
+            .items
+            .iter()
+            .rev()
+            .take(8)
+            .filter_map(|it| match it {
+                Item::User(t) => Some((false, t.clone())),
+                Item::Text(t) => Some((true, t.clone())),
+                _ => None,
+            })
+            .collect();
         self.agent_switch_to(next, true, cx);
+        for (skip_code, msg) in recent_msgs {
+            self.agent_queue_link_previews(&msg, skip_code, cx);
+        }
     }
 
     pub(crate) fn agent_archive_chat(&mut self, id: u64, archive: bool, cx: &mut Context<Self>) {
@@ -3519,11 +3539,54 @@ impl Workbench {
         cx.notify();
     }
 
+    pub(crate) fn agent_queue_link_previews(
+        &mut self,
+        text: &str,
+        skip_code: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !text.contains("http://") && !text.contains("https://") {
+            return;
+        }
+        for link in crate::smart_link::extract_unique_urls(text, skip_code)
+            .into_iter()
+            .take(4)
+        {
+            if !self.agent.link_previews.should_fetch(&link.url) {
+                continue;
+            }
+            self.agent.link_previews.mark_loading(&link.url);
+            let url = link.url.clone();
+            cx.spawn(async move |this, cx| {
+                let preview = cx
+                    .background_spawn(async move { crate::smart_link::fetch_preview(&link) })
+                    .await;
+                _ = this.update(cx, |this, cx| {
+                    this.agent.link_previews.finish(&url, preview);
+                    let mut rem = this.agent.remeasure.borrow_mut();
+                    for (ix, it) in this.agent.items.iter().enumerate() {
+                        let hit = match it {
+                            Item::User(t) | Item::Text(t) => t.contains(&url),
+                            _ => false,
+                        };
+                        if hit {
+                            rem.push(ix..ix + 1);
+                        }
+                    }
+                    drop(rem);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
     pub(crate) fn agent_update_mention(&mut self, cx: &mut Context<Self>) {
         let (text, cursor) = {
             let s = self.agent.input.read(cx);
             (s.value().to_string(), s.cursor())
         };
+        self.agent_queue_link_previews(&text, false, cx);
         let head = &text[..cursor.min(text.len())];
         if head.starts_with('/') && !head.contains(char::is_whitespace) {
             let q = head[1..].to_lowercase();
@@ -5394,6 +5457,36 @@ impl Workbench {
             Item::User(t) => {
                 let group = SharedString::from(format!("ag-user-{i}"));
                 let editing = a.editing == Some(i);
+                let has_links = t.contains("://") || t.contains("mailto:");
+                let user_links = if has_links {
+                    crate::smart_link::extract_unique_urls(t, false)
+                } else {
+                    Vec::new()
+                };
+                let body: AnyElement = if has_links {
+                    crate::smart_link::render_rich_text_with_links(
+                        &format!("ag-ul-{i}"),
+                        t,
+                        &a.link_previews,
+                    )
+                } else {
+                    div().child(t.clone()).into_any_element()
+                };
+                let cards: Vec<AnyElement> = user_links
+                    .into_iter()
+                    .filter(|l| !a.link_previews.dismissed.contains(&l.url))
+                    .take(2)
+                    .enumerate()
+                    .map(|(k, link)| {
+                        let st = a.link_previews.get(&link.url);
+                        crate::smart_link::render_preview_card(
+                            SharedString::from(format!("ag-u-card-{i}-{k}")),
+                            &link,
+                            st,
+                            None,
+                        )
+                    })
+                    .collect();
                 v_flex()
                     .items_end()
                     .gap_1()
@@ -5448,24 +5541,33 @@ impl Workbench {
                                     .border_color(c(theme::BORDER_STRONG))
                                     .text_sm()
                                     .text_color(c(theme::FG_STRONG))
-                                    .child(t.clone()),
+                                    .child(body),
                             ),
                     )
+                    .when(!cards.is_empty(), |v| {
+                        v.child(
+                            v_flex()
+                                .w_full()
+                                .max_w(relative(0.88))
+                                .gap_1()
+                                .children(cards),
+                        )
+                    })
                     .into_any_element()
             }
             Item::Text(t) => {
                 let cleaned = tidy::answer(t);
-                if !cleaned.contains('|') {
+                let md_el = if !cleaned.contains('|') {
                     render_md(
                         SharedString::from(format!("ag-md-{i}")),
-                        cleaned.into_owned(),
+                        cleaned.to_string(),
                     )
                 } else {
                     let segs = table::split_markdown_tables(&cleaned);
                     if segs.len() == 1 && matches!(&segs[0], table::Segment::Markdown(_)) {
                         render_md(
                             SharedString::from(format!("ag-md-{i}")),
-                            cleaned.into_owned(),
+                            cleaned.to_string(),
                         )
                     } else {
                         let mut table_ix = 0usize;
@@ -5491,6 +5593,32 @@ impl Workbench {
                             .children(children)
                             .into_any_element()
                     }
+                };
+                let cards: Vec<AnyElement> = crate::smart_link::extract_unique_urls(&cleaned, true)
+                    .into_iter()
+                    .filter(|l| !a.link_previews.dismissed.contains(&l.url))
+                    .take(2)
+                    .enumerate()
+                    .map(|(k, link)| {
+                        let st = a.link_previews.get(&link.url);
+                        crate::smart_link::render_preview_card(
+                            SharedString::from(format!("ag-a-card-{i}-{k}")),
+                            &link,
+                            st,
+                            None,
+                        )
+                    })
+                    .collect();
+                if cards.is_empty() {
+                    md_el
+                } else {
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_1p5()
+                        .child(md_el)
+                        .children(cards)
+                        .into_any_element()
                 }
             }
             Item::Thought(t) => {
@@ -6061,6 +6189,44 @@ impl Workbench {
         });
         let mut chips: Vec<AnyElement> = attachments.collect();
         chips.extend(self.render_context_chips(cx));
+        let input_text = a.input.read(cx).value().to_string();
+        let composer_links: Vec<_> = crate::smart_link::extract_unique_urls(&input_text, false)
+            .into_iter()
+            .filter(|l| !a.link_previews.dismissed.contains(&l.url))
+            .take(4)
+            .collect();
+        for (li, link) in composer_links.iter().enumerate() {
+            let dismiss_url = link.url.clone();
+            let st = a.link_previews.get(&link.url);
+            chips.push(crate::smart_link::render_composer_chip(
+                SharedString::from(format!("ag-link-chip-{li}")),
+                link,
+                st,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.agent.link_previews.dismiss(&dismiss_url);
+                    cx.notify();
+                }),
+            ));
+        }
+        let composer_cards: Vec<AnyElement> = composer_links
+            .iter()
+            .take(2)
+            .enumerate()
+            .map(|(li, link)| {
+                let dismiss_url = link.url.clone();
+                let st = a.link_previews.get(&link.url);
+                crate::smart_link::render_preview_card(
+                    SharedString::from(format!("ag-compose-card-{li}")),
+                    link,
+                    st,
+                    Some(Box::new(cx.listener(move |this, _, _, cx| {
+                        this.agent.link_previews.dismiss(&dismiss_url);
+                        cx.notify();
+                    }))),
+                )
+            })
+            .collect();
         let menu = self.render_agent_menu(false, window, cx);
         let geom = self.agent.geom.clone();
         let width = self.agent.compose_w.clone();
@@ -6127,6 +6293,15 @@ impl Workbench {
                             cx.stop_propagation();
                         })
                         .children(chips),
+                )
+            })
+            .when(!composer_cards.is_empty(), |v| {
+                v.child(
+                    v_flex()
+                        .mx_2()
+                        .mt_1p5()
+                        .gap_1()
+                        .children(composer_cards),
                 )
             })
             .child(
