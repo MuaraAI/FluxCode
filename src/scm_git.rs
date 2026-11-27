@@ -382,10 +382,11 @@ pub(crate) fn run_step(
                                 g.stderr.trim()
                             ))
                         }
+                        Err(_) if read_only_git_args(args) => {}
                         Err(e) => {
                             return Err(
                                 crate::trf!("Git helper failed. Refresh to check the result: {error}"; error => e),
-                            )
+                            );
                         }
                     }
                 }
@@ -451,6 +452,52 @@ pub(crate) fn run_step(
             args.first().map(String::as_str).unwrap_or(""),
             msg
         ))
+    }
+}
+
+fn read_only_git_args(args: &[String]) -> bool {
+    let mut args = args.iter().map(String::as_str).peekable();
+    loop {
+        match args.peek().copied() {
+            Some("--literal-pathspecs" | "--no-pager") => {
+                args.next();
+            }
+            Some("-c") => {
+                args.next();
+                let Some(value) = args.next() else {
+                    return false;
+                };
+                if !matches!(value, "core.quotepath=off" | "i18n.logOutputEncoding=UTF-8") {
+                    return false;
+                }
+            }
+            Some("-C") => {
+                args.next();
+                if args.next().is_none() {
+                    return false;
+                }
+            }
+            _ => break,
+        }
+    }
+    let Some(command) = args.next() else {
+        return false;
+    };
+    let rest: Vec<_> = args.collect();
+    if rest
+        .iter()
+        .any(|arg| *arg == "--output" || arg.starts_with("--output="))
+    {
+        return false;
+    }
+    match command {
+        "status" | "log" | "show" | "cat-file" | "rev-parse" | "for-each-ref" => true,
+        "symbolic-ref" => matches!(
+            rest.as_slice(),
+            ["--short", "HEAD"] | ["-q", "--short", "HEAD"]
+        ),
+        "remote" => matches!(rest.as_slice(), ["get-url", _] | ["get-url", "--push", _]),
+        _ => false,
     }
 }
 
@@ -607,14 +654,19 @@ pub(crate) fn file_diff(
         };
         return Ok((patch, None, open_path));
     }
-    let conflict = (group == Group::Conflicts)
-        .then(|| {
-            crate::workbench::read_file_bytes(target, &full, MAX_DIFF_BYTES as u64)
+    let conflict = if group == Group::Conflicts {
+        match crate::workbench::read_file_bytes(target, &full, MAX_DIFF_BYTES as u64) {
+            Ok(bytes) if bytes.len() > MAX_DIFF_BYTES => {
+                return Err(tr("The diff is too large to preview.").into());
+            }
+            Ok(bytes) => String::from_utf8(bytes)
                 .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-        })
-        .flatten()
-        .filter(|text| text.lines().any(|line| line.starts_with("<<<<<<<")));
+                .filter(|text| text.lines().any(|line| line.starts_with("<<<<<<<"))),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let mut args = vec![
         "--literal-pathspecs",
         "-c",
@@ -927,6 +979,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wsl_fallback_allows_only_read_git_commands_after_global_options() {
+        let args = |parts: &[&str]| parts.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert!(read_only_git_args(&args(&[
+            "--literal-pathspecs",
+            "-c",
+            "i18n.logOutputEncoding=UTF-8",
+            "log",
+            "-n",
+            "80",
+        ])));
+        assert!(read_only_git_args(&args(&["remote", "get-url", "origin"])));
+        assert!(!read_only_git_args(&args(&["reset", "--hard"])));
+        assert!(!read_only_git_args(&args(&[
+            "remote", "set-url", "origin", "url"
+        ])));
+        assert!(!read_only_git_args(&args(&[
+            "-c",
+            "alias.status=!git reset",
+            "status"
+        ])));
+    }
+
+    #[test]
     fn porcelain_v2() {
         let out = "# branch.oid abc\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -21\0\
 1 .M N... 100644 100644 100644 a b src/app.py\0\
@@ -1192,6 +1267,34 @@ mod tests {
         assert!(repo.status().conflicts.is_empty());
         assert_eq!(repo.git(&["show", ":same.txt"]), "resolved\n");
         assert!(repo.status().check_commit("merge", false).is_ok());
+    }
+
+    #[test]
+    fn oversized_conflict_content_is_rejected_even_when_the_diff_is_small() {
+        let repo = TestRepo::new();
+        let shared = "same line\n".repeat(MAX_DIFF_BYTES / 10 + 1);
+        let base = format!("base\n{shared}");
+        repo.write("large.txt", &base);
+        repo.git(&["add", "large.txt"]);
+        commit(&repo.0, "base", false, false, None).unwrap();
+
+        repo.git(&["checkout", "-b", "topic"]);
+        repo.write("large.txt", &base.replace("base\n", "topic\n"));
+        repo.git(&["add", "large.txt"]);
+        commit(&repo.0, "topic", false, false, None).unwrap();
+
+        repo.git(&["checkout", "main"]);
+        repo.write("large.txt", &base.replace("base\n", "current\n"));
+        repo.git(&["add", "large.txt"]);
+        commit(&repo.0, "current", false, false, None).unwrap();
+        assert!(run_step(&repo.0, &git_step(&["merge", "topic"]), None).is_err());
+
+        let file = repo.status().conflicts.remove(0);
+        assert!(repo.git(&["diff", "--ours", "--", "large.txt"]).len() < 1024);
+        assert_eq!(
+            file_diff(&repo.0, &file, Group::Conflicts, None).unwrap_err(),
+            tr("The diff is too large to preview.")
+        );
     }
 
     #[test]
