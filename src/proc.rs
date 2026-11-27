@@ -1,4 +1,3 @@
-
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -12,11 +11,11 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
-struct ProcessJob(isize);
+pub(crate) struct ProcessJob(isize);
 
 #[cfg(windows)]
 impl ProcessJob {
-    fn for_child(child: &std::process::Child) -> Option<Self> {
+    pub(crate) fn for_child(child: &std::process::Child) -> Option<Self> {
         #[repr(C)]
         struct BasicLimit {
             per_process_user_time_limit: i64,
@@ -50,7 +49,12 @@ impl ProcessJob {
         #[link(name = "kernel32")]
         extern "system" {
             fn CreateJobObjectW(attrs: *const std::ffi::c_void, name: *const u16) -> isize;
-            fn SetInformationJobObject(job: isize, class: u32, info: *const std::ffi::c_void, len: u32) -> i32;
+            fn SetInformationJobObject(
+                job: isize,
+                class: u32,
+                info: *const std::ffi::c_void,
+                len: u32,
+            ) -> i32;
             fn AssignProcessToJobObject(job: isize, proc: isize) -> i32;
             fn CloseHandle(handle: isize) -> i32;
         }
@@ -82,7 +86,7 @@ impl ProcessJob {
         }
     }
 
-    fn terminate_and_close(mut self) {
+    pub(crate) fn terminate_and_close(mut self) {
         self.terminate_inner();
     }
 
@@ -124,7 +128,7 @@ impl ProcessJob {
         }
     }
 
-    fn working_set_mb(&self) -> f64 {
+    pub(crate) fn working_set_mb(&self) -> f64 {
         #[link(name = "kernel32")]
         extern "system" {
             fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
@@ -150,32 +154,48 @@ impl ProcessJob {
     /// Non-destructively trims cold resident RAM pages across the entire Job Object and
     /// optionally engages Windows EcoQoS (`PROCESS_POWER_THROTTLING_EXECUTION_SPEED`).
     /// The agent remains 100% live and connected.
-    fn set_thermal_state(&self, trim_ws: bool, eco_qos: Option<bool>) -> usize {
+    pub(crate) fn set_thermal_state(&self, trim_ws: bool, eco_qos: Option<bool>) -> usize {
         #[repr(C)]
         struct PowerThrottlingState {
             version: u32,
             control_mask: u32,
             state_mask: u32,
         }
+        #[repr(C)]
+        struct MemoryPriorityInformation {
+            memory_priority: u32,
+        }
         #[link(name = "kernel32")]
         extern "system" {
             fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
             fn SetProcessWorkingSetSize(proc: isize, min_sz: usize, max_sz: usize) -> i32;
-            fn SetProcessInformation(proc: isize, class: u32, info: *const std::ffi::c_void, len: u32) -> i32;
+            fn SetProcessInformation(
+                proc: isize,
+                class: u32,
+                info: *const std::ffi::c_void,
+                len: u32,
+            ) -> i32;
             fn SetPriorityClass(proc: isize, class: u32) -> i32;
             fn CloseHandle(handle: isize) -> i32;
         }
         const PROCESS_SET_QUOTA: u32 = 0x0100;
         const PROCESS_SET_INFORMATION: u32 = 0x0200;
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_MEMORY_PRIORITY: u32 = 0;
         const PROCESS_POWER_THROTTLING: u32 = 4;
         const EXECUTION_SPEED: u32 = 0x1;
+        const MEMORY_PRIORITY_LOW: u32 = 2;
+        const MEMORY_PRIORITY_NORMAL: u32 = 5;
         const NORMAL_PRIORITY_CLASS: u32 = 0x0020;
         const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
 
         let access = PROCESS_QUERY_LIMITED_INFORMATION
             | if trim_ws { PROCESS_SET_QUOTA } else { 0 }
-            | if eco_qos.is_some() { PROCESS_SET_INFORMATION } else { 0 };
+            | if eco_qos.is_some() {
+                PROCESS_SET_INFORMATION
+            } else {
+                0
+            };
         let mut touched = 0usize;
         for pid in self.pids() {
             unsafe {
@@ -193,7 +213,27 @@ impl ProcessJob {
                             &pt as *const PowerThrottlingState as *const std::ffi::c_void,
                             std::mem::size_of::<PowerThrottlingState>() as u32,
                         );
-                        let _ = SetPriorityClass(h, if eco { BELOW_NORMAL_PRIORITY_CLASS } else { NORMAL_PRIORITY_CLASS });
+                        let mp = MemoryPriorityInformation {
+                            memory_priority: if eco {
+                                MEMORY_PRIORITY_LOW
+                            } else {
+                                MEMORY_PRIORITY_NORMAL
+                            },
+                        };
+                        let _ = SetProcessInformation(
+                            h,
+                            PROCESS_MEMORY_PRIORITY,
+                            &mp as *const MemoryPriorityInformation as *const std::ffi::c_void,
+                            std::mem::size_of::<MemoryPriorityInformation>() as u32,
+                        );
+                        let _ = SetPriorityClass(
+                            h,
+                            if eco {
+                                BELOW_NORMAL_PRIORITY_CLASS
+                            } else {
+                                NORMAL_PRIORITY_CLASS
+                            },
+                        );
                     }
                     if trim_ws {
                         let _ = SetProcessWorkingSetSize(h, usize::MAX, usize::MAX);
@@ -435,7 +475,14 @@ pub fn python(workspace: Option<&Path>) -> String {
 impl Procs {
     pub fn new() -> (Self, UnboundedReceiver<ProcEvent>) {
         let (tx, rx) = unbounded();
-        (Self { next: 0, tx, running: HashMap::new() }, rx)
+        (
+            Self {
+                next: 0,
+                tx,
+                running: HashMap::new(),
+            },
+            rx,
+        )
     }
 
     pub fn is_running(&self, id: u32) -> bool {
@@ -447,11 +494,22 @@ impl Procs {
     }
 
     /// Spawns an AI agent in an isolated process group & Job Object while keeping full host PATH/workspace access.
-    pub fn spawn_isolated(&mut self, cmd: Command, cwd: Option<&Path>, agent_tag: &str) -> Result<u32, String> {
+    pub fn spawn_isolated(
+        &mut self,
+        cmd: Command,
+        cwd: Option<&Path>,
+        agent_tag: &str,
+    ) -> Result<u32, String> {
         self.spawn_inner(cmd, cwd, true, Some(agent_tag))
     }
 
-    fn spawn_inner(&mut self, mut cmd: Command, cwd: Option<&Path>, isolated: bool, agent_tag: Option<&str>) -> Result<u32, String> {
+    fn spawn_inner(
+        &mut self,
+        mut cmd: Command,
+        cwd: Option<&Path>,
+        isolated: bool,
+        agent_tag: Option<&str>,
+    ) -> Result<u32, String> {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
@@ -491,8 +549,14 @@ impl Procs {
         self.next += 1;
         let id = self.next;
         let readers: Vec<_> = [
-            child.stdout.take().map(|p| pump(self.tx.clone(), id, false, p)),
-            child.stderr.take().map(|p| pump(self.tx.clone(), id, true, p)),
+            child
+                .stdout
+                .take()
+                .map(|p| pump(self.tx.clone(), id, false, p)),
+            child
+                .stderr
+                .take()
+                .map(|p| pump(self.tx.clone(), id, true, p)),
         ]
         .into_iter()
         .flatten()
@@ -574,7 +638,9 @@ impl Procs {
     }
 
     pub fn kill(&mut self, id: u32) {
-        let Some(mut entry) = self.running.remove(&id) else { return };
+        let Some(mut entry) = self.running.remove(&id) else {
+            return;
+        };
         drop(entry.stdin.take());
         #[cfg(windows)]
         {
@@ -585,13 +651,20 @@ impl Procs {
             terminate_process_tree(entry.pid);
         }
         #[cfg(not(windows))]
-        let _ = command("kill").args(["-9", &entry.pid.to_string()]).status();
+        let _ = command("kill")
+            .args(["-9", &entry.pid.to_string()])
+            .status();
     }
 }
 
-fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<()> {
+fn pump(
+    tx: UnboundedSender<ProcEvent>,
+    id: u32,
+    err: bool,
+    mut pipe: impl Read + Send + 'static,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 16384];
         let mut carry: Vec<u8> = Vec::new();
         loop {
             let n = match pipe.read(&mut buf) {
@@ -600,7 +673,14 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
             };
             if carry.is_empty() {
                 if let Ok(s) = std::str::from_utf8(&buf[..n]) {
-                    if tx.unbounded_send(ProcEvent::Output { id, text: s.to_owned(), err }).is_err() {
+                    if tx
+                        .unbounded_send(ProcEvent::Output {
+                            id,
+                            text: s.to_owned(),
+                            err,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                     continue;
@@ -621,12 +701,19 @@ fn pump(tx: UnboundedSender<ProcEvent>, id: u32, err: bool, mut pipe: impl Read 
             } else {
                 carry.drain(..valid);
             }
-            if tx.unbounded_send(ProcEvent::Output { id, text, err }).is_err() {
+            if tx
+                .unbounded_send(ProcEvent::Output { id, text, err })
+                .is_err()
+            {
                 break;
             }
         }
         if !carry.is_empty() {
-            let _ = tx.unbounded_send(ProcEvent::Output { id, text: String::from_utf8_lossy(&carry).into_owned(), err });
+            let _ = tx.unbounded_send(ProcEvent::Output {
+                id,
+                text: String::from_utf8_lossy(&carry).into_owned(),
+                err,
+            });
         }
     })
 }
@@ -695,17 +782,28 @@ mod tests {
         let (mut procs, _rx) = super::Procs::new();
         let mut cmd = super::command("cmd.exe");
         cmd.args(["/d", "/c", "ping -n 30 127.0.0.1 >nul"]);
-        let id = procs.spawn_isolated(cmd, None, "test-agent").expect("spawn isolated");
+        let id = procs
+            .spawn_isolated(cmd, None, "test-agent")
+            .expect("spawn isolated");
         let entry = procs.running.get(&id).expect("entry tracked");
-        assert!(entry.job.is_some(), "isolated agent must hold a Windows Job Object");
+        assert!(
+            entry.job.is_some(),
+            "isolated agent must hold a Windows Job Object"
+        );
         let pid = entry.pid;
         std::thread::sleep(std::time::Duration::from_millis(120));
         assert!(is_alive(pid), "resumed process should be running");
         let ws_before = procs.job_working_set_mb(id);
         assert!(ws_before > 0.0, "job working set should report positive MB");
-        assert!(procs.cool_job(id, true, Some(true)) >= 1, "cooling should touch job processes");
+        assert!(
+            procs.cool_job(id, true, Some(true)) >= 1,
+            "cooling should touch job processes"
+        );
         procs.wake_job(id);
-        assert!(is_alive(pid), "cooling and waking must keep process 100% alive");
+        assert!(
+            is_alive(pid),
+            "cooling and waking must keep process 100% alive"
+        );
         procs.kill(id);
         assert!(!procs.is_running(id));
         std::thread::sleep(std::time::Duration::from_millis(80));

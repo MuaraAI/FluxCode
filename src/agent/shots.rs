@@ -1,9 +1,8 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
 use gpui_kit::assets::IconName as Ico;
-use gpui_kit::component::{h_flex, v_flex, Icon};
+use gpui_kit::component::{button::Button, button::ButtonVariants, h_flex, v_flex, Icon, Sizable};
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -17,6 +16,8 @@ const THUMB_H: f32 = 132.;
 pub struct Shot {
     pub path: PathBuf,
     pub size: Option<(u32, u32)>,
+    pub is_video: bool,
+    pub meta: Option<String>,
 }
 
 pub struct Lightbox {
@@ -35,32 +36,78 @@ pub fn collect(v: &Value) -> Vec<Shot> {
     out
 }
 
+fn video_shot(path: PathBuf) -> Option<Shot> {
+    let info = crate::gflow::inspect_video(&path).ok()?;
+    let meta = crate::gflow::format_video_meta(&info);
+    Some(Shot {
+        path: info.path,
+        size: info.dimensions,
+        is_video: true,
+        meta: Some(meta),
+    })
+}
+
+fn push_unique(out: &mut Vec<Shot>, shot: Shot) {
+    if !out.iter().any(|s| s.path == shot.path) {
+        out.push(shot);
+    }
+}
+
 fn walk(v: &Value, out: &mut Vec<Shot>, depth: usize) {
     if depth > 8 || out.len() >= 16 {
         return;
     }
     match v {
         Value::Object(m) => {
-            let is_image = m.get("type").and_then(Value::as_str) == Some("image");
-            if let (true, Some(data)) = (is_image, m.get("data").and_then(Value::as_str)) {
-                let mime = m.get("mimeType").or_else(|| m.get("mime_type")).and_then(Value::as_str).unwrap_or("image/png");
-                if let Some(s) = save(data, mime) {
-                    if !out.contains(&s) {
-                        out.push(s);
-                    }
+            let kind = m.get("type").and_then(Value::as_str);
+            let is_image = kind == Some("image");
+            let is_video = kind == Some("video");
+            if (is_image || is_video) && m.get("data").and_then(Value::as_str).is_some() {
+                let data = m.get("data").and_then(Value::as_str).unwrap_or("");
+                let mime = m
+                    .get("mimeType")
+                    .or_else(|| m.get("mime_type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(if is_video { "video/mp4" } else { "image/png" });
+                if let Some(s) = save(data, mime, is_video) {
+                    push_unique(out, s);
                 }
                 return;
             }
             if is_image {
                 if let Some(src) = m.get("source") {
                     let data = src.get("data").and_then(Value::as_str);
-                    let mime = src.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
-                    if let Some(s) = data.and_then(|d| save(d, mime)) {
-                        if !out.contains(&s) {
-                            out.push(s);
-                        }
+                    let mime = src
+                        .get("media_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png");
+                    if let Some(s) = data.and_then(|d| save(d, mime, false)) {
+                        push_unique(out, s);
                     }
                     return;
+                }
+            }
+            for k in ["path", "file", "video_path", "out_file", "uri"] {
+                if let Some(raw) = m.get(k).and_then(Value::as_str) {
+                    let trimmed = raw.strip_prefix("file:///").unwrap_or(raw);
+                    let p = PathBuf::from(trimmed);
+                    if crate::gflow::is_video_path(&p) {
+                        if let Some(s) = video_shot(p) {
+                            push_unique(out, s);
+                        }
+                    }
+                }
+            }
+            if let Some(arr) = m.get("files").and_then(Value::as_array) {
+                for item in arr {
+                    if let Some(raw) = item.as_str() {
+                        let p = PathBuf::from(raw);
+                        if crate::gflow::is_video_path(&p) {
+                            if let Some(s) = video_shot(p) {
+                                push_unique(out, s);
+                            }
+                        }
+                    }
                 }
             }
             for x in m.values() {
@@ -72,52 +119,95 @@ fn walk(v: &Value, out: &mut Vec<Shot>, depth: usize) {
                 walk(x, out, depth + 1);
             }
         }
+        Value::String(raw) => {
+            let trimmed = raw.strip_prefix("file:///").unwrap_or(raw.as_str());
+            if trimmed.len() < 512 && !trimmed.contains('\n') {
+                let p = PathBuf::from(trimmed);
+                if crate::gflow::is_video_path(&p) && p.is_file() {
+                    if let Some(s) = video_shot(p) {
+                        push_unique(out, s);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
 
-fn save(data: &str, mime: &str) -> Option<Shot> {
+fn save(data: &str, mime: &str, is_video: bool) -> Option<Shot> {
     use base64::Engine as _;
     if data.len() > MAX_BYTES / 3 * 4 + 8 {
         return None;
     }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .ok()?;
     let ext = match mime {
         "image/jpeg" | "image/jpg" => "jpg",
         "image/gif" => "gif",
         "image/webp" => "webp",
         "image/svg+xml" => "svg",
         "image/bmp" => "bmp",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        _ if is_video => "mp4",
         _ => "png",
     };
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).ok()?;
-    let name = format!("{}.{ext}", &sha1_smol::Sha1::from(&bytes).digest().to_string()[..20]);
+    let name = format!(
+        "{}.{ext}",
+        &sha1_smol::Sha1::from(&bytes).digest().to_string()[..20]
+    );
     let path = dir.join(name);
     if !path.is_file() {
         std::fs::write(&path, &bytes).ok()?;
     }
+    if is_video {
+        return video_shot(path);
+    }
     let size = image::image_dimensions(&path).ok();
-    Some(Shot { path, size })
+    Some(Shot {
+        path,
+        size,
+        is_video: false,
+        meta: None,
+    })
 }
 
 pub fn prune_cache() {
-    let Ok(rd) = std::fs::read_dir(cache_dir()) else { return };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
+    let Ok(rd) = std::fs::read_dir(cache_dir()) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .flatten()
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
     if files.len() <= KEEP {
         return;
     }
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|a| std::cmp::Reverse(a.0));
     for (_, p) in files.into_iter().skip(KEEP) {
         let _ = std::fs::remove_file(p);
     }
 }
 
 impl Workbench {
-    pub(crate) fn agent_open_lightbox(&mut self, shots: Vec<Shot>, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn agent_open_lightbox(
+        &mut self,
+        shots: Vec<Shot>,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        self.agent.lightbox = Some(Lightbox { ix: ix.min(shots.len().saturating_sub(1)), shots, focus });
+        self.agent.lightbox = Some(Lightbox {
+            ix: ix.min(shots.len().saturating_sub(1)),
+            shots,
+            focus,
+        });
         cx.notify();
     }
 
@@ -138,9 +228,29 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn render_shots(&self, i: usize, shots: &[Shot], hidden: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_shots(
+        &self,
+        i: usize,
+        shots: &[Shot],
+        hidden: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let n = shots.len();
-        let label: SharedString = if n == 1 { tr("Screenshot").into() } else { crate::trf!("{n} screenshots"; n => n).into() };
+        let n_vid = shots.iter().filter(|s| s.is_video).count();
+        let all_vid = n_vid == n;
+        let label: SharedString = if all_vid {
+            if n == 1 {
+                tr("Video").into()
+            } else {
+                crate::trf!("{n} videos"; n => n).into()
+            }
+        } else if n_vid > 0 {
+            crate::trf!("{n} media items"; n => n).into()
+        } else if n == 1 {
+            tr("Screenshot").into()
+        } else {
+            crate::trf!("{n} screenshots"; n => n).into()
+        };
         let header = h_flex()
             .id(("ag-shots-h", i))
             .gap_1p5()
@@ -151,13 +261,40 @@ impl Workbench {
             .text_xs()
             .text_color(c(theme::FG_DIM))
             .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_MUTED)))
-            .child(Icon::new(Ico::Image).size(theme::u(12.)))
+            .child(
+                Icon::new(if n_vid > 0 {
+                    Ico::FileVideoCamera
+                } else {
+                    Ico::Image
+                })
+                .size(theme::u(12.)),
+            )
             .child(label)
-            .when(hidden, |h| {
-                h.child(img(shots[0].path.clone()).h(theme::u(16.)).max_w(theme::u(28.)).rounded(px(3.)).object_fit(ObjectFit::Cover))
+            .when(hidden && !shots[0].is_video, |h| {
+                h.child(
+                    img(shots[0].path.clone())
+                        .h(theme::u(16.))
+                        .max_w(theme::u(28.))
+                        .rounded(px(3.))
+                        .object_fit(ObjectFit::Cover),
+                )
             })
-            .child(Icon::new(if hidden { Ico::ChevronRight } else { Ico::ChevronDown }).size(theme::u(11.)))
-            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if hidden { tr("Show the preview") } else { tr("Hide the preview") }).build(w, cx))
+            .child(
+                Icon::new(if hidden {
+                    Ico::ChevronRight
+                } else {
+                    Ico::ChevronDown
+                })
+                .size(theme::u(11.)),
+            )
+            .tooltip(move |w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(if hidden {
+                    tr("Show the preview")
+                } else {
+                    tr("Hide the preview")
+                })
+                .build(w, cx)
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(super::Item::Images { hidden, .. }) = this.agent.items.get_mut(i) {
                     *hidden = !*hidden;
@@ -168,11 +305,83 @@ impl Workbench {
         let mut col = v_flex().w_full().gap_1().pl(theme::u(22.)).child(header);
         if !hidden {
             let h = if n == 1 { THUMB_H * 1.35 } else { THUMB_H };
+            let images_only: Vec<Shot> = shots.iter().filter(|s| !s.is_video).cloned().collect();
             let mut row = h_flex().w_full().flex_wrap().gap_1p5();
+            let mut img_ix = 0usize;
             for (k, s) in shots.iter().enumerate() {
+                if s.is_video {
+                    let open_p = s.path.clone();
+                    let reveal_p = s.path.clone();
+                    let fname = s
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("video")
+                        .to_string();
+                    let meta = s.meta.clone().unwrap_or_default();
+                    row = row.child(
+                        v_flex()
+                            .id(("ag-vid", i * 64 + k))
+                            .w_full()
+                            .p_2()
+                            .gap_1p5()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(c(theme::BORDER))
+                            .bg(c(theme::BG_ELEVATED))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(Ico::FileVideoCamera)
+                                            .flex_none()
+                                            .size(theme::u(14.))
+                                            .text_color(c(theme::ACCENT_TEXT)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(c(theme::FG_STRONG))
+                                            .child(fname),
+                                    ),
+                            )
+                            .when(!meta.is_empty(), |v| {
+                                v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(meta))
+                            })
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap_1p5()
+                                    .child(
+                                        Button::new(("ag-vid-open", i * 64 + k))
+                                            .label(tr("Open video"))
+                                            .xsmall()
+                                            .primary()
+                                            .on_click(move |_, _, _| {
+                                                crate::gflow::open_file_in_os(&open_p);
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new(("ag-vid-dir", i * 64 + k))
+                                            .label(tr("Show in folder"))
+                                            .xsmall()
+                                            .ghost()
+                                            .on_click(move |_, _, cx| cx.reveal_path(&reveal_p)),
+                                    ),
+                            ),
+                    );
+                    continue;
+                }
                 let (w, hh) = s.size.unwrap_or((16, 10));
                 let aspect = (w.max(1) as f32 / hh.max(1) as f32).clamp(0.3, 4.);
-                let all = shots.to_vec();
+                let all = images_only.clone();
+                let my_ix = img_ix;
+                img_ix += 1;
                 row = row.child(
                     div()
                         .id(("ag-shot", i * 64 + k))
@@ -188,7 +397,11 @@ impl Workbench {
                         .bg(c(theme::BG_ELEVATED))
                         .cursor_pointer()
                         .hover(|s| s.border_color(c(theme::ACCENT)))
-                        .child(img(s.path.clone()).size_full().object_fit(ObjectFit::Contain))
+                        .child(
+                            img(s.path.clone())
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        )
                         .child(
                             div()
                                 .absolute()
@@ -205,8 +418,13 @@ impl Workbench {
                                 .group_hover("ag-shot", |s| s.visible())
                                 .child(Icon::new(Ico::Maximize2).size(theme::u(12.))),
                         )
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Full screen")).build(w, cx))
-                        .on_click(cx.listener(move |this, _, w, cx| this.agent_open_lightbox(all.clone(), k, w, cx))),
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tr("Full screen"))
+                                .build(w, cx)
+                        })
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.agent_open_lightbox(all.clone(), my_ix, w, cx)
+                        })),
                 );
             }
             col = col.child(row);
@@ -214,7 +432,11 @@ impl Workbench {
         col.into_any_element()
     }
 
-    pub(crate) fn render_lightbox(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_lightbox(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let lb = self.agent.lightbox.as_ref()?;
         let shot = lb.shots.get(lb.ix)?.clone();
         let n = lb.shots.len();
@@ -246,8 +468,13 @@ impl Workbench {
                 .justify_center()
                 .cursor_pointer()
                 .text_color(gpui_kit::white().opacity(0.85))
-                .hover(|s| s.bg(gpui_kit::white().opacity(0.12)).text_color(gpui_kit::white()))
-                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
+                .hover(|s| {
+                    s.bg(gpui_kit::white().opacity(0.12))
+                        .text_color(gpui_kit::white())
+                })
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx)
+                })
                 .child(Icon::new(icon).size(theme::u(16.)))
         };
         let arrow = |id: &'static str, icon: Ico, d: isize, cx: &mut Context<Self>| {
@@ -278,8 +505,16 @@ impl Workbench {
             .overflow_hidden()
             .shadow_lg()
             .on_click(|_, _, cx| cx.stop_propagation())
-            .child(img(shot.path.clone()).size_full().object_fit(ObjectFit::Contain))
-            .with_animation(SharedString::from(format!("ag-lb-in-{}", shot.path.display())), Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()), |d, t| d.opacity(t));
+            .child(
+                img(shot.path.clone())
+                    .size_full()
+                    .object_fit(ObjectFit::Contain),
+            )
+            .with_animation(
+                SharedString::from(format!("ag-lb-in-{}", shot.path.display())),
+                Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()),
+                |d, t| d.opacity(t),
+            );
         Some(
             div()
                 .id("ag-lightbox")
@@ -293,11 +528,13 @@ impl Workbench {
                 .flex_col()
                 .bg(gpui_kit::black().opacity(0.86))
                 .on_click(cx.listener(|this, _, w, cx| this.lightbox_close(w, cx)))
-                .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| match e.keystroke.key.as_str() {
-                    "escape" => this.lightbox_close(w, cx),
-                    "left" => this.lightbox_step(-1, cx),
-                    "right" => this.lightbox_step(1, cx),
-                    _ => {}
+                .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
+                    match e.keystroke.key.as_str() {
+                        "escape" => this.lightbox_close(w, cx),
+                        "left" => this.lightbox_step(-1, cx),
+                        "right" => this.lightbox_step(1, cx),
+                        _ => {}
+                    }
                 }))
                 .child(
                     h_flex()
@@ -307,24 +544,52 @@ impl Workbench {
                         .px_4()
                         .gap_1()
                         .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(Icon::new(Ico::Image).size(theme::u(15.)).text_color(gpui_kit::white().opacity(0.7)))
-                        .child(div().pl_1().text_sm().text_color(gpui_kit::white().opacity(0.9)).child(tr("Screenshot")))
-                        .child(div().pl_2().text_xs().text_color(gpui_kit::white().opacity(0.55)).child(info))
+                        .child(
+                            Icon::new(Ico::Image)
+                                .size(theme::u(15.))
+                                .text_color(gpui_kit::white().opacity(0.7)),
+                        )
+                        .child(
+                            div()
+                                .pl_1()
+                                .text_sm()
+                                .text_color(gpui_kit::white().opacity(0.9))
+                                .child(tr("Screenshot")),
+                        )
+                        .child(
+                            div()
+                                .pl_2()
+                                .text_xs()
+                                .text_color(gpui_kit::white().opacity(0.55))
+                                .child(info),
+                        )
                         .child(div().flex_1())
-                        .child(bar_btn("ag-lb-open", Ico::ExternalLink, "Open in a tab").on_click(cx.listener(move |this, _, w, cx| {
-                            cx.stop_propagation();
-                            let p = open_path.clone();
-                            this.lightbox_close(w, cx);
-                            this.open_file(p, w, cx);
-                        })))
-                        .child(bar_btn("ag-lb-copy", Ico::Copy, "Copy the file path").on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy_path.clone()));
-                        }))
-                        .child(bar_btn("ag-lb-close", Ico::Close, "Close (Esc)").on_click(cx.listener(|this, _, w, cx| {
-                            cx.stop_propagation();
-                            this.lightbox_close(w, cx)
-                        }))),
+                        .child(
+                            bar_btn("ag-lb-open", Ico::ExternalLink, "Open in a tab").on_click(
+                                cx.listener(move |this, _, w, cx| {
+                                    cx.stop_propagation();
+                                    let p = open_path.clone();
+                                    this.lightbox_close(w, cx);
+                                    this.open_file(p, w, cx);
+                                }),
+                            ),
+                        )
+                        .child(
+                            bar_btn("ag-lb-copy", Ico::Copy, "Copy the file path").on_click(
+                                move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        copy_path.clone(),
+                                    ));
+                                },
+                            ),
+                        )
+                        .child(bar_btn("ag-lb-close", Ico::Close, "Close (Esc)").on_click(
+                            cx.listener(|this, _, w, cx| {
+                                cx.stop_propagation();
+                                this.lightbox_close(w, cx)
+                            }),
+                        )),
                 )
                 .child(
                     h_flex()
@@ -335,11 +600,20 @@ impl Workbench {
                         .items_center()
                         .justify_center()
                         .gap_4()
-                        .when(n > 1, |h| h.child(arrow("ag-lb-prev", Ico::ChevronLeft, -1, cx)))
+                        .when(n > 1, |h| {
+                            h.child(arrow("ag-lb-prev", Ico::ChevronLeft, -1, cx))
+                        })
                         .child(picture)
-                        .when(n > 1, |h| h.child(arrow("ag-lb-next", Ico::ChevronRight, 1, cx))),
+                        .when(n > 1, |h| {
+                            h.child(arrow("ag-lb-next", Ico::ChevronRight, 1, cx))
+                        }),
                 )
-                .with_animation("ag-lightbox-fade", Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |d, t| d.opacity(t))
+                .with_animation(
+                    "ag-lightbox-fade",
+                    Animation::new(Duration::from_millis(160))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                    |d, t| d.opacity(t),
+                )
                 .into_any_element(),
         )
     }
@@ -359,9 +633,25 @@ mod tests {
         });
         let shots = collect(&tool);
         assert_eq!(shots.len(), 1);
+        assert!(!shots[0].is_video);
         assert_eq!(shots[0].size, Some((1, 1)));
         assert!(shots[0].path.is_file());
-        assert!(collect(&serde_json::json!({"content": [{"type": "text", "text": "no picture"}]})).is_empty());
+        assert!(
+            collect(&serde_json::json!({"content": [{"type": "text", "text": "no picture"}]}))
+                .is_empty()
+        );
         assert!(collect(&serde_json::json!({"type": "image", "data": "not base64!"})).is_empty());
+
+        let tmp =
+            std::env::temp_dir().join(format!("fluxcode-shot-vid-{}.mp4", std::process::id()));
+        std::fs::write(&tmp, b"ftypisom0000").unwrap();
+        let vid_tool = serde_json::json!({
+            "files": [tmp.display().to_string()]
+        });
+        let vid_shots = collect(&vid_tool);
+        assert_eq!(vid_shots.len(), 1);
+        assert!(vid_shots[0].is_video);
+        assert!(vid_shots[0].meta.as_ref().is_some_and(|m| m.contains("KB")));
+        let _ = std::fs::remove_file(&tmp);
     }
 }

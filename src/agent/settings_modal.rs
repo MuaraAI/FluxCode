@@ -1,13 +1,14 @@
-
-use super::{agent_glyph, agent_id, agent_name, menu::effort_note, model_groups, opencode_config_file, ConfigOpt, Status};
+use super::{
+    agent_glyph, agent_id, agent_name, menu::effort_note, model_groups, opencode_config_file,
+    ConfigOpt, Status,
+};
 use crate::i18n::tr;
-use crate::theme::{self, c};
+use crate::theme::{self, c, GlassExt};
 use crate::workbench::Workbench;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
-    h_flex,
-    v_flex, Icon, IconName, Sizable,
+    h_flex, v_flex, Disableable, Icon, IconName, Sizable,
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 
@@ -22,7 +23,13 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 5] = [Tab::Model, Tab::Permissions, Tab::Session, Tab::Browser, Tab::Agent];
+    const ALL: [Tab; 5] = [
+        Tab::Model,
+        Tab::Permissions,
+        Tab::Session,
+        Tab::Browser,
+        Tab::Agent,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -58,7 +65,11 @@ impl Tab {
 const COMPACT: f32 = 600.;
 
 impl Workbench {
-    pub(crate) fn render_agent_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_agent_settings(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.agent.show_options {
             return None;
         }
@@ -67,11 +78,20 @@ impl Workbench {
         let card_h = (f32::from(vp.height) - 72.).clamp(320., 580.);
         let compact = card_w < COMPACT;
         let tab = self.agent.settings_tab;
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let vertical_nav = !compact;
+        let nav_liq = crate::ui::liquid::keyed_state("ag-set-nav-liq", window, cx);
+        let nav_cross = if vertical_nav { 168.0f32 } else { 30.0f32 };
+        let active_tab_ix = Tab::ALL.iter().position(|t| *t == tab);
 
-        let nav = Tab::ALL.into_iter().map(|t| {
+        let nav_items = Tab::ALL.into_iter().enumerate().map(|(ix, t)| {
             let on = t == tab;
+            let probe = crate::ui::liquid::keyed_item_probe(nav_liq.clone(), ix, view_id);
+            let liq_h = nav_liq.clone();
             h_flex()
                 .id(SharedString::from(format!("ag-set-tab-{t:?}")))
+                .relative()
                 .flex_none()
                 .h(theme::u(30.))
                 .px_2p5()
@@ -79,26 +99,139 @@ impl Workbench {
                 .rounded(px(6.))
                 .cursor_pointer()
                 .text_sm()
-                .when(on, |d| d.bg(c(theme::SELECT)).text_color(c(theme::FG_STRONG)))
-                .when(!on, |d| d.text_color(c(theme::FG_MUTED)).hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
-                .child(Icon::new(t.icon()).size(theme::u(15.)).flex_none().text_color(c(if on { theme::ACCENT_TEXT } else { theme::FG_DIM })))
+                .when(on, |d| {
+                    d.when(!motion, |d| d.bg(c(theme::SELECT)))
+                        .text_color(c(theme::FG_STRONG))
+                })
+                .when(!on, |d| {
+                    d.text_color(c(theme::FG_MUTED)).when(!motion, |d| {
+                        d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                    })
+                })
+                .on_hover(move |entered: &bool, _, cx| {
+                    if *entered && motion {
+                        crate::ui::liquid::keyed_hover_enter(
+                            &liq_h,
+                            ix,
+                            vertical_nav,
+                            nav_cross,
+                            155,
+                            view_id,
+                            cx,
+                        );
+                    }
+                })
+                .child(probe)
+                .child(
+                    Icon::new(t.icon())
+                        .size(theme::u(15.))
+                        .flex_none()
+                        .text_color(c(if on {
+                            theme::ACCENT_TEXT
+                        } else {
+                            theme::FG_DIM
+                        })),
+                )
                 .child(div().whitespace_nowrap().child(tr(t.label())))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.agent.settings_tab = t;
                     cx.notify();
                 }))
         });
+        let (nav_frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &nav_liq,
+            vertical_nav,
+            Tab::ALL.len(),
+            active_tab_ix,
+            nav_cross,
+            200,
+            motion,
+        );
+        let nav_layer = nav_frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-set-nav-liq-l",
+                vertical_nav,
+                crate::ui::liquid::agent_liquid_style(nav_cross, 6.0),
+                fr,
+            )
+        });
+        let nav_origin = crate::ui::liquid::keyed_origin_probe(nav_liq.clone(), view_id);
         let nav = if compact {
-            h_flex().id("ag-set-nav").flex_none().px_3().py_2().gap_1().overflow_x_scroll().border_b_1().border_color(c(theme::BORDER)).children(nav).into_any_element()
+            h_flex()
+                .id("ag-set-nav")
+                .flex_none()
+                .px_3()
+                .py_2()
+                .overflow_x_scroll()
+                .border_b_1()
+                .border_color(if theme::glass() {
+                    theme::glass_edge()
+                } else {
+                    c(theme::BORDER)
+                })
+                .child(
+                    h_flex()
+                        .id("ag-set-nav-inner")
+                        .relative()
+                        .gap_1()
+                        .on_hover({
+                            let h = nav_liq.clone();
+                            move |entered: &bool, _, cx| {
+                                if !*entered && motion {
+                                    crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                                }
+                            }
+                        })
+                        .child(nav_origin)
+                        .children(nav_layer)
+                        .children(nav_items),
+                )
+                .into_any_element()
         } else {
-            v_flex().flex_none().w(theme::u(184.)).p_2().gap_0p5().border_r_1().border_color(c(theme::BORDER)).bg(c(theme::BG_EDITOR)).children(nav).into_any_element()
+            v_flex()
+                .flex_none()
+                .w(theme::u(184.))
+                .p_2()
+                .border_r_1()
+                .border_color(if theme::glass() {
+                    theme::glass_edge()
+                } else {
+                    c(theme::BORDER)
+                })
+                .bg(c(theme::BG_EDITOR).opacity(if theme::glass() { 0.45 } else { 1.0 }))
+                .child(
+                    v_flex()
+                        .id("ag-set-nav-inner")
+                        .relative()
+                        .w_full()
+                        .gap_0p5()
+                        .on_hover({
+                            let h = nav_liq.clone();
+                            move |entered: &bool, _, cx| {
+                                if !*entered && motion {
+                                    crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                                }
+                            }
+                        })
+                        .child(nav_origin)
+                        .children(nav_layer)
+                        .children(nav_items),
+                )
+                .into_any_element()
         };
 
         let body = match tab {
             Tab::Model => self.settings_model(compact, cx),
             Tab::Permissions => self.settings_permissions(compact, cx),
             Tab::Session => self.settings_session(compact, cx),
-            Tab::Browser => v_flex().child(row(tr("Browser for agents").into(), None, self.render_browser_setting(cx), true)).into_any_element(),
+            Tab::Browser => v_flex()
+                .child(row(
+                    tr("Browser for agents").into(),
+                    None,
+                    self.render_browser_setting(cx),
+                    true,
+                ))
+                .into_any_element(),
             Tab::Agent => self.settings_agent(compact, window, cx),
         };
         let content = v_flex()
@@ -111,8 +244,20 @@ impl Workbench {
             .pt_4()
             .pb_5()
             .gap_1()
-            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr(tab.label())))
-            .child(div().pb_2().text_xs().text_color(c(theme::FG_DIM)).child(tr(tab.blurb())))
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(theme::FG_STRONG))
+                    .child(tr(tab.label())),
+            )
+            .child(
+                div()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr(tab.blurb())),
+            )
             .child(body);
 
         let name = agent_name();
@@ -131,7 +276,15 @@ impl Workbench {
             .border_b_1()
             .border_color(c(theme::BORDER))
             .child(agent_glyph(&agent_id(), 20.))
-            .child(div().min_w_0().truncate().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(crate::trf!("{name} settings"; name => name)))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(theme::FG_STRONG))
+                    .child(crate::trf!("{name} settings"; name => name)),
+            )
             .child(
                 h_flex()
                     .flex_none()
@@ -146,8 +299,19 @@ impl Workbench {
                     .child(div().size(px(6.)).rounded_full().bg(c(dot)))
                     .child(state),
             )
+            .when(crate::acp::locate(&agent_id()).is_some(), |h| {
+                h.child(super::menu::optimized_badge())
+            })
             .child(div().flex_1())
-            .when(!compact, |h| h.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(tr("Esc closes"))))
+            .when(!compact, |h| {
+                h.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(tr("Esc closes")),
+                )
+            })
             .child(
                 Button::new("ag-set-close")
                     .icon(IconName::Close)
@@ -159,17 +323,22 @@ impl Workbench {
 
         let card = v_flex()
             .id("ag-settings")
+            .relative()
             .key_context("AgentSettings")
             .track_focus(&self.agent.settings_focus)
             .occlude()
             .w(px(card_w))
             .h(px(card_h))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(c(theme::BORDER_STRONG))
-            .bg(c(theme::BG_SIDE))
-            .shadow_lg()
+            .when(theme::glass(), |d| d.glass_pop())
+            .when(!theme::glass(), |d| {
+                d.rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .bg(c(theme::BG_SIDE))
+                    .shadow_lg()
+            })
             .overflow_hidden()
+            .child(crate::ui::liquid::fresnel_top_sheen())
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
@@ -178,12 +347,35 @@ impl Workbench {
             }))
             .on_mouse_down_out(cx.listener(|this, _, w, cx| this.agent_close_options(w, cx)))
             .child(header)
-            .child(if compact { v_flex().flex_1().min_h_0().child(nav).child(content).into_any_element() } else { h_flex().flex_1().min_h_0().items_stretch().child(nav).child(content).into_any_element() });
+            .child(if compact {
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(nav)
+                    .child(content)
+                    .into_any_element()
+            } else {
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_stretch()
+                    .child(nav)
+                    .child(content)
+                    .into_any_element()
+            });
 
-        let modal_card: AnyElement = if cx.reduce_motion() {
+        let modal_card: AnyElement = if !motion {
             card.into_any_element()
         } else {
-            card.with_animation("ag-settings-in", Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).mt(px((1. - t) * 6.))).into_any_element()
+            card.with_animation(
+                "ag-settings-in",
+                Animation::new(std::time::Duration::from_millis(175)),
+                |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 10.5, 8.0);
+                    el.opacity(pose.opacity).mt(px(pose.offset_px))
+                },
+            )
+            .into_any_element()
         };
 
         Some(
@@ -203,7 +395,10 @@ impl Workbench {
         let view = self.agent_config_view();
         let name = agent_name();
         if view.is_empty() {
-            let on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
+            let on = matches!(
+                self.agent.status,
+                Status::Starting | Status::Ready | Status::Busy
+            );
             return v_flex()
                 .gap_2()
                 .pt_1()
@@ -221,20 +416,56 @@ impl Workbench {
         }
         if let Some(e) = view.iter().find(|o| o.category == "thought_level") {
             let note: SharedString = tr(effort_note(&e.current)).into();
-            col = col.child(divider()).child(row(tr("Effort").into(), Some(note), segmented(e, cx), compact));
+            col = col.child(divider()).child(row(
+                tr("Effort").into(),
+                Some(note),
+                segmented(e, cx),
+                compact,
+            ));
         }
-        if let Some(m) = view.iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1) {
-            let desc: SharedString = m.choices.iter().find(|c| c.0 == m.current).map(|c| c.2.clone()).unwrap_or_default().into();
-            col = col.child(divider()).child(row(tr("Mode").into(), (!desc.is_empty()).then_some(desc), segmented(m, cx), compact));
+        if let Some(m) = view
+            .iter()
+            .find(|o| o.category == "mode")
+            .filter(|o| o.choices.len() > 1)
+        {
+            let desc: SharedString = m
+                .choices
+                .iter()
+                .find(|c| c.0 == m.current)
+                .map(|c| c.2.clone())
+                .unwrap_or_default()
+                .into();
+            col = col.child(divider()).child(row(
+                tr("Mode").into(),
+                (!desc.is_empty()).then_some(desc),
+                segmented(m, cx),
+                compact,
+            ));
         }
-        for o in view.iter().filter(|o| !matches!(o.category.as_str(), "model" | "thought_level" | "mode")) {
-            col = col.child(divider()).child(row(o.name.clone().into(), None, segmented(o, cx), compact));
+        for o in view
+            .iter()
+            .filter(|o| !matches!(o.category.as_str(), "model" | "thought_level" | "mode"))
+        {
+            col = col.child(divider()).child(row(
+                o.name.clone().into(),
+                None,
+                segmented(o, cx),
+                compact,
+            ));
         }
         col.into_any_element()
     }
 
     fn settings_model_list(&self, m: &ConfigOpt, cx: &mut Context<Self>) -> AnyElement {
-        let mut list = v_flex().id("ag-set-models").max_h(theme::u(248.)).overflow_y_scroll().py_1().rounded(px(6.)).border_1().border_color(c(theme::BORDER)).bg(c(theme::BG_EDITOR));
+        let mut list = v_flex()
+            .id("ag-set-models")
+            .max_h(theme::u(248.))
+            .overflow_y_scroll()
+            .py_1()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(c(theme::BORDER))
+            .bg(c(theme::BG_EDITOR));
         for (gi, (group, models)) in model_groups(&m.choices).into_iter().enumerate() {
             let title = match group.as_str() {
                 "free" => tr("Free (OpenCode Zen)").to_string(),
@@ -249,16 +480,40 @@ impl Workbench {
                     .gap_2()
                     .text_xs()
                     .text_color(c(theme::FG_DIM))
-                    .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(div().flex_none().w(theme::u(52.)).text_right().child(tr("Context")))
-                    .child(div().flex_none().w(theme::u(48.)).text_right().child(tr("Output")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(theme::u(52.))
+                            .text_right()
+                            .child(tr("Context")),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(theme::u(48.))
+                            .text_right()
+                            .child(tr("Output")),
+                    )
                     .child(div().flex_none().w(theme::u(16.))),
             );
             for (i, (v, n)) in models.into_iter().enumerate() {
                 let on = v == m.current;
                 let meta = super::catalog::get(&v);
-                let ctx = meta.map(|x| super::catalog::tokens(x.context)).unwrap_or_default();
-                let out = meta.filter(|x| x.output > 0).map(|x| super::catalog::tokens(x.output)).unwrap_or_default();
+                let ctx = meta
+                    .map(|x| super::catalog::tokens(x.context))
+                    .unwrap_or_default();
+                let out = meta
+                    .filter(|x| x.output > 0)
+                    .map(|x| super::catalog::tokens(x.output))
+                    .unwrap_or_default();
                 let (id, val) = (m.id.clone(), v.clone());
                 list = list.child(
                     h_flex()
@@ -272,11 +527,43 @@ impl Workbench {
                         .text_sm()
                         .when(on, |d| d.bg(c(theme::SELECT)))
                         .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
-                        .child(div().flex_1().min_w_0().truncate().text_color(c(if on { theme::FG_STRONG } else { theme::FG })).when(on, |d| d.font_weight(FontWeight::MEDIUM)).child(n))
-                        .child(div().flex_none().w(theme::u(52.)).text_right().text_xs().text_color(c(theme::FG_MUTED)).child(ctx))
-                        .child(div().flex_none().w(theme::u(48.)).text_right().text_xs().text_color(c(theme::FG_DIM)).child(out))
-                        .child(div().flex_none().w(theme::u(16.)).when(on, |d| d.child(Icon::new(IconName::Check).size(theme::u(14.)).text_color(c(theme::ACCENT_TEXT)))))
-                        .on_click(cx.listener(move |this, _, _, cx| this.agent_set_option(&id, val.clone(), true, cx))),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(c(if on { theme::FG_STRONG } else { theme::FG }))
+                                .when(on, |d| d.font_weight(FontWeight::MEDIUM))
+                                .child(n),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(theme::u(52.))
+                                .text_right()
+                                .text_xs()
+                                .text_color(c(theme::FG_MUTED))
+                                .child(ctx),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(theme::u(48.))
+                                .text_right()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(out),
+                        )
+                        .child(div().flex_none().w(theme::u(16.)).when(on, |d| {
+                            d.child(
+                                Icon::new(IconName::Check)
+                                    .size(theme::u(14.))
+                                    .text_color(c(theme::ACCENT_TEXT)),
+                            )
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.agent_set_option(&id, val.clone(), true, cx)
+                        })),
                 );
             }
         }
@@ -288,42 +575,53 @@ impl Workbench {
         let full = s.access() == "full";
         let off = s.access_off();
         let weak = cx.entity().downgrade();
-        let full_switch = crate::ui::McToggle::new("ag-set-full").checked(full).on_click({
-            let weak = weak.clone();
-            move |on: &bool, _, cx| {
-                let on = *on;
-                _ = weak.update(cx, |this, cx| this.agent_toggle_full(on, cx));
-            }
-        });
+        let full_switch = crate::ui::McToggle::new("ag-set-full")
+            .checked(full)
+            .on_click({
+                let weak = weak.clone();
+                move |on: &bool, _, cx| {
+                    let on = *on;
+                    _ = weak.update(cx, |this, cx| this.agent_toggle_full(on, cx));
+                }
+            });
         let full_desc: SharedString = if full {
             tr("On: whenever the agent asks to run a command or use a file anywhere on this PC, the answer is yes. Nothing waits for you.").into()
         } else {
             tr("Off: when the agent asks to run a command, change a file or open a folder outside the project, the request shows in the chat and it waits for your answer.").into()
         };
-        let levels = h_flex().gap_1().flex_wrap().children([("write", tr("Edit files, ask for commands")), ("read", tr("Read only"))].into_iter().map(|(id, label)| {
-            Button::new(SharedString::from(format!("ag-set-off-{id}")))
-                .label(label)
-                .small()
-                .when(off == id, |b| b.primary())
-                .when(off != id, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.settings.access() == "full" {
-                        this.settings.agent_access_off = id.into();
-                        this.settings.save();
-                        cx.notify();
-                    } else {
-                        this.agent_set_access(id, cx);
-                    }
-                }))
-        }));
-        let notify = crate::ui::McToggle::new("ag-set-notify").checked(s.agent_notify).on_click(move |on: &bool, _, cx| {
-            let on = *on;
-            _ = weak.update(cx, |this, cx| {
-                this.settings.agent_notify = on;
-                this.settings.save();
-                cx.notify();
+        let levels = h_flex().gap_1().flex_wrap().children(
+            [
+                ("write", tr("Edit files, ask for commands")),
+                ("read", tr("Read only")),
+            ]
+            .into_iter()
+            .map(|(id, label)| {
+                Button::new(SharedString::from(format!("ag-set-off-{id}")))
+                    .label(label)
+                    .small()
+                    .when(off == id, |b| b.primary())
+                    .when(off != id, |b| b.ghost())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.settings.access() == "full" {
+                            this.settings.agent_access_off = id.into();
+                            this.settings.save();
+                            cx.notify();
+                        } else {
+                            this.agent_set_access(id, cx);
+                        }
+                    }))
+            }),
+        );
+        let notify = crate::ui::McToggle::new("ag-set-notify")
+            .checked(s.agent_notify)
+            .on_click(move |on: &bool, _, cx| {
+                let on = *on;
+                _ = weak.update(cx, |this, cx| {
+                    this.settings.agent_notify = on;
+                    this.settings.save();
+                    cx.notify();
+                });
             });
-        });
         let warn = full.then(|| {
             h_flex()
                 .mt_1()
@@ -360,14 +658,16 @@ impl Workbench {
     fn settings_session(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.settings;
         let weak = cx.entity().downgrade();
-        let idle = crate::ui::McToggle::new("ag-set-idle").checked(s.agent_idle_min > 0).on_click(move |on: &bool, _, cx| {
-            let on = *on;
-            _ = weak.update(cx, |this, cx| {
-                this.settings.agent_idle_min = if on { 10 } else { 0 };
-                this.settings.save();
-                cx.notify();
+        let idle = crate::ui::McToggle::new("ag-set-idle")
+            .checked(s.agent_idle_min > 0)
+            .on_click(move |on: &bool, _, cx| {
+                let on = *on;
+                _ = weak.update(cx, |this, cx| {
+                    this.settings.agent_idle_min = if on { 10 } else { 0 };
+                    this.settings.save();
+                    cx.notify();
+                });
             });
-        });
         let chats = self.agent.history.len();
         v_flex()
             .child(row(tr("Stop when idle").into(), Some(tr("FluxCode already trims idle RAM and CPU automatically while keeping the agent live. Turn this on only if you want it fully stopped after 10 quiet minutes.").into()), idle.into_any_element(), false))
@@ -392,11 +692,22 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn settings_agent(&self, compact: bool, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn settings_agent(
+        &self,
+        compact: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = agent_id();
         let name = agent_name();
-        let by: SharedString = crate::acp::known(&id).map(|k| k.by.to_string()).unwrap_or_default().into();
-        let path: SharedString = crate::acp::locate(&id).map(|l| l.cmd.display().to_string()).unwrap_or_else(|| tr("Not installed").to_string()).into();
+        let by: SharedString = crate::acp::known(&id)
+            .map(|k| k.by.to_string())
+            .unwrap_or_default()
+            .into();
+        let path: SharedString = crate::acp::locate(&id)
+            .map(|l| l.cmd.display().to_string())
+            .unwrap_or_else(|| tr("Not installed").to_string())
+            .into();
         let mut col = v_flex()
             .child(row(
                 name.to_string().into(),
@@ -412,7 +723,67 @@ impl Workbench {
                 compact,
             ))
             .child(divider())
-            .child(row(tr("Program").into(), None, div().text_xs().font_family("Cascadia Code").text_color(c(theme::FG_MUTED)).child(path).into_any_element(), true));
+            .child(row(
+                tr("Program").into(),
+                None,
+                div()
+                    .text_xs()
+                    .font_family("Cascadia Code")
+                    .text_color(c(theme::FG_MUTED))
+                    .child(path)
+                    .into_any_element(),
+                true,
+            ));
+        if crate::acp::locate(&id).is_some() {
+            let mut stats = Vec::new();
+            if self.agent.thermal.last_filtered_ws_mb > 0.1 {
+                stats.push(crate::trf!(
+                    "RAM {ws} MB / target {eq} MB";
+                    ws => self.agent.thermal.last_filtered_ws_mb.round() as u64,
+                    eq => self.agent.thermal.eq_mb.round() as u64
+                ));
+            }
+            if self.agent.thermal.eco_active {
+                stats.push(tr("EcoQoS idle").to_string());
+            }
+            let delta_hits = self.agent.ctx_cache.hits_unchanged + self.agent.ctx_cache.hits_delta;
+            if delta_hits > 0 && self.agent.ctx_cache.bytes_saved > 0 {
+                stats.push(crate::trf!(
+                    "Delta saved {kb} KB";
+                    kb => (self.agent.ctx_cache.bytes_saved / 1024).max(1)
+                ));
+            }
+            let opt_ctrl = v_flex()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .items_center()
+                        .child(super::menu::optimized_badge())
+                        .child(
+                            div().text_xs().text_color(c(theme::FG_MUTED)).child(tr(self
+                                .agent
+                                .thermal
+                                .profile
+                                .label())),
+                        ),
+                )
+                .when(!stats.is_empty(), |v| {
+                    v.child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(stats.join(" · ")),
+                    )
+                });
+            col = col.child(divider()).child(row(
+                tr("Optimization").into(),
+                Some(tr("Live Kalman-Lyapunov memory control, EcoQoS idle cooling, lossless multi-hunk delta context, and frame-paced streaming.").into()),
+                opt_ctrl.into_any_element(),
+                true,
+            ));
+        }
         if crate::acp::is_opencode(&id) {
             if let Some(cfg) = opencode_config_file() {
                 col = col.child(divider()).child(row(
@@ -430,6 +801,287 @@ impl Workbench {
                 ));
             }
         }
+        let (fam, accounts) = self.agent_accounts();
+        if let Some(f) = fam {
+            let current = self.agent_account().map(|a| a.name);
+            let waiting = self.agent.account_wait.as_ref().map(|a| a.name.clone());
+            let mut acc_col = v_flex().w_full().gap_2();
+
+            let profile_card = |card_id: String,
+                                id_info: crate::agent::worktree::ProfileIdentity,
+                                is_active: bool,
+                                actions: AnyElement| {
+                let status_label = if id_info.synced {
+                    tr("Synced")
+                } else {
+                    tr("Sign in required")
+                };
+                let status_col = if id_info.synced {
+                    theme::GREEN
+                } else {
+                    theme::WARN
+                };
+                let email_text = id_info
+                    .email
+                    .clone()
+                    .unwrap_or_else(|| tr("No email detected yet").to_string());
+                v_flex()
+                    .id(SharedString::from(card_id))
+                    .relative()
+                    .w_full()
+                    .p_2p5()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(if is_active {
+                        c(theme::ACCENT).opacity(0.50)
+                    } else if theme::glass() {
+                        theme::glass_edge()
+                    } else {
+                        c(theme::BORDER)
+                    })
+                    .bg(if theme::glass() {
+                        theme::glass_fill()
+                    } else {
+                        c(theme::BG_ELEVATED).into()
+                    })
+                    .child(crate::ui::liquid::fresnel_top_sheen())
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .size(theme::u(28.))
+                                    .rounded_full()
+                                    .bg(c(theme::ACCENT).opacity(0.12))
+                                    .border_1()
+                                    .border_color(c(theme::ACCENT).opacity(0.45))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c(theme::ACCENT_TEXT))
+                                    .child(id_info.initial),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        h_flex()
+                                            .flex_wrap()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(c(theme::FG_STRONG))
+                                                    .child(id_info.name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_1p5()
+                                                    .rounded(px(4.))
+                                                    .border_1()
+                                                    .border_color(c(status_col).opacity(0.42))
+                                                    .bg(c(status_col).opacity(0.10))
+                                                    .text_size(theme::u(10.))
+                                                    .text_color(c(status_col))
+                                                    .child(status_label),
+                                            )
+                                            .when_some(id_info.tier, |h, tier| {
+                                                h.child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .rounded(px(4.))
+                                                        .bg(c(theme::ACCENT).opacity(0.14))
+                                                        .text_size(theme::u(10.))
+                                                        .text_color(c(theme::ACCENT_TEXT))
+                                                        .child(tier),
+                                                )
+                                            })
+                                            .when_some(id_info.flow_profile, |h, fp| {
+                                                h.child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .rounded(px(4.))
+                                                        .border_1()
+                                                        .border_color(c(theme::BORDER))
+                                                        .text_size(theme::u(10.))
+                                                        .text_color(c(theme::FG_MUTED))
+                                                        .child(format!("Flow: {fp}")),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .truncate()
+                                            .text_color(c(if id_info.email.is_some() {
+                                                theme::FG
+                                            } else {
+                                                theme::FG_DIM
+                                            }))
+                                            .child(email_text),
+                                    ),
+                            ),
+                    )
+                    .child(actions)
+            };
+
+            let def_id = crate::agent::worktree::profile_identity(
+                f,
+                None,
+                if current.is_none() {
+                    self.agent.active_email.as_deref()
+                } else {
+                    None
+                },
+                if current.is_none() {
+                    self.agent.active_tier.as_deref()
+                } else {
+                    None
+                },
+            );
+            let def_actions = h_flex()
+                .flex_wrap()
+                .gap_1p5()
+                .child(
+                    Button::new("ag-set-acc-def")
+                        .label(tr(if current.is_none() { "Active" } else { "Use" }))
+                        .xsmall()
+                        .disabled(current.is_none())
+                        .when(current.is_none(), |b| b.primary())
+                        .when(current.is_some(), |b| b.ghost())
+                        .on_click(cx.listener(|this, _, _, cx| this.agent_use_account(None, cx))),
+                )
+                .when(f == "antigravity", |h| {
+                    h.child(
+                        Button::new("ag-set-acc-def-login")
+                            .label(tr("Choose login method…"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.agent_use_account(None, cx);
+                                this.agent_close_options(w, cx);
+                                this.agent_open_auth_picker(cx);
+                            })),
+                    )
+                })
+                .into_any_element();
+            acc_col = acc_col.child(profile_card(
+                "ag-set-card-def".into(),
+                def_id,
+                current.is_none(),
+                def_actions,
+            ));
+
+            for a in &accounts {
+                let on = current.as_deref() == Some(a.name.as_str());
+                let name = a.name.clone();
+                let login_name = a.name.clone();
+                let signout_name = a.name.clone();
+                let id_info = crate::agent::worktree::profile_identity(
+                    f,
+                    Some(a),
+                    if on {
+                        self.agent.active_email.as_deref()
+                    } else {
+                        None
+                    },
+                    if on {
+                        self.agent.active_tier.as_deref()
+                    } else {
+                        None
+                    },
+                );
+                let card_actions = h_flex()
+                    .flex_wrap()
+                    .gap_1p5()
+                    .child(
+                        Button::new(SharedString::from(format!("ag-set-acc-{name}")))
+                            .label(tr(if on { "Active" } else { "Use" }))
+                            .xsmall()
+                            .disabled(on)
+                            .when(on, |b| b.primary())
+                            .when(!on, |b| b.ghost())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.agent_use_account(Some(name.clone()), cx);
+                            })),
+                    )
+                    .when(f == "antigravity", |h| {
+                        h.child(
+                            Button::new(SharedString::from(format!(
+                                "ag-set-acc-login-{login_name}"
+                            )))
+                            .label(tr("Sign in / Switch login"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(
+                                move |this, _, w, cx| {
+                                    this.agent_use_account(Some(login_name.clone()), cx);
+                                    this.agent_close_options(w, cx);
+                                    this.agent_open_auth_picker(cx);
+                                },
+                            )),
+                        )
+                    })
+                    .child(
+                        Button::new(SharedString::from(format!("ag-set-acc-out-{signout_name}")))
+                            .label(tr("Sign out"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.agent_sign_out(signout_name.clone(), cx);
+                            })),
+                    )
+                    .into_any_element();
+                acc_col = acc_col.child(profile_card(
+                    format!("ag-set-card-{}", a.name),
+                    id_info,
+                    on,
+                    card_actions,
+                ));
+            }
+
+            acc_col = acc_col.child(
+                h_flex().flex_wrap().gap_1p5().child(match waiting {
+                    Some(w_name) => Button::new("ag-set-acc-wait")
+                        .label(crate::trf!(
+                            "Waiting for {name} to sign in… (cancel)";
+                            name => w_name
+                        ))
+                        .xsmall()
+                        .on_click(cx.listener(|this, _, _, cx| this.agent_cancel_account(cx))),
+                    None => Button::new("ag-set-acc-add")
+                        .label(tr("Add account and sign in…"))
+                        .xsmall()
+                        .primary()
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.agent_add_account(cx);
+                            if f == "antigravity" {
+                                this.agent_close_options(w, cx);
+                            }
+                        })),
+                }),
+            );
+            col = col.child(divider()).child(row(
+                tr("Account").into(),
+                Some(tr("Synced with real Antigravity profiles. Choose Google Default Browser, Gemini Enterprise, or API key login per profile.").into()),
+                acc_col.into_any_element(),
+                true,
+            ));
+        }
+        col = col.child(divider()).child(row(
+            tr("Antigravity & Google Flow").into(),
+            Some(tr("Pure-Rust multi-account router, Chrome session manager, credit check, and Flow MCP bridge.").into()),
+            self.render_gflow_panel(cx),
+            true,
+        ));
         if crate::acp::managed(&id) {
             let id2 = id.clone();
             col = col.child(divider()).child(row(
@@ -449,6 +1101,500 @@ impl Workbench {
         }
         col.into_any_element()
     }
+
+    pub(crate) fn render_gflow_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = crate::gflow::load_state();
+        let profiles = crate::gflow::discover_profiles();
+        let chrome_info = crate::gflow::chrome_binary();
+        let has_google_chrome = chrome_info.as_ref().is_some_and(|(k, _)| *k == "chrome");
+        let weak = cx.entity().downgrade();
+        let weak2 = weak.clone();
+
+        let mcp_toggle = h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(
+                crate::ui::McToggle::new("ag-gf-mcp")
+                    .small()
+                    .checked(self.settings.agent_gflow_mcp)
+                    .on_click(move |on: &bool, _, cx| {
+                        let on = *on;
+                        _ = weak.update(cx, |this, cx| {
+                            this.settings.agent_gflow_mcp = on;
+                            this.settings.save();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(c(theme::FG))
+                    .child(tr("Connect Flow MCP to agents")),
+            );
+
+        let sync_toggle = h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(
+                crate::ui::McToggle::new("ag-gf-sync")
+                    .small()
+                    .checked(self.settings.agent_gflow_sync)
+                    .on_click(move |on: &bool, _, cx| {
+                        let on = *on;
+                        _ = weak2.update(cx, |this, cx| {
+                            this.settings.agent_gflow_sync = on;
+                            this.settings.save();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(c(theme::FG))
+                    .child(tr("Sync with Antigravity account")),
+            );
+
+        let mode_bar = crate::ui::SegmentedControl::new(
+            "ag-gf-mode",
+            crate::gflow::RoutingMode::ALL.into_iter().map(|m| {
+                let on = state.mode == m;
+                crate::ui::SegItem::new(
+                    SharedString::from(format!("ag-gf-mode-{}", m.as_str())),
+                    tr(m.label()),
+                    on,
+                    cx.listener(move |this, _, _, cx| {
+                        let _ = crate::gflow::set_mode(m, None, None, None);
+                        this.agent.gflow_note = Some((tr(m.blurb()).to_string(), false));
+                        cx.notify();
+                    }),
+                )
+            }),
+        );
+
+        let use_default_browser = self.settings.agent_gflow_browser != "isolated";
+        let browser_bar = crate::ui::SegmentedControl::new(
+            "ag-gf-browser",
+            [
+                ("default", tr("Default browser")),
+                ("isolated", tr("Isolated Chrome")),
+            ]
+            .into_iter()
+            .map(|(id, label)| {
+                let on = (id == "default") == use_default_browser;
+                crate::ui::SegItem::new(
+                    SharedString::from(format!("ag-gf-br-{id}")),
+                    label,
+                    on,
+                    cx.listener(move |this, _, _, cx| {
+                        this.settings.agent_gflow_browser = id.into();
+                        this.settings.save();
+                        cx.notify();
+                    }),
+                )
+            }),
+        );
+
+        let next_name = crate::gflow::next_profile_name(&profiles);
+        let out_dir = crate::gflow::output_dir();
+        let actions = h_flex()
+            .flex_wrap()
+            .gap_1p5()
+            .child(
+                Button::new("ag-gf-add")
+                    .label(tr("Add Flow account"))
+                    .xsmall()
+                    .primary()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let name = next_name.clone();
+                        if this.settings.agent_gflow_browser != "isolated" {
+                            match crate::gflow::register_profile_slot(&name) {
+                                Ok(_) => {
+                                    cx.open_url("https://labs.google/fx/tools/flow?hl=en");
+                                    this.agent.gflow_note = Some((
+                                        crate::trf!(
+                                            "Opened Google Flow in your default browser for {name}.";
+                                            name => name
+                                        ),
+                                        false,
+                                    ));
+                                }
+                                Err(e) => this.agent.gflow_note = Some((e, true)),
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        this.agent.gflow_note = Some((
+                            crate::trf!("Opened browser for Flow profile {name}."; name => name),
+                            false,
+                        ));
+                        cx.notify();
+                        cx.spawn(async move |this, cx| {
+                            let res = cx
+                                .background_spawn(async move {
+                                    crate::gflow::launch_browser_login(&name)
+                                })
+                                .await;
+                            _ = this.update(cx, |this, cx| {
+                                if let Err(e) = res {
+                                    this.agent.gflow_note = Some((e, true));
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    })),
+            )
+            .child(
+                Button::new("ag-gf-credits")
+                    .label(tr("Check credits"))
+                    .xsmall()
+                    .loading(self.agent.gflow_busy)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.agent.gflow_busy {
+                            return;
+                        }
+                        this.agent.gflow_busy = true;
+                        cx.notify();
+                        cx.spawn(async move |this, cx| {
+                            let res = cx
+                                .background_spawn(async move { crate::gflow::check_credits(false) })
+                                .await;
+                            _ = this.update(cx, |this, cx| {
+                                this.agent.gflow_busy = false;
+                                this.agent.gflow_note = Some(match res {
+                                    Ok(rep) => {
+                                        let mut msg = crate::trf!(
+                                            "Total Flow credits: {total}";
+                                            total => rep.total_credits
+                                        );
+                                        if let Some(note) = rep.note {
+                                            msg = format!("{msg} · {note}");
+                                        }
+                                        (msg, false)
+                                    }
+                                    Err(e) => (e, true),
+                                });
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    })),
+            )
+            .child(
+                Button::new("ag-gf-refresh")
+                    .label(tr("Refresh"))
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.agent.gflow_note = None;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("ag-gf-out")
+                    .label(tr("Open folder"))
+                    .xsmall()
+                    .ghost()
+                    .on_click(move |_, _, cx| {
+                        let _ = std::fs::create_dir_all(&out_dir);
+                        cx.reveal_path(&out_dir);
+                    }),
+            );
+
+        let mut col = v_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_4()
+                    .child(mcp_toggle)
+                    .child(sync_toggle),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Flow routing mode")),
+                            )
+                            .child(mode_bar),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr(state.mode.blurb())),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Flow login browser")),
+                            )
+                            .child(browser_bar),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(if use_default_browser {
+                                tr("Opens Google Flow in your system default browser so you can pick any signed-in Google account.")
+                            } else {
+                                tr("Opens an isolated Chrome profile window for multi-account Flow automation.")
+                            }),
+                    ),
+            )
+            .when(!use_default_browser && !has_google_chrome, |v| {
+                v.child(
+                    div()
+                        .p_2()
+                        .rounded(px(6.))
+                        .bg(c(theme::WARN).opacity(0.10))
+                        .text_xs()
+                        .text_color(c(theme::FG))
+                        .child(tr(
+                            "Google Chrome not detected; install Google Chrome for full Flow login compatibility (fallback uses Edge/Brave).",
+                        )),
+                )
+            })
+            .child(actions);
+
+        if profiles.is_empty() {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(tr("No saved Flow profiles yet. Click Add Flow account to sign in with an isolated Chrome window.")),
+            );
+        } else {
+            for p in profiles {
+                let p_pin = p.name.clone();
+                let p_login = p.name.clone();
+                let p_rm = p.name.clone();
+                let is_pinned = state.sticky_profile.as_deref() == Some(p.name.as_str())
+                    || (state.sticky_profile.is_none() && p.is_default);
+                let initial: String = p
+                    .email
+                    .as_deref()
+                    .and_then(|e| e.chars().find(|c| c.is_ascii_alphanumeric()))
+                    .or_else(|| p.name.chars().find(|c| c.is_ascii_alphanumeric()))
+                    .map(|c| c.to_ascii_uppercase().to_string())
+                    .unwrap_or_else(|| "F".into());
+                let email = p.email.unwrap_or_else(|| tr("Not signed in").to_string());
+                let strat_label: SharedString = if p.chrome_strategy {
+                    tr("Chrome").into()
+                } else if p.strategy == "default-browser" {
+                    tr("Default browser").into()
+                } else {
+                    p.strategy.clone().into()
+                };
+                col = col.child(
+                    v_flex()
+                        .relative()
+                        .w_full()
+                        .p_2()
+                        .gap_1p5()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(if theme::glass() {
+                            theme::glass_edge()
+                        } else {
+                            c(theme::BORDER)
+                        })
+                        .bg(if theme::glass() {
+                            theme::glass_fill()
+                        } else {
+                            c(theme::BG_ELEVATED).into()
+                        })
+                        .child(crate::ui::liquid::fresnel_top_sheen())
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_1p5()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .size(theme::u(20.))
+                                        .rounded_full()
+                                        .bg(c(theme::ACCENT).opacity(0.12))
+                                        .border_1()
+                                        .border_color(c(theme::ACCENT).opacity(0.40))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(theme::u(10.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c(theme::ACCENT_TEXT))
+                                        .child(initial),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(p.name.clone()),
+                                )
+                                .child(div().text_xs().text_color(c(theme::FG)).child(email))
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(
+                                            c(if p.chrome_strategy {
+                                                theme::GREEN
+                                            } else {
+                                                theme::BORDER
+                                            })
+                                            .opacity(if p.chrome_strategy { 0.45 } else { 1.0 }),
+                                        )
+                                        .bg(c(theme::BG_ELEVATED))
+                                        .text_size(theme::u(10.5))
+                                        .text_color(c(if p.chrome_strategy {
+                                            theme::GREEN
+                                        } else {
+                                            theme::FG_MUTED
+                                        }))
+                                        .child(strat_label),
+                                )
+                                .when_some(p.cached_credits, |h, cred| {
+                                    h.child(
+                                        div()
+                                            .px_1p5()
+                                            .rounded(px(4.))
+                                            .border_1()
+                                            .border_color(c(theme::BORDER))
+                                            .text_size(theme::u(10.5))
+                                            .text_color(c(theme::FG))
+                                            .child(crate::trf!("{n} credits"; n => cred)),
+                                    )
+                                })
+                                .when(p.in_cooldown, |h| {
+                                    h.child(
+                                        div()
+                                            .px_1p5()
+                                            .rounded(px(4.))
+                                            .bg(c(theme::WARN).opacity(0.14))
+                                            .text_size(theme::u(10.5))
+                                            .text_color(c(theme::WARN))
+                                            .child(tr("Cooldown")),
+                                    )
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_1()
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "ag-gf-pin-{}",
+                                        p.name
+                                    )))
+                                    .label(tr(if is_pinned { "Pinned" } else { "Pin" }))
+                                    .xsmall()
+                                    .when(is_pinned, |b| b.primary())
+                                    .when(!is_pinned, |b| b.ghost())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let _ = crate::gflow::set_mode(
+                                            crate::gflow::RoutingMode::Sticky,
+                                            Some(p_pin.clone()),
+                                            None,
+                                            None,
+                                        );
+                                        this.agent.gflow_note = None;
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!("ag-gf-in-{}", p.name)))
+                                        .label(tr("Open login"))
+                                        .xsmall()
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            let name = p_login.clone();
+                                            if this.settings.agent_gflow_browser != "isolated" {
+                                                let _ = crate::gflow::register_profile_slot(&name);
+                                                cx.open_url("https://labs.google/fx/tools/flow?hl=en");
+                                                this.agent.gflow_note = Some((
+                                                    crate::trf!(
+                                                        "Opened Google Flow in your default browser for {name}.";
+                                                        name => name
+                                                    ),
+                                                    false,
+                                                ));
+                                                cx.notify();
+                                                return;
+                                            }
+                                            cx.spawn(async move |this, cx| {
+                                                let res = cx
+                                                    .background_spawn(async move {
+                                                        crate::gflow::launch_browser_login(&name)
+                                                    })
+                                                    .await;
+                                                _ = this.update(cx, |this, cx| {
+                                                    if let Err(e) = res {
+                                                        this.agent.gflow_note = Some((e, true));
+                                                    }
+                                                    cx.notify();
+                                                });
+                                            })
+                                            .detach();
+                                        })),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!("ag-gf-rm-{}", p.name)))
+                                        .label(tr("Remove"))
+                                        .xsmall()
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Err(e) = crate::gflow::remove_profile(&p_rm) {
+                                                this.agent.gflow_note = Some((e, true));
+                                            }
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                );
+            }
+        }
+
+        if let Some((note, is_err)) = &self.agent.gflow_note {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(c(if *is_err {
+                        theme::DANGER
+                    } else {
+                        theme::FG_MUTED
+                    }))
+                    .child(note.clone()),
+            );
+        }
+
+        col.into_any_element()
+    }
 }
 
 fn row(title: SharedString, desc: Option<SharedString>, control: AnyElement, stacked: bool) -> Div {
@@ -457,11 +1603,18 @@ fn row(title: SharedString, desc: Option<SharedString>, control: AnyElement, sta
         .min_w_0()
         .gap_0p5()
         .child(div().text_sm().text_color(c(theme::FG_STRONG)).child(title))
-        .when_some(desc, |v, d| v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(d)));
+        .when_some(desc, |v, d| {
+            v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(d))
+        });
     if stacked {
         v_flex().py_3().gap_2().child(text).child(control)
     } else {
-        h_flex().py_3().gap_4().items_start().child(text).child(div().flex_none().pt(px(2.)).child(control))
+        h_flex()
+            .py_3()
+            .gap_4()
+            .items_start()
+            .child(text)
+            .child(div().flex_none().pt(px(2.)).child(control))
     }
 }
 

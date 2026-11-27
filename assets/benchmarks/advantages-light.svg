@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="1896" viewBox="0 0 780 1896" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif">
+<title>Why FluxCode vs Zed &amp; VS Code</title>
+<text x="16" y="28" font-size="18" font-weight="700" fill="#1f2328">Why FluxCode vs Zed &amp; VS Code</text>
+<text x="16" y="48" font-size="12.5" fill="#59636e">Stacked vertically top to bottom: everyday benefit first, programmer detail next.</text>
+<text x="16" y="76" font-size="11" font-weight="700" letter-spacing="0.06em" fill="#9a6533">PART 1  /  SPEED &amp; FOOTPRINT (SHORTER BAR WINS)</text>
+<rect x="16" y="88" width="748" height="126" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="110" font-size="13.5" font-weight="700" fill="#1f2328">1. Window open after launch</text>
+<text x="750" y="110" text-anchor="end" font-size="11" fill="#6e7781">ms, shorter is better</text>
+<text x="30" y="128" font-size="12" fill="#59636e">Opens right away with no splash screen or wait.</text>
+<line x1="112.0" y1="139" x2="112.0" y2="208" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="217.0" y1="139" x2="217.0" y2="208" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="322.0" y1="139" x2="322.0" y2="208" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="153" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="142" width="3.0" height="13" rx="2" fill="#9a6533"/>
+<text x="123.0" y="153" font-size="11.5" font-weight="700" fill="#1f2328">10 ms  (Rust + GPUI, 81.8x faster than Zed)</text>
+<text x="30" y="177" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="166" width="57.3" height="13" rx="2" fill="#818b95"/>
+<text x="177.3" y="177" font-size="11.5" font-weight="400" fill="#59636e">818 ms  (Rust + GPUI)</text>
+<text x="30" y="201" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="190" width="210.0" height="13" rx="2" fill="#818b95"/>
+<text x="330.0" y="201" font-size="11.5" font-weight="400" fill="#59636e">~3,000 ms  (Electron workbench usable)</text>
+<rect x="16" y="224" width="748" height="126" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="246" font-size="13.5" font-weight="700" fill="#1f2328">2. Idle memory (RAM)</text>
+<text x="750" y="246" text-anchor="end" font-size="11" fill="#6e7781">MB, shorter is better</text>
+<text x="30" y="264" font-size="12" fill="#59636e">Stays light in the background so your laptop stays cool and fast.</text>
+<line x1="112.0" y1="275" x2="112.0" y2="344" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="217.0" y1="275" x2="217.0" y2="344" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="322.0" y1="275" x2="322.0" y2="344" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="289" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="278" width="3.0" height="13" rx="2" fill="#9a6533"/>
+<text x="123.0" y="289" font-size="11.5" font-weight="700" fill="#1f2328">1.4 MB  (47.3x less than Zed, 663x less than VS Code)</text>
+<text x="30" y="313" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="302" width="15.0" height="13" rx="2" fill="#818b95"/>
+<text x="135.0" y="313" font-size="11.5" font-weight="400" fill="#59636e">66.2 MB  (Task Manager idle)</text>
+<text x="30" y="337" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="326" width="210.0" height="13" rx="2" fill="#818b95"/>
+<text x="330.0" y="337" font-size="11.5" font-weight="400" fill="#59636e">929.2 MB  (all Electron processes summed)</text>
+<rect x="16" y="360" width="748" height="126" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="382" font-size="13.5" font-weight="700" fill="#1f2328">3. Reserved memory</text>
+<text x="750" y="382" text-anchor="end" font-size="11" fill="#6e7781">MB, shorter is better</text>
+<text x="30" y="400" font-size="12" fill="#59636e">Claims far less virtual memory on low-RAM laptops.</text>
+<line x1="112.0" y1="411" x2="112.0" y2="480" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="217.0" y1="411" x2="217.0" y2="480" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="322.0" y1="411" x2="322.0" y2="480" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="425" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="414" width="11.5" height="13" rx="2" fill="#9a6533"/>
+<text x="131.5" y="425" font-size="11.5" font-weight="700" fill="#1f2328">72 MB  (2.1x less than Zed)</text>
+<text x="30" y="449" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="438" width="24.6" height="13" rx="2" fill="#818b95"/>
+<text x="144.6" y="449" font-size="11.5" font-weight="400" fill="#59636e">154 MB</text>
+<text x="30" y="473" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="462" width="210.0" height="13" rx="2" fill="#818b95"/>
+<text x="330.0" y="473" font-size="11.5" font-weight="400" fill="#59636e">1,315 MB</text>
+<rect x="16" y="496" width="748" height="126" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="518" font-size="13.5" font-weight="700" fill="#1f2328">4. Background processes</text>
+<text x="750" y="518" text-anchor="end" font-size="11" fill="#6e7781">processes, fewer is better</text>
+<text x="30" y="536" font-size="12" fill="#59636e">One clean app process instead of spawning a cluster of helpers.</text>
+<line x1="112.0" y1="547" x2="112.0" y2="616" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="217.0" y1="547" x2="217.0" y2="616" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="322.0" y1="547" x2="322.0" y2="616" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="561" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="550" width="23.3" height="13" rx="2" fill="#9a6533"/>
+<text x="143.3" y="561" font-size="11.5" font-weight="700" fill="#1f2328">1 process  (single native process)</text>
+<text x="30" y="585" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="574" width="46.7" height="13" rx="2" fill="#818b95"/>
+<text x="166.7" y="585" font-size="11.5" font-weight="400" fill="#59636e">2 processes</text>
+<text x="30" y="609" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="598" width="210.0" height="13" rx="2" fill="#818b95"/>
+<text x="330.0" y="609" font-size="11.5" font-weight="400" fill="#59636e">9 processes  (renderer, GPU, extension host, helpers)</text>
+<rect x="16" y="632" width="748" height="126" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="654" font-size="13.5" font-weight="700" fill="#1f2328">5. Install size on disk</text>
+<text x="750" y="654" text-anchor="end" font-size="11" fill="#6e7781">MB, shorter is better</text>
+<text x="30" y="672" font-size="12" fill="#59636e">Downloads in seconds and takes the space of a few photos.</text>
+<line x1="112.0" y1="683" x2="112.0" y2="752" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="217.0" y1="683" x2="217.0" y2="752" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<line x1="322.0" y1="683" x2="322.0" y2="752" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="697" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="686" width="3.2" height="13" rx="2" fill="#9a6533"/>
+<text x="123.2" y="697" font-size="11.5" font-weight="700" fill="#1f2328">16 MB  (one binary, 16.3x smaller than Zed)</text>
+<text x="30" y="721" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="710" width="52.5" height="13" rx="2" fill="#818b95"/>
+<text x="172.5" y="721" font-size="11.5" font-weight="400" fill="#59636e">261 MB</text>
+<text x="30" y="745" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="734" width="210.0" height="13" rx="2" fill="#818b95"/>
+<text x="330.0" y="745" font-size="11.5" font-weight="400" fill="#59636e">1,044 MB  (over 1 GB installed)</text>
+<text x="16" y="784" font-size="11" font-weight="700" letter-spacing="0.06em" fill="#9a6533">PART 2  /  BUILT-IN CAPABILITIES (OUT OF THE BOX)</text>
+<text x="16" y="800" font-size="11" fill="#6e7781">Filled accent square = built in  ·  Grey square = partial or via extension  ·  Empty square = not available</text>
+<rect x="16" y="812" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="834" font-size="13.5" font-weight="700" fill="#1f2328">6. Built-in AI agents &amp; RAM optimizer</text>
+<text x="30" y="852" font-size="12" fill="#59636e">Chat with AI right inside the editor without freezing your laptop, and undo any turn.</text>
+<text x="30" y="877" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="868" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="877" font-size="11.5" font-weight="700" fill="#1f2328">ACP (OpenCode 2, Claude, Codex, Gemini, Copilot), FIFO queue, Force Send, EcoQoS ~94% trim</text>
+<text x="30" y="901" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="892" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="896.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="901" font-size="11.5" font-weight="400" fill="#59636e">Built-in agent + ACP (no live EcoQoS RAM trim or Job Object isolation)</text>
+<text x="30" y="925" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="916" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="920.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="925" font-size="11.5" font-weight="400" fill="#59636e">GitHub Copilot + third-party extensions</text>
+<rect x="16" y="944" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="966" font-size="13.5" font-weight="700" fill="#1f2328">7. VS Code Marketplace extensions</text>
+<text x="30" y="984" font-size="12" fill="#59636e">Install your favorite icons, themes, and AI extensions from the same ecosystem.</text>
+<text x="30" y="1009" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1000" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1009" font-size="11.5" font-weight="700" fill="#1f2328">Almost all VS Code extensions work (icons, themes, AI); report bugs in GitHub Issues</text>
+<text x="30" y="1033" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1024" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1028.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1033" font-size="11.5" font-weight="400" fill="#59636e">Separate Zed extension catalog</text>
+<text x="30" y="1057" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1048" width="9" height="9" rx="2" fill="#818b95"/>
+<text x="130" y="1057" font-size="11.5" font-weight="400" fill="#59636e">Original full marketplace catalog</text>
+<rect x="16" y="1076" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1098" font-size="13.5" font-weight="700" fill="#1f2328">8. Built-in WizTree disk analyzer</text>
+<text x="30" y="1116" font-size="12" fill="#59636e">See which folders eat your storage instantly, without installing a separate tool.</text>
+<text x="30" y="1141" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1132" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1141" font-size="11.5" font-weight="700" fill="#1f2328">Built-in Rust treemap (Ctrl+Shift+Y) + @wiztree AI context in 0-1 tool calls</text>
+<text x="30" y="1165" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1156" width="9" height="9" rx="2" fill="none" stroke="rgba(127,127,127,0.35)" stroke-width="1.2"/>
+<text x="130" y="1165" font-size="11.5" font-weight="400" fill="#59636e">Not built in</text>
+<text x="30" y="1189" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1180" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1184.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1189" font-size="11.5" font-weight="400" fill="#59636e">Requires third-party extensions</text>
+<rect x="16" y="1208" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1230" font-size="13.5" font-weight="700" fill="#1f2328">9. Non-text &amp; game files</text>
+<text x="30" y="1248" font-size="12" fill="#59636e">Open and edit databases, PDFs, Office docs, ZIPs, and Minecraft files in one app.</text>
+<text x="30" y="1273" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1264" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1273" font-size="11.5" font-weight="700" fill="#1f2328">Editable Bedrock/Java NBT, LevelDB, SQLite, PDF, Office, ZIP, and Hex built in</text>
+<text x="30" y="1297" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1288" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1292.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1297" font-size="11.5" font-weight="400" fill="#59636e">Images only</text>
+<text x="30" y="1321" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1312" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1316.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1321" font-size="11.5" font-weight="400" fill="#59636e">Images built in; other formats need extensions</text>
+<rect x="16" y="1340" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1362" font-size="13.5" font-weight="700" fill="#1f2328">10. Multi-language terminal &amp; error jumps</text>
+<text x="30" y="1380" font-size="12" fill="#59636e">When code fails, click the error card to jump straight to the exact broken line.</text>
+<text x="30" y="1405" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1396" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1405" font-size="11.5" font-weight="700" fill="#1f2328">Multi-tab shell with clickable file:line:col error cards across 15+ languages</text>
+<text x="30" y="1429" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1420" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1424.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1429" font-size="11.5" font-weight="400" fill="#59636e">Standard integrated terminal</text>
+<text x="30" y="1453" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1444" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1448.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1453" font-size="11.5" font-weight="400" fill="#59636e">Integrated terminal + task problem matchers</text>
+<rect x="16" y="1472" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1494" font-size="13.5" font-weight="700" fill="#1f2328">11. Git, project kits &amp; WSL2</text>
+<text x="30" y="1512" font-size="12" fill="#59636e">Manage commits, incoming changes, project templates, and Windows-Linux files smoothly.</text>
+<text x="30" y="1537" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1528" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1537" font-size="11.5" font-weight="700" fill="#1f2328">Commit graph, incoming fetch, 11 built-in manifests, fast WSL2 disk helper</text>
+<text x="30" y="1561" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1552" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1556.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1561" font-size="11.5" font-weight="400" fill="#59636e">Built-in Git, SSH remote</text>
+<text x="30" y="1585" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1576" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1580.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1585" font-size="11.5" font-weight="400" fill="#59636e">Built-in Git; SSH, Containers, and WSL via extensions</text>
+<rect x="16" y="1604" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1626" font-size="13.5" font-weight="700" fill="#1f2328">12. Privacy &amp; zero telemetry</text>
+<text x="30" y="1644" font-size="12" fill="#59636e">Does not track your habits or send usage data back to any server.</text>
+<text x="30" y="1669" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1660" width="9" height="9" rx="2" fill="#9a6533"/>
+<text x="130" y="1669" font-size="11.5" font-weight="700" fill="#1f2328">Zero telemetry (only automatic network call is the update check)</text>
+<text x="30" y="1693" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1684" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1688.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1693" font-size="11.5" font-weight="400" fill="#59636e">Telemetry on by default (opt-out)</text>
+<text x="30" y="1717" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1708" width="9" height="9" rx="2" fill="none" stroke="#818b95" stroke-width="1.5"/>
+<rect x="114" y="1712.5" width="5" height="2.5" rx="0.8" fill="#818b95"/>
+<text x="130" y="1717" font-size="11.5" font-weight="400" fill="#59636e">Telemetry on by default (opt-out)</text>
+<rect x="16" y="1736" width="748" height="122" rx="8" fill="rgba(127,127,127,0.04)" stroke="rgba(127,127,127,0.22)" stroke-width="1"/>
+<text x="30" y="1758" font-size="13.5" font-weight="700" fill="#1f2328">13. Honest trade-offs (not built yet)</text>
+<text x="30" y="1776" font-size="12" fill="#59636e">Still in active development; mature language servers and a debugger are on the roadmap.</text>
+<text x="30" y="1801" font-size="12" font-weight="700" fill="#1f2328">FluxCode</text>
+<rect x="112" y="1792" width="9" height="9" rx="2" fill="none" stroke="#9a6533" stroke-width="1.5"/>
+<rect x="114" y="1796.5" width="5" height="2.5" rx="0.8" fill="#9a6533"/>
+<text x="130" y="1801" font-size="11.5" font-weight="700" fill="#1f2328">Dev builds; LSP and debugger planned (Run supported)</text>
+<text x="30" y="1825" font-size="12" font-weight="400" fill="#1f2328">Zed</text>
+<rect x="112" y="1816" width="9" height="9" rx="2" fill="#818b95"/>
+<text x="130" y="1825" font-size="11.5" font-weight="400" fill="#59636e">Stable release with built-in LSP and debugger</text>
+<text x="30" y="1849" font-size="12" font-weight="400" fill="#1f2328">VS Code</text>
+<rect x="112" y="1840" width="9" height="9" rx="2" fill="#818b95"/>
+<text x="130" y="1849" font-size="11.5" font-weight="400" fill="#59636e">Stable release with debugger and extension LSPs</text>
+<text x="16" y="1878" font-size="11" fill="#6e7781">Windows 11 Home (AMD Ryzen 5 7535HS, 15 GB RAM) · empty profiles · median of 5 runs · Nov 2026</text>
+</svg>

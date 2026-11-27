@@ -98,30 +98,33 @@ impl SelectionGeometry {
     }
 
     fn run_at(&self, point: Point<Pixels>, side: Option<DiffSide>) -> Option<&CodeRun> {
-        let side = side.or_else(|| {
-            let split = self.split_width?;
-            let nearest = self
-                .runs
-                .iter()
-                .min_by_key(|run| line_distance(point, run.bounds))?;
-            if nearest.document.is_single_column() {
-                return None;
+        let side = match side {
+            Some(side) => side,
+            None => {
+                if let Some(split) = self.split_width {
+                    let nearest = self
+                        .runs
+                        .iter()
+                        .min_by_key(|run| line_distance(point, run.bounds))?;
+                    if nearest.document.is_single_column() {
+                        return Some(nearest);
+                    }
+                    if point.x < self.bounds.left() + split {
+                        DiffSide::Original
+                    } else {
+                        DiffSide::Modified
+                    }
+                } else {
+                    self.runs
+                        .iter()
+                        .min_by(|a, b| {
+                            distance_to_bounds(point, a.bounds)
+                                .total_cmp(&distance_to_bounds(point, b.bounds))
+                        })
+                        .map(|run| run.side)?
+                }
             }
-            Some(if point.x < self.bounds.left() + split {
-                DiffSide::Original
-            } else {
-                DiffSide::Modified
-            })
-        });
-        let side = side.or_else(|| {
-            self.runs
-                .iter()
-                .min_by(|a, b| {
-                    distance_to_bounds(point, a.bounds)
-                        .total_cmp(&distance_to_bounds(point, b.bounds))
-                })
-                .map(|run| run.side)
-        })?;
+        };
         self.runs
             .iter()
             .filter(|run| run.side == side)

@@ -1,4 +1,3 @@
-
 use super::market::{self, Busy, Item, Query, Sort};
 use super::view::tile;
 use super::Filter;
@@ -25,9 +24,15 @@ const ICON_WORKERS: usize = 6;
 const ROW_H: f32 = 66.;
 const PREFETCH_ROWS: usize = 20;
 
-fn vsx_icon(path: Option<&PathBuf>, size: f32) -> AnyElement {
+fn vsx_icon(path: Option<&PathBuf>, bundled: bool, size: f32) -> AnyElement {
     match path {
         Some(p) => img(p.clone())
+            .flex_none()
+            .size(theme::u(size))
+            .rounded(px(size * 0.12))
+            .object_fit(ObjectFit::Contain)
+            .into_any_element(),
+        None if bundled => img(SharedString::from("material-icons/logo.png"))
             .flex_none()
             .size(theme::u(size))
             .rounded(px(size * 0.12))
@@ -334,10 +339,11 @@ impl Workbench {
     }
 
     fn vsx_applied_changed(&mut self, installed: &str, cx: &mut Context<Self>) {
-        if !self.settings.icon_theme.is_empty() && super::vsx_icons::active_id().is_empty() {
-            self.settings.icon_theme.clear();
+        if self.settings.icon_theme != super::vsx_icons::active_id() {
+            self.settings.icon_theme = super::vsx_icons::active_id();
             self.settings.save();
         }
+        self.reconcile_ext_views();
         self.settings.apply_backdrop();
         theme::apply(cx);
         cx.refresh_windows();
@@ -346,8 +352,12 @@ impl Workbench {
             let themes: Vec<&str> = a.themes.iter().map(|(_, n)| n.as_str()).collect();
             let icons: Vec<&str> = a.icon_themes.iter().map(|(_, n)| n.as_str()).collect();
             self.ext.note = Some(match (themes.is_empty(), icons.is_empty()) {
-                (false, _) => crate::trf!("Added to the color themes: {list}. Pick one below or from the theme menu in the status bar."; list => themes.join(", ")),
-                (true, false) => crate::trf!("Added to file icon themes: {list}. Pick one below or from the theme menu in the status bar."; list => icons.join(", ")),
+                (false, _) => {
+                    crate::trf!("Added to the color themes: {list}. Pick one below or from the theme menu in the status bar."; list => themes.join(", "))
+                }
+                (true, false) => {
+                    crate::trf!("Added to file icon themes: {list}. Pick one below or from the theme menu in the status bar."; list => icons.join(", "))
+                }
                 (true, true) => unreachable!(),
             });
         }
@@ -357,6 +367,9 @@ impl Workbench {
         let id = item.id();
         let loading = self.ext.market.open.as_ref().is_some_and(|o| o.id() == id);
         self.close_pages(window, cx);
+        if !loading {
+            self.ext.note = None;
+        }
         self.ext.page = Some(format!("{PAGE}{id}"));
         if !self.ext.market.readme.contains_key(&id) && !loading {
             let folder = self.ext.market.installed(&id).map(|i| i.folder.clone());
@@ -373,10 +386,15 @@ impl Workbench {
                 });
                 if let Some(md) = md {
                     let images = cx
-                        .background_spawn(async move { market::fetch_readme_images(&md, folder.as_deref()) })
+                        .background_spawn(async move {
+                            market::fetch_readme_images(&md, folder.as_deref())
+                        })
                         .await;
                     _ = this.update(cx, |this, cx| {
-                        this.ext.market.readme_images.insert(id, std::sync::Arc::new(images));
+                        this.ext
+                            .market
+                            .readme_images
+                            .insert(id, std::sync::Arc::new(images));
                         cx.notify();
                     });
                 }
@@ -458,6 +476,7 @@ impl Workbench {
                 .child(market::format_count(it.installs))
         });
         let open = it.clone();
+        let bundled = self.ext.market.installed(&id).is_some_and(|i| i.bundled);
         h_flex()
             .id((keys.0, ix))
             .w_full()
@@ -469,7 +488,7 @@ impl Workbench {
             .cursor_pointer()
             .when(selected, |d| d.bg(c(theme::BG_HOVER)))
             .hover(|d| d.bg(c(theme::BG_HOVER)))
-            .child(vsx_icon(icon, 34.))
+            .child(vsx_icon(icon, bundled, 34.))
             .child(
                 v_flex()
                     .flex_1()
@@ -586,28 +605,41 @@ impl Workbench {
             .xsmall()
             .ghost()
             .dropdown_menu(move |mut menu: PopupMenu, _, _| {
-                menu = menu.min_w(px(210.)).max_h(px(460.)).scrollable(true).label(tr("Sort by"));
+                menu = menu
+                    .min_w(px(210.))
+                    .max_h(px(460.))
+                    .scrollable(true)
+                    .label(tr("Sort by"));
                 for s in Sort::ALL {
                     if s == Sort::Relevance && !has_text {
                         continue;
                     }
                     let w = weak.clone();
-                    menu = menu.item(PopupMenuItem::new(tr(s.label())).checked(s == sort).on_click(move |_, _, cx| {
-                        _ = w.update(cx, |this, cx| {
-                            this.ext.market.sort = Some(s);
-                            this.market_search(0, cx);
-                        });
-                    }));
+                    menu = menu.item(
+                        PopupMenuItem::new(tr(s.label()))
+                            .checked(s == sort)
+                            .on_click(move |_, _, cx| {
+                                _ = w.update(cx, |this, cx| {
+                                    this.ext.market.sort = Some(s);
+                                    this.market_search(0, cx);
+                                });
+                            }),
+                    );
                 }
                 menu = menu.separator().label(tr("Category"));
-                for cat in std::iter::once(None).chain(market::CATEGORIES.iter().copied().map(Some)) {
+                for cat in std::iter::once(None).chain(market::CATEGORIES.iter().copied().map(Some))
+                {
                     let w = weak.clone();
-                    menu = menu.item(PopupMenuItem::new(cat.map(tr).unwrap_or(tr("All categories"))).checked(cat == current).on_click(move |_, _, cx| {
-                        _ = w.update(cx, |this, cx| {
-                            this.ext.market.category = cat;
-                            this.market_search(0, cx);
-                        });
-                    }));
+                    menu = menu.item(
+                        PopupMenuItem::new(cat.map(tr).unwrap_or(tr("All categories")))
+                            .checked(cat == current)
+                            .on_click(move |_, _, cx| {
+                                _ = w.update(cx, |this, cx| {
+                                    this.ext.market.category = cat;
+                                    this.market_search(0, cx);
+                                });
+                            }),
+                    );
                 }
                 menu
             })
@@ -787,10 +819,11 @@ impl Workbench {
                     .pb_2()
                     .gap_1()
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(crate::ui::McInput::new(&self.ext.query).small().cleanable(true)),
+                        div().flex_1().min_w_0().child(
+                            crate::ui::McInput::new(&self.ext.query)
+                                .small()
+                                .cleanable(true),
+                        ),
                     )
                     .child(
                         Button::new("ext-from-file")
@@ -843,7 +876,10 @@ impl Workbench {
         let busy = m.busy.get(&id).copied();
         let gallery = !it.asset_uri.is_empty();
 
-        let applied = inst.as_ref().map(|_| super::native::applied(&id)).unwrap_or_default();
+        let applied = inst
+            .as_ref()
+            .map(|_| super::native::applied(&id))
+            .unwrap_or_default();
         let mut actions = h_flex().flex_none().gap_1();
         actions = match (busy, &inst) {
             (Some(b), _) => actions.child(
@@ -859,47 +895,86 @@ impl Workbench {
             (None, Some(i)) => {
                 let has_icon_themes = !applied.icon_themes.is_empty();
                 let has_color_themes = !applied.themes.is_empty();
+                let first_container = applied.activity_views.first().map(|(cid, _)| cid.clone());
+                let has_sidebar = first_container.is_some();
                 let mut a = actions;
-                if has_icon_themes {
-                    let only_icon = (applied.icon_themes.len() == 1).then(|| applied.icon_themes[0].0.clone());
+                if let Some(cid) = first_container {
                     a = a.child(
-                        Button::new("vsx-choose-icon")
-                            .label(tr("Choose Icon Theme"))
+                        Button::new("vsx-open-side")
+                            .label(tr("Open in Side Bar"))
                             .small()
                             .primary()
-                            .on_click(cx.listener(move |this, _, w, cx| {
-                                if let Some(tid) = only_icon.as_deref().filter(|t| *t != super::vsx_icons::active_id()) {
-                                    this.set_icon_theme(tid, cx);
-                                } else {
-                                    this.open_icon_theme_picker(w, cx);
-                                }
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_ext_container_by_id(&cid, cx);
                             })),
                     );
                 }
+                if has_icon_themes {
+                    let only_icon =
+                        (applied.icon_themes.len() == 1).then(|| applied.icon_themes[0].0.clone());
+                    let btn = Button::new("vsx-choose-icon")
+                        .label(tr("Choose Icon Theme"))
+                        .small();
+                    let btn = if !has_sidebar {
+                        btn.primary()
+                    } else {
+                        btn.outline()
+                    };
+                    a = a.child(btn.on_click(cx.listener(move |this, _, w, cx| {
+                        if let Some(tid) = only_icon
+                            .as_deref()
+                            .filter(|t| *t != super::vsx_icons::active_id())
+                        {
+                            this.set_icon_theme(tid, cx);
+                        } else {
+                            this.open_icon_theme_picker(w, cx);
+                        }
+                    })));
+                }
                 if has_color_themes {
-                    let only_theme = (applied.themes.len() == 1).then(|| applied.themes[0].0.clone());
+                    let only_theme =
+                        (applied.themes.len() == 1).then(|| applied.themes[0].0.clone());
                     let btn = Button::new("vsx-choose-theme")
                         .label(tr("Choose Color Theme"))
                         .small();
-                    let btn = if !has_icon_themes { btn.primary() } else { btn.outline() };
+                    let btn = if !has_sidebar && !has_icon_themes {
+                        btn.primary()
+                    } else {
+                        btn.outline()
+                    };
                     a = a.child(btn.on_click(cx.listener(move |this, _, w, cx| {
-                        if let Some(tid) = only_theme.as_deref().filter(|t| *t != theme::palette().id) {
+                        if let Some(tid) =
+                            only_theme.as_deref().filter(|t| *t != theme::palette().id)
+                        {
                             this.set_theme(tid, w, cx);
                         } else {
                             this.open_theme_picker(w, cx);
                         }
                     })));
                 }
-                let uid = id.clone();
-                let a = a.child(
-                    Button::new("vsx-uninstall")
-                        .label(tr("Uninstall"))
-                        .small()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.market_uninstall(uid.clone(), cx)
-                        })),
-                );
-                if gallery && i.version != it.version {
+                let a = if i.bundled {
+                    a.child(
+                        div()
+                            .px_2()
+                            .h(theme::u(26.))
+                            .flex()
+                            .items_center()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr("Default")),
+                    )
+                } else {
+                    let uid = id.clone();
+                    a.child(
+                        Button::new("vsx-uninstall")
+                            .label(tr("Uninstall"))
+                            .small()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.market_uninstall(uid.clone(), cx)
+                            })),
+                    )
+                };
+                if gallery && !i.bundled && i.version != it.version {
                     let up = it.clone();
                     a.child(
                         Button::new("vsx-update")
@@ -1021,12 +1096,13 @@ impl Workbench {
             .as_ref()
             .and_then(|i| i.icon.clone())
             .or_else(|| m.icons.get(&id).cloned());
+        let bundled = inst.as_ref().is_some_and(|i| i.bundled);
         let head = h_flex()
             .w_full()
             .flex_wrap()
             .gap_4()
             .items_start()
-            .child(vsx_icon(icon.as_ref(), 64.))
+            .child(vsx_icon(icon.as_ref(), bundled, 64.))
             .child(
                 v_flex()
                     .flex_1()
@@ -1049,80 +1125,149 @@ impl Workbench {
             Some(i) if !i.contributes.is_empty() => {
                 crate::trf!("It declares {list}."; list => i.contributes.join(", ")).into()
             }
-            Some(_) => tr("It declares no themes, languages or snippets.").into(),
-            None => tr("Install it to see what it declares (themes, languages, snippets).").into(),
+            Some(_) => tr("It declares no themes, languages or extension views.").into(),
+            None => tr("Install it to see what it declares (themes, languages, views, commands).")
+                .into(),
         };
         let current = theme::palette().id;
-        let theme_chips = h_flex().flex_wrap().gap_1().children(applied.themes.iter().enumerate().map(|(i, (tid, name))| {
-            let tid = tid.clone();
-            let on = tid == current;
-            chip(("vsx-theme", i), name.clone().into(), on)
-                .border_1()
-                .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
-                .on_click(cx.listener(move |this, _, w, cx| this.set_theme(&tid, w, cx)))
-        }));
+        let theme_chips =
+            h_flex()
+                .flex_wrap()
+                .gap_1()
+                .children(applied.themes.iter().enumerate().map(|(i, (tid, name))| {
+                    let tid = tid.clone();
+                    let on = tid == current;
+                    chip(("vsx-theme", i), name.clone().into(), on)
+                        .border_1()
+                        .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
+                        .on_click(cx.listener(move |this, _, w, cx| this.set_theme(&tid, w, cx)))
+                }));
         let current_icon = super::vsx_icons::active_id();
-        let uses_this_icon = applied.icon_themes.iter().any(|(tid, _)| tid == &current_icon);
+        let show_material_reset = current_icon != super::vsx_icons::MATERIAL_ID
+            && applied
+                .icon_themes
+                .iter()
+                .any(|(tid, _)| tid == &current_icon);
         let icon_chips = h_flex()
             .flex_wrap()
             .gap_1()
-            .children(applied.icon_themes.iter().enumerate().map(|(i, (tid, name))| {
-                let tid = tid.clone();
-                let on = tid == current_icon;
-                chip(("vsx-icon-theme", i), name.clone().into(), on)
-                    .border_1()
-                    .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_icon_theme(&tid, cx)))
-            }))
-            .when(uses_this_icon, |h| {
+            .children(
+                applied
+                    .icon_themes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (tid, name))| {
+                        let tid = tid.clone();
+                        let on = tid == current_icon;
+                        chip(("vsx-icon-theme", i), name.clone().into(), on)
+                            .border_1()
+                            .border_color(c(if on { theme::ACCENT } else { theme::BORDER }))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.set_icon_theme(&tid, cx)),
+                            )
+                    }),
+            )
+            .when(show_material_reset, |h| {
                 h.child(
-                    chip("vsx-icon-theme-reset", tr("Use built-in").into(), false)
-                        .border_1()
-                        .border_color(c(theme::BORDER))
-                        .on_click(cx.listener(|this, _, _, cx| this.set_icon_theme("", cx))),
+                    chip(
+                        "vsx-icon-theme-reset",
+                        tr("Reset to Material Icon Theme").into(),
+                        false,
+                    )
+                    .border_1()
+                    .border_color(c(theme::BORDER))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_icon_theme(super::vsx_icons::MATERIAL_ID, cx)
+                    })),
                 )
             });
-        let applied_line: Option<SharedString> = match (
-            &inst,
-            applied.themes.is_empty(),
-            applied.icon_themes.is_empty(),
-            applied.languages.is_empty(),
-        ) {
-            (None, ..) => None,
-            (Some(_), true, true, true) => Some(tr("Nothing it declares is applied: FluxCode applies color themes, file icon themes and the file types of languages.").into()),
-            (Some(_), _, _, false) => Some(crate::trf!("Files open as {list}."; list => applied.languages.join(", ")).into()),
-            (Some(_), .., true) => None,
+        let mut active_parts: Vec<String> = Vec::new();
+        if !applied.activity_views.is_empty() {
+            let names: Vec<&str> = applied
+                .activity_views
+                .iter()
+                .map(|(_, t)| t.as_str())
+                .collect();
+            active_parts.push(names.join(", "));
+        }
+        if !applied.languages.is_empty() {
+            active_parts
+                .push(crate::trf!("Files open as {list}."; list => applied.languages.join(", ")));
+        }
+        let applied_line: Option<SharedString> = match &inst {
+            None => None,
+            Some(_) if !active_parts.is_empty() => {
+                Some(crate::trf!("Active now: {list}."; list => active_parts.join(" · ")).into())
+            }
+            Some(_) => None,
         };
-        let here = v_flex()
-            .gap_1()
-            .child(div().text_sm().text_color(c(theme::FG)).child(declared))
-            .when(!applied.themes.is_empty(), |v| {
-                v.child(
-                    v_flex()
-                        .gap_1()
-                        .pt_1()
-                        .child(div().text_sm().text_color(c(theme::FG)).child(tr("Its color themes are in the theme menu; click one to use it:")))
-                        .child(theme_chips),
-                )
-            })
-            .when(!applied.icon_themes.is_empty(), |v| {
-                v.child(
-                    v_flex()
-                        .gap_1()
-                        .pt_1()
-                        .child(div().text_sm().text_color(c(theme::FG)).child(tr("Its file icon themes are ready; click one to use it:")))
-                        .child(icon_chips),
-                )
-            })
-            .when_some(applied_line, |v, t| v.child(div().text_sm().text_color(c(theme::FG)).child(t)))
-            .when(!applied.failed.is_empty(), |v| {
-                v.child(div().text_xs().text_color(c(theme::WARN)).child(crate::trf!("Couldn't read: {list}"; list => applied.failed.join("; "))))
-            })
-            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr("Grammars and snippets aren't applied yet.")))
-            .child(div().text_xs().text_color(c(theme::FG_DIM)).child(tr(
-                "VS Code's JavaScript extension host isn't available in FluxCode, so code that runs inside VS Code (commands, debuggers, language servers started by the extension) doesn't run here.",
-            )))
-            .when_some(inst.as_ref().map(|i| i.folder.display().to_string()), |v, f| v.child(div().text_xs().font_family("Cascadia Code").text_color(c(theme::FG_DIM)).child(f)));
+        let host_note: Option<&'static str> = if inst
+            .as_ref()
+            .is_some_and(|i| i.has_code || applied.has_main)
+        {
+            if super::host::ExtHost::node_available() {
+                Some(tr("Sidebar views, commands, and webviews run lazily on FluxCode's Node.js extension host."))
+            } else {
+                Some(tr(
+                    "Install Node.js to activate extension code (views, commands, webviews).",
+                ))
+            }
+        } else {
+            None
+        };
+        let here =
+            v_flex()
+                .gap_1()
+                .child(div().text_sm().text_color(c(theme::FG)).child(declared))
+                .when(!applied.themes.is_empty(), |v| {
+                    v.child(
+                        v_flex()
+                            .gap_1()
+                            .pt_1()
+                            .child(div().text_sm().text_color(c(theme::FG)).child(tr(
+                                "Its color themes are in the theme menu; click one to use it:",
+                            )))
+                            .child(theme_chips),
+                    )
+                })
+                .when(!applied.icon_themes.is_empty(), |v| {
+                    v.child(
+                        v_flex()
+                            .gap_1()
+                            .pt_1()
+                            .child(
+                                div().text_sm().text_color(c(theme::FG)).child(tr(
+                                    "Its file icon themes are ready; click one to use it:",
+                                )),
+                            )
+                            .child(icon_chips),
+                    )
+                })
+                .when_some(applied_line, |v, t| {
+                    v.child(div().text_sm().text_color(c(theme::FG)).child(t))
+                })
+                .when(!applied.failed.is_empty(), |v| {
+                    v.child(div().text_xs().text_color(c(theme::WARN)).child(
+                        crate::trf!("Couldn't read: {list}"; list => applied.failed.join("; ")),
+                    ))
+                })
+                .when_some(host_note, |v, n| {
+                    v.child(div().text_xs().text_color(c(theme::FG_DIM)).child(n))
+                })
+                .when_some(
+                    inst.as_ref()
+                        .filter(|i| !i.bundled && !i.folder.as_os_str().is_empty())
+                        .map(|i| i.folder.display().to_string()),
+                    |v, f| {
+                        v.child(
+                            div()
+                                .text_xs()
+                                .font_family("Cascadia Code")
+                                .text_color(c(theme::FG_DIM))
+                                .child(f),
+                        )
+                    },
+                );
 
         let readme: AnyElement = match m.readme.get(&id) {
             None => h_flex()
@@ -1148,20 +1293,22 @@ impl Workbench {
                 div()
                     .text_sm()
                     .text_color(c(theme::FG))
-                    .child(TextView::markdown(view_id, t.clone()).image_source(move |uri| {
-                        let key = uri.as_ref();
-                        let hit = images.get(key).or_else(|| {
-                            key.contains("&amp;")
-                                .then(|| key.replace("&amp;", "&"))
-                                .and_then(|k| images.get(&k))
-                        });
-                        match hit {
-                            Some(p) => ImageSource::from(p.clone()),
-                            None => ImageSource::Custom(std::sync::Arc::new(|_, _| {
-                                Some(Err(ImageCacheError::Asset("unavailable".into())))
-                            })),
-                        }
-                    }))
+                    .child(
+                        TextView::markdown(view_id, t.clone()).image_source(move |uri| {
+                            let key = uri.as_ref();
+                            let hit = images.get(key).or_else(|| {
+                                key.contains("&amp;")
+                                    .then(|| key.replace("&amp;", "&"))
+                                    .and_then(|k| images.get(&k))
+                            });
+                            match hit {
+                                Some(p) => ImageSource::from(p.clone()),
+                                None => ImageSource::Custom(std::sync::Arc::new(|_, _| {
+                                    Some(Err(ImageCacheError::Asset("unavailable".into())))
+                                })),
+                            }
+                        }),
+                    )
                     .into_any_element()
             }
             Some(Err(e)) => div()
@@ -1180,7 +1327,16 @@ impl Workbench {
         };
         let ext_id = format!("{}.{}", it.publisher, it.name);
         let id_copied = self.ext.market.copied_id.as_deref() == Some(ext_id.as_str());
-        let chip = |t: String| div().px_2().py(px(2.)).rounded(px(4.)).bg(c(theme::BG_ELEVATED)).text_xs().text_color(c(theme::FG_MUTED)).child(t);
+        let chip = |t: String| {
+            div()
+                .px_2()
+                .py(px(2.))
+                .rounded(px(4.))
+                .bg(c(theme::BG_ELEVATED))
+                .text_xs()
+                .text_color(c(theme::FG_MUTED))
+                .child(t)
+        };
         let mut chips = h_flex().w_full().flex_wrap().gap_1p5();
         chips = chips.child(chip(format!("v{}", it.version)));
         if !it.updated.is_empty() {
@@ -1199,18 +1355,36 @@ impl Workbench {
                 .rounded(px(4.))
                 .bg(c(theme::BG_ELEVATED))
                 .border_1()
-                .border_color(c(if id_copied { theme::GREEN } else { theme::BORDER }))
+                .border_color(c(if id_copied {
+                    theme::GREEN
+                } else {
+                    theme::BORDER
+                }))
                 .text_xs()
-                .text_color(c(if id_copied { theme::FG_STRONG } else { theme::FG_MUTED }))
+                .text_color(c(if id_copied {
+                    theme::FG_STRONG
+                } else {
+                    theme::FG_MUTED
+                }))
                 .cursor_pointer()
-                .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)).text_color(c(theme::FG_STRONG)))
+                .hover(|s| {
+                    s.bg(c(theme::BG_HOVER))
+                        .border_color(c(theme::BORDER_STRONG))
+                        .text_color(c(theme::FG_STRONG))
+                })
                 .active(|s| s.opacity(0.8))
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copy extension ID")).build(w, cx))
+                .tooltip(|w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tr("Copy extension ID")).build(w, cx)
+                })
                 .child(ext_id)
                 .child(
                     Icon::new(if id_copied { Ico::Check } else { Ico::Copy })
                         .size(theme::u(11.))
-                        .text_color(c(if id_copied { theme::GREEN } else { theme::FG_DIM })),
+                        .text_color(c(if id_copied {
+                            theme::GREEN
+                        } else {
+                            theme::FG_DIM
+                        })),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(copy_id.clone()));
@@ -1218,7 +1392,9 @@ impl Workbench {
                     this.status = crate::trf!("Copied {id}"; id => copy_id).into();
                     let expect = copy_id.clone();
                     cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(Duration::from_millis(1600)).await;
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1600))
+                            .await;
                         _ = this.update(cx, |this, cx| {
                             if this.ext.market.copied_id.as_deref() == Some(expect.as_str()) {
                                 this.ext.market.copied_id = None;
@@ -1274,7 +1450,8 @@ impl Workbench {
             page_el
                 .with_animation(
                     "vsx-page-in",
-                    Animation::new(std::time::Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                    Animation::new(std::time::Duration::from_millis(150))
+                        .with_easing(gpui_kit::ease_out_quint()),
                     |el, t| el.opacity(t),
                 )
                 .into_any_element()

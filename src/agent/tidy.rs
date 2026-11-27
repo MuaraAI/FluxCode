@@ -1,4 +1,3 @@
-
 use std::borrow::Cow;
 
 fn markers(line: &str) -> Vec<(usize, String)> {
@@ -6,7 +5,11 @@ fn markers(line: &str) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     let mut i = 0;
     while i + 2 < b.len() {
-        if b[i] == b'(' && b[i + 2] == b')' && (i == 0 || b[i - 1] == b' ') && b.get(i + 3).is_none_or(|c| *c == b' ') {
+        if b[i] == b'('
+            && b[i + 2] == b')'
+            && (i == 0 || b[i - 1] == b' ')
+            && b.get(i + 3).is_none_or(|c| *c == b' ')
+        {
             let ch = b[i + 1];
             let want = match out.last() {
                 None => matches!(ch, b'a' | b'A' | b'1'),
@@ -51,7 +54,11 @@ fn split_choices(line: &str, out: &mut String) -> bool {
     for (k, (at, mark)) in m.iter().enumerate() {
         let end = m.get(k + 1).map_or(line.len(), |n| n.0);
         let body = line[at + 3..end].trim();
-        let body = if k + 1 < m.len() { trim_joiner(body) } else { body };
+        let body = if k + 1 < m.len() {
+            trim_joiner(body)
+        } else {
+            body
+        };
         let (body, tail) = match (k + 1 == m.len()).then(|| body.find(". ")).flatten() {
             Some(dot) => (&body[..=dot], body[dot + 1..].trim()),
             None => (body, ""),
@@ -127,13 +134,23 @@ mod tests {
     fn leaves_other_text_alone() {
         let t = "Fungsi f(a) dan g(b) saja.\n```\n(a) x (b) y\n```\n";
         assert!(matches!(answer(t), std::borrow::Cow::Borrowed(_)));
-        assert!(matches!(answer("tidak ada pilihan"), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(
+            answer("tidak ada pilihan"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     #[test]
     fn long_thoughts_get_paragraphs() {
-        let long = format!("{}. But actually the clamp is wrong.", "word ".repeat(60).trim());
-        assert!(thought(&long).contains(".\n\nBut actually"), "{}", thought(&long));
+        let long = format!(
+            "{}. But actually the clamp is wrong.",
+            "word ".repeat(60).trim()
+        );
+        assert!(
+            thought(&long).contains(".\n\nBut actually"),
+            "{}",
+            thought(&long)
+        );
         assert_eq!(thought("Short. Then more."), "Short. Then more.");
     }
 }

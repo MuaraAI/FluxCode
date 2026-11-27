@@ -78,8 +78,8 @@ pub(crate) enum FoldExpansion {
 /// Contiguous changed row range for rendering an overview ruler beside the scrollbar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiffOverviewMark {
-    pub start_row: usize,
-    pub end_row: usize,
+    pub start_row: u32,
+    pub end_row: u32,
     pub removed: bool,
     pub added: bool,
     pub conflict: bool,
@@ -967,19 +967,23 @@ impl DiffState {
     }
 
     /// Scrolls the diff viewer so `row_ix` lands near the upper third of the viewport.
-    pub fn scroll_to_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+    pub fn scroll_to_row(&mut self, row_ix: usize, cx: &mut Context<Self>) -> bool {
         if self.rows.is_empty() {
-            return;
+            return false;
         }
-        let (_, visible) = self.viewport_rows();
+        let (current_top, visible) = self.viewport_rows();
         let max_ix = self.rows.len().saturating_sub(1);
         let target = row_ix.min(max_ix).saturating_sub(visible / 3);
+        if current_top == target {
+            return false;
+        }
         self.navigated_scroll_top.set(None);
         self.list.scroll_to(ListOffset {
             item_ix: target,
             offset_in_item: px(0.),
         });
         cx.notify();
+        true
     }
 
     /// Reveals part or all of a collapsed unchanged range.
@@ -1445,20 +1449,13 @@ impl DiffState {
     /// measured heights of unchanged rows survive disclosure changes.
     fn rebuild(&mut self, reset: bool) {
         let rows = self.project_rows();
-        self.file_rows = source_rows(&self.files, &rows);
-        self.change_rows = changed_groups(&rows);
-        self.hunk_rows = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, row)| matches!(row, DisplayRow::Hunk { .. }).then_some(ix))
-            .collect();
-        self.overview_marks = compute_overview_marks(&rows);
+        let indexed = index_rows(&self.files, &rows);
+        self.file_rows = indexed.file_rows;
+        self.change_rows = indexed.change_rows;
+        self.hunk_rows = indexed.hunk_rows;
+        self.overview_marks = indexed.overview_marks;
+        self.header_rows = indexed.header_rows;
         self.navigated_scroll_top.set(None);
-        self.header_rows = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, row)| matches!(row, DisplayRow::File(_)).then_some(ix))
-            .collect();
         if reset {
             self.list.reset(rows.len());
         } else {
@@ -1642,10 +1639,19 @@ fn file_ixs(files: &[DiffFile]) -> HashMap<SharedString, usize> {
     ixs
 }
 
-/// Every source line maps to its code row or the disclosure hiding it; lines
-/// of a collapsed file have no row. Disjoint folds visit each pair once, so
-/// building the maps is linear.
-fn source_rows(files: &[DiffFile], rows: &[DisplayRow]) -> Vec<FileRows> {
+struct RowIndex {
+    file_rows: Vec<FileRows>,
+    change_rows: Vec<usize>,
+    hunk_rows: Vec<usize>,
+    overview_marks: Vec<DiffOverviewMark>,
+    header_rows: Vec<usize>,
+}
+
+/// Indexes source-line mappings, change groups, hunks, headers, and overview marks
+/// in one fused linear pass over `rows` to stay within cache bandwidth.
+fn index_rows(files: &[DiffFile], rows: &[DisplayRow]) -> RowIndex {
+    const _: () = assert!(std::mem::size_of::<DiffOverviewMark>() == 12);
+
     let mut file_rows = files
         .iter()
         .map(|file| FileRows {
@@ -1653,83 +1659,148 @@ fn source_rows(files: &[DiffFile], rows: &[DisplayRow]) -> Vec<FileRows> {
             modified: vec![None; file.lines_count(DiffSide::Modified)],
         })
         .collect::<Vec<_>>();
-    for (row_ix, row) in rows.iter().enumerate() {
+    let mut change_rows = Vec::new();
+    let mut hunk_rows = Vec::new();
+    let mut overview_marks: Vec<DiffOverviewMark> = Vec::new();
+    let mut header_rows = Vec::new();
+    let mut prev_changed_file: Option<usize> = None;
+
+    for (ix, row) in rows.iter().enumerate() {
         let mut map = |file: usize, original: Option<usize>, modified: Option<usize>| {
             if let Some(line) = original {
-                file_rows[file].original[line] = Some(row_ix);
+                file_rows[file].original[line] = Some(ix);
             }
             if let Some(line) = modified {
-                file_rows[file].modified[line] = Some(row_ix);
+                file_rows[file].modified[line] = Some(ix);
             }
         };
+        let mut is_changed_code = false;
+        let mut mark_flags: Option<(bool, bool, bool)> = None;
         match row {
             DisplayRow::Code {
                 file,
                 original,
                 modified,
-                ..
-            } => map(*file, *original, *modified),
+                changed,
+            } => {
+                map(*file, *original, *modified);
+                if *changed {
+                    is_changed_code = true;
+                    if prev_changed_file != Some(*file) {
+                        change_rows.push(ix);
+                    }
+                    prev_changed_file = Some(*file);
+                    mark_flags = Some((original.is_some(), modified.is_some(), false));
+                }
+            }
             DisplayRow::Fold { file, pairs } => {
                 for pair in &files[*file].pairs()[pairs.clone()] {
                     map(*file, pair.original(), pair.modified());
                 }
             }
-            DisplayRow::File(_)
-            | DisplayRow::Notice(_)
-            | DisplayRow::Hunk { .. }
-            | DisplayRow::Conflict { .. } => {}
+            DisplayRow::File(_) => header_rows.push(ix),
+            DisplayRow::Hunk { .. } => hunk_rows.push(ix),
+            DisplayRow::Conflict { .. } => {
+                mark_flags = Some((false, false, true));
+            }
+            DisplayRow::Notice(_) => {}
         }
-    }
-    file_rows
-}
-
-fn changed_groups(rows: &[DisplayRow]) -> Vec<usize> {
-    let changed = |row: &DisplayRow| matches!(row, DisplayRow::Code { changed: true, .. });
-    rows.iter()
-        .enumerate()
-        .filter_map(|(ix, row)| {
-            (changed(row)
-                && (ix == 0 || !changed(&rows[ix - 1]) || rows[ix - 1].file() != row.file()))
-            .then_some(ix)
-        })
-        .collect()
-}
-
-fn compute_overview_marks(rows: &[DisplayRow]) -> Vec<DiffOverviewMark> {
-    let mut marks: Vec<DiffOverviewMark> = Vec::new();
-    for (ix, row) in rows.iter().enumerate() {
-        let flags = match row {
-            DisplayRow::Code {
-                original,
-                modified,
-                changed: true,
-                ..
-            } => Some((original.is_some(), modified.is_some(), false)),
-            DisplayRow::Conflict { .. } => Some((false, false, true)),
-            _ => None,
-        };
-        let Some((removed, added, conflict)) = flags else {
-            continue;
-        };
-        if let Some(last) = marks.last_mut() {
-            if last.end_row == ix
+        if !is_changed_code {
+            prev_changed_file = None;
+        }
+        if let Some((removed, added, conflict)) = mark_flags {
+            let start = ix as u32;
+            let end = ix.saturating_add(1).min(u32::MAX as usize) as u32;
+            if let Some(last) = overview_marks.last_mut()
+                && last.end_row == start
                 && last.removed == removed
                 && last.added == added
                 && last.conflict == conflict
             {
-                last.end_row = ix + 1;
-                continue;
+                last.end_row = end;
+            } else {
+                overview_marks.push(DiffOverviewMark {
+                    start_row: start,
+                    end_row: end,
+                    removed,
+                    added,
+                    conflict,
+                });
             }
         }
-        marks.push(DiffOverviewMark {
-            start_row: ix,
-            end_row: ix + 1,
-            removed,
-            added,
-            conflict,
-        });
     }
-    marks
+
+    RowIndex {
+        file_rows,
+        change_rows,
+        hunk_rows,
+        overview_marks,
+        header_rows,
+    }
+}
+
+#[cfg(test)]
+mod overview_tests {
+    use super::*;
+
+    #[test]
+    fn overview_mark_fits_12_bytes_and_coalesces_adjacent_rows() {
+        assert_eq!(std::mem::size_of::<DiffOverviewMark>(), 12);
+        let rows = vec![
+            DisplayRow::File(0),
+            DisplayRow::Hunk { file: 0, hunk: 0 },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(0),
+                modified: None,
+                changed: true,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(1),
+                modified: None,
+                changed: true,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(2),
+                modified: Some(0),
+                changed: false,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: None,
+                modified: Some(1),
+                changed: true,
+            },
+        ];
+        let files = DiffFile::parse("--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,2 @@\n-a\n-b\n c\n+d\n").unwrap();
+        let indexed = index_rows(&files, &rows);
+        assert_eq!(indexed.header_rows, vec![0]);
+        assert_eq!(indexed.hunk_rows, vec![1]);
+        assert_eq!(indexed.change_rows, vec![2, 5]);
+        assert_eq!(indexed.overview_marks.len(), 2);
+        assert_eq!(
+            indexed.overview_marks[0],
+            DiffOverviewMark {
+                start_row: 2,
+                end_row: 4,
+                removed: true,
+                added: false,
+                conflict: false,
+            }
+        );
+        assert_eq!(
+            indexed.overview_marks[1],
+            DiffOverviewMark {
+                start_row: 5,
+                end_row: 6,
+                removed: false,
+                added: true,
+                conflict: false,
+            }
+        );
+    }
 }
 
 const SIDE_BIT: u64 = 1 << 40;

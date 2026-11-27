@@ -1,14 +1,96 @@
+fn pack_deflate_level() -> u8 {
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        10
+    } else {
+        1
+    }
+}
 
 fn pack_languages() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let level = pack_deflate_level();
     for lang in ["fr", "ms"] {
         let src = manifest.join("i18n").join(format!("{lang}.tsv"));
         println!("cargo:rerun-if-changed={}", src.display());
         let text = std::fs::read(&src).unwrap_or_default();
-        let packed = miniz_oxide::deflate::compress_to_vec(&text, 10);
+        let packed = miniz_oxide::deflate::compress_to_vec(&text, level);
         std::fs::write(out.join(format!("{lang}.tsv.z")), packed).expect("write language pack");
     }
+}
+
+fn pack_material_icons() {
+    let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let level = pack_deflate_level();
+    let mat_dir = manifest.join("assets").join("material-icons");
+    let json_path = mat_dir.join("material-icons.json");
+    let icons_dir = mat_dir.join("icons");
+    println!("cargo:rerun-if-changed={}", json_path.display());
+    println!("cargo:rerun-if-changed={}", icons_dir.display());
+
+    let json_raw =
+        std::fs::read(&json_path).expect("read assets/material-icons/material-icons.json");
+    let json_packed = miniz_oxide::deflate::compress_to_vec(&json_raw, level);
+    std::fs::write(out.join("material-icons.json.z"), json_packed)
+        .expect("write material-icons.json.z");
+
+    let mut svgs: Vec<(String, Vec<u8>)> = std::fs::read_dir(&icons_dir)
+        .expect("read assets/material-icons/icons")
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("svg")) {
+                let name = p.file_name()?.to_string_lossy().into_owned();
+                let bytes = std::fs::read(&p).ok()?;
+                Some((name, bytes))
+            } else {
+                None
+            }
+        })
+        .collect();
+    svgs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    const CHUNK_SIZE: usize = 32;
+    let mut chunks_meta: Vec<(u32, u32, u32)> = Vec::new();
+    let mut entries_meta: Vec<(String, u16, u32, u32)> = Vec::with_capacity(svgs.len());
+    let mut payload: Vec<u8> = Vec::new();
+
+    for (chunk_idx, group) in svgs.chunks(CHUNK_SIZE).enumerate() {
+        let mut raw_chunk = Vec::new();
+        for (name, bytes) in group {
+            let off = raw_chunk.len() as u32;
+            let len = bytes.len() as u32;
+            raw_chunk.extend_from_slice(bytes);
+            entries_meta.push((name.clone(), chunk_idx as u16, off, len));
+        }
+        let compressed = miniz_oxide::deflate::compress_to_vec(&raw_chunk, level);
+        let data_offset = payload.len() as u32;
+        let comp_len = compressed.len() as u32;
+        let raw_len = raw_chunk.len() as u32;
+        payload.extend_from_slice(&compressed);
+        chunks_meta.push((data_offset, comp_len, raw_len));
+    }
+
+    let mut pack =
+        Vec::with_capacity(64 + chunks_meta.len() * 12 + entries_meta.len() * 32 + payload.len());
+    pack.extend_from_slice(&(chunks_meta.len() as u32).to_le_bytes());
+    for (off, comp, raw) in &chunks_meta {
+        pack.extend_from_slice(&off.to_le_bytes());
+        pack.extend_from_slice(&comp.to_le_bytes());
+        pack.extend_from_slice(&raw.to_le_bytes());
+    }
+    pack.extend_from_slice(&(entries_meta.len() as u32).to_le_bytes());
+    for (name, cidx, off, len) in &entries_meta {
+        let nb = name.as_bytes();
+        pack.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+        pack.extend_from_slice(nb);
+        pack.extend_from_slice(&cidx.to_le_bytes());
+        pack.extend_from_slice(&off.to_le_bytes());
+        pack.extend_from_slice(&len.to_le_bytes());
+    }
+    pack.extend_from_slice(&payload);
+    std::fs::write(out.join("material-icons.pack"), pack).expect("write material-icons.pack");
 }
 
 fn main() {
@@ -18,13 +100,16 @@ fn main() {
 
     let build = match std::env::var("FLUXCODE_BUILD") {
         Ok(b) if valid(&b) => b,
-        Ok(b) if !b.is_empty() => panic!("FLUXCODE_BUILD must look like BuildDev-2026-11-09-17-30-12, got {b:?}"),
+        Ok(b) if !b.is_empty() => {
+            panic!("FLUXCODE_BUILD must look like BuildDev-2026-11-09-17-30-12, got {b:?}")
+        }
         _ => utc_now(),
     };
     println!("cargo:rustc-env=FLUXCODE_BUILD={build}");
     compile_zig_accel();
     release_builds(&build);
     pack_languages();
+    pack_material_icons();
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -33,7 +118,11 @@ fn main() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     std::fs::copy(manifest.join("assets/icon.ico"), out.join("fluxcode.ico")).expect("copy icon");
 
-    let n: Vec<u16> = build.split('-').skip(1).map(|p| p.parse().unwrap_or(0)).collect();
+    let n: Vec<u16> = build
+        .split('-')
+        .skip(1)
+        .map(|p| p.parse().unwrap_or(0))
+        .collect();
     let (y, md, hm, s) = (n[0], n[1] * 100 + n[2], n[3] * 100 + n[4], n[5]);
     let rc = format!(
         r#"1 ICON "fluxcode.ico"
@@ -63,7 +152,9 @@ END
     );
     let rc_path = out.join("fluxcode.rc");
     std::fs::write(&rc_path, rc).expect("write rc");
-    embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional().expect("embed resources");
+    embed_resource::compile(&rc_path, embed_resource::NONE)
+        .manifest_optional()
+        .expect("embed resources");
 }
 
 fn zig_target(rust_target: &str) -> Option<&'static str> {
@@ -83,7 +174,11 @@ fn find_zig() -> Option<std::path::PathBuf> {
     if let Some(p) = std::env::var_os("ZIG").filter(|v| !v.is_empty()) {
         return Some(std::path::PathBuf::from(p));
     }
-    if std::process::Command::new("zig").arg("version").output().is_ok_and(|o| o.status.success()) {
+    if std::process::Command::new("zig")
+        .arg("version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
         return Some(std::path::PathBuf::from("zig"));
     }
     #[cfg(windows)]
@@ -107,7 +202,9 @@ fn compile_zig_accel() {
     }
     let Some(zig) = find_zig() else { return };
     let rust_target = std::env::var("TARGET").unwrap_or_default();
-    let Some(ztarget) = zig_target(&rust_target) else { return };
+    let Some(ztarget) = zig_target(&rust_target) else {
+        return;
+    };
 
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let src = manifest.join("zig/src/flux_accel.zig");
@@ -115,7 +212,11 @@ fn compile_zig_accel() {
         return;
     }
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let lib_name = if rust_target.contains("windows-msvc") { "flux_accel.lib" } else { "libflux_accel.a" };
+    let lib_name = if rust_target.contains("windows-msvc") {
+        "flux_accel.lib"
+    } else {
+        "libflux_accel.a"
+    };
     let out_lib = out.join(lib_name);
 
     let run = |opt_args: &[&str]| -> bool {
@@ -141,29 +242,117 @@ fn compile_zig_accel() {
 }
 
 fn release_builds(this_build: &str) {
+    use std::collections::HashMap;
     println!("cargo:rerun-if-changed=changelog.flux");
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let git = |args: &[&str]| -> Option<String> {
-        let o = std::process::Command::new("git").args(args).current_dir(&manifest).output().ok()?;
-        o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&manifest)
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
+
+    let mut tag_targets: Vec<(String, String)> = git(&[
+        "for-each-ref",
+        "--format=%(refname:short)%09%(*objectname)%09%(objectname)",
+        "refs/tags/BuildDev-*",
+    ])
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| {
+        let mut parts = l.split('\t');
+        let tag = parts.next()?.trim();
+        let deref = parts.next().unwrap_or("").trim();
+        let obj = parts.next().unwrap_or("").trim();
+        let sha = if deref.is_empty() { obj } else { deref };
+        (!tag.is_empty() && !sha.is_empty()).then(|| (tag.to_string(), sha.to_string()))
+    })
+    .collect();
+    tag_targets.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut earliest_tag: HashMap<String, String> = HashMap::new();
+    let mut first_commit: HashMap<String, String> = HashMap::new();
+    if !tag_targets.is_empty() {
+        let mut parents_map: HashMap<String, Vec<String>> = HashMap::new();
+        for line in git(&["rev-list", "--parents", "--all"])
+            .unwrap_or_default()
+            .lines()
+        {
+            let mut it = line.split_whitespace();
+            if let Some(sha) = it.next() {
+                parents_map.insert(sha.to_string(), it.map(str::to_string).collect());
+            }
+        }
+        // Propagate BuildDev-* tags in ascending order so first write per ancestor is earliest tag.
+        let mut stack: Vec<String> = Vec::new();
+        for (tag, target) in tag_targets {
+            stack.push(target);
+            while let Some(cur) = stack.pop() {
+                if earliest_tag.contains_key(&cur) {
+                    continue;
+                }
+                if let Some(ps) = parents_map.get(&cur) {
+                    for p in ps {
+                        if !earliest_tag.contains_key(p) {
+                            stack.push(p.clone());
+                        }
+                    }
+                }
+                earliest_tag.insert(cur, tag.clone());
+            }
+        }
+
+        let mut cur_commit = String::new();
+        for line in git(&[
+            "log",
+            "--reverse",
+            "--format=COMMIT:%H",
+            "-p",
+            "-U0",
+            "--",
+            "changelog.flux",
+        ])
+        .unwrap_or_default()
+        .lines()
+        {
+            if let Some(h) = line.strip_prefix("COMMIT:") {
+                cur_commit = h.trim().to_string();
+            } else if !cur_commit.is_empty() && line.starts_with('+') && !line.starts_with("+++") {
+                if let Some(t) = line[1..]
+                    .trim_end()
+                    .strip_prefix("@title en:")
+                    .map(str::trim)
+                {
+                    if !t.is_empty() {
+                        first_commit
+                            .entry(t.to_string())
+                            .or_insert_with(|| cur_commit.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let mut rows = String::new();
-    let tagged = git(&["tag", "-l", "BuildDev-*"]).is_some_and(|t| !t.trim().is_empty());
+    let tagged = !earliest_tag.is_empty();
     let text = std::fs::read_to_string(manifest.join("changelog.flux")).unwrap_or_default();
     for line in text.lines() {
-        let Some(title) = line.trim_end().strip_prefix("@title en:").map(str::trim) else { continue };
+        let Some(title) = line.trim_end().strip_prefix("@title en:").map(str::trim) else {
+            continue;
+        };
         if title.is_empty() || title == "..." || !tagged {
             continue;
         }
-        let pick = format!("-S@title en: {title}");
-        let Some(first) = git(&["log", "--format=%H", "--reverse", &pick, "--", "changelog.flux"]).and_then(|s| s.lines().next().map(str::to_string)) else {
-            rows.push_str(&format!("    ({title:?}, {this_build:?}),\n"));
-            continue;
-        };
-        let mut tags: Vec<String> = git(&["tag", "--contains", &first, "--list", "BuildDev-*"]).unwrap_or_default().lines().map(str::to_string).collect();
-        tags.sort();
-        let build = tags.into_iter().next().unwrap_or_else(|| this_build.to_string());
+        let build = first_commit
+            .get(title)
+            .and_then(|sha| earliest_tag.get(sha))
+            .map(String::as_str)
+            .unwrap_or(this_build);
         rows.push_str(&format!("    ({title:?}, {build:?}),\n"));
     }
     let src = format!("/// (release title, the build it came in), from git; see build.rs.\npub const RELEASE_BUILDS: &[(&str, &str)] = &[\n{rows}];\n");
@@ -171,14 +360,23 @@ fn release_builds(this_build: &str) {
 }
 
 fn valid(b: &str) -> bool {
-    let Some(rest) = b.strip_prefix("BuildDev-") else { return false };
+    let Some(rest) = b.strip_prefix("BuildDev-") else {
+        return false;
+    };
     let parts: Vec<&str> = rest.split('-').collect();
     let widths = [4, 2, 2, 2, 2, 2];
-    parts.len() == 6 && parts.iter().zip(widths).all(|(p, w)| p.len() == w && p.bytes().all(|c| c.is_ascii_digit()))
+    parts.len() == 6
+        && parts
+            .iter()
+            .zip(widths)
+            .all(|(p, w)| p.len() == w && p.bytes().all(|c| c.is_ascii_digit()))
 }
 
 fn utc_now() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -189,5 +387,10 @@ fn utc_now() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("BuildDev-{y:04}-{m:02}-{d:02}-{:02}-{:02}-{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "BuildDev-{y:04}-{m:02}-{d:02}-{:02}-{:02}-{:02}",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
