@@ -348,7 +348,12 @@ pub fn overview(i: &Inputs) -> String {
         let branch = g.branch.as_deref().unwrap_or("(detached)");
         let mut line = format!("Git: branch {branch}");
         if let Some(up) = &g.upstream {
-            let _ = write!(line, ", tracking {up} ({} ahead, {} behind)", g.ahead, g.behind);
+            let _ = write!(
+                line,
+                ", tracking {up} ({} ahead, {} behind)",
+                g.ahead,
+                g.behind
+            );
         }
         let changed: Vec<String> = g
             .conflicts

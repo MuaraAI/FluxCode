@@ -2234,7 +2234,19 @@ impl Workbench {
             let rows = flexible.then(|| {
                 let mut col = v_flex().w_full().min_w_0().pb_1();
                 if s.workflows.is_empty() && s.runs.is_empty() {
-                    col = col.child(div().flex_shrink_0().px(theme::u(18.)).py_1().text_xs().text_color(c(theme::FG_DIM)).child(if s.actions_loaded { "No active workflows in this repository." } else { "Loading workflows…" }));
+                    col = col.child(
+                        div()
+                            .flex_shrink_0()
+                            .px(theme::u(18.))
+                            .py_1()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(if s.actions_loaded {
+                                "No active workflows in this repository."
+                            } else {
+                                "Loading workflows…"
+                            }),
+                    );
                 }
                 for (i, wf) in s.workflows.iter().enumerate() {
                     let w = wf.clone();
