@@ -3,7 +3,7 @@ use super::{
     ConfigOpt, Status,
 };
 use crate::i18n::tr;
-use crate::theme::{self, c};
+use crate::theme::{self, c, GlassExt};
 use crate::workbench::Workbench;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
@@ -78,11 +78,20 @@ impl Workbench {
         let card_h = (f32::from(vp.height) - 72.).clamp(320., 580.);
         let compact = card_w < COMPACT;
         let tab = self.agent.settings_tab;
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let vertical_nav = !compact;
+        let nav_liq = crate::ui::liquid::keyed_state("ag-set-nav-liq", window, cx);
+        let nav_cross = if vertical_nav { 168.0f32 } else { 30.0f32 };
+        let active_tab_ix = Tab::ALL.iter().position(|t| *t == tab);
 
-        let nav = Tab::ALL.into_iter().map(|t| {
+        let nav_items = Tab::ALL.into_iter().enumerate().map(|(ix, t)| {
             let on = t == tab;
+            let probe = crate::ui::liquid::keyed_item_probe(nav_liq.clone(), ix, view_id);
+            let liq_h = nav_liq.clone();
             h_flex()
                 .id(SharedString::from(format!("ag-set-tab-{t:?}")))
+                .relative()
                 .flex_none()
                 .h(theme::u(30.))
                 .px_2p5()
@@ -91,12 +100,28 @@ impl Workbench {
                 .cursor_pointer()
                 .text_sm()
                 .when(on, |d| {
-                    d.bg(c(theme::SELECT)).text_color(c(theme::FG_STRONG))
+                    d.when(!motion, |d| d.bg(c(theme::SELECT)))
+                        .text_color(c(theme::FG_STRONG))
                 })
                 .when(!on, |d| {
-                    d.text_color(c(theme::FG_MUTED))
-                        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                    d.text_color(c(theme::FG_MUTED)).when(!motion, |d| {
+                        d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                    })
                 })
+                .on_hover(move |entered: &bool, _, cx| {
+                    if *entered && motion {
+                        crate::ui::liquid::keyed_hover_enter(
+                            &liq_h,
+                            ix,
+                            vertical_nav,
+                            nav_cross,
+                            155,
+                            view_id,
+                            cx,
+                        );
+                    }
+                })
+                .child(probe)
                 .child(
                     Icon::new(t.icon())
                         .size(theme::u(15.))
@@ -113,28 +138,85 @@ impl Workbench {
                     cx.notify();
                 }))
         });
+        let (nav_frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &nav_liq,
+            vertical_nav,
+            Tab::ALL.len(),
+            active_tab_ix,
+            nav_cross,
+            200,
+            motion,
+        );
+        let nav_layer = nav_frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "ag-set-nav-liq-l",
+                vertical_nav,
+                crate::ui::liquid::agent_liquid_style(nav_cross, 6.0),
+                fr,
+            )
+        });
+        let nav_origin = crate::ui::liquid::keyed_origin_probe(nav_liq.clone(), view_id);
         let nav = if compact {
             h_flex()
                 .id("ag-set-nav")
                 .flex_none()
                 .px_3()
                 .py_2()
-                .gap_1()
                 .overflow_x_scroll()
                 .border_b_1()
-                .border_color(c(theme::BORDER))
-                .children(nav)
+                .border_color(if theme::glass() {
+                    theme::glass_edge()
+                } else {
+                    c(theme::BORDER)
+                })
+                .child(
+                    h_flex()
+                        .id("ag-set-nav-inner")
+                        .relative()
+                        .gap_1()
+                        .on_hover({
+                            let h = nav_liq.clone();
+                            move |entered: &bool, _, cx| {
+                                if !*entered && motion {
+                                    crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                                }
+                            }
+                        })
+                        .child(nav_origin)
+                        .children(nav_layer)
+                        .children(nav_items),
+                )
                 .into_any_element()
         } else {
             v_flex()
                 .flex_none()
                 .w(theme::u(184.))
                 .p_2()
-                .gap_0p5()
                 .border_r_1()
-                .border_color(c(theme::BORDER))
-                .bg(c(theme::BG_EDITOR))
-                .children(nav)
+                .border_color(if theme::glass() {
+                    theme::glass_edge()
+                } else {
+                    c(theme::BORDER)
+                })
+                .bg(c(theme::BG_EDITOR).opacity(if theme::glass() { 0.45 } else { 1.0 }))
+                .child(
+                    v_flex()
+                        .id("ag-set-nav-inner")
+                        .relative()
+                        .w_full()
+                        .gap_0p5()
+                        .on_hover({
+                            let h = nav_liq.clone();
+                            move |entered: &bool, _, cx| {
+                                if !*entered && motion {
+                                    crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                                }
+                            }
+                        })
+                        .child(nav_origin)
+                        .children(nav_layer)
+                        .children(nav_items),
+                )
                 .into_any_element()
         };
 
@@ -241,17 +323,22 @@ impl Workbench {
 
         let card = v_flex()
             .id("ag-settings")
+            .relative()
             .key_context("AgentSettings")
             .track_focus(&self.agent.settings_focus)
             .occlude()
             .w(px(card_w))
             .h(px(card_h))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(c(theme::BORDER_STRONG))
-            .bg(c(theme::BG_SIDE))
-            .shadow_lg()
+            .when(theme::glass(), |d| d.glass_pop())
+            .when(!theme::glass(), |d| {
+                d.rounded(px(6.))
+                    .border_1()
+                    .border_color(c(theme::BORDER_STRONG))
+                    .bg(c(theme::BG_SIDE))
+                    .shadow_lg()
+            })
             .overflow_hidden()
+            .child(crate::ui::liquid::fresnel_top_sheen())
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
@@ -277,14 +364,16 @@ impl Workbench {
                     .into_any_element()
             });
 
-        let modal_card: AnyElement = if cx.reduce_motion() {
+        let modal_card: AnyElement = if !motion {
             card.into_any_element()
         } else {
             card.with_animation(
                 "ag-settings-in",
-                Animation::new(std::time::Duration::from_millis(160))
-                    .with_easing(gpui_kit::ease_out_quint()),
-                |el, t| el.opacity(t).mt(px((1. - t) * 6.)),
+                Animation::new(std::time::Duration::from_millis(175)),
+                |el, t| {
+                    let pose = crate::ui::liquid::spring_glass_pose(t, 10.5, 8.0);
+                    el.opacity(pose.opacity).mt(px(pose.offset_px))
+                },
             )
             .into_any_element()
         };
@@ -713,68 +802,275 @@ impl Workbench {
             }
         }
         let (fam, accounts) = self.agent_accounts();
-        if fam.is_some() {
+        if let Some(f) = fam {
             let current = self.agent_account().map(|a| a.name);
             let waiting = self.agent.account_wait.as_ref().map(|a| a.name.clone());
-            let mut acc_row = h_flex().flex_wrap().gap_1p5().child(
-                Button::new("ag-set-acc-def")
-                    .label(tr("Default account"))
-                    .xsmall()
-                    .when(current.is_none(), |b| b.primary())
-                    .when(current.is_some(), |b| b.ghost())
-                    .on_click(cx.listener(|this, _, _, cx| this.agent_use_account(None, cx))),
+            let mut acc_col = v_flex().w_full().gap_2();
+
+            let profile_card = |card_id: String,
+                                id_info: crate::agent::worktree::ProfileIdentity,
+                                is_active: bool,
+                                actions: AnyElement| {
+                let status_label = if id_info.synced {
+                    tr("Synced")
+                } else {
+                    tr("Sign in required")
+                };
+                let status_col = if id_info.synced {
+                    theme::GREEN
+                } else {
+                    theme::WARN
+                };
+                let email_text = id_info
+                    .email
+                    .clone()
+                    .unwrap_or_else(|| tr("No email detected yet").to_string());
+                v_flex()
+                    .id(SharedString::from(card_id))
+                    .relative()
+                    .w_full()
+                    .p_2p5()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(if is_active {
+                        c(theme::ACCENT).opacity(0.50)
+                    } else if theme::glass() {
+                        theme::glass_edge()
+                    } else {
+                        c(theme::BORDER)
+                    })
+                    .bg(if theme::glass() {
+                        theme::glass_fill()
+                    } else {
+                        c(theme::BG_ELEVATED).into()
+                    })
+                    .child(crate::ui::liquid::fresnel_top_sheen())
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .size(theme::u(28.))
+                                    .rounded_full()
+                                    .bg(c(theme::ACCENT).opacity(0.12))
+                                    .border_1()
+                                    .border_color(c(theme::ACCENT).opacity(0.45))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(c(theme::ACCENT_TEXT))
+                                    .child(id_info.initial),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        h_flex()
+                                            .flex_wrap()
+                                            .gap_1p5()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(c(theme::FG_STRONG))
+                                                    .child(id_info.name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_1p5()
+                                                    .rounded(px(4.))
+                                                    .border_1()
+                                                    .border_color(c(status_col).opacity(0.42))
+                                                    .bg(c(status_col).opacity(0.10))
+                                                    .text_size(theme::u(10.))
+                                                    .text_color(c(status_col))
+                                                    .child(status_label),
+                                            )
+                                            .when_some(id_info.tier, |h, tier| {
+                                                h.child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .rounded(px(4.))
+                                                        .bg(c(theme::ACCENT).opacity(0.14))
+                                                        .text_size(theme::u(10.))
+                                                        .text_color(c(theme::ACCENT_TEXT))
+                                                        .child(tier),
+                                                )
+                                            })
+                                            .when_some(id_info.flow_profile, |h, fp| {
+                                                h.child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .rounded(px(4.))
+                                                        .border_1()
+                                                        .border_color(c(theme::BORDER))
+                                                        .text_size(theme::u(10.))
+                                                        .text_color(c(theme::FG_MUTED))
+                                                        .child(format!("Flow: {fp}")),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .truncate()
+                                            .text_color(c(if id_info.email.is_some() {
+                                                theme::FG
+                                            } else {
+                                                theme::FG_DIM
+                                            }))
+                                            .child(email_text),
+                                    ),
+                            ),
+                    )
+                    .child(actions)
+            };
+
+            let def_id = crate::agent::worktree::profile_identity(
+                f,
+                None,
+                if current.is_none() {
+                    self.agent.active_email.as_deref()
+                } else {
+                    None
+                },
+                if current.is_none() {
+                    self.agent.active_tier.as_deref()
+                } else {
+                    None
+                },
             );
+            let def_actions = h_flex()
+                .flex_wrap()
+                .gap_1p5()
+                .child(
+                    Button::new("ag-set-acc-def")
+                        .label(tr(if current.is_none() { "Active" } else { "Use" }))
+                        .xsmall()
+                        .when(current.is_none(), |b| b.primary())
+                        .when(current.is_some(), |b| b.ghost())
+                        .on_click(cx.listener(|this, _, _, cx| this.agent_use_account(None, cx))),
+                )
+                .when(f == "antigravity", |h| {
+                    h.child(
+                        Button::new("ag-set-acc-def-login")
+                            .label(tr("Choose login method…"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.agent_use_account(None, cx);
+                                this.agent_close_options(w, cx);
+                                this.agent_open_auth_picker(cx);
+                            })),
+                    )
+                })
+                .into_any_element();
+            acc_col = acc_col.child(profile_card(
+                "ag-set-card-def".into(),
+                def_id,
+                current.is_none(),
+                def_actions,
+            ));
+
             for a in &accounts {
                 let on = current.as_deref() == Some(a.name.as_str());
                 let name = a.name.clone();
+                let login_name = a.name.clone();
                 let signout_name = a.name.clone();
-                let tag = match &a.flow_profile {
-                    Some(fp) => format!("{} ({fp})", a.name),
-                    None => a.name.clone(),
-                };
-                acc_row = acc_row.child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new(SharedString::from(format!("ag-set-acc-{name}")))
-                                .label(tag)
-                                .xsmall()
-                                .when(on, |b| b.primary())
-                                .when(!on, |b| b.ghost())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.agent_use_account(Some(name.clone()), cx);
-                                })),
-                        )
-                        .child(
+                let id_info = crate::agent::worktree::profile_identity(
+                    f,
+                    Some(a),
+                    if on {
+                        self.agent.active_email.as_deref()
+                    } else {
+                        None
+                    },
+                    if on {
+                        self.agent.active_tier.as_deref()
+                    } else {
+                        None
+                    },
+                );
+                let card_actions = h_flex()
+                    .flex_wrap()
+                    .gap_1p5()
+                    .child(
+                        Button::new(SharedString::from(format!("ag-set-acc-{name}")))
+                            .label(tr(if on { "Active" } else { "Use" }))
+                            .xsmall()
+                            .when(on, |b| b.primary())
+                            .when(!on, |b| b.ghost())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.agent_use_account(Some(name.clone()), cx);
+                            })),
+                    )
+                    .when(f == "antigravity", |h| {
+                        h.child(
                             Button::new(SharedString::from(format!(
-                                "ag-set-acc-out-{signout_name}"
+                                "ag-set-acc-login-{login_name}"
                             )))
-                            .icon(IconName::Close)
+                            .label(tr("Sign in / Switch login"))
                             .xsmall()
                             .ghost()
-                            .tooltip(crate::trf!("Sign out of {name}"; name => a.name))
                             .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.agent_sign_out(signout_name.clone(), cx);
+                                move |this, _, w, cx| {
+                                    this.agent_use_account(Some(login_name.clone()), cx);
+                                    this.agent_close_options(w, cx);
+                                    this.agent_open_auth_picker(cx);
                                 },
                             )),
-                        ),
-                );
+                        )
+                    })
+                    .child(
+                        Button::new(SharedString::from(format!("ag-set-acc-out-{signout_name}")))
+                            .label(tr("Sign out"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.agent_sign_out(signout_name.clone(), cx);
+                            })),
+                    )
+                    .into_any_element();
+                acc_col = acc_col.child(profile_card(
+                    format!("ag-set-card-{}", a.name),
+                    id_info,
+                    on,
+                    card_actions,
+                ));
             }
-            acc_row = acc_row.child(match waiting {
-                Some(w_name) => Button::new("ag-set-acc-wait")
-                    .label(crate::trf!("Waiting for {name} to sign in… (cancel)"; name => w_name))
-                    .xsmall()
-                    .on_click(cx.listener(|this, _, _, cx| this.agent_cancel_account(cx))),
-                None => Button::new("ag-set-acc-add")
-                    .label(tr("Add account and sign in…"))
-                    .xsmall()
-                    .on_click(cx.listener(|this, _, _, cx| this.agent_add_account(cx))),
-            });
+
+            acc_col = acc_col.child(
+                h_flex().flex_wrap().gap_1p5().child(match waiting {
+                    Some(w_name) => Button::new("ag-set-acc-wait")
+                        .label(crate::trf!(
+                            "Waiting for {name} to sign in… (cancel)";
+                            name => w_name
+                        ))
+                        .xsmall()
+                        .on_click(cx.listener(|this, _, _, cx| this.agent_cancel_account(cx))),
+                    None => Button::new("ag-set-acc-add")
+                        .label(tr("Add account and sign in…"))
+                        .xsmall()
+                        .primary()
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.agent_add_account(cx);
+                            if f == "antigravity" {
+                                this.agent_close_options(w, cx);
+                            }
+                        })),
+                }),
+            );
             col = col.child(divider()).child(row(
                 tr("Account").into(),
-                Some(tr("Isolated Windows sessions saved for this agent without touching global logins.").into()),
-                acc_row.into_any_element(),
+                Some(tr("Synced with real Antigravity profiles. Choose Google Default Browser, Gemini Enterprise, or API key login per profile.").into()),
+                acc_col.into_any_element(),
                 true,
             ));
         }
@@ -875,6 +1171,29 @@ impl Workbench {
             }),
         );
 
+        let use_default_browser = self.settings.agent_gflow_browser != "isolated";
+        let browser_bar = crate::ui::SegmentedControl::new(
+            "ag-gf-browser",
+            [
+                ("default", tr("Default browser")),
+                ("isolated", tr("Isolated Chrome")),
+            ]
+            .into_iter()
+            .map(|(id, label)| {
+                let on = (id == "default") == use_default_browser;
+                crate::ui::SegItem::new(
+                    SharedString::from(format!("ag-gf-br-{id}")),
+                    label,
+                    on,
+                    cx.listener(move |this, _, _, cx| {
+                        this.settings.agent_gflow_browser = id.into();
+                        this.settings.save();
+                        cx.notify();
+                    }),
+                )
+            }),
+        );
+
         let next_name = crate::gflow::next_profile_name(&profiles);
         let out_dir = crate::gflow::output_dir();
         let actions = h_flex()
@@ -887,6 +1206,23 @@ impl Workbench {
                     .primary()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let name = next_name.clone();
+                        if this.settings.agent_gflow_browser != "isolated" {
+                            match crate::gflow::register_profile_slot(&name) {
+                                Ok(_) => {
+                                    cx.open_url("https://labs.google/fx/tools/flow?hl=en");
+                                    this.agent.gflow_note = Some((
+                                        crate::trf!(
+                                            "Opened Google Flow in your default browser for {name}.";
+                                            name => name
+                                        ),
+                                        false,
+                                    ));
+                                }
+                                Err(e) => this.agent.gflow_note = Some((e, true)),
+                            }
+                            cx.notify();
+                            return;
+                        }
                         this.agent.gflow_note = Some((
                             crate::trf!("Opened browser for Flow profile {name}."; name => name),
                             false,
@@ -998,7 +1334,34 @@ impl Workbench {
                             .child(tr(state.mode.blurb())),
                     ),
             )
-            .when(!has_google_chrome, |v| {
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_MUTED))
+                                    .child(tr("Flow login browser")),
+                            )
+                            .child(browser_bar),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(if use_default_browser {
+                                tr("Opens Google Flow in your system default browser so you can pick any signed-in Google account.")
+                            } else {
+                                tr("Opens an isolated Chrome profile window for multi-account Flow automation.")
+                            }),
+                    ),
+            )
+            .when(!use_default_browser && !has_google_chrome, |v| {
                 v.child(
                     div()
                         .p_2()
@@ -1027,21 +1390,40 @@ impl Workbench {
                 let p_rm = p.name.clone();
                 let is_pinned = state.sticky_profile.as_deref() == Some(p.name.as_str())
                     || (state.sticky_profile.is_none() && p.is_default);
+                let initial: String = p
+                    .email
+                    .as_deref()
+                    .and_then(|e| e.chars().find(|c| c.is_ascii_alphanumeric()))
+                    .or_else(|| p.name.chars().find(|c| c.is_ascii_alphanumeric()))
+                    .map(|c| c.to_ascii_uppercase().to_string())
+                    .unwrap_or_else(|| "F".into());
                 let email = p.email.unwrap_or_else(|| tr("Not signed in").to_string());
                 let strat_label: SharedString = if p.chrome_strategy {
                     tr("Chrome").into()
+                } else if p.strategy == "default-browser" {
+                    tr("Default browser").into()
                 } else {
                     p.strategy.clone().into()
                 };
                 col = col.child(
                     v_flex()
+                        .relative()
                         .w_full()
                         .p_2()
                         .gap_1p5()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(c(theme::BORDER))
-                        .bg(c(theme::BG_ELEVATED))
+                        .border_color(if theme::glass() {
+                            theme::glass_edge()
+                        } else {
+                            c(theme::BORDER)
+                        })
+                        .bg(if theme::glass() {
+                            theme::glass_fill()
+                        } else {
+                            c(theme::BG_ELEVATED).into()
+                        })
+                        .child(crate::ui::liquid::fresnel_top_sheen())
                         .child(
                             h_flex()
                                 .flex_wrap()
@@ -1049,12 +1431,28 @@ impl Workbench {
                                 .items_center()
                                 .child(
                                     div()
+                                        .flex_none()
+                                        .size(theme::u(20.))
+                                        .rounded_full()
+                                        .bg(c(theme::ACCENT).opacity(0.12))
+                                        .border_1()
+                                        .border_color(c(theme::ACCENT).opacity(0.40))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(theme::u(10.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(c(theme::ACCENT_TEXT))
+                                        .child(initial),
+                                )
+                                .child(
+                                    div()
                                         .text_xs()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(c(theme::FG_STRONG))
                                         .child(p.name.clone()),
                                 )
-                                .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(email))
+                                .child(div().text_xs().text_color(c(theme::FG)).child(email))
                                 .child(
                                     div()
                                         .px_1p5()
@@ -1130,8 +1528,21 @@ impl Workbench {
                                         .label(tr("Open login"))
                                         .xsmall()
                                         .ghost()
-                                        .on_click(cx.listener(move |_this, _, _, cx| {
+                                        .on_click(cx.listener(move |this, _, _, cx| {
                                             let name = p_login.clone();
+                                            if this.settings.agent_gflow_browser != "isolated" {
+                                                let _ = crate::gflow::register_profile_slot(&name);
+                                                cx.open_url("https://labs.google/fx/tools/flow?hl=en");
+                                                this.agent.gflow_note = Some((
+                                                    crate::trf!(
+                                                        "Opened Google Flow in your default browser for {name}.";
+                                                        name => name
+                                                    ),
+                                                    false,
+                                                ));
+                                                cx.notify();
+                                                return;
+                                            }
                                             cx.spawn(async move |this, cx| {
                                                 let res = cx
                                                     .background_spawn(async move {

@@ -1,7 +1,7 @@
 # gpui-fast-windows 0.1.13, as FluxCode builds it
 
 A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
-(Apache-2.0, see LICENSE) with six changes, in `src/directx_renderer.rs`,
+(Apache-2.0, see LICENSE) with seven changes, in `src/directx_renderer.rs`,
 `src/directx_atlas.rs`, `src/fast/frame.rs`, `src/window.rs` and `src/events.rs`. Search for "FluxCode" to find them.
 
 1. **Path textures on demand.** Upstream makes two window-sized textures for drawing
@@ -36,5 +36,10 @@ A copy of [gpui-fast-windows](https://github.com/longbridge/gpui-fast) 0.1.13
 6. **Oversized atlas tile guard** (MuaraAI/FluxCode#121). `DirectXAtlasTextures::allocate`
    rejects tiles above Direct3D 11's 16384px limit before `push_texture` so a tall
    image cannot leak a clamped 16384px texture every frame.
+7. **Non-topmost DirectComposition target + focus reclaim for embedded child HWNDs.**
+   `DirectComposition::new` calls `CreateTargetForHwnd(hwnd, false)` so `WS_CHILD`
+   native WebView2 windows composite cleanly above the GPUI swap chain while preserving
+   DWM Acrylic and atomic window moves; `handle_mouse_down_msg` calls `SetFocus(handle)`
+   when `GetFocus() != handle` to reclaim keyboard focus when clicking back into GPUI.
 
-To update: copy the new upstream version over this folder and apply the six changes again.
+To update: copy the new upstream version over this folder and apply the seven changes again.

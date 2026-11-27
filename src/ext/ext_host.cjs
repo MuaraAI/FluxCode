@@ -1011,6 +1011,22 @@ const vscodeApi = {
   tasks: { registerTaskProvider: () => new Disposable(() => {}), fetchTasks: async () => [] },
   scm: { createSourceControl: (id, label) => ({ id, label, createResourceGroup: () => ({ resourceStates: [], dispose() {} }), dispose() {} }) },
   tests: { createTestController: () => ({ items: { replace() {}, add() {} }, createRunProfile: () => ({ dispose() {} }), dispose() {} }) },
+  lm: {
+    selectChatModels: async () => [],
+    onDidChangeChatModels: new EventEmitter().event,
+    registerTool: () => new Disposable(() => {}),
+    tools: [],
+  },
+  chat: {
+    createChatParticipant: (id, handler) => ({
+      id,
+      handler,
+      iconPath: undefined,
+      followupProvider: undefined,
+      onDidReceiveFeedback: new EventEmitter().event,
+      dispose() {},
+    }),
+  },
   l10n: { t: (msg, ...args) => (typeof msg === 'string' ? msg.replace(/\{(\d+)\}/g, (_, i) => (args[i] !== undefined ? String(args[i]) : `{${i}}`)) : String(msg)) },
 };
 
@@ -1109,8 +1125,10 @@ async function resolveWebviewViewInternal(extId, viewId, handle) {
     hostState.pendingResolveViews.push({ extId, viewId, handle });
     return { pending: true };
   }
-  const act = hostState.activated.get(String(reg.extId || extId).toLowerCase());
-  const extFolder = (act && act.folder) || process.cwd();
+  const targetKey = String(reg.extId || extId).toLowerCase();
+  const act = hostState.activated.get(targetKey);
+  const meta = hostState.allExtMetas.find((m) => String(m.id || '').toLowerCase() === targetKey);
+  const extFolder = (act && act.folder) || (meta && meta.folder) || process.cwd();
   const { webview, receiveEmitter } = makeWebview(handle, extFolder, {});
   const disposeEmitter = new EventEmitter();
   const visEmitter = new EventEmitter();
@@ -1125,7 +1143,15 @@ async function resolveWebviewViewInternal(extId, viewId, handle) {
     onDidChangeVisibility: visEmitter.event,
     show() {},
   };
-  hostState.webviewViews.set(handle, { viewId, extId: reg.extId, webview, receiveEmitter });
+  hostState.webviewViews.set(handle, {
+    viewId,
+    extId: reg.extId,
+    webview,
+    webviewView,
+    receiveEmitter,
+    visEmitter,
+    disposeEmitter,
+  });
   const prevId = activeExtLogId;
   activeExtLogId = reg.extId;
   try {
@@ -1204,6 +1230,33 @@ const handlers = {
         try { parsed = JSON.parse(parsed); } catch {}
       }
       slot.receiveEmitter.fire(parsed);
+    }
+    return { ok: true };
+  },
+  async webviewVisibility(params) {
+    const slot = hostState.webviewViews.get(params.handle);
+    if (slot && slot.webviewView) {
+      const next = Boolean(params.visible);
+      if (slot.webviewView.visible !== next) {
+        slot.webviewView.visible = next;
+        slot.visEmitter.fire();
+      }
+    }
+    return { ok: true };
+  },
+  async disposeWebview(params) {
+    const viewSlot = hostState.webviewViews.get(params.handle);
+    if (viewSlot) {
+      hostState.webviewViews.delete(params.handle);
+      viewSlot.receiveEmitter.dispose();
+      viewSlot.visEmitter.dispose();
+      viewSlot.disposeEmitter.fire();
+      viewSlot.disposeEmitter.dispose();
+      return { ok: true };
+    }
+    const panelSlot = hostState.webviewPanels.get(params.handle);
+    if (panelSlot && panelSlot.panel && typeof panelSlot.panel.dispose === 'function') {
+      panelSlot.panel.dispose();
     }
     return { ok: true };
   },

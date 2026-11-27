@@ -1,11 +1,20 @@
+fn pack_deflate_level() -> u8 {
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        10
+    } else {
+        1
+    }
+}
+
 fn pack_languages() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let level = pack_deflate_level();
     for lang in ["fr", "ms"] {
         let src = manifest.join("i18n").join(format!("{lang}.tsv"));
         println!("cargo:rerun-if-changed={}", src.display());
         let text = std::fs::read(&src).unwrap_or_default();
-        let packed = miniz_oxide::deflate::compress_to_vec(&text, 10);
+        let packed = miniz_oxide::deflate::compress_to_vec(&text, level);
         std::fs::write(out.join(format!("{lang}.tsv.z")), packed).expect("write language pack");
     }
 }
@@ -13,6 +22,7 @@ fn pack_languages() {
 fn pack_material_icons() {
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let level = pack_deflate_level();
     let mat_dir = manifest.join("assets").join("material-icons");
     let json_path = mat_dir.join("material-icons.json");
     let icons_dir = mat_dir.join("icons");
@@ -21,7 +31,7 @@ fn pack_material_icons() {
 
     let json_raw =
         std::fs::read(&json_path).expect("read assets/material-icons/material-icons.json");
-    let json_packed = miniz_oxide::deflate::compress_to_vec(&json_raw, 10);
+    let json_packed = miniz_oxide::deflate::compress_to_vec(&json_raw, level);
     std::fs::write(out.join("material-icons.json.z"), json_packed)
         .expect("write material-icons.json.z");
 
@@ -54,7 +64,7 @@ fn pack_material_icons() {
             raw_chunk.extend_from_slice(bytes);
             entries_meta.push((name.clone(), chunk_idx as u16, off, len));
         }
-        let compressed = miniz_oxide::deflate::compress_to_vec(&raw_chunk, 10);
+        let compressed = miniz_oxide::deflate::compress_to_vec(&raw_chunk, level);
         let data_offset = payload.len() as u32;
         let comp_len = compressed.len() as u32;
         let raw_len = raw_chunk.len() as u32;
@@ -232,6 +242,7 @@ fn compile_zig_accel() {
 }
 
 fn release_builds(this_build: &str) {
+    use std::collections::HashMap;
     println!("cargo:rerun-if-changed=changelog.flux");
     let manifest = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -245,8 +256,90 @@ fn release_builds(this_build: &str) {
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
+
+    let mut tag_targets: Vec<(String, String)> = git(&[
+        "for-each-ref",
+        "--format=%(refname:short)%09%(*objectname)%09%(objectname)",
+        "refs/tags/BuildDev-*",
+    ])
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| {
+        let mut parts = l.split('\t');
+        let tag = parts.next()?.trim();
+        let deref = parts.next().unwrap_or("").trim();
+        let obj = parts.next().unwrap_or("").trim();
+        let sha = if deref.is_empty() { obj } else { deref };
+        (!tag.is_empty() && !sha.is_empty()).then(|| (tag.to_string(), sha.to_string()))
+    })
+    .collect();
+    tag_targets.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut earliest_tag: HashMap<String, String> = HashMap::new();
+    let mut first_commit: HashMap<String, String> = HashMap::new();
+    if !tag_targets.is_empty() {
+        let mut parents_map: HashMap<String, Vec<String>> = HashMap::new();
+        for line in git(&["rev-list", "--parents", "--all"])
+            .unwrap_or_default()
+            .lines()
+        {
+            let mut it = line.split_whitespace();
+            if let Some(sha) = it.next() {
+                parents_map.insert(sha.to_string(), it.map(str::to_string).collect());
+            }
+        }
+        // Propagate BuildDev-* tags in ascending order so first write per ancestor is earliest tag.
+        let mut stack: Vec<String> = Vec::new();
+        for (tag, target) in tag_targets {
+            stack.push(target);
+            while let Some(cur) = stack.pop() {
+                if earliest_tag.contains_key(&cur) {
+                    continue;
+                }
+                if let Some(ps) = parents_map.get(&cur) {
+                    for p in ps {
+                        if !earliest_tag.contains_key(p) {
+                            stack.push(p.clone());
+                        }
+                    }
+                }
+                earliest_tag.insert(cur, tag.clone());
+            }
+        }
+
+        let mut cur_commit = String::new();
+        for line in git(&[
+            "log",
+            "--reverse",
+            "--format=COMMIT:%H",
+            "-p",
+            "-U0",
+            "--",
+            "changelog.flux",
+        ])
+        .unwrap_or_default()
+        .lines()
+        {
+            if let Some(h) = line.strip_prefix("COMMIT:") {
+                cur_commit = h.trim().to_string();
+            } else if !cur_commit.is_empty() && line.starts_with('+') && !line.starts_with("+++") {
+                if let Some(t) = line[1..]
+                    .trim_end()
+                    .strip_prefix("@title en:")
+                    .map(str::trim)
+                {
+                    if !t.is_empty() {
+                        first_commit
+                            .entry(t.to_string())
+                            .or_insert_with(|| cur_commit.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let mut rows = String::new();
-    let tagged = git(&["tag", "-l", "BuildDev-*"]).is_some_and(|t| !t.trim().is_empty());
+    let tagged = !earliest_tag.is_empty();
     let text = std::fs::read_to_string(manifest.join("changelog.flux")).unwrap_or_default();
     for line in text.lines() {
         let Some(title) = line.trim_end().strip_prefix("@title en:").map(str::trim) else {
@@ -255,29 +348,11 @@ fn release_builds(this_build: &str) {
         if title.is_empty() || title == "..." || !tagged {
             continue;
         }
-        let pick = format!("-S@title en: {title}");
-        let Some(first) = git(&[
-            "log",
-            "--format=%H",
-            "--reverse",
-            &pick,
-            "--",
-            "changelog.flux",
-        ])
-        .and_then(|s| s.lines().next().map(str::to_string)) else {
-            rows.push_str(&format!("    ({title:?}, {this_build:?}),\n"));
-            continue;
-        };
-        let mut tags: Vec<String> = git(&["tag", "--contains", &first, "--list", "BuildDev-*"])
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect();
-        tags.sort();
-        let build = tags
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| this_build.to_string());
+        let build = first_commit
+            .get(title)
+            .and_then(|sha| earliest_tag.get(sha))
+            .map(String::as_str)
+            .unwrap_or(this_build);
         rows.push_str(&format!("    ({title:?}, {build:?}),\n"));
     }
     let src = format!("/// (release title, the build it came in), from git; see build.rs.\npub const RELEASE_BUILDS: &[(&str, &str)] = &[\n{rows}];\n");

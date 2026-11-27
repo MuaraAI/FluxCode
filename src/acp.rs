@@ -803,6 +803,7 @@ fn find_antigravity() -> Option<Launch> {
         );
     }
     if let Some(home) = var("USERPROFILE").or_else(|| var("HOME")) {
+        roots.push(home.join(".gemini").join("bin"));
         roots.push(home.join(".gemini").join("antigravity").join("bin"));
         roots.push(home.join(".antigravity").join("bin"));
         roots.push(home.join(".local").join("bin"));
@@ -2459,6 +2460,14 @@ mod install_errors {
         let l_cli = find_antigravity_in(std::slice::from_ref(&agy_dir)).expect("finds agy CLI");
         assert_eq!(l_cli.cmd, agy_dir.join(cli_name));
         assert_eq!(l_cli.args, vec!["acp".to_string()]);
+
+        let home_gemini_bin = root.join(".gemini").join("bin");
+        std::fs::create_dir_all(&home_gemini_bin).unwrap();
+        std::fs::write(home_gemini_bin.join(cli_name), b"").unwrap();
+        let l_home = find_antigravity_in(std::slice::from_ref(&home_gemini_bin))
+            .expect("finds ~/.gemini/bin/agy");
+        assert_eq!(l_home.cmd, home_gemini_bin.join(cli_name));
+        assert_eq!(l_home.args, vec!["acp".to_string()]);
 
         let srv_name = if cfg!(windows) {
             "agy_acp_server.exe"

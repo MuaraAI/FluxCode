@@ -37,6 +37,7 @@ pub(crate) struct CodeRun {
 pub(crate) struct SelectionGeometry {
     bounds: Bounds<Pixels>,
     scroll_offset: Point<Pixels>,
+    split_width: Option<Pixels>,
     multi_click: Cell<Option<(usize, Point<Pixels>, bool)>>,
     runs: Vec<CodeRun>,
 }
@@ -97,15 +98,33 @@ impl SelectionGeometry {
     }
 
     fn run_at(&self, point: Point<Pixels>, side: Option<DiffSide>) -> Option<&CodeRun> {
-        let side = side.or_else(|| {
-            self.runs
-                .iter()
-                .min_by(|a, b| {
-                    distance_to_bounds(point, a.bounds)
-                        .total_cmp(&distance_to_bounds(point, b.bounds))
-                })
-                .map(|run| run.side)
-        })?;
+        let side = match side {
+            Some(side) => side,
+            None => {
+                if let Some(split) = self.split_width {
+                    let nearest = self
+                        .runs
+                        .iter()
+                        .min_by_key(|run| line_distance(point, run.bounds))?;
+                    if nearest.document.is_single_column() {
+                        return Some(nearest);
+                    }
+                    if point.x < self.bounds.left() + split {
+                        DiffSide::Original
+                    } else {
+                        DiffSide::Modified
+                    }
+                } else {
+                    self.runs
+                        .iter()
+                        .min_by(|a, b| {
+                            distance_to_bounds(point, a.bounds)
+                                .total_cmp(&distance_to_bounds(point, b.bounds))
+                        })
+                        .map(|run| run.side)?
+                }
+            }
+        };
         self.runs
             .iter()
             .filter(|run| run.side == side)
@@ -415,6 +434,7 @@ pub(crate) struct SelectionLayer {
     child: AnyElement,
     scroll: ListState,
     horizontal: ScrollHandle,
+    split_width: Option<Pixels>,
     selection: TextSelectionHandle,
     geometry: Rc<RefCell<SelectionGeometry>>,
 }
@@ -424,6 +444,7 @@ impl SelectionLayer {
         child: AnyElement,
         scroll: ListState,
         horizontal: ScrollHandle,
+        split_width: Option<Pixels>,
         selection: TextSelectionHandle,
         geometry: Rc<RefCell<SelectionGeometry>>,
     ) -> Self {
@@ -431,6 +452,7 @@ impl SelectionLayer {
             child,
             scroll,
             horizontal,
+            split_width,
             selection,
             geometry,
         }
@@ -477,12 +499,15 @@ impl Element for SelectionLayer {
             let mut geometry = self.geometry.borrow_mut();
             geometry.clear();
             geometry.bounds = bounds;
+            geometry.split_width = self.split_width;
         }
         // This participant's hitbox is behind its child disclosures and gutters.
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         self.child.prepaint(window, cx);
         let mut offset = ScrollbarHandle::offset(&self.scroll);
-        offset.x = self.horizontal.offset().x;
+        if self.split_width.is_none() {
+            offset.x = self.horizontal.offset().x;
+        }
         self.geometry.borrow_mut().scroll_offset = offset;
         let text_bounds = self
             .geometry

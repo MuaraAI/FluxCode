@@ -48,6 +48,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_flow_browser() -> String {
+    "default".into()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -65,6 +69,8 @@ pub struct Settings {
     pub ui_size: UiSize,
     pub agent_right: bool,
     pub right_views: Vec<String>,
+    #[serde(default)]
+    pub left_views: Vec<String>,
     pub glass: bool,
     pub saver_packs: Vec<String>,
     pub saver_level: String,
@@ -111,6 +117,8 @@ pub struct Settings {
     pub agent_gflow_mcp: bool,
     #[serde(default = "default_true")]
     pub agent_gflow_sync: bool,
+    #[serde(default = "default_flow_browser")]
+    pub agent_gflow_browser: String,
     pub last_build: String,
     #[serde(default)]
     pub rev: u32,
@@ -133,6 +141,7 @@ impl Default for Settings {
             ui_size: UiSize::default(),
             agent_right: true,
             right_views: Vec::new(),
+            left_views: Vec::new(),
             glass: true,
             saver_packs: Vec::new(),
             saver_level: "full".into(),
@@ -175,6 +184,7 @@ impl Default for Settings {
             copilot: true,
             agent_gflow_mcp: true,
             agent_gflow_sync: true,
+            agent_gflow_browser: default_flow_browser(),
             last_build: String::new(),
             rev: SETTINGS_REV,
         }
@@ -962,6 +972,7 @@ impl Workbench {
         self.settings.apply_backdrop();
         theme::apply(cx);
         let p = theme::palette();
+        self.native_webviews.set_background_rgb(p.side);
         self.ext_host
             .host
             .update_theme_css(crate::ext::webview_bridge::theme_css(p));

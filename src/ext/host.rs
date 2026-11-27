@@ -51,6 +51,7 @@ pub struct WebviewInfo {
     pub url: String,
     pub title: String,
     pub has_html: bool,
+    pub html_rev: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -73,6 +74,10 @@ pub enum HostEvent {
         url: String,
         title: String,
         has_html: bool,
+    },
+    WebviewHtmlUpdated {
+        handle: String,
+        rev: u64,
     },
     #[allow(dead_code)]
     WebviewPanelOpened {
@@ -485,24 +490,59 @@ impl ExtHost {
         }
     }
 
+    pub fn set_webview_visibility(&self, handle: &str, visible: bool) {
+        let Some(proc) = &self.proc else { return };
+        let _ = proc.send(&json!({
+            "method": "webviewVisibility",
+            "params": { "handle": handle, "visible": visible }
+        }));
+    }
+
+    pub fn dispose_webview(&mut self, handle: &str) {
+        if let Some(b) = self
+            .bridge
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            b.remove_webview(handle);
+        }
+        self.view_handles.retain(|_, h| h != handle);
+        let Some(proc) = &self.proc else { return };
+        let _ = proc.send(&json!({
+            "method": "disposeWebview",
+            "params": { "handle": handle }
+        }));
+    }
+
+    pub fn has_sse_client(&self, handle: &str) -> bool {
+        self.bridge
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|b| b.has_sse_client(handle))
+    }
+
     pub fn shutdown(&mut self) {
         *self.proc_sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let Some(proc) = self.proc.take() else { return };
-        let _ = proc.send(&json!({ "id": 0, "method": "shutdown", "params": {} }));
-        if let Ok(mut child) = proc.child.lock() {
-            let mut exited = false;
-            for _ in 0..8 {
-                if let Ok(Some(_)) = child.try_wait() {
-                    exited = true;
-                    break;
+        if let Some(proc) = self.proc.take() {
+            let _ = proc.send(&json!({ "id": 0, "method": "shutdown", "params": {} }));
+            if let Ok(mut child) = proc.child.lock() {
+                let mut exited = false;
+                for _ in 0..8 {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        exited = true;
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(20));
                 }
-                thread::sleep(std::time::Duration::from_millis(20));
+                if !exited {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
             }
-            if !exited {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        };
+        }
+        *self.bridge.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -550,7 +590,11 @@ fn handle_rpc_message(val: &Value, bridge: &WebviewBridge, tx: &UnboundedSender<
                 params.get("handle").and_then(Value::as_str),
                 params.get("html").and_then(Value::as_str),
             ) {
-                bridge.set_html(h, html.to_string());
+                let rev = bridge.set_html(h, html.to_string());
+                let _ = tx.unbounded_send(HostEvent::WebviewHtmlUpdated {
+                    handle: h.to_string(),
+                    rev,
+                });
             }
         }
         "webviewOptions" => {
@@ -847,6 +891,11 @@ impl ExtHostState {
                 title,
                 has_html,
             } => {
+                let prev_rev = self
+                    .webviews
+                    .get(&view_id)
+                    .map(|w| w.html_rev)
+                    .unwrap_or(0);
                 self.webviews.insert(
                     view_id,
                     WebviewInfo {
@@ -854,9 +903,19 @@ impl ExtHostState {
                         url,
                         title,
                         has_html,
+                        html_rev: prev_rev,
                     },
                 );
                 None
+            }
+            HostEvent::WebviewHtmlUpdated { handle, rev } => {
+                for wv in self.webviews.values_mut() {
+                    if wv.handle == handle {
+                        wv.has_html = true;
+                        wv.html_rev = rev;
+                    }
+                }
+                Some(HostAction::WebviewHtmlUpdated { handle, rev })
             }
             HostEvent::WebviewPanelOpened { url, .. } => Some(HostAction::OpenPanelUrl(url)),
             HostEvent::TreeUpdated {
@@ -931,6 +990,7 @@ pub enum HostAction {
     OpenFile(PathBuf),
     RunTerminal(String),
     FocusContainer(String),
+    WebviewHtmlUpdated { handle: String, rev: u64 },
 }
 
 #[cfg(test)]

@@ -495,7 +495,13 @@ impl WindowsWindowInner {
         button: MouseButton,
         lparam: LPARAM,
     ) -> Option<isize> {
-        unsafe { SetCapture(handle) };
+        // FluxCode: reclaim keyboard focus from embedded WS_CHILD HWNDs (e.g. WebView2).
+        unsafe {
+            if GetFocus() != handle {
+                let _ = SetFocus(Some(handle));
+            }
+            SetCapture(handle);
+        }
 
         let Some(mut func) = self.state.callbacks.input.take() else {
             return Some(1);

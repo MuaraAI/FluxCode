@@ -1,7 +1,7 @@
 # gpui-component 0.9.0, as FluxCode builds it
 
 A copy of [gpui-component](https://github.com/longbridge/gpui-kit) 0.9.0 from crates.io
-(Apache-2.0, see LICENSE-APACHE) with two FluxCode changes:
+(Apache-2.0, see LICENSE-APACHE) with three FluxCode changes:
 
 1. Incremental syntax highlighting in `src/highlighter/syntect_backend.rs`:
 
@@ -28,6 +28,14 @@ panic on out-of-bounds item indices in `InlineFlow::prepaint`. Non-MDX Markdown 
 normalizes common HTML block tags into spanned CommonMark/GFM blocks and guards any
 residual `mdast::Node::Html` with a custom fallback block renderer.
 
+3. Split diff selection, visible hunk tracking, and cached overview ruler marks in `src/diff/{mod.rs, selection.rs, state.rs, scroll_tests.rs}`:
+
+**Split columns stay selectable, resizable, and cheap to paint.** `DiffState` exposes
+`split_ratio` resizing (`split_width`, `resize_split`), `SelectionGeometry` resolves
+split-column hits (`split_width` in `SelectionLayer`), `hunk_position`/`move_hunk`
+follow viewport scroll position via `partition_point`, and `rebuild()` fuses row
+indexing with compact 12-byte `overview_marks` into a single linear pass.
+
 To update: copy the new upstream version over this folder (without `Cargo.toml.orig`,
-`Cargo.lock` and `.cargo_vcs_info.json`) and apply both changes again unless upstream
+`Cargo.lock` and `.cargo_vcs_info.json`) and apply all three changes again unless upstream
 fixes them.

@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
@@ -27,7 +26,12 @@ pub fn web_kind<'a>(kind: &'a str, title: &str) -> Option<(&'a str, &'static str
     if !matches!(kind, "other" | "") {
         return None;
     }
-    match title.trim().to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
+    match title
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-', ' '], "")
+        .as_str()
+    {
         "websearch" => Some(("search", "the web")),
         "webfetch" => Some(("fetch", "a page")),
         _ => None,
@@ -39,7 +43,23 @@ pub fn target(title: &str, kind: &str) -> (String, bool) {
     if let Some(cmd) = t.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
         return (cmd.to_string(), true);
     }
-    for v in ["Read ", "Reading ", "Edit ", "Write ", "Writing ", "Search ", "Searching ", "Fetch ", "Delete ", "Move ", "Run ", "Running ", "Find ", "Grep ", "Glob "] {
+    for v in [
+        "Read ",
+        "Reading ",
+        "Edit ",
+        "Write ",
+        "Writing ",
+        "Search ",
+        "Searching ",
+        "Fetch ",
+        "Delete ",
+        "Move ",
+        "Run ",
+        "Running ",
+        "Find ",
+        "Grep ",
+        "Glob ",
+    ] {
         if let Some(rest) = t.strip_prefix(v) {
             return (rest.trim_matches(['"', '`']).to_string(), false);
         }
@@ -86,10 +106,20 @@ pub struct Step<'a> {
 fn circle_px() -> f32 {
     // Keep circle diameter an odd integer so the 1px vertical rail sits at exact integer center.
     let raw = f32::from(theme::u(18.)).round();
-    if (raw as i32) % 2 == 0 { raw + 1. } else { raw }
+    if (raw as i32) % 2 == 0 {
+        raw + 1.
+    } else {
+        raw
+    }
 }
 
-fn build_rail(icon: IconName, running: bool, col: theme::Tok, joined_up: bool, joined_down: bool) -> AnyElement {
+fn build_rail(
+    icon: IconName,
+    running: bool,
+    col: theme::Tok,
+    joined_up: bool,
+    joined_down: bool,
+) -> AnyElement {
     let d = circle_px();
     let row_h = f32::from(theme::u(28.)).round();
     let top = ((row_h - d) / 2.).round().max(0.);
@@ -135,7 +165,11 @@ fn build_rail(icon: IconName, running: bool, col: theme::Tok, joined_up: bool, j
                 .items_center()
                 .justify_center()
                 .border_1()
-                .border_color(c(if running { theme::ACCENT_TEXT } else { theme::BORDER }))
+                .border_color(c(if running {
+                    theme::ACCENT_TEXT
+                } else {
+                    theme::BORDER
+                }))
                 .bg(c(theme::BG_ELEVATED))
                 .child(Icon::new(icon).size(px(icon_sz)).text_color(c(col))),
         )
@@ -143,24 +177,47 @@ fn build_rail(icon: IconName, running: bool, col: theme::Tok, joined_up: bool, j
 }
 
 impl Workbench {
-    pub(crate) fn render_step(&self, s: Step, on_click: Option<Box<dyn Fn(&mut Workbench, &mut Context<Workbench>) + 'static>>, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_step(
+        &self,
+        s: Step,
+        on_click: Option<Box<dyn Fn(&mut Workbench, &mut Context<Workbench>) + 'static>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let running = s.live && matches!(s.status, "pending" | "in_progress" | "");
         let failed = s.status == "failed";
         let web = web_kind(s.kind, s.title);
         let kind = web.map_or(s.kind, |w| w.0);
         let (doing, done, icon) = verbs(kind);
-        let label: SharedString = tr(if running { doing } else if failed && kind != "think" { "Failed" } else { done }).into();
+        let label: SharedString = tr(if running {
+            doing
+        } else if failed && kind != "think" {
+            "Failed"
+        } else {
+            done
+        })
+        .into();
         let (what, code) = match web {
             Some((_, what)) => (tr(what).to_string(), false),
             None if kind == "think" => (s.note.clone().unwrap_or_default(), false),
             None => target(s.title, kind),
         };
         let time = self.agent.times.get(&s.key).and_then(|(_, d)| *d).map(took);
-        let col = if failed { theme::DANGER } else if running { theme::ACCENT_TEXT } else { theme::FG_DIM };
+        let col = if failed {
+            theme::DANGER
+        } else if running {
+            theme::ACCENT_TEXT
+        } else {
+            theme::FG_DIM
+        };
 
         let rail = build_rail(icon, running, col, s.joined_up, s.joined_down);
 
-        let state_key: SharedString = format!("ag-step-{}-{}", s.key, if running { "run" } else { s.status }).into();
+        let state_key: SharedString = format!(
+            "ag-step-{}-{}",
+            s.key,
+            if running { "run" } else { s.status }
+        )
+        .into();
         let head = h_flex()
             .min_h(theme::u(28.))
             .gap_1p5()
@@ -169,14 +226,27 @@ impl Workbench {
                 div()
                     .flex_none()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(c(if failed { theme::DANGER } else if running { theme::FG_STRONG } else { theme::FG_MUTED }))
+                    .text_color(c(if failed {
+                        theme::DANGER
+                    } else if running {
+                        theme::FG_STRONG
+                    } else {
+                        theme::FG_MUTED
+                    }))
                     .child(label)
-                    .with_animation(state_key.clone(), Animation::new(Duration::from_millis(180)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(0.35 + 0.65 * t)),
+                    .with_animation(
+                        state_key.clone(),
+                        Animation::new(Duration::from_millis(180))
+                            .with_easing(gpui_kit::ease_out_quint()),
+                        |el, t| el.opacity(0.35 + 0.65 * t),
+                    ),
             )
             .when(!what.is_empty(), |h| {
                 let w = div().flex_1().min_w_0().truncate();
                 h.child(if code {
-                    w.font_family("Cascadia Code").text_color(c(theme::FG)).child(what.clone())
+                    w.font_family("Cascadia Code")
+                        .text_color(c(theme::FG))
+                        .child(what.clone())
                 } else if s.kind == "think" {
                     w.text_color(c(theme::FG_DIM)).child(what.clone())
                 } else {
@@ -191,7 +261,13 @@ impl Workbench {
                     .flex()
                     .justify_end()
                     .text_color(c(theme::FG_DIM))
-                    .when_some(time, |d, t| d.child(div().child(t).with_animation(SharedString::from(format!("{state_key}-t")), Animation::new(Duration::from_millis(220)), |el, t| el.opacity(t)))),
+                    .when_some(time, |d, t| {
+                        d.child(div().child(t).with_animation(
+                            SharedString::from(format!("{state_key}-t")),
+                            Animation::new(Duration::from_millis(220)),
+                            |el, t| el.opacity(t),
+                        ))
+                    }),
             )
             .child(
                 div()
@@ -199,19 +275,42 @@ impl Workbench {
                     .w(theme::u(12.))
                     .flex()
                     .justify_center()
-                    .when(s.kind == "think", |d| d.child(Icon::new(if s.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)))),
+                    .when(s.kind == "think", |d| {
+                        d.child(
+                            Icon::new(if s.open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(theme::u(12.))
+                            .text_color(c(theme::FG_DIM)),
+                        )
+                    }),
             );
         let sweep = running.then(|| {
-            div().relative().h(px(2.)).mr_2().rounded_full().bg(c(theme::BG_HOVER)).overflow_hidden().child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .w(relative(0.3))
-                    .rounded_full()
-                    .bg(c(theme::ACCENT_TEXT))
-                    .with_animation(SharedString::from(format!("ag-step-sweep-{}", s.key)), Animation::new(Duration::from_millis(1100)).repeat().with_easing(gpui_kit::ease_in_out), |el, t| el.left(relative(-0.3 + t * 1.3))),
-            )
+            div()
+                .relative()
+                .h(px(2.))
+                .mr_2()
+                .rounded_full()
+                .bg(c(theme::BG_HOVER))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .w(relative(0.3))
+                        .rounded_full()
+                        .bg(c(theme::ACCENT_TEXT))
+                        .with_animation(
+                            SharedString::from(format!("ag-step-sweep-{}", s.key)),
+                            Animation::new(Duration::from_millis(1100))
+                                .repeat()
+                                .with_easing(gpui_kit::ease_in_out),
+                            |el, t| el.left(relative(-0.3 + t * 1.3)),
+                        ),
+                )
         });
         let detail = s.detail.map(|t| {
             div()
@@ -219,9 +318,19 @@ impl Workbench {
                 .pr_4()
                 .text_xs()
                 .text_color(c(theme::FG_MUTED))
-                .child(TextView::markdown(SharedString::from(format!("ag-thought-{}", s.key)), t).text_xs().selectable(true))
+                .child(
+                    TextView::markdown(SharedString::from(format!("ag-thought-{}", s.key)), t)
+                        .text_xs()
+                        .selectable(true),
+                )
         });
-        let body = v_flex().flex_1().min_w_0().justify_center().child(head).children(sweep).children(detail);
+        let body = v_flex()
+            .flex_1()
+            .min_w_0()
+            .justify_center()
+            .child(head)
+            .children(sweep)
+            .children(detail);
         let row = h_flex()
             .id(SharedString::from(format!("ag-step-{}", s.key)))
             .when(s.pull_up, |d| d.mt(px(-8.)))
@@ -230,9 +339,15 @@ impl Workbench {
             .when(on_click.is_some(), |d| d.cursor_pointer())
             .child(rail)
             .child(body)
-            .when_some(on_click, |d, f| d.on_click(cx.listener(move |this, _, _, cx| f(this, cx))));
-        row.with_animation(SharedString::from(format!("ag-step-in-{}", s.key)), Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()), |el, t| el.opacity(t).ml(px((1. - t) * 6.)))
-            .into_any_element()
+            .when_some(on_click, |d, f| {
+                d.on_click(cx.listener(move |this, _, _, cx| f(this, cx)))
+            });
+        row.with_animation(
+            SharedString::from(format!("ag-step-in-{}", s.key)),
+            Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+            |el, t| el.opacity(t).ml(px((1. - t) * 6.)),
+        )
+        .into_any_element()
     }
 }
 
@@ -241,12 +356,24 @@ impl Workbench {
         let (first, last) = (g.first, g.last);
         let mut parts: Vec<String> = Vec::new();
         if g.thoughts > 0 {
-            parts.push(if g.thoughts == 1 { tr("1 thought").to_string() } else { crate::trf!("{n} thoughts"; n => g.thoughts) });
+            parts.push(if g.thoughts == 1 {
+                tr("1 thought").to_string()
+            } else {
+                crate::trf!("{n} thoughts"; n => g.thoughts)
+            });
         }
         if g.tools > 0 {
-            parts.push(if g.tools == 1 { tr("1 tool").to_string() } else { crate::trf!("{n} tools"; n => g.tools) });
+            parts.push(if g.tools == 1 {
+                tr("1 tool").to_string()
+            } else {
+                crate::trf!("{n} tools"; n => g.tools)
+            });
         }
-        let col = if g.running { theme::ACCENT_TEXT } else { theme::FG_DIM };
+        let col = if g.running {
+            theme::ACCENT_TEXT
+        } else {
+            theme::FG_DIM
+        };
         let rail = build_rail(IconName::ListCollapse, g.running, col, false, g.joined_down);
         h_flex()
             .id(("ag-group", first))
@@ -261,10 +388,50 @@ impl Workbench {
                     .min_h(theme::u(28.))
                     .gap_1p5()
                     .text_xs()
-                    .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(if g.running { theme::FG_STRONG } else { theme::FG_MUTED })).child(tr(if g.running { "Working" } else { "Worked" })))
-                    .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_DIM)).child(parts.join(", ")))
-                    .child(div().flex_none().min_w(theme::u(40.)).flex().justify_end().text_color(c(theme::FG_DIM)).when_some(g.total.map(took), |d, t| d.child(t)))
-                    .child(div().flex_none().w(theme::u(12.)).flex().justify_center().child(Icon::new(if g.open { IconName::ChevronDown } else { IconName::ChevronRight }).size(theme::u(12.)).text_color(c(theme::FG_DIM)))),
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(c(if g.running {
+                                theme::FG_STRONG
+                            } else {
+                                theme::FG_MUTED
+                            }))
+                            .child(tr(if g.running { "Working" } else { "Worked" })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG_DIM))
+                            .child(parts.join(", ")),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(theme::u(40.))
+                            .flex()
+                            .justify_end()
+                            .text_color(c(theme::FG_DIM))
+                            .when_some(g.total.map(took), |d, t| d.child(t)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(theme::u(12.))
+                            .flex()
+                            .justify_center()
+                            .child(
+                                Icon::new(if g.open {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .size(theme::u(12.))
+                                .text_color(c(theme::FG_DIM)),
+                            ),
+                    ),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.agent.open_groups.remove(&first) {
@@ -286,13 +453,28 @@ mod tests {
     fn words_and_targets() {
         assert_eq!(verbs("read").0, "Reading");
         assert_eq!(verbs("execute").1, "Ran");
-        assert_eq!(target("Read src/main.rs", "read"), ("src/main.rs".into(), false));
-        assert_eq!(target("`cargo build --release`", "execute"), ("cargo build --release".into(), true));
-        assert_eq!(target("Search \"fn main\"", "search"), ("fn main".into(), false));
+        assert_eq!(
+            target("Read src/main.rs", "read"),
+            ("src/main.rs".into(), false)
+        );
+        assert_eq!(
+            target("`cargo build --release`", "execute"),
+            ("cargo build --release".into(), true)
+        );
+        assert_eq!(
+            target("Search \"fn main\"", "search"),
+            ("fn main".into(), false)
+        );
         assert_eq!(took(Duration::from_millis(420)), "0.4 s");
         assert_eq!(took(Duration::from_secs(65)), "1 min 5 s");
-        assert_eq!(super::web_kind("other", "websearch"), Some(("search", "the web")));
-        assert_eq!(super::web_kind("other", "webfetch"), Some(("fetch", "a page")));
+        assert_eq!(
+            super::web_kind("other", "websearch"),
+            Some(("search", "the web"))
+        );
+        assert_eq!(
+            super::web_kind("other", "webfetch"),
+            Some(("fetch", "a page"))
+        );
         assert_eq!(super::web_kind("read", "websearch"), None);
     }
 }

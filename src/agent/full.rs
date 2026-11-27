@@ -112,7 +112,7 @@ impl Workbench {
             .size_full()
             .p(gap)
             .when(left, |d| {
-                d.child(self.render_full_chats(cx))
+                d.child(self.render_full_chats(window, cx))
                     .child(edge("agf-edge-l", 3, self, cx))
             })
             .when(!left, |d| d.child(div().w(gap).flex_none()))
@@ -189,6 +189,9 @@ impl Workbench {
             )
             .child(div().flex_none().child(self.render_agent_switch(cx)))
             .when(w >= 540., |h| h.children(self.render_agent_opt_badge(cx)))
+            .when(w >= 660., |h| {
+                h.children(self.render_agent_profile_pill(cx))
+            })
             .child(div().flex_1())
             .child(div().flex_none().child(self.render_agent_tools(cx)))
             .child(div().flex_none().child(self.render_agent_more(cx)))
@@ -283,19 +286,18 @@ impl Workbench {
         cx.notify();
     }
 
-    fn render_full_chats(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_full_chats(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use super::chats::{self, ChatView};
         let a = &self.agent;
         let busy = a.run.working();
         let view = ChatView::from_id(&self.settings.chat_view);
-        let mut list = v_flex()
-            .id("agf-chats")
-            .flex_1()
-            .min_h_0()
-            .px_2()
-            .pb_2()
-            .gap_px()
-            .overflow_y_scroll();
+        let motion = !cx.reduce_motion();
+        let view_id = window.current_view();
+        let liq = crate::ui::liquid::keyed_state("agf-chats-liq", window, cx);
+        let row_cross = 240.0f32;
+        let mut chat_ix = 0usize;
+        let mut active_chat_ix = None;
+        let mut rows_box = v_flex().w_full().gap_px();
         let fresh = a.chat_id.is_none() && a.items.iter().any(|i| matches!(i, Item::User(_)));
         if fresh && view != ChatView::Archived {
             let title = a
@@ -309,18 +311,34 @@ impl Workbench {
                     }
                 })
                 .unwrap_or_default();
-            list = list.child(chat_row(
-                "agf-now",
-                title,
-                tr("Now").into(),
-                Flags {
-                    current: true,
-                    working: busy,
-                    archived: false,
-                    pinned: false,
-                    mark: Some(c(theme::GREEN)),
-                },
-            ));
+            active_chat_ix = Some(chat_ix);
+            let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), chat_ix, view_id);
+            let liq_h = liq.clone();
+            let ix_now = chat_ix;
+            chat_ix += 1;
+            rows_box = rows_box.child(
+                chat_row(
+                    "agf-now",
+                    title,
+                    tr("Now").into(),
+                    Flags {
+                        current: true,
+                        working: busy,
+                        archived: false,
+                        pinned: false,
+                        mark: Some(c(theme::GREEN)),
+                        motion,
+                    },
+                )
+                .on_hover(move |entered: &bool, _, cx| {
+                    if *entered && motion {
+                        crate::ui::liquid::keyed_hover_enter(
+                            &liq_h, ix_now, true, row_cross, 145, view_id, cx,
+                        );
+                    }
+                })
+                .child(probe),
+            );
         }
         let busy_ids = a.working_ids();
         let now = super::now_ms();
@@ -358,7 +376,7 @@ impl Workbench {
                         "Pinned" => Some(c(theme::FG_MUTED)),
                         _ => None,
                     });
-                list = list.child(
+                rows_box = rows_box.child(
                     h_flex()
                         .id(("agf-g", gi))
                         .mx_1()
@@ -421,7 +439,7 @@ impl Workbench {
                 let id = chat.id;
                 let current = a.chat_id == Some(id);
                 if let Some(r) = a.full.rename.as_ref().filter(|r| r.id == id) {
-                    list = list.child(
+                    rows_box = rows_box.child(
                         div()
                             .id(("agf-rn", i))
                             .w_full()
@@ -437,6 +455,13 @@ impl Workbench {
                     );
                     continue;
                 }
+                let r_ix = chat_ix;
+                chat_ix += 1;
+                if current {
+                    active_chat_ix = Some(r_ix);
+                }
+                let probe = crate::ui::liquid::keyed_item_probe(liq.clone(), r_ix, view_id);
+                let liq_h = liq.clone();
                 let clock = when_label(chat.updated);
                 let mut when = if clock.contains(' ') {
                     clock
@@ -452,7 +477,7 @@ impl Workbench {
                 let archived = chat.archived;
                 let pinned = chat.pinned;
                 let mark = recency_color(chats::recency(chat.updated, today_start));
-                list = list.child(
+                rows_box = rows_box.child(
                     chat_row(
                         SharedString::from(format!("agf-c-{i}")),
                         chat.title.clone(),
@@ -463,8 +488,17 @@ impl Workbench {
                             archived,
                             pinned,
                             mark,
+                            motion,
                         },
                     )
+                    .on_hover(move |entered: &bool, _, cx| {
+                        if *entered && motion {
+                            crate::ui::liquid::keyed_hover_enter(
+                                &liq_h, r_ix, true, row_cross, 145, view_id, cx,
+                            );
+                        }
+                    })
+                    .child(probe)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, e: &MouseDownEvent, w, cx| {
@@ -534,7 +568,7 @@ impl Workbench {
             } else {
                 tr("Show only active and pinned").into()
             };
-            list = list.child(
+            rows_box = rows_box.child(
                 h_flex()
                     .id("agf-more")
                     .mx_1()
@@ -571,7 +605,7 @@ impl Workbench {
                 _ if a.history.is_empty() => tr("No chats yet. Each answer saves the chat here."),
                 _ => tr("Every chat is in the archive."),
             };
-            list = list.child(
+            rows_box = rows_box.child(
                 div()
                     .px_2()
                     .py_2()
@@ -580,6 +614,46 @@ impl Workbench {
                     .child(text),
             );
         }
+        let (frame, _) = crate::ui::liquid::keyed_sync_and_sample(
+            &liq,
+            true,
+            chat_ix,
+            active_chat_ix,
+            row_cross,
+            175,
+            motion,
+        );
+        let layer = frame.map(|fr| {
+            crate::ui::liquid::render_coalesced_layer(
+                "agf-chats-liq-l",
+                true,
+                crate::ui::liquid::agent_liquid_style(row_cross, 5.0),
+                fr,
+            )
+        });
+        let list_inner = v_flex()
+            .id("agf-chats-inner")
+            .relative()
+            .w_full()
+            .on_hover({
+                let h = liq.clone();
+                move |entered: &bool, _, cx| {
+                    if !*entered && motion {
+                        crate::ui::liquid::keyed_hover_leave(&h, view_id, cx);
+                    }
+                }
+            })
+            .child(crate::ui::liquid::keyed_origin_probe(liq, view_id))
+            .children(layer)
+            .child(rows_box);
+        let list = v_flex()
+            .id("agf-chats")
+            .flex_1()
+            .min_h_0()
+            .px_2()
+            .pb_2()
+            .overflow_y_scroll()
+            .child(list_inner);
         let weak = cx.entity().downgrade();
         let view_menu = Button::new("agf-view")
             .icon(Icon::new(Ico::ListFilter))
@@ -843,6 +917,7 @@ struct Flags {
     archived: bool,
     pinned: bool,
     mark: Option<Hsla>,
+    motion: bool,
 }
 
 fn recency_color(r: super::chats::Recency) -> Option<Hsla> {
@@ -867,6 +942,7 @@ fn chat_row(
         archived,
         pinned,
         mark,
+        motion,
     } = f;
     h_flex()
         .id(id)
@@ -876,32 +952,36 @@ fn chat_row(
         .py_1p5()
         .gap_1()
         .relative()
-        .rounded(px(4.))
+        .rounded(px(5.))
         .cursor_pointer()
         .border_1()
         .border_color(gpui_kit::transparent_black())
-        .when(current, |d| {
+        .when(current && !motion, |d| {
             d.bg(c(theme::ACCENT).opacity(0.10))
                 .border_color(c(theme::ACCENT).opacity(0.28))
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(-1.))
-                        .w(px(3.))
-                        .rounded_full()
-                        .bg(c(theme::ACCENT))
-                        .with_animation(
-                            SharedString::from(format!("agf-cur-{title}")),
-                            Animation::new(std::time::Duration::from_millis(220))
-                                .with_easing(gpui_kit::ease_out_quint()),
-                            |d, t| {
-                                d.top(relative(0.5 - 0.3 * t))
-                                    .bottom(relative(0.5 - 0.3 * t))
-                            },
-                        ),
-                )
         })
-        .when(!current, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
+        .when(current, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .left(px(-1.))
+                    .w(px(3.))
+                    .rounded_full()
+                    .bg(c(theme::ACCENT))
+                    .with_animation(
+                        SharedString::from(format!("agf-cur-{title}")),
+                        Animation::new(std::time::Duration::from_millis(220))
+                            .with_easing(gpui_kit::ease_out_quint()),
+                        |d, t| {
+                            d.top(relative(0.5 - 0.3 * t))
+                                .bottom(relative(0.5 - 0.3 * t))
+                        },
+                    ),
+            )
+        })
+        .when(!current && !motion, |d| {
+            d.hover(|s| s.bg(c(theme::BG_HOVER)))
+        })
         .when(working, |d| {
             d.child(
                 div().flex_none().pr_1().child(
