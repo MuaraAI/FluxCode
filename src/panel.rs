@@ -265,7 +265,6 @@ fn mono_kind(k: LineKind) -> bool {
             | LineKind::Dim
             | LineKind::Success
             | LineKind::Frame
-            | LineKind::Hunk
             | LineKind::Code
             | LineKind::Caret
             | LineKind::Blank
@@ -2031,8 +2030,7 @@ impl Workbench {
                 | LineKind::Warn
                 | LineKind::Dim
                 | LineKind::Success
-                | LineKind::Frame
-                | LineKind::Hunk => (cols.mono, 2),
+                | LineKind::Frame => (cols.mono, 2),
                 LineKind::Code if !marked => (cols.mono, 2),
                 LineKind::CardMsg | LineKind::CardHint => (cols.card, 0),
                 LineKind::Result if l.err => (cols.result, 0),

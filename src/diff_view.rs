@@ -191,6 +191,9 @@ pub fn parse_with_state(text: &str, cx: &mut Context<Workbench>) -> DiffDoc {
             multi_file,
             empty_note: None,
             virtual_tab: false,
+            conflict_original: None,
+            scm_patch: None,
+            scm_stage: None,
         };
     }
     let mut doc = parse(text);
