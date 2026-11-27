@@ -107,7 +107,9 @@ pub fn split_markdown_tables(src: &str) -> Vec<Segment> {
         if i + 1 < lines.len() {
             if let Some(headers) = parse_pipe_row(line) {
                 if headers.len() >= 2 {
-                    if let Some((aligns, explicit_align)) = parse_separator_row(lines[i + 1], headers.len()) {
+                    if let Some((aligns, explicit_align)) =
+                        parse_separator_row(lines[i + 1], headers.len())
+                    {
                         let mut rows: Vec<Vec<String>> = Vec::new();
                         let mut j = i + 2;
                         while j < lines.len() {
@@ -204,8 +206,16 @@ fn strip_unescaped_trailing_pipe(s: &str) -> &str {
     if !s.ends_with('|') {
         return s;
     }
-    let bs = s[..s.len() - 1].chars().rev().take_while(|&c| c == '\\').count();
-    if bs % 2 == 1 { s } else { &s[..s.len() - 1] }
+    let bs = s[..s.len() - 1]
+        .chars()
+        .rev()
+        .take_while(|&c| c == '\\')
+        .count();
+    if bs % 2 == 1 {
+        s
+    } else {
+        &s[..s.len() - 1]
+    }
 }
 
 fn parse_separator_row(line: &str, expected: usize) -> Option<(Vec<Align>, Vec<bool>)> {
@@ -346,7 +356,10 @@ fn is_summary_row(row: &[String]) -> bool {
     };
     let clean = clean_cell(first);
     let low = clean.text.trim().to_ascii_lowercase();
-    matches!(low.as_str(), "total" | "jumlah" | "subtotal" | "summary" | "ringkasan" | "all")
+    matches!(
+        low.as_str(),
+        "total" | "jumlah" | "subtotal" | "summary" | "ringkasan" | "all"
+    )
 }
 
 fn compute_col_specs(t: &MdTable) -> Vec<ColSpec> {
@@ -447,7 +460,13 @@ pub fn table_to_csv(t: &MdTable) -> String {
         }
     };
     let mut out = String::new();
-    out.push_str(&t.headers.iter().map(|h| esc(h)).collect::<Vec<_>>().join(","));
+    out.push_str(
+        &t.headers
+            .iter()
+            .map(|h| esc(h))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
     out.push('\n');
     for row in &t.rows {
         out.push_str(&row.iter().map(|c| esc(c)).collect::<Vec<_>>().join(","));
@@ -457,7 +476,8 @@ pub fn table_to_csv(t: &MdTable) -> String {
 }
 
 fn sorted_indices(t: &MdTable, sort: Option<(usize, bool)>) -> (Vec<usize>, Option<usize>) {
-    let total_ix = (t.rows.len() >= 2 && is_summary_row(&t.rows[t.rows.len() - 1])).then_some(t.rows.len() - 1);
+    let total_ix = (t.rows.len() >= 2 && is_summary_row(&t.rows[t.rows.len() - 1]))
+        .then_some(t.rows.len() - 1);
     let body_len = total_ix.unwrap_or(t.rows.len());
     let mut order: Vec<usize> = (0..body_len).collect();
     if let Some((col, asc)) = sort {
@@ -466,7 +486,11 @@ fn sorted_indices(t: &MdTable, sort: Option<(usize, bool)>) -> (Vec<usize>, Opti
                 let ka = parse_sort_key(t.rows[a].get(col).map(String::as_str).unwrap_or(""));
                 let kb = parse_sort_key(t.rows[b].get(col).map(String::as_str).unwrap_or(""));
                 let cmp = ka.cmp_key(&kb);
-                if asc { cmp } else { cmp.reverse() }
+                if asc {
+                    cmp
+                } else {
+                    cmp.reverse()
+                }
             });
         }
     }
@@ -531,7 +555,9 @@ impl Workbench {
                 .text_size(theme::u(10.5))
                 .text_color(c(theme::FG_DIM))
                 .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
                 .child(Icon::new(IconName::Copy).size(theme::u(10.)))
                 .child(label)
         };
@@ -593,7 +619,9 @@ impl Workbench {
                 let tip: SharedString = tr("Click to sort").into();
 
                 h_flex()
-                    .id(SharedString::from(format!("ag-tbl-h-{item_ix}-{table_ix}-{col_ix}")))
+                    .id(SharedString::from(format!(
+                        "ag-tbl-h-{item_ix}-{table_ix}-{col_ix}"
+                    )))
                     .min_w(px(w))
                     .when(spec.flex_grow, |d| d.flex_1())
                     .when(!spec.flex_grow, |d| d.w(px(w)).flex_none())
@@ -601,17 +629,27 @@ impl Workbench {
                     .py_1p5()
                     .gap_1()
                     .cursor_pointer()
-                    .when(col_ix > 0, |d| d.border_l_1().border_color(c(theme::BORDER)))
+                    .when(col_ix > 0, |d| {
+                        d.border_l_1().border_color(c(theme::BORDER))
+                    })
                     .when(spec.align == Align::Right, |d| d.justify_end())
                     .when(spec.align == Align::Center, |d| d.justify_center())
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(c(if active.is_some() { theme::ACCENT_TEXT } else { theme::FG_MUTED }))
+                    .text_color(c(if active.is_some() {
+                        theme::ACCENT_TEXT
+                    } else {
+                        theme::FG_MUTED
+                    }))
                     .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let next = match this.agent.table_sorts.get(&sort_key).copied() {
-                            Some((c, asc)) if c == col_ix && asc == default_asc => Some((col_ix, !default_asc)),
+                            Some((c, asc)) if c == col_ix && asc == default_asc => {
+                                Some((col_ix, !default_asc))
+                            }
                             Some((c, _)) if c == col_ix => None,
                             _ => Some((col_ix, default_asc)),
                         };
@@ -628,10 +666,14 @@ impl Workbench {
                     .child(div().whitespace_nowrap().child(display.text))
                     .when_some(active, |d, (_, asc)| {
                         d.child(
-                            Icon::new(if asc { IconName::ChevronUp } else { IconName::ChevronDown })
-                                .flex_none()
-                                .size(theme::u(11.))
-                                .text_color(c(theme::ACCENT_TEXT)),
+                            Icon::new(if asc {
+                                IconName::ChevronUp
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .flex_none()
+                            .size(theme::u(11.))
+                            .text_color(c(theme::ACCENT_TEXT)),
                         )
                     })
             }));
@@ -639,7 +681,9 @@ impl Workbench {
         let render_row = |row_ix: usize, is_total: bool, is_last: bool| {
             let row = &table.rows[row_ix];
             h_flex()
-                .id(SharedString::from(format!("ag-tbl-r-{item_ix}-{table_ix}-{row_ix}")))
+                .id(SharedString::from(format!(
+                    "ag-tbl-r-{item_ix}-{table_ix}-{row_ix}"
+                )))
                 .w_full()
                 .items_center()
                 .when(is_total, |d| {
@@ -647,7 +691,9 @@ impl Workbench {
                         .border_t_1()
                         .border_color(c(theme::BORDER_STRONG))
                 })
-                .when(!is_total && !is_last, |d| d.border_b_1().border_color(c(theme::BORDER)))
+                .when(!is_total && !is_last, |d| {
+                    d.border_b_1().border_color(c(theme::BORDER))
+                })
                 .when(!is_total, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
                 .children(specs.iter().enumerate().map(|(col_ix, spec)| {
                     let w = col_widths[col_ix];
@@ -667,7 +713,9 @@ impl Workbench {
                     };
 
                     div()
-                        .id(SharedString::from(format!("ag-tbl-c-{item_ix}-{table_ix}-{row_ix}-{col_ix}")))
+                        .id(SharedString::from(format!(
+                            "ag-tbl-c-{item_ix}-{table_ix}-{row_ix}-{col_ix}"
+                        )))
                         .min_w(px(w))
                         .when(spec.flex_grow, |d| d.flex_1())
                         .when(!spec.flex_grow, |d| d.w(px(w)).flex_none())
@@ -675,29 +723,45 @@ impl Workbench {
                         .py_1p5()
                         .flex()
                         .items_center()
-                        .when(col_ix > 0, |d| d.border_l_1().border_color(c(theme::BORDER)))
+                        .when(col_ix > 0, |d| {
+                            d.border_l_1().border_color(c(theme::BORDER))
+                        })
                         .when(spec.align == Align::Right, |d| d.justify_end())
                         .when(spec.align == Align::Center, |d| d.justify_center())
                         .text_xs()
-                        .when(spec.numeric || cell.code || is_link, |d| d.font_family("Cascadia Code"))
+                        .when(spec.numeric || cell.code || is_link, |d| {
+                            d.font_family("Cascadia Code")
+                        })
                         .when(cell.bold || is_total, |d| {
-                            d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG))
+                            d.font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c(theme::FG_STRONG))
                         })
                         .when(!cell.bold && !is_total && is_link, |d| {
                             d.text_color(c(theme::ACCENT_TEXT))
                         })
                         .when(!cell.bold && !is_total && !is_link, |d| {
-                            d.text_color(c(if spec.numeric { theme::FG_STRONG } else { theme::FG }))
+                            d.text_color(c(if spec.numeric {
+                                theme::FG_STRONG
+                            } else {
+                                theme::FG
+                            }))
                         })
                         .when(!copy_val.is_empty(), |d| {
                             d.cursor_pointer()
-                                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                                .tooltip(move |w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                        .build(w, cx)
+                                })
                                 .on_click(cx.listener(move |this, _, w, cx| {
                                     if let Some(p) = &open_path {
                                         this.jump_to_file_smooth(p.clone(), None, w, cx);
                                     } else {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(copy_val.clone()));
-                                        this.status = crate::trf!("Copied: {0}"; 0 => copy_val.clone()).into();
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy_val.clone(),
+                                        ));
+                                        this.status =
+                                            crate::trf!("Copied: {0}"; 0 => copy_val.clone())
+                                                .into();
                                         cx.notify();
                                     }
                                 }))
@@ -727,7 +791,9 @@ impl Workbench {
             .child(top_bar)
             .child(
                 div()
-                    .id(SharedString::from(format!("ag-tbl-scroll-{item_ix}-{table_ix}")))
+                    .id(SharedString::from(format!(
+                        "ag-tbl-scroll-{item_ix}-{table_ix}"
+                    )))
                     .w_full()
                     .min_w_0()
                     .overflow_x_scroll()
@@ -745,7 +811,10 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_col_specs, sorted_indices, split_markdown_tables, table_to_csv, table_to_markdown, Align, Segment};
+    use super::{
+        compute_col_specs, sorted_indices, split_markdown_tables, table_to_csv, table_to_markdown,
+        Align, Segment,
+    };
 
     #[test]
     fn splits_markdown_and_tables_respecting_code_fences() {
@@ -768,11 +837,15 @@ Footer note.";
         let segs = split_markdown_tables(src);
         assert_eq!(segs.len(), 3);
         assert!(matches!(&segs[0], Segment::Markdown(s) if s.contains("Ringkasan")));
-        let Segment::Table(t) = &segs[1] else { panic!("expected table") };
+        let Segment::Table(t) = &segs[1] else {
+            panic!("expected table")
+        };
         assert_eq!(t.headers, vec!["Folder", "Size", "Files"]);
         assert_eq!(t.rows.len(), 3);
         assert_eq!(t.aligns, vec![Align::Left, Align::Right, Align::Right]);
-        assert!(matches!(&segs[2], Segment::Markdown(s) if s.contains("Not | A | Table") && s.contains("Footer note.")));
+        assert!(
+            matches!(&segs[2], Segment::Markdown(s) if s.contains("Not | A | Table") && s.contains("Footer note."))
+        );
     }
 
     #[test]
@@ -785,15 +858,23 @@ Footer note.";
 | tools | 240 KB | 106 |
 | behavior_packs | 5.68 MB | 379 |
 | **total** | **~41.2 MB** | **5796** |";
-        let Segment::Table(t) = &split_markdown_tables(src)[0] else { panic!("expected table") };
+        let Segment::Table(t) = &split_markdown_tables(src)[0] else {
+            panic!("expected table")
+        };
         let (desc, total_ix) = sorted_indices(t, Some((1, false)));
         assert_eq!(total_ix, Some(4));
         let names: Vec<&str> = desc.iter().map(|&i| t.rows[i][0].as_str()).collect();
-        assert_eq!(names, vec!["resource_packs", "behavior_packs", "db", "tools"]);
+        assert_eq!(
+            names,
+            vec!["resource_packs", "behavior_packs", "db", "tools"]
+        );
 
         let (asc_files, _) = sorted_indices(t, Some((2, true)));
         let by_files: Vec<&str> = asc_files.iter().map(|&i| t.rows[i][0].as_str()).collect();
-        assert_eq!(by_files, vec!["db", "tools", "behavior_packs", "resource_packs"]);
+        assert_eq!(
+            by_files,
+            vec!["db", "tools", "behavior_packs", "resource_packs"]
+        );
     }
 
     #[test]
@@ -803,11 +884,17 @@ Footer note.";
 | --- | --- |
 | 2.16 MB | KiwHitAnimation_RP\\models\\entity\\kiwha\\kiwha_cut_shade.geo.json |
 | 1.13 MB | db\\000299.log |";
-        let Segment::Table(t) = &split_markdown_tables(src)[0] else { panic!("expected table") };
+        let Segment::Table(t) = &split_markdown_tables(src)[0] else {
+            panic!("expected table")
+        };
         let specs = compute_col_specs(t);
         assert!(specs[0].numeric);
         assert_eq!(specs[0].align, Align::Right);
-        assert!(specs[0].min_w >= 80.0, "size column should fit '2.16 MB' on one line: {}", specs[0].min_w);
+        assert!(
+            specs[0].min_w >= 80.0,
+            "size column should fit '2.16 MB' on one line: {}",
+            specs[0].min_w
+        );
         assert!(!specs[1].numeric);
         assert!(specs[1].flex_grow);
         assert!(specs[1].min_w >= 200.0);
@@ -816,7 +903,9 @@ Footer note.";
     #[test]
     fn exports_markdown_and_csv_cleanly() {
         let src = "| A | B |\n| --- | ---: |\n| hello, world | **42** |";
-        let Segment::Table(t) = &split_markdown_tables(src)[0] else { panic!("expected table") };
+        let Segment::Table(t) = &split_markdown_tables(src)[0] else {
+            panic!("expected table")
+        };
         assert_eq!(table_to_csv(t), "A,B\n\"hello, world\",42\n");
         assert!(table_to_markdown(t).contains("| A | B |"));
     }

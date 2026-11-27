@@ -77,7 +77,9 @@ impl ExplorerState {
     }
 
     pub fn index_of(&self, id: &str) -> Option<usize> {
-        self.rows.iter().position(|r| !r.is_placeholder && !r.is_pending && r.id == id)
+        self.rows
+            .iter()
+            .position(|r| !r.is_placeholder && !r.is_pending && r.id == id)
     }
 
     pub fn mark_folder_anim(&mut self, id: String, expanding: bool) {
@@ -107,7 +109,9 @@ pub(crate) fn flatten_nodes(
     dirs: &mut HashSet<String>,
 ) -> Vec<TreeRow> {
     let pending_dir = match pending {
-        Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => Some(d.to_string_lossy().into_owned()),
+        Some(PendingOp::NewFile(d) | PendingOp::NewFolder(d)) => {
+            Some(d.to_string_lossy().into_owned())
+        }
         _ => None,
     };
     let mut rows = Vec::with_capacity(nodes.len().saturating_mul(2));
@@ -365,14 +369,28 @@ impl Workbench {
         let (row_h, _) = self.explorer_row_metrics();
         let target_y = self.explorer_row_y(ix);
         let cross_w = (self.sidebar_width - 10.).max(120.);
-        let rect = crate::ui::liquid::Rect1D { pos: target_y, len: row_h };
-        if self.explorer.liq.borrow_mut().hover_enter(ix, Some(rect), cross_w, 150, std::time::Instant::now()) {
+        let rect = crate::ui::liquid::Rect1D {
+            pos: target_y,
+            len: row_h,
+        };
+        if self.explorer.liq.borrow_mut().hover_enter(
+            ix,
+            Some(rect),
+            cross_w,
+            150,
+            std::time::Instant::now(),
+        ) {
             cx.notify();
         }
     }
 
     fn explorer_hover_clear(&mut self, cx: &mut Context<Self>) {
-        if self.explorer.liq.borrow_mut().hover_clear(std::time::Instant::now()) {
+        if self
+            .explorer
+            .liq
+            .borrow_mut()
+            .hover_clear(std::time::Instant::now())
+        {
             cx.notify();
         }
     }
@@ -456,7 +474,11 @@ impl Workbench {
     }
 
     pub(crate) fn reveal_active_in_explorer(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone()) else {
+        let Some(path) = self
+            .active
+            .and_then(|a| self.docs.get(a))
+            .map(|d| d.path.clone())
+        else {
             return;
         };
         if self.explorer.revealed_tab.as_ref() == Some(&path) {
@@ -469,7 +491,9 @@ impl Workbench {
         self.explorer.revealed_tab = Some(path.clone());
         let id = path.to_string_lossy().into_owned();
         if let Some(ix) = self.explorer.index_of(&id) {
-            self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+            self.explorer
+                .scroll
+                .scroll_to_item(ix, ScrollStrategy::Nearest);
             return;
         }
         let ancestors = files::ancestor_dirs(&path, &roots);
@@ -482,7 +506,9 @@ impl Workbench {
         if files::contains_node(&self.tree_nodes, &id) {
             self.rebuild_explorer_rows(cx);
             if let Some(ix) = self.explorer.index_of(&id) {
-                self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+                self.explorer
+                    .scroll
+                    .scroll_to_item(ix, ScrollStrategy::Nearest);
             }
             return;
         }
@@ -519,18 +545,30 @@ impl Workbench {
                 }
                 this.rebuild_explorer_rows(cx);
                 if let Some(ix) = this.explorer.index_of(&id) {
-                    this.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+                    this.explorer
+                        .scroll
+                        .scroll_to_item(ix, ScrollStrategy::Nearest);
                 }
             });
         })
         .detach();
     }
 
-    pub(crate) fn on_explorer_up(&mut self, _: &ExplorerUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_up(
+        &mut self,
+        _: &ExplorerUp,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.move_explorer_selection(-1, cx);
     }
 
-    pub(crate) fn on_explorer_down(&mut self, _: &ExplorerDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_down(
+        &mut self,
+        _: &ExplorerDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.move_explorer_selection(1, cx);
     }
 
@@ -555,28 +593,58 @@ impl Workbench {
             ix = next as usize;
         }
         self.selected = Some(PathBuf::from(&rows[ix].id));
-        self.explorer.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+        self.explorer
+            .scroll
+            .scroll_to_item(ix, ScrollStrategy::Nearest);
         cx.notify();
     }
 
-    pub(crate) fn on_explorer_left(&mut self, _: &ExplorerLeft, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
-        let Some(ix) = self.explorer.index_of(&sel) else { return };
+    pub(crate) fn on_explorer_left(
+        &mut self,
+        _: &ExplorerLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sel) = self
+            .selected
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let Some(ix) = self.explorer.index_of(&sel) else {
+            return;
+        };
         let row = self.explorer.rows[ix].clone();
         if row.is_dir && row.expanded {
             self.toggle_folder(row.id, cx);
         } else if let Some(parent) = row.parent_id {
             self.selected = Some(PathBuf::from(&parent));
             if let Some(pix) = self.explorer.index_of(&parent) {
-                self.explorer.scroll.scroll_to_item(pix, ScrollStrategy::Nearest);
+                self.explorer
+                    .scroll
+                    .scroll_to_item(pix, ScrollStrategy::Nearest);
             }
             cx.notify();
         }
     }
 
-    pub(crate) fn on_explorer_right(&mut self, _: &ExplorerRight, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
-        let Some(ix) = self.explorer.index_of(&sel) else { return };
+    pub(crate) fn on_explorer_right(
+        &mut self,
+        _: &ExplorerRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sel) = self
+            .selected
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let Some(ix) = self.explorer.index_of(&sel) else {
+            return;
+        };
         let row = self.explorer.rows[ix].clone();
         if row.is_dir && !row.expanded {
             self.expand_folder(row.id, true, cx);
@@ -584,15 +652,30 @@ impl Workbench {
             let next = &self.explorer.rows[ix + 1];
             if !next.is_placeholder && !next.is_pending {
                 self.selected = Some(PathBuf::from(&next.id));
-                self.explorer.scroll.scroll_to_item(ix + 1, ScrollStrategy::Nearest);
+                self.explorer
+                    .scroll
+                    .scroll_to_item(ix + 1, ScrollStrategy::Nearest);
                 cx.notify();
             }
         }
     }
 
-    pub(crate) fn on_explorer_open(&mut self, _: &ExplorerOpen, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(sel) = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned()) else { return };
-        let Some(ix) = self.explorer.index_of(&sel) else { return };
+    pub(crate) fn on_explorer_open(
+        &mut self,
+        _: &ExplorerOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sel) = self
+            .selected
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let Some(ix) = self.explorer.index_of(&sel) else {
+            return;
+        };
         let row = self.explorer.rows[ix].clone();
         if row.is_dir {
             self.toggle_folder(row.id, cx);
@@ -603,7 +686,11 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn render_explorer(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_explorer(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if self.root.is_none() {
             return v_flex()
                 .p_4()
@@ -611,17 +698,31 @@ impl Workbench {
                 .text_sm()
                 .text_color(c(theme::FG_MUTED))
                 .child(tr("You have not yet opened a folder."))
-                .child(self.action_button("x-open-folder", tr("Open folder"), crate::ui::Kind::Primary, cx, |_, w, cx| {
-                    w.dispatch_action(Box::new(OpenFolder), cx)
-                }))
+                .child(self.action_button(
+                    "x-open-folder",
+                    tr("Open folder"),
+                    crate::ui::Kind::Primary,
+                    cx,
+                    |_, w, cx| w.dispatch_action(Box::new(OpenFolder), cx),
+                ))
                 .into_any_element();
         }
-        let active_path = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.to_string_lossy().into_owned());
-        let selected = self.selected.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let active_path = self
+            .active
+            .and_then(|a| self.docs.get(a))
+            .map(|d| d.path.to_string_lossy().into_owned());
+        let selected = self
+            .selected
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
         let sel_ix = selected
             .as_deref()
             .and_then(|s| self.explorer.index_of(s))
-            .or_else(|| active_path.as_deref().and_then(|a| self.explorer.index_of(a)));
+            .or_else(|| {
+                active_path
+                    .as_deref()
+                    .and_then(|a| self.explorer.index_of(a))
+            });
         let root = self.root.clone();
         let root_target = self.ctx_target.clone();
         let focused = self.explorer.focus.is_focused(window);
@@ -653,9 +754,8 @@ impl Workbench {
                     .map(|(p, s)| (p.to_string_lossy().into_owned(), *s));
                 let ws_anim = this.explorer.workspace_anim;
                 let added_roots = &this.explorer.added_roots;
-                let themed_icons = crate::ext::vsx_icons::is_active();
                 let hide_arrows = crate::ext::vsx_icons::hides_explorer_arrows();
-                let icon_sz = if themed_icons { theme::u(15.) } else { theme::u(13.) };
+                let icon_sz = theme::u(15.);
 
                 range
                     .map(|ix| {
@@ -664,17 +764,22 @@ impl Workbench {
 
                         if row.is_pending {
                             let icon: AnyElement = match &pending {
-                                Some(PendingOp::NewFolder(_)) => files::folder_icon_el("", true, false, icon_sz),
+                                Some(PendingOp::NewFolder(_)) => {
+                                    files::folder_icon_el("", true, false, icon_sz)
+                                }
                                 _ => {
                                     let typed = name_input.read(cx).value();
-                                    if typed.is_empty() && !themed_icons {
-                                        Icon::new(IconName::File).size(icon_sz).text_color(c(theme::FG_MUTED)).into_any_element()
-                                    } else {
-                                        files::file_icon_el(&typed, icon_sz)
-                                    }
+                                    files::file_icon_el(&typed, icon_sz)
                                 }
                             };
-                            return name_row(PENDING_ROW_ID, row.depth, icon, hide_arrows, &name_input).into_any_element();
+                            return name_row(
+                                PENDING_ROW_ID,
+                                row.depth,
+                                icon,
+                                hide_arrows,
+                                &name_input,
+                            )
+                            .into_any_element();
                         }
 
                         if row.is_placeholder {
@@ -696,13 +801,20 @@ impl Workbench {
                         if let Some(PendingOp::Rename(p)) = &pending {
                             if p.to_string_lossy() == id {
                                 let icon = if row.is_dir {
-                                    files::folder_icon_el(&row.label, row.expanded, multi && row.depth == 0, icon_sz)
+                                    files::folder_icon_el(
+                                        &row.label,
+                                        row.expanded,
+                                        multi && row.depth == 0,
+                                        icon_sz,
+                                    )
                                 } else {
                                     let typed = name_input.read(cx).value();
-                                    let name: &str = if typed.is_empty() { &row.label } else { &typed };
+                                    let name: &str =
+                                        if typed.is_empty() { &row.label } else { &typed };
                                     files::file_icon_el(name, icon_sz)
                                 };
-                                return name_row(&id, row.depth, icon, hide_arrows, &name_input).into_any_element();
+                                return name_row(&id, row.depth, icon, hide_arrows, &name_input)
+                                    .into_any_element();
                             }
                         }
 
@@ -718,22 +830,40 @@ impl Workbench {
                         let is_dir = row.is_dir;
                         let expanded = row.expanded;
                         let chevron = (!hide_arrows).then(|| {
-                            div().w(theme::u(12.)).flex().items_center().justify_center().when(is_dir, |d| {
-                                d.child(
-                                    Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                            div()
+                                .w(theme::u(12.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(is_dir, |d| {
+                                    d.child(
+                                        Icon::new(if expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronRight
+                                        })
                                         .xsmall()
                                         .text_color(c(theme::FG_DIM)),
-                                )
-                            })
+                                    )
+                                })
                         });
                         let icon = if is_dir {
-                            files::folder_icon_el(&row.label, expanded, multi && row.depth == 0, icon_sz)
+                            files::folder_icon_el(
+                                &row.label,
+                                expanded,
+                                multi && row.depth == 0,
+                                icon_sz,
+                            )
                         } else {
                             files::file_icon_el(&row.label, icon_sz)
                         };
                         let (mark, dir_dirty) = if has_scm {
                             let key = id.replace('/', "\\").to_lowercase();
-                            let mark = if is_dir { None } else { marks.get(&key).copied() };
+                            let mark = if is_dir {
+                                None
+                            } else {
+                                marks.get(&key).copied()
+                            };
                             let dir_dirty = is_dir && dirty_dirs.contains(&key);
                             (mark, dir_dirty)
                         } else {
@@ -768,9 +898,40 @@ impl Workbench {
                             .cursor_pointer()
                             .text_size(theme::u(11.5))
                             .text_color(label_color)
-                            .when(!motion && (is_open || is_sel), |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::SELECT))))
-                            .when(motion && is_open && !is_sel, |s| s.child(div().absolute().left(px(4.)).right(px(6.)).top_0().bottom_0().rounded(px(6.)).bg(c(theme::ACCENT).opacity(0.08))))
-                            .when(!motion, |s| s.hover(|s| if is_open || is_sel { s } else { s.bg(c(theme::BG_HOVER)) }).active(|s| s.bg(c(theme::SELECT))))
+                            .when(!motion && (is_open || is_sel), |s| {
+                                s.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(4.))
+                                        .right(px(6.))
+                                        .top_0()
+                                        .bottom_0()
+                                        .rounded(px(6.))
+                                        .bg(c(theme::SELECT)),
+                                )
+                            })
+                            .when(motion && is_open && !is_sel, |s| {
+                                s.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(4.))
+                                        .right(px(6.))
+                                        .top_0()
+                                        .bottom_0()
+                                        .rounded(px(6.))
+                                        .bg(c(theme::ACCENT).opacity(0.08)),
+                                )
+                            })
+                            .when(!motion, |s| {
+                                s.hover(|s| {
+                                    if is_open || is_sel {
+                                        s
+                                    } else {
+                                        s.bg(c(theme::BG_HOVER))
+                                    }
+                                })
+                                .active(|s| s.bg(c(theme::SELECT)))
+                            })
                             .children(chevron)
                             .child(icon)
                             .child(
@@ -779,17 +940,30 @@ impl Workbench {
                                     .min_w_0()
                                     .truncate()
                                     .when(multi && row.depth == 0, |d| {
-                                        d.font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG))
+                                        d.font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(c(theme::FG_STRONG))
                                     })
                                     .when(mark == Some('D'), |d| d.line_through())
                                     .child(row.label.clone()),
                             )
-                            .when_some(mark, |h, m| h.child(div().text_xs().font_weight(FontWeight::BOLD).child(m.to_string())))
-                            .when(dir_dirty, |h| h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN))))
+                            .when_some(mark, |h, m| {
+                                h.child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(m.to_string()),
+                                )
+                            })
+                            .when(dir_dirty, |h| {
+                                h.child(div().size(px(5.)).rounded_full().bg(c(theme::WARN)))
+                            })
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 let keep = {
                                     let w = view_md.read(cx);
-                                    stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                                    stray_press_keeps_input(
+                                        &w.pending,
+                                        &w.name_input.read(cx).value(),
+                                    )
                                 };
                                 if keep {
                                     cx.stop_propagation();
@@ -819,7 +993,10 @@ impl Workbench {
                             .on_mouse_down(MouseButton::Right, move |_, window, cx| {
                                 let keep = {
                                     let w = view_r.read(cx);
-                                    stray_press_keeps_input(&w.pending, &w.name_input.read(cx).value())
+                                    stray_press_keeps_input(
+                                        &w.pending,
+                                        &w.name_input.read(cx).value(),
+                                    )
                                 };
                                 if keep {
                                     cx.stop_propagation();
@@ -841,7 +1018,11 @@ impl Workbench {
                                 let added = extra_ctx.contains(&path);
                                 *target.borrow_mut() = Some(path);
                                 let menu = if added {
-                                    menu.menu(tr("Remove Folder from Workspace"), Box::new(RemoveFolder)).separator()
+                                    menu.menu(
+                                        tr("Remove Folder from Workspace"),
+                                        Box::new(RemoveFolder),
+                                    )
+                                    .separator()
                                 } else {
                                     menu
                                 };
@@ -879,7 +1060,8 @@ impl Workbench {
                             return row_el
                                 .with_animation(
                                     SharedString::from(format!("xr-ws-{ws_anim}-{id}")),
-                                    Animation::new(Duration::from_millis(240)).with_easing(gpui_kit::ease_out_quint()),
+                                    Animation::new(Duration::from_millis(240))
+                                        .with_easing(gpui_kit::ease_out_quint()),
                                     move |d, t| {
                                         d.opacity(0.15 + 0.85 * t)
                                             .pl(px(base_pl - (1. - t) * 10.))
@@ -894,8 +1076,12 @@ impl Workbench {
                                 return row_el
                                     .with_animation(
                                         SharedString::from(format!("xr-open-{seq}-{id}")),
-                                        Animation::new(Duration::from_millis(165)).with_easing(gpui_kit::ease_out_quint()),
-                                        move |d, t| d.opacity(0.08 + 0.92 * t).pl(px(base_pl - (1. - t) * 7.)),
+                                        Animation::new(Duration::from_millis(165))
+                                            .with_easing(gpui_kit::ease_out_quint()),
+                                        move |d, t| {
+                                            d.opacity(0.08 + 0.92 * t)
+                                                .pl(px(base_pl - (1. - t) * 7.))
+                                        },
                                     )
                                     .into_any_element();
                             }
@@ -904,7 +1090,8 @@ impl Workbench {
                                 return row_el
                                     .with_animation(
                                         SharedString::from(format!("xr-shut-{seq}-{id}")),
-                                        Animation::new(Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                                        Animation::new(Duration::from_millis(150))
+                                            .with_easing(gpui_kit::ease_out_quint()),
                                         move |d, t| d.bg(hover.opacity((1. - t) * 0.5)),
                                     )
                                     .into_any_element();
@@ -915,7 +1102,8 @@ impl Workbench {
                                         return row_el
                                             .with_animation(
                                                 SharedString::from(format!("xr-pull-{seq}-{id}")),
-                                                Animation::new(Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                                                Animation::new(Duration::from_millis(140))
+                                                    .with_easing(gpui_kit::ease_out_quint()),
                                                 |d, t| d.mt(px((1. - t) * 4.)),
                                             )
                                             .into_any_element();
@@ -949,10 +1137,12 @@ impl Workbench {
             let scrolled = (self.explorer.liq_scroll_y.get() - scroll_y).abs() > 0.5;
             self.explorer.liq_scroll_y.set(scroll_y);
             let mut liq = self.explorer.liq.borrow_mut();
-            let act_rect = sel_ix.filter(|&i| i < count).map(|i| crate::ui::liquid::Rect1D {
-                pos: explorer_row_top(i, scroll_y, row_h),
-                len: row_h,
-            });
+            let act_rect = sel_ix
+                .filter(|&i| i < count)
+                .map(|i| crate::ui::liquid::Rect1D {
+                    pos: explorer_row_top(i, scroll_y, row_h),
+                    len: row_h,
+                });
             if scrolled {
                 if let Some(r) = act_rect {
                     liq.active_ix = sel_ix;
@@ -961,10 +1151,13 @@ impl Workbench {
             } else {
                 liq.sync_active(sel_ix, act_rect, cross_w, 195, now);
             }
-            let hov_rect = liq.hover_ix.filter(|&i| i < count).map(|i| crate::ui::liquid::Rect1D {
-                pos: explorer_row_top(i, scroll_y, row_h),
-                len: row_h,
-            });
+            let hov_rect = liq
+                .hover_ix
+                .filter(|&i| i < count)
+                .map(|i| crate::ui::liquid::Rect1D {
+                    pos: explorer_row_top(i, scroll_y, row_h),
+                    len: row_h,
+                });
             liq.sync_hover_rect(hov_rect, cross_w, now);
             liq.sample_frame(cross_w, now).map(|fr| {
                 let st = crate::ui::liquid::LiquidStyle {
@@ -1023,7 +1216,10 @@ impl Workbench {
                 menu.menu(tr("New File..."), Box::new(ExplorerNewFile))
                     .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
                     .separator()
-                    .menu(tr("Add Folder to Workspace..."), Box::new(AddFolderToWorkspace))
+                    .menu(
+                        tr("Add Folder to Workspace..."),
+                        Box::new(AddFolderToWorkspace),
+                    )
                     .menu(tr("Refresh"), Box::new(ExplorerRefresh))
                     .separator()
                     .menu(tr("Copy Path"), Box::new(CopyPath))
@@ -1034,7 +1230,11 @@ impl Workbench {
     }
 
     fn target_dir(&self) -> Option<PathBuf> {
-        let t = self.ctx_target.borrow_mut().take().or_else(|| self.selected.clone());
+        let t = self
+            .ctx_target
+            .borrow_mut()
+            .take()
+            .or_else(|| self.selected.clone());
         match t {
             Some(p) if p.is_dir() => Some(p),
             Some(p) => p.parent().map(Path::to_path_buf),
@@ -1043,33 +1243,42 @@ impl Workbench {
     }
 
     fn target_item(&self) -> Option<PathBuf> {
-        self.ctx_target.borrow_mut().take().or_else(|| self.selected.clone())
+        self.ctx_target
+            .borrow_mut()
+            .take()
+            .or_else(|| self.selected.clone())
     }
 
-    pub(crate) fn pending_file_icon(&self, cx: &App) -> Option<(crate::fluxicon::FluxIcon, Option<u32>)> {
+    pub(crate) fn pending_file_icon(&self, cx: &App) -> Option<crate::ext::vsx_icons::IconKey> {
+        let dark = crate::theme::palette().dark;
         match &self.pending {
             Some(PendingOp::NewFile(_)) => {
                 let typed = self.name_input.read(cx).value();
-                Some(if typed.is_empty() {
-                    (crate::fluxicon::FILE, None)
-                } else {
-                    files::icon_for(&typed)
-                })
+                Some(crate::ext::vsx_icons::file_icon_key(&typed, dark))
             }
             Some(PendingOp::Rename(p)) => {
                 let typed = self.name_input.read(cx).value();
                 if typed.is_empty() {
-                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    Some(files::icon_for(&name))
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    Some(crate::ext::vsx_icons::file_icon_key(&name, dark))
                 } else {
-                    Some(files::icon_for(&typed))
+                    Some(crate::ext::vsx_icons::file_icon_key(&typed, dark))
                 }
             }
             _ => None,
         }
     }
 
-    fn start_pending(&mut self, op: PendingOp, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_pending(
+        &mut self,
+        op: PendingOp,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.view = SideView::Explorer;
         self.sidebar_open = true;
         if let PendingOp::NewFile(d) | PendingOp::NewFolder(d) = &op {
@@ -1101,36 +1310,69 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_cancel_pending(&mut self, _: &CancelPending, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_cancel_pending(
+        &mut self,
+        _: &CancelPending,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_pending(window, cx);
     }
 
-    pub(crate) fn on_explorer_new_file(&mut self, _: &ExplorerNewFile, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_new_file(
+        &mut self,
+        _: &ExplorerNewFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(d) = self.target_dir() {
             self.start_pending(PendingOp::NewFile(d), "", window, cx);
         }
     }
 
-    pub(crate) fn on_explorer_new_folder(&mut self, _: &ExplorerNewFolder, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_new_folder(
+        &mut self,
+        _: &ExplorerNewFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(d) = self.target_dir() {
             self.start_pending(PendingOp::NewFolder(d), "", window, cx);
         }
     }
 
-    pub(crate) fn on_explorer_rename(&mut self, _: &ExplorerRename, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_rename(
+        &mut self,
+        _: &ExplorerRename,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(p) = self.target_item().filter(|p| Some(p) != self.root.as_ref()) {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             self.start_pending(PendingOp::Rename(p), &name, window, cx);
         }
     }
 
-    pub(crate) fn on_explorer_delete(&mut self, _: &ExplorerDelete, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_delete(
+        &mut self,
+        _: &ExplorerDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(p) = self.target_item().filter(|p| Some(p) != self.root.as_ref()) {
             self.start_pending(PendingOp::Delete(p), "", window, cx);
         }
     }
 
-    pub(crate) fn on_explorer_refresh(&mut self, _: &ExplorerRefresh, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_explorer_refresh(
+        &mut self,
+        _: &ExplorerRefresh,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.refresh_tree(cx);
     }
 
@@ -1140,23 +1382,36 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_copy_relative_path(&mut self, _: &CopyRelativePath, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_copy_relative_path(
+        &mut self,
+        _: &CopyRelativePath,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(p) = self.target_item() {
             let rel = self.rel_display(&p.to_string_lossy()).replace('\\', "/");
             cx.write_to_clipboard(ClipboardItem::new_string(rel));
         }
     }
 
-    pub(crate) fn on_reveal(&mut self, _: &RevealInExplorer, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_reveal(
+        &mut self,
+        _: &RevealInExplorer,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(p) = self.target_item() {
             cx.reveal_path(&p);
         }
     }
 
     pub(crate) fn commit_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(op) = self.pending.take() else { return };
+        let Some(op) = self.pending.take() else {
+            return;
+        };
         let name = self.name_input.read(cx).value().trim().to_string();
-        let bad_name = name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']);
+        let bad_name =
+            name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']);
         let result = match &op {
             PendingOp::NewFile(_) | PendingOp::NewFolder(_) | PendingOp::Rename(_) if bad_name => {
                 Err(crate::trf!("\"{name}\" is not a valid name"; name => name))
@@ -1175,7 +1430,12 @@ impl Workbench {
                     for d in self.docs.iter_mut() {
                         if let Ok(rest) = d.path.strip_prefix(from) {
                             d.path = to.join(rest);
-                            d.name = d.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into();
+                            d.name = d
+                                .path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                                .into();
                         }
                     }
                     self.selected = Some(to);
@@ -1202,7 +1462,13 @@ impl Workbench {
     }
 }
 
-fn name_row(id: &str, depth: usize, icon: AnyElement, hide_arrows: bool, name_input: &Entity<InputState>) -> Stateful<Div> {
+fn name_row(
+    id: &str,
+    depth: usize,
+    icon: AnyElement,
+    hide_arrows: bool,
+    name_input: &Entity<InputState>,
+) -> Stateful<Div> {
     h_flex()
         .id(SharedString::from(format!("xr-edit-{id}")))
         .w_full()
@@ -1214,7 +1480,9 @@ fn name_row(id: &str, depth: usize, icon: AnyElement, hide_arrows: bool, name_in
         .items_center()
         .bg(c(theme::SELECT))
         .on_click(|_, _, cx| cx.stop_propagation())
-        .when(!hide_arrows, |h| h.child(div().w(theme::u(12.)).flex().justify_center()))
+        .when(!hide_arrows, |h| {
+            h.child(div().w(theme::u(12.)).flex().justify_center())
+        })
         .child(icon)
         .child(
             div()
@@ -1223,7 +1491,12 @@ fn name_row(id: &str, depth: usize, icon: AnyElement, hide_arrows: bool, name_in
                 .h_full()
                 .flex()
                 .items_center()
-                .child(crate::ui::McInput::new(name_input).xsmall().focus_bordered(false).w_full()),
+                .child(
+                    crate::ui::McInput::new(name_input)
+                        .xsmall()
+                        .focus_bordered(false)
+                        .w_full(),
+                ),
         )
 }
 
@@ -1243,8 +1516,19 @@ fn delete_row(id: &str, depth: usize, path: &Path, view: &Entity<Workbench>) -> 
         .bg(c(theme::SELECT))
         .text_size(theme::u(11.5))
         .on_click(|_, _, cx| cx.stop_propagation())
-        .child(Icon::new(IconName::Delete).size(theme::u(13.)).text_color(c(theme::DANGER)))
-        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG)).child(crate::trf!("Delete {name}?"; name => name)))
+        .child(
+            Icon::new(IconName::Delete)
+                .size(theme::u(13.))
+                .text_color(c(theme::DANGER)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(c(theme::FG))
+                .child(crate::trf!("Delete {name}?"; name => name)),
+        )
         .child(
             Button::new("pending-del-ok")
                 .label(tr("Delete"))
@@ -1283,26 +1567,52 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn dir(id: &str, name: &str, loaded: bool, children: Vec<Node>) -> Node {
-        Node { id: id.into(), name: name.into(), children: Some(children), loaded }
+        Node {
+            id: id.into(),
+            name: name.into(),
+            children: Some(children),
+            loaded,
+        }
     }
 
     fn file(id: &str, name: &str) -> Node {
-        Node { id: id.into(), name: name.into(), children: None, loaded: true }
+        Node {
+            id: id.into(),
+            name: name.into(),
+            children: None,
+            loaded: true,
+        }
     }
 
     #[test]
     fn toggling_two_large_sibling_folders_keeps_exact_path_identity() {
-        let big_a: Vec<Node> = (0..60).map(|i| file(&format!("/bp/A/a{i}.js"), &format!("a{i}.js"))).collect();
-        let big_b: Vec<Node> = (0..60).map(|i| file(&format!("/bp/B/b{i}.json"), &format!("b{i}.json"))).collect();
-        let nodes = vec![dir("/bp", "behavior_packs", true, vec![
-            dir("/bp/A", "KiwEssentialsVIP_BP", true, big_a),
-            dir("/bp/B", "KiwHitAnimation_BP", true, big_b),
-        ])];
+        let big_a: Vec<Node> = (0..60)
+            .map(|i| file(&format!("/bp/A/a{i}.js"), &format!("a{i}.js")))
+            .collect();
+        let big_b: Vec<Node> = (0..60)
+            .map(|i| file(&format!("/bp/B/b{i}.json"), &format!("b{i}.json")))
+            .collect();
+        let nodes = vec![dir(
+            "/bp",
+            "behavior_packs",
+            true,
+            vec![
+                dir("/bp/A", "KiwEssentialsVIP_BP", true, big_a),
+                dir("/bp/B", "KiwHitAnimation_BP", true, big_b),
+            ],
+        )];
         let mut expanded = HashSet::from(["/bp".to_string(), "/bp/B".to_string()]);
         let loading = HashSet::new();
         let mut dirs = HashSet::new();
 
-        let rows = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/bp")), &mut dirs);
+        let rows = flatten_nodes(
+            &nodes,
+            &expanded,
+            &loading,
+            None,
+            Some(Path::new("/bp")),
+            &mut dirs,
+        );
         assert_eq!(rows[0].id, "/bp");
         assert_eq!(rows[1].id, "/bp/A");
         assert!(!rows[1].expanded);
@@ -1313,7 +1623,14 @@ mod tests {
         // Expand A and collapse B: rows stay strictly keyed by path.
         expanded.insert("/bp/A".to_string());
         expanded.remove("/bp/B");
-        let rows2 = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/bp")), &mut dirs);
+        let rows2 = flatten_nodes(
+            &nodes,
+            &expanded,
+            &loading,
+            None,
+            Some(Path::new("/bp")),
+            &mut dirs,
+        );
         assert_eq!(rows2[1].id, "/bp/A");
         assert!(rows2[1].expanded);
         assert_eq!(rows2[2].id, "/bp/A/a0.js");
@@ -1331,7 +1648,14 @@ mod tests {
         let expanded = HashSet::from(["/p/unloaded".to_string(), "/p/empty".to_string()]);
         let loading = HashSet::new();
         let mut dirs = HashSet::new();
-        let rows = flatten_nodes(&nodes, &expanded, &loading, None, Some(Path::new("/p")), &mut dirs);
+        let rows = flatten_nodes(
+            &nodes,
+            &expanded,
+            &loading,
+            None,
+            Some(Path::new("/p")),
+            &mut dirs,
+        );
         assert_eq!(rows.len(), 4);
         assert!(rows[0].is_dir && rows[1].is_placeholder && rows[1].loading);
         assert!(rows[2].is_dir && rows[3].is_placeholder && !rows[3].loading);
@@ -1339,17 +1663,36 @@ mod tests {
 
     #[test]
     fn pending_row_inserts_into_target_folder_or_root() {
-        let nodes = vec![dir("/p/src", "src", true, vec![file("/p/src/a.rs", "a.rs")])];
+        let nodes = vec![dir(
+            "/p/src",
+            "src",
+            true,
+            vec![file("/p/src/a.rs", "a.rs")],
+        )];
         let expanded = HashSet::from(["/p/src".to_string()]);
         let loading = HashSet::new();
         let mut dirs = HashSet::new();
         let op = PendingOp::NewFile(PathBuf::from("/p/src"));
-        let rows = flatten_nodes(&nodes, &expanded, &loading, Some(&op), Some(Path::new("/p")), &mut dirs);
+        let rows = flatten_nodes(
+            &nodes,
+            &expanded,
+            &loading,
+            Some(&op),
+            Some(Path::new("/p")),
+            &mut dirs,
+        );
         assert_eq!(rows[1].id, PENDING_ROW_ID);
         assert_eq!(rows[1].depth, 1);
 
         let root_op = PendingOp::NewFolder(PathBuf::from("/p"));
-        let rows_root = flatten_nodes(&nodes, &expanded, &loading, Some(&root_op), Some(Path::new("/p")), &mut dirs);
+        let rows_root = flatten_nodes(
+            &nodes,
+            &expanded,
+            &loading,
+            Some(&root_op),
+            Some(Path::new("/p")),
+            &mut dirs,
+        );
         assert_eq!(rows_root[0].id, PENDING_ROW_ID);
         assert_eq!(rows_root[0].depth, 0);
     }
@@ -1368,8 +1711,14 @@ mod tests {
         assert!(stray_press_keeps_input(&new, "main.py"));
         assert!(!stray_press_keeps_input(&new, ""));
         assert!(!stray_press_keeps_input(&new, "   "));
-        assert!(stray_press_keeps_input(&Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))), "b"));
-        assert!(!stray_press_keeps_input(&Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))), "main.py"));
+        assert!(stray_press_keeps_input(
+            &Some(PendingOp::Rename(PathBuf::from("/tmp/a.txt"))),
+            "b"
+        ));
+        assert!(!stray_press_keeps_input(
+            &Some(PendingOp::Delete(PathBuf::from("/tmp/a.txt"))),
+            "main.py"
+        ));
         assert!(!stray_press_keeps_input(&None, "main.py"));
     }
 
@@ -1380,7 +1729,10 @@ mod tests {
         let ix = 220;
         let top = explorer_row_top(ix, scroll_y, row_h);
         assert_eq!(explorer_row_at_y(top + 0.5, scroll_y, row_h, 500), Some(ix));
-        assert_eq!(explorer_row_at_y(top + row_h - 0.5, scroll_y, row_h, 500), Some(ix));
+        assert_eq!(
+            explorer_row_at_y(top + row_h - 0.5, scroll_y, row_h, 500),
+            Some(ix)
+        );
         assert_eq!(explorer_row_at_y(-1.0, scroll_y, row_h, 500), None);
         assert_eq!(explorer_row_at_y(500.0, 0.0, 20.0, 5), None);
     }
@@ -1388,11 +1740,17 @@ mod tests {
     #[test]
     fn explorer_scroll_y_clamps_bottom_and_top_overscroll() {
         // 145 rows * 20px = 2900px; viewport 500px -> valid scroll range [-2400, 0].
-        assert_eq!(clamp_explorer_scroll_y(-2460.0, 145, 20.0, 500.0, 0.0), -2400.0);
+        assert_eq!(
+            clamp_explorer_scroll_y(-2460.0, 145, 20.0, 500.0, 0.0),
+            -2400.0
+        );
         assert_eq!(clamp_explorer_scroll_y(60.0, 145, 20.0, 500.0, 0.0), 0.0);
         // Short list that fits in viewport stays at 0.0.
         assert_eq!(clamp_explorer_scroll_y(-40.0, 5, 20.0, 500.0, 0.0), 0.0);
         // Fallback before viewport measurement uses base_handle.max_offset().y.
-        assert_eq!(clamp_explorer_scroll_y(-950.0, 145, 20.0, 0.0, 800.0), -800.0);
+        assert_eq!(
+            clamp_explorer_scroll_y(-950.0, 145, 20.0, 0.0, 800.0),
+            -800.0
+        );
     }
 }

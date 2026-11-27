@@ -1,4 +1,3 @@
-
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,23 +17,44 @@ pub fn file() -> Option<PathBuf> {
         return Some(PathBuf::from(x).join("opencode").join("models.json"));
     }
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".cache").join("opencode").join("models.json"))
+    Some(
+        PathBuf::from(home)
+            .join(".cache")
+            .join("opencode")
+            .join("models.json"),
+    )
 }
 
 pub fn parse(json: &str, ids: &[String]) -> HashMap<String, Meta> {
-    let Ok(v) = serde_json::from_str::<Value>(json) else { return HashMap::new() };
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return HashMap::new();
+    };
     let mut out = HashMap::new();
     for id in ids {
-        let Some((provider, model)) = id.split_once('/') else { continue };
+        let Some((provider, model)) = id.split_once('/') else {
+            continue;
+        };
         let m = &v[provider]["models"][model];
-        let num = |x: &Value| x.as_u64().or_else(|| x.as_f64().map(|f| f as u64)).unwrap_or(0);
+        let num = |x: &Value| {
+            x.as_u64()
+                .or_else(|| x.as_f64().map(|f| f as u64))
+                .unwrap_or(0)
+        };
         let context = num(&m["limit"]["context"]);
         if context == 0 {
             continue;
         }
         let cost = |k: &str| m["cost"][k].as_f64();
-        let free = matches!((cost("input"), cost("output")), (Some(i), Some(o)) if i == 0.0 && o == 0.0);
-        out.insert(id.clone(), Meta { context, output: num(&m["limit"]["output"]), free });
+        let free =
+            matches!((cost("input"), cost("output")), (Some(i), Some(o)) if i == 0.0 && o == 0.0);
+        out.insert(
+            id.clone(),
+            Meta {
+                context,
+                output: num(&m["limit"]["output"]),
+                free,
+            },
+        );
     }
     out
 }
@@ -44,7 +64,9 @@ pub fn get(id: &str) -> Option<Meta> {
 }
 
 pub fn missing(ids: &[String]) -> Vec<String> {
-    let Ok(g) = KEPT.lock() else { return Vec::new() };
+    let Ok(g) = KEPT.lock() else {
+        return Vec::new();
+    };
     match g.as_ref() {
         None => ids.to_vec(),
         Some(_) => Vec::new(),
@@ -52,7 +74,10 @@ pub fn missing(ids: &[String]) -> Vec<String> {
 }
 
 pub fn load(ids: &[String]) {
-    let found = file().and_then(|f| std::fs::read_to_string(f).ok()).map(|j| parse(&j, ids)).unwrap_or_default();
+    let found = file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|j| parse(&j, ids))
+        .unwrap_or_default();
     if let Ok(mut g) = KEPT.lock() {
         g.get_or_insert_with(HashMap::new).extend(found);
     }
@@ -66,7 +91,11 @@ pub fn claude_id(family: &str, version: f32) -> String {
 pub fn tokens(n: u64) -> String {
     if n >= 950_000 {
         let m = (n as f64 / 1_000_000.0 * 10.0).round() / 10.0;
-        if m.fract() == 0.0 { format!("{}M", m as u64) } else { format!("{m}M") }
+        if m.fract() == 0.0 {
+            format!("{}M", m as u64)
+        } else {
+            format!("{m}M")
+        }
     } else if n >= 1000 {
         format!("{}K", (n as f64 / 1000.0).round() as u64)
     } else {
@@ -84,7 +113,14 @@ mod tests {
             "glm-5.3-flash-free":{"limit":{"context":200000,"output":32000},"cost":{"input":0,"output":0}},
             "glm-5.3":{"limit":{"context":1000000,"output":131072},"cost":{"input":1.4,"output":4}}}},
             "anthropic":{"models":{"claude-opus-5-5":{"limit":{"context":1000000,"output":128000},"cost":{"input":4,"output":20}}}}}"#;
-        let ids: Vec<String> = ["opencode/glm-5.3-flash-free", "opencode/glm-5.3", "opencode/nope", "anthropic/claude-opus-5-5"].map(String::from).to_vec();
+        let ids: Vec<String> = [
+            "opencode/glm-5.3-flash-free",
+            "opencode/glm-5.3",
+            "opencode/nope",
+            "anthropic/claude-opus-5-5",
+        ]
+        .map(String::from)
+        .to_vec();
         let m = parse(json, &ids);
         assert!(m["opencode/glm-5.3-flash-free"].free);
         assert_eq!(m["opencode/glm-5.3-flash-free"].context, 200_000);

@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::proc::{self, python};
 use crate::term::{self, LineKind, PyError};
@@ -8,8 +7,9 @@ use gpui_kit::component::{
     h_flex,
     highlighter::{Diagnostic, DiagnosticSeverity},
     input::{
-        EditorState, Input, OverviewRulerDecoration, OverviewRulerDecorationCollection, OverviewRulerLane, Position,
-        RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Rope,
+        EditorState, Input, OverviewRulerDecoration, OverviewRulerDecorationCollection,
+        OverviewRulerLane, Position, RangeDecoration, RangeDecorationCollection,
+        RangeDecorationStyle, Rope,
     },
     v_flex, Icon, IconName, RopeExt, Sizable,
 };
@@ -21,7 +21,10 @@ fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
     if mine.is_empty() {
         return Vec::new();
     }
-    let mut rows: std::collections::HashMap<u32, String> = mine.iter().map(|p| (p.line.saturating_sub(1), String::new())).collect();
+    let mut rows: std::collections::HashMap<u32, String> = mine
+        .iter()
+        .map(|p| (p.line.saturating_sub(1), String::new()))
+        .collect();
     let max_row = rows.keys().copied().max().unwrap_or(0);
     for (idx, line) in rope.iter_lines().enumerate() {
         let r = idx as u32;
@@ -35,20 +38,28 @@ fn build_mine_diagnostics(mine: &[Problem], rope: &Rope) -> Vec<Diagnostic> {
     mine.iter()
         .map(|p| {
             let row = p.line.saturating_sub(1);
-            let src = rows.get(&row).map(|s| s.trim_end_matches(['\r', '\n'])).unwrap_or("");
+            let src = rows
+                .get(&row)
+                .map(|s| s.trim_end_matches(['\r', '\n']))
+                .unwrap_or("");
             let indent = (src.len() - src.trim_start().len()) as u32;
             let len = src.trim_end().chars().count() as u32;
             let (a, b) = match p.caret {
-                Some((s, e)) if (indent + e as u32) <= len.max(1) && e > s => (indent + s as u32, indent + e as u32),
+                Some((s, e)) if (indent + e as u32) <= len.max(1) && e > s => {
+                    (indent + s as u32, indent + e as u32)
+                }
                 _ if p.col > 0 => {
                     let c0 = p.col.saturating_sub(1).min(len);
                     (c0, len.max(c0 + 1))
                 }
                 _ => (indent, len.max(indent + 1)),
             };
-            Diagnostic::new(Position::new(row, a)..Position::new(row, b), p.message.clone())
-                .with_severity(DiagnosticSeverity::Error)
-                .with_source(p.source)
+            Diagnostic::new(
+                Position::new(row, a)..Position::new(row, b),
+                p.message.clone(),
+            )
+            .with_severity(DiagnosticSeverity::Error)
+            .with_source(p.source)
         })
         .collect()
 }
@@ -88,7 +99,11 @@ fn sync_diagnostic_decorations(
         }
         let start = rope.line_start_offset(row);
         let end = rope.line_end_offset(row);
-        let span = if end > start { start..end } else { start..start.saturating_add(1).min(rope.len()) };
+        let span = if end > start {
+            start..end
+        } else {
+            start..start.saturating_add(1).min(rope.len())
+        };
         if !span.is_empty() {
             range_decos.push(
                 RangeDecoration::new(span.clone())
@@ -116,7 +131,9 @@ fn write_diagnostics(
     code_diags: &[crate::diagnostics::CodeDiag],
     cx: &mut Context<EditorState>,
 ) {
-    let Some(set) = ed.diagnostics_mut() else { return };
+    let Some(set) = ed.diagnostics_mut() else {
+        return;
+    };
     if set.is_empty() && mine_diags.is_empty() && code_diags.is_empty() {
         return;
     }
@@ -131,9 +148,12 @@ fn write_diagnostics(
         };
         let end = d.end_col.max(d.col + 1);
         set.push(
-            Diagnostic::new(Position::new(d.row, d.col)..Position::new(d.row, end), d.message.clone())
-                .with_severity(sev)
-                .with_source(d.source),
+            Diagnostic::new(
+                Position::new(d.row, d.col)..Position::new(d.row, end),
+                d.message.clone(),
+            )
+            .with_severity(sev)
+            .with_source(d.source),
         );
     }
     cx.notify();
@@ -211,7 +231,11 @@ pub(crate) struct PanelSel {
 
 impl PanelSel {
     fn span(&self) -> ((usize, usize), (usize, usize)) {
-        if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -233,10 +257,22 @@ impl PanelSel {
 }
 
 fn mono_kind(k: LineKind) -> bool {
-    matches!(k, LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame | LineKind::Code | LineKind::Caret | LineKind::Blank)
+    matches!(
+        k,
+        LineKind::Normal
+            | LineKind::Err
+            | LineKind::Warn
+            | LineKind::Dim
+            | LineKind::Success
+            | LineKind::Frame
+            | LineKind::Code
+            | LineKind::Caret
+            | LineKind::Blank
+    )
 }
 
-pub(crate) type WrapCache = std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
+pub(crate) type WrapCache =
+    std::cell::RefCell<((usize, usize, usize, usize, usize), std::rc::Rc<Vec<Row>>)>;
 
 #[derive(Clone)]
 pub(crate) struct Problem {
@@ -250,8 +286,17 @@ pub(crate) struct Problem {
 }
 
 pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
-    let n = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_start_matches(r"\\?\").to_lowercase();
-    if cfg!(windows) { n(a) == n(b) } else { a == b }
+    let n = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_start_matches(r"\\?\")
+            .to_lowercase()
+    };
+    if cfg!(windows) {
+        n(a) == n(b)
+    } else {
+        a == b
+    }
 }
 
 fn clean_path_parts(path: &Path) -> Vec<String> {
@@ -269,7 +314,13 @@ fn clean_path_parts(path: &Path) -> Vec<String> {
     unified
         .split('/')
         .filter(|part| !part.is_empty() && *part != ".")
-        .map(|part| if cfg!(windows) { part.to_ascii_lowercase() } else { part.to_string() })
+        .map(|part| {
+            if cfg!(windows) {
+                part.to_ascii_lowercase()
+            } else {
+                part.to_string()
+            }
+        })
         .collect()
 }
 
@@ -308,11 +359,21 @@ pub(crate) fn path_in_repo(repo: &Path, path: &Path) -> bool {
 }
 
 impl Workbench {
-    pub(crate) fn on_toggle_panel(&mut self, _: &TogglePanel, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_toggle_panel(
+        &mut self,
+        _: &TogglePanel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.set_panel_open(!self.panel_open, cx);
     }
 
-    pub(crate) fn on_toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_toggle_terminal(
+        &mut self,
+        _: &ToggleTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.panel_open && self.panel_tab == PanelTab::Terminal {
             self.set_panel_open(false, cx);
         } else {
@@ -323,7 +384,12 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_new_terminal(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_new_terminal(
+        &mut self,
+        _: &NewTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.new_terminal(window, cx);
     }
 
@@ -357,7 +423,12 @@ impl Workbench {
     }
 
     /// The last tab stays: there is always one terminal to type in.
-    pub(crate) fn close_terminal(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_terminal(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.terms.len() < 2 || ix >= self.terms.len() {
             return;
         }
@@ -376,12 +447,22 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_show_output(&mut self, _: &ShowOutput, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_show_output(
+        &mut self,
+        _: &ShowOutput,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.panel_tab = PanelTab::Output;
         self.set_panel_open(true, cx);
     }
 
-    pub(crate) fn on_show_problems(&mut self, _: &ShowProblems, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_show_problems(
+        &mut self,
+        _: &ShowProblems,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.panel_open && self.panel_tab == PanelTab::Problems {
             self.set_panel_open(false, cx);
         } else {
@@ -391,7 +472,9 @@ impl Workbench {
     }
 
     fn term_running(&self) -> bool {
-        self.terms[self.term_ix].proc.is_some_and(|id| self.procs.is_running(id))
+        self.terms[self.term_ix]
+            .proc
+            .is_some_and(|id| self.procs.is_running(id))
     }
 
     fn set_term_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -405,12 +488,20 @@ impl Workbench {
 
     pub(crate) fn terminal_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let line = self.term_input.read(cx).value().to_string();
-        self.term_input.update(cx, |s, cx| s.set_value("", window, cx));
+        self.term_input
+            .update(cx, |s, cx| s.set_value("", window, cx));
         self.terms[self.term_ix].typed = false;
         self.terms[self.term_ix].hist_ix = None;
         self.terms[self.term_ix].tab_cycle = None;
-        if let Some(id) = self.terms[self.term_ix].proc.filter(|id| self.procs.is_running(*id)) {
-            push_text(&mut self.terms[self.term_ix].lines, &format!("{line}\n"), false);
+        if let Some(id) = self.terms[self.term_ix]
+            .proc
+            .filter(|id| self.procs.is_running(*id))
+        {
+            push_text(
+                &mut self.terms[self.term_ix].lines,
+                &format!("{line}\n"),
+                false,
+            );
             self.procs.write_stdin(id, &format!("{line}\n"));
             self.terms[self.term_ix].scroll.scroll_to_bottom();
             cx.notify();
@@ -447,7 +538,12 @@ impl Workbench {
 
         let cmdline = match term::autocorrect(typed, &self.terms[self.term_ix].cwd) {
             Some(fix) => {
-                let what = fix.fixes.iter().map(|(a, b)| format!("{a} → {b}")).collect::<Vec<_>>().join(",  ");
+                let what = fix
+                    .fixes
+                    .iter()
+                    .map(|(a, b)| format!("{a} → {b}"))
+                    .collect::<Vec<_>>()
+                    .join(",  ");
                 let mut l = Line::new(&what, LineKind::Fixed);
                 l.meta = fix.line.clone().into();
                 self.terms[self.term_ix].lines.push(l);
@@ -468,9 +564,21 @@ impl Workbench {
         } else if lower == "pwd" {
             let meta = self.term_full();
             push_line(&mut self.terms[self.term_ix].lines, &meta, LineKind::Normal);
-        } else if lower == "cd" || lower.starts_with("cd ") || lower.starts_with("cd\\") || lower.starts_with("cd..") || lower.starts_with("chdir") {
-            let arg = cmdline.trim_start_matches(|c: char| c.is_ascii_alphabetic()).trim();
-            let arg = arg.strip_prefix("/d").or_else(|| arg.strip_prefix("/D")).unwrap_or(arg).trim().trim_matches('"');
+        } else if lower == "cd"
+            || lower.starts_with("cd ")
+            || lower.starts_with("cd\\")
+            || lower.starts_with("cd..")
+            || lower.starts_with("chdir")
+        {
+            let arg = cmdline
+                .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+                .trim();
+            let arg = arg
+                .strip_prefix("/d")
+                .or_else(|| arg.strip_prefix("/D"))
+                .unwrap_or(arg)
+                .trim()
+                .trim_matches('"');
             if arg.is_empty() {
                 let dir = self.terms[self.term_ix].cwd.display().to_string();
                 push_line(&mut self.terms[self.term_ix].lines, &dir, LineKind::Normal);
@@ -492,13 +600,18 @@ impl Workbench {
             self.apply_problems(cx);
             let mut cmd = match &self.wsl {
                 Some(t) => {
-                    let cwd = t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone());
+                    let cwd = t
+                        .linux_path(&self.terms[self.term_ix].cwd)
+                        .unwrap_or_else(|| t.linux_root.clone());
                     crate::remote::shell_command(t, &cwd, &cmdline)
                 }
                 None => proc::shell_command(&cmdline),
             };
             crate::github::apply_env(&mut cmd);
-            let local_cwd = self.wsl.is_none().then(|| self.terms[self.term_ix].cwd.clone());
+            let local_cwd = self
+                .wsl
+                .is_none()
+                .then(|| self.terms[self.term_ix].cwd.clone());
             match self.procs.spawn(cmd, local_cwd.as_deref()) {
                 Ok(id) => {
                     self.terms[self.term_ix].proc = Some(id);
@@ -519,21 +632,27 @@ impl Workbench {
 
     fn term_meta(&self) -> String {
         match &self.wsl {
-            Some(t) => t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone()),
+            Some(t) => t
+                .linux_path(&self.terms[self.term_ix].cwd)
+                .unwrap_or_else(|| t.linux_root.clone()),
             None => term::short_cwd(&self.terms[self.term_ix].cwd, self.root.as_deref()),
         }
     }
 
     fn term_full(&self) -> String {
         match &self.wsl {
-            Some(t) => t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone()),
+            Some(t) => t
+                .linux_path(&self.terms[self.term_ix].cwd)
+                .unwrap_or_else(|| t.linux_root.clone()),
             None => self.terms[self.term_ix].cwd.display().to_string(),
         }
     }
 
     fn change_dir(&mut self, arg: &str) {
         if let Some(t) = self.wsl.clone() {
-            let current = t.linux_path(&self.terms[self.term_ix].cwd).unwrap_or_else(|| t.linux_root.clone());
+            let current = t
+                .linux_path(&self.terms[self.term_ix].cwd)
+                .unwrap_or_else(|| t.linux_root.clone());
             let linux = if arg == "~" {
                 crate::remote::home_dir(&t.distro).unwrap_or_else(|| "/".to_string())
             } else if arg.starts_with('/') {
@@ -547,32 +666,53 @@ impl Workbench {
             } else {
                 format!("{}/{}", current.trim_end_matches('/'), arg)
             };
-            let exists = crate::remote::program_command(&t, "/", "sh", &["-c", r#"test -d "$1""#, "--", &linux])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+            let exists = crate::remote::program_command(
+                &t,
+                "/",
+                "sh",
+                &["-c", r#"test -d "$1""#, "--", &linux],
+            )
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
             if exists {
                 self.terms[self.term_ix].cwd = t.unc_path(&linux);
             } else {
-                push_line(&mut self.terms[self.term_ix].lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err);
+                push_line(
+                    &mut self.terms[self.term_ix].lines,
+                    &crate::trf!("No folder named '{arg}' here."; arg => arg),
+                    LineKind::Err,
+                );
             }
             return;
         }
         let target = if arg == "~" {
-            std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default()
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(PathBuf::from)
+                .unwrap_or_default()
         } else {
             self.terms[self.term_ix].cwd.join(arg)
         };
         match target.canonicalize() {
             Ok(p) if p.is_dir() => {
-                self.terms[self.term_ix].cwd = PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
+                self.terms[self.term_ix].cwd =
+                    PathBuf::from(p.to_string_lossy().trim_start_matches(r"\\?\"));
             }
-            _ => push_line(&mut self.terms[self.term_ix].lines, &crate::trf!("No folder named '{arg}' here."; arg => arg), LineKind::Err),
+            _ => push_line(
+                &mut self.terms[self.term_ix].lines,
+                &crate::trf!("No folder named '{arg}' here."; arg => arg),
+                LineKind::Err,
+            ),
         }
     }
 
-
-    pub(crate) fn on_term_history_prev(&mut self, _: &TermHistoryPrev, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_term_history_prev(
+        &mut self,
+        _: &TermHistoryPrev,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.terms[self.term_ix].history.is_empty() || self.term_running() {
             return;
         }
@@ -586,8 +726,15 @@ impl Workbench {
         self.set_term_input(&text, window, cx);
     }
 
-    pub(crate) fn on_term_history_next(&mut self, _: &TermHistoryNext, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(i) = self.terms[self.term_ix].hist_ix else { return };
+    pub(crate) fn on_term_history_next(
+        &mut self,
+        _: &TermHistoryNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(i) = self.terms[self.term_ix].hist_ix else {
+            return;
+        };
         self.terms[self.term_ix].tab_cycle = None;
         if i + 1 < self.terms[self.term_ix].history.len() {
             self.terms[self.term_ix].hist_ix = Some(i + 1);
@@ -599,7 +746,12 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_term_complete(&mut self, _: &TermComplete, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_term_complete(
+        &mut self,
+        _: &TermComplete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.term_running() {
             return;
         }
@@ -610,7 +762,9 @@ impl Workbench {
             return;
         }
         if let Some(cycle) = self.terms[ix].tab_cycle.as_mut() {
-            if cycle.items.get(cycle.ix).map(String::as_str) == Some(value.as_str()) && cycle.items.len() > 1 {
+            if cycle.items.get(cycle.ix).map(String::as_str) == Some(value.as_str())
+                && cycle.items.len() > 1
+            {
                 cycle.ix = (cycle.ix + 1) % cycle.items.len();
                 let next = cycle.items[cycle.ix].clone();
                 let pos = cycle.ix + 1;
@@ -635,7 +789,12 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_term_interrupt(&mut self, _: &TermInterrupt, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_term_interrupt(
+        &mut self,
+        _: &TermInterrupt,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.panel_sel.is_some_and(|s| s.terminal && !s.is_empty()) {
             self.panel_copy(cx);
             self.panel_sel = None;
@@ -645,7 +804,10 @@ impl Workbench {
             window.dispatch_action(Box::new(gpui_kit::component::input::Copy), cx);
             return;
         }
-        if let Some(id) = self.terms[self.term_ix].proc.filter(|id| self.procs.is_running(*id)) {
+        if let Some(id) = self.terms[self.term_ix]
+            .proc
+            .filter(|id| self.procs.is_running(*id))
+        {
             push_text(&mut self.terms[self.term_ix].lines, "^C\n", false);
             self.procs.kill(id);
         } else {
@@ -654,7 +816,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_term_escape(&mut self, _: &TermEscape, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_term_escape(
+        &mut self,
+        _: &TermEscape,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.panel_sel = None;
         self.terms[self.term_ix].hist_ix = None;
         self.terms[self.term_ix].tab_cycle = None;
@@ -666,7 +833,6 @@ impl Workbench {
         self.terms[self.term_ix].lines.clear();
         cx.notify();
     }
-
 
     pub(crate) fn on_run_file(&mut self, _: &RunFile, _: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.active else {
@@ -687,13 +853,29 @@ impl Workbench {
         let wsl = self.wsl.clone();
         let source = self.docs[ix].text(cx);
         let runtimes = if wsl.is_some() {
-            if self.wsl_runtimes == 0 { u32::MAX } else { self.wsl_runtimes }
+            if self.wsl_runtimes == 0 {
+                u32::MAX
+            } else {
+                self.wsl_runtimes
+            }
         } else {
             let mask = local_runtimes_mask();
-            if mask == 0 { probe_local_runtimes(self.root.as_deref()) } else { mask }
+            if mask == 0 {
+                probe_local_runtimes(self.root.as_deref())
+            } else {
+                mask
+            }
         };
-        if let RunVerdict::NotRunnable(reason) = check_script_runnable(&path, &source, self.root.as_deref(), wsl.is_some(), runtimes) {
-            self.status = crate::trf!("{0} can't be run: {1}"; 0 => self.docs[ix].name, 1 => tr(reason)).into();
+        if let RunVerdict::NotRunnable(reason) = check_script_runnable(
+            &path,
+            &source,
+            self.root.as_deref(),
+            wsl.is_some(),
+            runtimes,
+        ) {
+            self.status =
+                crate::trf!("{0} can't be run: {1}"; 0 => self.docs[ix].name, 1 => tr(reason))
+                    .into();
             cx.notify();
             return;
         }
@@ -704,11 +886,14 @@ impl Workbench {
         };
         if let Some(t) = &wsl {
             if matches!(program.as_str(), "powershell" | "cmd.exe") {
-                self.status = crate::trf!("Don't know how to run {0} in WSL"; 0 => self.docs[ix].name).into();
+                self.status =
+                    crate::trf!("Don't know how to run {0} in WSL"; 0 => self.docs[ix].name).into();
                 cx.notify();
                 return;
             }
-            let linux = t.linux_path(&path).unwrap_or_else(|| path.display().to_string());
+            let linux = t
+                .linux_path(&path)
+                .unwrap_or_else(|| path.display().to_string());
             let unc = path.to_string_lossy().into_owned();
             for a in &mut args {
                 if *a == unc {
@@ -755,9 +940,19 @@ impl Workbench {
         match self.procs.spawn(cmd, local_cwd.as_deref()) {
             Ok(id) => {
                 self.out_proc = Some(id);
-                self.out_run = Some(RunInfo { started: Instant::now(), block: self.out_lines.len(), python: program.clone(), cwd, command: shown.join(" ") });
+                self.out_run = Some(RunInfo {
+                    started: Instant::now(),
+                    block: self.out_lines.len(),
+                    python: program.clone(),
+                    cwd,
+                    command: shown.join(" "),
+                });
             }
-            Err(e) => push_line(&mut self.out_lines, &crate::trf!("Couldn't start '{program}': {e}"; program => program, e => e), LineKind::Err),
+            Err(e) => push_line(
+                &mut self.out_lines,
+                &crate::trf!("Couldn't start '{program}': {e}"; program => program, e => e),
+                LineKind::Err,
+            ),
         }
         self.panel_open = true;
         self.panel_tab = PanelTab::Output;
@@ -765,14 +960,22 @@ impl Workbench {
     }
 
     pub(crate) fn on_stop_run(&mut self, _: &StopRun, _: &mut Window, cx: &mut Context<Self>) {
-        for id in [self.out_proc, self.terms[self.term_ix].proc].into_iter().flatten() {
+        for id in [self.out_proc, self.terms[self.term_ix].proc]
+            .into_iter()
+            .flatten()
+        {
             self.procs.kill(id);
         }
         cx.notify();
     }
 
     /// `term` names the terminal tab that finished; `None` is the Output tab.
-    pub(crate) fn finish_run(&mut self, term: Option<usize>, code: Option<i32>, cx: &mut Context<Self>) {
+    pub(crate) fn finish_run(
+        &mut self,
+        term: Option<usize>,
+        code: Option<i32>,
+        cx: &mut Context<Self>,
+    ) {
         let terminal = term.is_some();
         let run = match term {
             Some(ix) => self.terms[ix].run.take(),
@@ -785,19 +988,30 @@ impl Workbench {
         close_line(lines);
         let mut error: Option<PyError> = None;
         let mut reason: Option<String> = None;
-        let from = run.as_ref().map_or(lines.len(), |r| r.block.min(lines.len()));
+        let from = run
+            .as_ref()
+            .map_or(lines.len(), |r| r.block.min(lines.len()));
         if let Some(run) = &run {
             if code != Some(0) || lines[from..].iter().any(|l| l.kind == LineKind::Err) {
-                let view: Vec<(&str, LineKind)> = lines[from..].iter().map(|l| (l.text.as_ref(), l.kind)).collect();
+                let view: Vec<(&str, LineKind)> = lines[from..]
+                    .iter()
+                    .map(|l| (l.text.as_ref(), l.kind))
+                    .collect();
                 error = term::parse_problem(&view, &run.command, &run.python, &run.cwd);
                 if error.is_none() && code.is_some_and(|c| c != 0) {
                     reason = term::failure_reason(&view);
                 }
             }
         }
-        let output = lines[from..].iter().filter(|l| !l.text.trim().is_empty()).count();
+        let output = lines[from..]
+            .iter()
+            .filter(|l| !l.text.trim().is_empty())
+            .count();
         let spent = run.as_ref().map(|r| r.started.elapsed());
-        let quiet = terminal && code == Some(0) && error.is_none() && spent.is_some_and(|d| d < std::time::Duration::from_secs(1));
+        let quiet = terminal
+            && code == Some(0)
+            && error.is_none()
+            && spent.is_some_and(|d| d < std::time::Duration::from_secs(1));
         let inline_shell_err = terminal
             && error
                 .as_ref()
@@ -817,7 +1031,9 @@ impl Workbench {
                     lines.pop();
                 }
                 let mut head = Line::new(&e.message, LineKind::CardHead);
-                let exit_tag = code.map(|c| crate::trf!("exit {c}"; c => c)).unwrap_or_default();
+                let exit_tag = code
+                    .map(|c| crate::trf!("exit {c}"; c => c))
+                    .unwrap_or_default();
                 head.meta = match (exit_tag.is_empty(), took.is_empty()) {
                     (false, false) => format!("{exit_tag} · {took}").into(),
                     (false, true) => exit_tag.into(),
@@ -836,7 +1052,12 @@ impl Workbench {
         } else {
             match (&error, &run) {
                 (Some(e), Some(run)) => push_card(lines, e, &run.cwd),
-                _ if !quiet && output >= 2 && lines.last().is_some_and(|l| !l.text.trim().is_empty()) => push_line(lines, "", LineKind::Blank),
+                _ if !quiet
+                    && output >= 2
+                    && lines.last().is_some_and(|l| !l.text.trim().is_empty()) =>
+                {
+                    push_line(lines, "", LineKind::Blank)
+                }
                 _ => {}
             }
             let (text, ok) = match code {
@@ -856,7 +1077,9 @@ impl Workbench {
             let link = term::parse_path_loc(&r);
             let shown = match &link {
                 Some((p, _, _)) => match (r.find(p.as_str()), Path::new(p).file_name()) {
-                    (Some(at), Some(name)) => format!("{}{}", name.to_string_lossy(), &r[at + p.len()..]),
+                    (Some(at), Some(name)) => {
+                        format!("{}{}", name.to_string_lossy(), &r[at + p.len()..])
+                    }
                     _ => r.clone(),
                 },
                 None => r.clone(),
@@ -869,7 +1092,10 @@ impl Workbench {
 
         if let Some(e) = error {
             if let (Some(path), Some(line)) = (e.file.clone(), e.line) {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let loc = match e.col.filter(|&c| c > 0) {
                     Some(c) => format!("{name}:{line}:{c}"),
                     None => format!("{name}:{line}"),
@@ -908,10 +1134,17 @@ impl Workbench {
         const MAX_DIAG_BYTES: usize = 2 * 1024 * 1024;
 
         let Some(d) = self.docs.get(ix) else { return };
-        let Some(editor) = d.editor.clone() else { return };
+        let Some(editor) = d.editor.clone() else {
+            return;
+        };
         let diag_ranges = d.diag_ranges.clone();
         let diag_ruler = d.diag_ruler.clone();
-        let mine: Vec<Problem> = self.problems.iter().filter(|p| same_path(&p.path, &d.path)).cloned().collect();
+        let mine: Vec<Problem> = self
+            .problems
+            .iter()
+            .filter(|p| same_path(&p.path, &d.path))
+            .cloned()
+            .collect();
         let lang = (!d.read_only).then_some(d.lang);
         let is_nbt = d.nbt_format.is_some();
         let doc_path = d.path.clone();
@@ -923,16 +1156,27 @@ impl Workbench {
             let code_diags = if is_nbt {
                 crate::nbt::diagnose(&source)
             } else {
-                lang.map(|l| crate::diagnostics::analyze(&source, l)).unwrap_or_default()
+                lang.map(|l| crate::diagnostics::analyze(&source, l))
+                    .unwrap_or_default()
             };
             self.refresh_doc_runnability_with(ix, &source);
-            let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
+            let err_n = code_diags
+                .iter()
+                .filter(|c| c.severity == crate::diagnostics::Severity::Error)
+                .count();
             let warn_n = code_diags.len() - err_n;
             editor.update(cx, |ed, cx| {
                 let mine_diags = build_mine_diagnostics(&mine, ed.text());
                 write_diagnostics(ed, mine_diags, &code_diags, cx);
             });
-            sync_diagnostic_decorations(&editor, diag_ranges.as_ref(), diag_ruler.as_ref(), &mine, &code_diags, cx);
+            sync_diagnostic_decorations(
+                &editor,
+                diag_ranges.as_ref(),
+                diag_ruler.as_ref(),
+                &mine,
+                &code_diags,
+                cx,
+            );
             if let Some(d) = self.docs.get_mut(ix) {
                 d.diagnostics = code_diags;
                 d.error_count = err_n;
@@ -949,7 +1193,14 @@ impl Workbench {
             }
             write_diagnostics(ed, mine_diags, &[], cx);
         });
-        sync_diagnostic_decorations(&editor, diag_ranges.as_ref(), diag_ruler.as_ref(), &mine, &[], cx);
+        sync_diagnostic_decorations(
+            &editor,
+            diag_ranges.as_ref(),
+            diag_ruler.as_ref(),
+            &mine,
+            &[],
+            cx,
+        );
         if async_rope.is_none() {
             if let Some(d) = self.docs.get_mut(ix) {
                 d.diagnostics.clear();
@@ -964,24 +1215,49 @@ impl Workbench {
                 let code_diags = cx
                     .background_spawn(async move {
                         let text = rope.to_string();
-                        if is_nbt { crate::nbt::diagnose(&text) } else { crate::diagnostics::analyze(&text, l) }
+                        if is_nbt {
+                            crate::nbt::diagnose(&text)
+                        } else {
+                            crate::diagnostics::analyze(&text, l)
+                        }
                     })
                     .await;
                 _ = this.update(cx, |this, cx| {
-                    let Some(ix) = this.docs.iter().position(|d| same_path(&d.path, &doc_path) && d.gen == doc_gen) else {
+                    let Some(ix) = this
+                        .docs
+                        .iter()
+                        .position(|d| same_path(&d.path, &doc_path) && d.gen == doc_gen)
+                    else {
                         return;
                     };
-                    let Some(ed_ent) = this.docs[ix].editor.clone() else { return };
+                    let Some(ed_ent) = this.docs[ix].editor.clone() else {
+                        return;
+                    };
                     let ranges = this.docs[ix].diag_ranges.clone();
                     let ruler = this.docs[ix].diag_ruler.clone();
-                    let err_n = code_diags.iter().filter(|c| c.severity == crate::diagnostics::Severity::Error).count();
+                    let err_n = code_diags
+                        .iter()
+                        .filter(|c| c.severity == crate::diagnostics::Severity::Error)
+                        .count();
                     let warn_n = code_diags.len() - err_n;
-                    let mine: Vec<Problem> = this.problems.iter().filter(|p| same_path(&p.path, &doc_path)).cloned().collect();
+                    let mine: Vec<Problem> = this
+                        .problems
+                        .iter()
+                        .filter(|p| same_path(&p.path, &doc_path))
+                        .cloned()
+                        .collect();
                     ed_ent.update(cx, |ed, cx| {
                         let mine_diags = build_mine_diagnostics(&mine, ed.text());
                         write_diagnostics(ed, mine_diags, &code_diags, cx);
                     });
-                    sync_diagnostic_decorations(&ed_ent, ranges.as_ref(), ruler.as_ref(), &mine, &code_diags, cx);
+                    sync_diagnostic_decorations(
+                        &ed_ent,
+                        ranges.as_ref(),
+                        ruler.as_ref(),
+                        &mine,
+                        &code_diags,
+                        cx,
+                    );
                     this.docs[ix].diagnostics = code_diags;
                     this.docs[ix].error_count = err_n;
                     this.docs[ix].warn_count = warn_n;
@@ -992,7 +1268,14 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn open_location(&mut self, path: PathBuf, line: u32, col: u32, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_location(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        col: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !path.is_file() {
             self.status = crate::trf!("{0} doesn't exist"; 0 => path.display()).into();
             cx.notify();
@@ -1010,19 +1293,32 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_go_to_problem(&mut self, _: &GoToProblem, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_go_to_problem(
+        &mut self,
+        _: &GoToProblem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(p) = self.problems.first().cloned() {
             let col = p.caret.map_or(p.col.saturating_sub(1), |c| c.0 as u32);
             self.open_location(p.path, p.line, col, window, cx);
             return;
         }
         if let Some(ix) = self.active {
-            if let Some(d) = self.docs.get(ix).and_then(|doc| doc.diagnostics.first().map(|c| (doc.path.clone(), c.row + 1, c.col))) {
+            if let Some(d) = self.docs.get(ix).and_then(|doc| {
+                doc.diagnostics
+                    .first()
+                    .map(|c| (doc.path.clone(), c.row + 1, c.col))
+            }) {
                 self.open_location(d.0, d.1, d.2, window, cx);
                 return;
             }
         }
-        if let Some((path, line, col)) = self.docs.iter().find_map(|doc| doc.diagnostics.first().map(|c| (doc.path.clone(), c.row + 1, c.col))) {
+        if let Some((path, line, col)) = self.docs.iter().find_map(|doc| {
+            doc.diagnostics
+                .first()
+                .map(|c| (doc.path.clone(), c.row + 1, c.col))
+        }) {
             self.open_location(path, line, col, window, cx);
         }
     }
@@ -1033,9 +1329,18 @@ impl Workbench {
             return p;
         }
         let base = if terminal {
-            self.terms[self.term_ix].run.as_ref().map(|r| r.cwd.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone())
+            self.terms[self.term_ix]
+                .run
+                .as_ref()
+                .map(|r| r.cwd.clone())
+                .unwrap_or_else(|| self.terms[self.term_ix].cwd.clone())
         } else {
-            self.out_run.as_ref().map(|r| r.cwd.clone()).or_else(|| self.ext.last_cwd.clone()).or_else(|| self.root.clone()).unwrap_or_default()
+            self.out_run
+                .as_ref()
+                .map(|r| r.cwd.clone())
+                .or_else(|| self.ext.last_cwd.clone())
+                .or_else(|| self.root.clone())
+                .unwrap_or_default()
         };
         let joined = base.join(&p);
         if joined.is_file() {
@@ -1046,20 +1351,40 @@ impl Workbench {
             if from_root.is_file() {
                 return from_root;
             }
-            let needle = path.replace('\\', "/").trim_start_matches("./").to_ascii_lowercase();
+            let needle = path
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_ascii_lowercase();
             let suffix = format!("/{needle}");
             if let Some(found) = self.all_files.iter().find(|f| {
                 let fp = Path::new(f.as_str());
-                let rel = fp.strip_prefix(root).unwrap_or(fp).to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+                let rel = fp
+                    .strip_prefix(root)
+                    .unwrap_or(fp)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase();
                 rel == needle || rel.ends_with(&suffix)
             }) {
                 return PathBuf::from(found);
             }
         }
-        if p.is_absolute() { p } else { joined }
+        if p.is_absolute() {
+            p
+        } else {
+            joined
+        }
     }
 
-    fn open_link(&mut self, path: &str, line: u32, col: u32, terminal: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_link(
+        &mut self,
+        path: &str,
+        line: u32,
+        col: u32,
+        terminal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.stop_propagation();
         self.panel_sel = None;
         let full = self.resolve_link_path(path, terminal);
@@ -1071,7 +1396,9 @@ impl Workbench {
         self.panel_tab = PanelTab::Terminal;
         if self.term_running() {
             self.set_term_input(command, window, cx);
-            self.status = tr("The terminal is busy: the fix is in the prompt, press Enter when it's free").into();
+            self.status =
+                tr("The terminal is busy: the fix is in the prompt, press Enter when it's free")
+                    .into();
             cx.notify();
             return;
         }
@@ -1081,14 +1408,43 @@ impl Workbench {
         self.run_in_terminal(command, cx);
     }
 
-
     #[allow(clippy::too_many_arguments)]
-    fn render_line(&self, i: usize, ix: usize, l: &Line, shown: &SharedString, first: bool, terminal: bool, m: Metrics, cx: &mut Context<Self>) -> AnyElement {
+    fn render_line(
+        &self,
+        i: usize,
+        ix: usize,
+        l: &Line,
+        shown: &SharedString,
+        first: bool,
+        terminal: bool,
+        m: Metrics,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mono = mono_kind(l.kind);
         let text_left = theme::u(12.) + if first { px(0.) } else { px(m.em * 2.) };
-        let span = self.panel_sel.filter(|s| s.terminal == terminal).and_then(|s| s.on_row(i, shown.chars().count()));
-        let highlight = span.filter(|_| mono).map(|(a, b)| div().absolute().top_0().bottom_0().bg(c(theme::SELECT)).left(text_left + px(a as f32 * m.em)).w(px((b - a).max(1) as f32 * m.em)));
-        let over = span.filter(|_| !mono).map(|_| div().absolute().top_0().bottom_0().left(theme::u(8.)).right(theme::u(8.)).rounded(px(3.)).bg(c(theme::SELECT).opacity(0.6)));
+        let span = self
+            .panel_sel
+            .filter(|s| s.terminal == terminal)
+            .and_then(|s| s.on_row(i, shown.chars().count()));
+        let highlight = span.filter(|_| mono).map(|(a, b)| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .bg(c(theme::SELECT))
+                .left(text_left + px(a as f32 * m.em))
+                .w(px((b - a).max(1) as f32 * m.em))
+        });
+        let over = span.filter(|_| !mono).map(|_| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(theme::u(8.))
+                .right(theme::u(8.))
+                .rounded(px(3.))
+                .bg(c(theme::SELECT).opacity(0.6))
+        });
         let base = h_flex()
             .id(("pl", i))
             .relative()
@@ -1099,47 +1455,85 @@ impl Workbench {
             .whitespace_nowrap()
             .overflow_hidden()
             .children(highlight)
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                let col = if mono { this.panel_col(ev.position.x, text_left, m) } else { 0 };
-                this.panel_sel_press(terminal, i, col, mono, ev.click_count, ev.modifiers.shift, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    let col = if mono {
+                        this.panel_col(ev.position.x, text_left, m)
+                    } else {
+                        0
+                    };
+                    this.panel_sel_press(
+                        terminal,
+                        i,
+                        col,
+                        mono,
+                        ev.click_count,
+                        ev.modifiers.shift,
+                        cx,
+                    );
+                }),
+            )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
                 if ev.pressed_button != Some(MouseButton::Left) {
                     return;
                 }
-                let Some(sel) = this.panel_sel.filter(|s| s.terminal == terminal) else { return };
-                let col = if mono { this.panel_col(ev.position.x, text_left, m) } else if i >= sel.anchor.0 { usize::MAX } else { 0 };
+                let Some(sel) = this.panel_sel.filter(|s| s.terminal == terminal) else {
+                    return;
+                };
+                let col = if mono {
+                    this.panel_col(ev.position.x, text_left, m)
+                } else if i >= sel.anchor.0 {
+                    usize::MAX
+                } else {
+                    0
+                };
                 if sel.head != (i, col) {
-                    this.panel_sel = Some(PanelSel { head: (i, col), ..sel });
+                    this.panel_sel = Some(PanelSel {
+                        head: (i, col),
+                        ..sel
+                    });
                     cx.notify();
                 }
             }));
         let text = |s: &SharedString, col: theme::Tok| div().text_color(c(col)).child(s.clone());
-        let ui = |s: &SharedString, col: theme::Tok| div().font_family(UI_FONT).text_color(c(col)).child(s.clone());
+        let ui = |s: &SharedString, col: theme::Tok| {
+            div()
+                .font_family(UI_FONT)
+                .text_color(c(col))
+                .child(s.clone())
+        };
         let hang = theme::u(12.) + px(m.em * 2.);
         let card = |row: Stateful<Div>, inner: Div| {
-            row.px_0().child(
-                inner
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .items_center()
-                    .px_3()
-                    .gap_2()
-                    .border_l_2()
-                    .border_color(c(theme::DANGER).opacity(0.75))
-                    .bg(c(theme::DANGER).opacity(0.045)),
-            )
-            .into_any_element()
+            row.px_0()
+                .child(
+                    inner
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .items_center()
+                        .px_3()
+                        .gap_2()
+                        .border_l_2()
+                        .border_color(c(theme::DANGER).opacity(0.75))
+                        .bg(c(theme::DANGER).opacity(0.045)),
+                )
+                .into_any_element()
         };
-        let link = |label: SharedString, path: SharedString, line: u32, col: u32, cx: &mut Context<Self>| {
+        let link = |label: SharedString,
+                    path: SharedString,
+                    line: u32,
+                    col: u32,
+                    cx: &mut Context<Self>| {
             div()
                 .id(("lk", i))
                 .text_color(c(theme::BLUE))
                 .cursor_pointer()
                 .hover(|s| s.underline())
                 .child(label)
-                .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx)))
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    this.open_link(&path, line, col, terminal, w, cx)
+                }))
         };
         let el = match l.kind {
             LineKind::Blank => base.into_any_element(),
@@ -1154,7 +1548,9 @@ impl Workbench {
                         .text_xs()
                         .text_color(c(theme::FG_MUTED))
                         .child(place)
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)
+                        }),
                 )
                 .child(text(&"❯".into(), theme::ACCENT_TEXT).flex_none())
                 .child(text(&l.text, theme::FG_STRONG).min_w_0().truncate())
@@ -1179,7 +1575,9 @@ impl Workbench {
                             .when(!s.meta.is_empty(), |h| h.child(ui(&s.meta, theme::FG_DIM)))
                             .into_any_element()
                     }
-                    None if last && live => ui(&tr("Running").into(), theme::BLUE).flex_none().into_any_element(),
+                    None if last && live => ui(&tr("Running").into(), theme::BLUE)
+                        .flex_none()
+                        .into_any_element(),
                     None => div().into_any_element(),
                 };
                 base.child(
@@ -1192,9 +1590,16 @@ impl Workbench {
                         .rounded(px(4.))
                         .bg(c(theme::BG_ELEVATED))
                         .child(text(&"❯".into(), theme::FG_DIM).flex_none())
-                        .child(text(&l.text, theme::FG_STRONG).flex_none().max_w(relative(0.6)).truncate())
+                        .child(
+                            text(&l.text, theme::FG_STRONG)
+                                .flex_none()
+                                .max_w(relative(0.6))
+                                .truncate(),
+                        )
                         .child(div().flex_1())
-                        .when(!l.meta.is_empty(), |h| h.child(ui(&l.meta, theme::FG_DIM).min_w_0().truncate()))
+                        .when(!l.meta.is_empty(), |h| {
+                            h.child(ui(&l.meta, theme::FG_DIM).min_w_0().truncate())
+                        })
                         .child(badge),
                 )
                 .into_any_element()
@@ -1217,7 +1622,11 @@ impl Workbench {
                 };
                 let quiet = terminal && !l.err;
                 base.font_family(UI_FONT)
-                    .child(Icon::new(icon).size(theme::u(if quiet { 12. } else { 14. })).text_color(c(col)))
+                    .child(
+                        Icon::new(icon)
+                            .size(theme::u(if quiet { 12. } else { 14. }))
+                            .text_color(c(col)),
+                    )
                     .child(
                         div()
                             .when(!quiet, |d| d.font_weight(FontWeight::MEDIUM))
@@ -1244,7 +1653,9 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::BLUE)).underline())
                             .child(shown.clone())
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.open_link(&path, line, col, terminal, w, cx)
+                            })),
                     ),
                     None => row.child(text(shown, theme::FG_STRONG).min_w_0()),
                 }
@@ -1256,15 +1667,37 @@ impl Workbench {
                 match parts.as_slice() {
                     [name, mid @ .., path] => {
                         let mid: SharedString = mid.join(" · ").into();
-                        row.child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(name.to_string()))
-                            .when(!mid.is_empty(), |h| h.child(text(&mid, theme::FG_MUTED).min_w_0().truncate()))
-                            .child(text(&path.to_string().into(), theme::FG_DIM).flex_1().min_w_0().truncate())
-                            .into_any_element()
+                        row.child(
+                            div()
+                                .flex_none()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(c(theme::FG_STRONG))
+                                .child(name.to_string()),
+                        )
+                        .when(!mid.is_empty(), |h| {
+                            h.child(text(&mid, theme::FG_MUTED).min_w_0().truncate())
+                        })
+                        .child(
+                            text(&path.to_string().into(), theme::FG_DIM)
+                                .flex_1()
+                                .min_w_0()
+                                .truncate(),
+                        )
+                        .into_any_element()
                     }
-                    _ => row.child(text(&l.text, theme::FG_STRONG).min_w_0().truncate()).into_any_element(),
+                    _ => row
+                        .child(text(&l.text, theme::FG_STRONG).min_w_0().truncate())
+                        .into_any_element(),
                 }
             }
-            LineKind::Frame | LineKind::Warn | LineKind::Err | LineKind::Normal | LineKind::Dim | LineKind::Code if l.link.is_some() => {
+            LineKind::Frame
+            | LineKind::Warn
+            | LineKind::Err
+            | LineKind::Normal
+            | LineKind::Dim
+            | LineKind::Code
+                if l.link.is_some() =>
+            {
                 let (path, line, line_col) = l.link.clone().unwrap_or_default();
                 let col = match l.kind {
                     LineKind::Warn => theme::WARN,
@@ -1286,29 +1719,69 @@ impl Workbench {
                             .text_color(c(col))
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::BLUE)).underline())
-                            .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                            .tooltip(move |w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                            })
                             .child(shown.clone())
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, line_col, terminal, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.open_link(&path, line, line_col, terminal, w, cx)
+                            })),
                     )
                     .into_any_element()
             }
             LineKind::CardHead => {
                 let mut inner = h_flex()
                     .font_family(UI_FONT)
-                    .child(Icon::new(IconName::CircleX).size(theme::u(14.)).text_color(c(theme::DANGER)))
-                    .child(div().flex_shrink(1.).min_w_0().truncate().text_color(c(theme::DANGER)).font_weight(FontWeight::SEMIBOLD).child(l.text.clone()));
+                    .child(
+                        Icon::new(IconName::CircleX)
+                            .size(theme::u(14.))
+                            .text_color(c(theme::DANGER)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::DANGER))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(l.text.clone()),
+                    );
                 if let Some((path, line, col)) = &l.link {
-                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(link(l.meta.clone(), path.clone(), *line, *col, cx).min_w_0().truncate());
+                    inner = inner.child(text(&"in".into(), theme::FG_DIM)).child(
+                        link(l.meta.clone(), path.clone(), *line, *col, cx)
+                            .min_w_0()
+                            .truncate(),
+                    );
                 } else if !l.meta.is_empty() {
-                    inner = inner.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(format!("· {}", l.meta)));
+                    inner = inner.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(format!("· {}", l.meta)),
+                    );
                 }
                 card(base, inner)
             }
-            LineKind::CardMsg => card(base, h_flex().child(ui(shown, theme::FG_STRONG).pl(theme::u(22.)))),
+            LineKind::CardMsg => card(
+                base,
+                h_flex().child(ui(shown, theme::FG_STRONG).pl(theme::u(22.))),
+            ),
             LineKind::CardCode => {
                 let mut inner = h_flex()
-                    .child(div().flex_none().pl(theme::u(22.)).text_color(c(theme::FG_DIM)).child(l.meta.clone()))
-                    .child(div().flex_none().text_color(c(theme::BORDER_STRONG)).child("│"));
+                    .child(
+                        div()
+                            .flex_none()
+                            .pl(theme::u(22.))
+                            .text_color(c(theme::FG_DIM))
+                            .child(l.meta.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(c(theme::BORDER_STRONG))
+                            .child("│"),
+                    );
                 if let Some((path, line, col)) = l.link.clone() {
                     inner = inner.child(
                         div()
@@ -1319,7 +1792,9 @@ impl Workbench {
                             .cursor_pointer()
                             .hover(|s| s.text_color(c(theme::BLUE)).underline())
                             .child(l.text.clone())
-                            .on_click(cx.listener(move |this, _, w, cx| this.open_link(&path, line, col, terminal, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.open_link(&path, line, col, terminal, w, cx)
+                            })),
                     );
                 } else {
                     inner = inner.child(text(&l.text, theme::FG).min_w_0().truncate());
@@ -1329,7 +1804,13 @@ impl Workbench {
             LineKind::CardHint => card(
                 base,
                 h_flex()
-                    .when(first, |h| h.child(Icon::new(IconName::Info).size(theme::u(14.)).text_color(c(theme::WARN))))
+                    .when(first, |h| {
+                        h.child(
+                            Icon::new(IconName::Info)
+                                .size(theme::u(14.))
+                                .text_color(c(theme::WARN)),
+                        )
+                    })
                     .child(ui(shown, theme::FG_MUTED).when(!first, |d| d.pl(theme::u(22.)))),
             ),
             LineKind::CardAction => {
@@ -1352,7 +1833,9 @@ impl Workbench {
                                 .hover(|s| s.opacity(0.88))
                                 .child(Icon::new(IconName::Play).size(theme::u(12.)))
                                 .child(tr("Fix"))
-                                .on_click(cx.listener(move |this, _, w, cx| this.run_fix(&cmd, w, cx))),
+                                .on_click(
+                                    cx.listener(move |this, _, w, cx| this.run_fix(&cmd, w, cx)),
+                                ),
                         )
                         .child(text(&l.text, theme::FG).min_w_0().truncate()),
                 )
@@ -1367,11 +1850,19 @@ impl Workbench {
                     LineKind::Frame => theme::FG_MUTED,
                     _ => theme::FG,
                 };
-                base.when(!first, |b| b.pl(hang)).child(div().text_color(c(col)).child(shown.clone())).into_any_element()
+                base.when(!first, |b| b.pl(hang))
+                    .child(div().text_color(c(col)).child(shown.clone()))
+                    .into_any_element()
             }
         };
         match over {
-            Some(o) => div().relative().h(m.row).w_full().child(el).child(o).into_any_element(),
+            Some(o) => div()
+                .relative()
+                .h(m.row)
+                .w_full()
+                .child(el)
+                .child(o)
+                .into_any_element(),
             None => el,
         }
     }
@@ -1382,37 +1873,86 @@ impl Workbench {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn panel_sel_press(&mut self, terminal: bool, i: usize, col: usize, mono: bool, clicks: usize, shift: bool, cx: &mut Context<Self>) {
+    fn panel_sel_press(
+        &mut self,
+        terminal: bool,
+        i: usize,
+        col: usize,
+        mono: bool,
+        clicks: usize,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) {
         let old = self.panel_sel.filter(|s| s.terminal == terminal);
         let rows = self.panel_rows(terminal);
-        let text: Vec<char> = rows.get(i).map(|r| r.text.chars().collect()).unwrap_or_default();
+        let text: Vec<char> = rows
+            .get(i)
+            .map(|r| r.text.chars().collect())
+            .unwrap_or_default();
         self.panel_sel = Some(match (shift, old, clicks) {
-            (true, Some(s), _) => PanelSel { head: (i, col), ..s },
+            (true, Some(s), _) => PanelSel {
+                head: (i, col),
+                ..s
+            },
             (_, _, 2) if mono => {
                 let at = col.min(text.len().saturating_sub(1));
                 let word = |c: &char| !c.is_whitespace();
                 if text.get(at).is_some_and(word) {
-                    let a = (0..=at).rev().take_while(|&k| word(&text[k])).last().unwrap_or(at);
-                    let b = (at..text.len()).take_while(|&k| word(&text[k])).last().map_or(at, |k| k + 1);
-                    PanelSel { terminal, anchor: (i, a), head: (i, b) }
+                    let a = (0..=at)
+                        .rev()
+                        .take_while(|&k| word(&text[k]))
+                        .last()
+                        .unwrap_or(at);
+                    let b = (at..text.len())
+                        .take_while(|&k| word(&text[k]))
+                        .last()
+                        .map_or(at, |k| k + 1);
+                    PanelSel {
+                        terminal,
+                        anchor: (i, a),
+                        head: (i, b),
+                    }
                 } else {
-                    PanelSel { terminal, anchor: (i, col), head: (i, col) }
+                    PanelSel {
+                        terminal,
+                        anchor: (i, col),
+                        head: (i, col),
+                    }
                 }
             }
-            (_, _, n) if n >= 2 => PanelSel { terminal, anchor: (i, 0), head: (i, usize::MAX) },
-            _ => PanelSel { terminal, anchor: (i, col), head: (i, col) },
+            (_, _, n) if n >= 2 => PanelSel {
+                terminal,
+                anchor: (i, 0),
+                head: (i, usize::MAX),
+            },
+            _ => PanelSel {
+                terminal,
+                anchor: (i, col),
+                head: (i, col),
+            },
         });
         cx.notify();
     }
 
     fn panel_rows(&self, terminal: bool) -> std::rc::Rc<Vec<Row>> {
-        (if terminal { &self.terms[self.term_ix].wrap } else { &self.out_wrap }).borrow().1.clone()
+        (if terminal {
+            &self.terms[self.term_ix].wrap
+        } else {
+            &self.out_wrap
+        })
+        .borrow()
+        .1
+        .clone()
     }
 
     pub(crate) fn panel_sel_text(&self) -> Option<String> {
         let sel = self.panel_sel.filter(|s| !s.is_empty())?;
         let rows = self.panel_rows(sel.terminal);
-        let lines = if sel.terminal { &self.terms[self.term_ix].lines } else { &self.out_lines };
+        let lines = if sel.terminal {
+            &self.terms[self.term_ix].lines
+        } else {
+            &self.out_lines
+        };
         let ((r0, _), (r1, _)) = sel.span();
         let last = r1.min(rows.len().checked_sub(1)?);
         let mut out: Vec<String> = Vec::new();
@@ -1451,7 +1991,9 @@ impl Workbench {
     }
 
     pub(crate) fn panel_copy(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(text) = self.panel_sel_text() else { return false };
+        let Some(text) = self.panel_sel_text() else {
+            return false;
+        };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.status = tr("Copied").into();
         cx.notify();
@@ -1459,7 +2001,14 @@ impl Workbench {
     }
 
     fn wrapped_rows(&self, terminal: bool, cols: Cols) -> std::rc::Rc<Vec<Row>> {
-        let (lines, cache) = if terminal { (&self.terms[self.term_ix].lines, &self.terms[self.term_ix].wrap) } else { (&self.out_lines, &self.out_wrap) };
+        let (lines, cache) = if terminal {
+            (
+                &self.terms[self.term_ix].lines,
+                &self.terms[self.term_ix].wrap,
+            )
+        } else {
+            (&self.out_lines, &self.out_wrap)
+        };
         let key = (
             lines.len(),
             lines.first().map_or(0, |l| l.text.as_ptr() as usize),
@@ -1473,16 +2022,26 @@ impl Workbench {
         }
         let mut rows = Vec::with_capacity(lines.len() + 8);
         for (ix, l) in lines.iter().enumerate() {
-            let marked = l.kind == LineKind::Code && lines.get(ix + 1).is_some_and(|n| n.kind == LineKind::Caret);
+            let marked = l.kind == LineKind::Code
+                && lines.get(ix + 1).is_some_and(|n| n.kind == LineKind::Caret);
             let (width, hang) = match l.kind {
-                LineKind::Normal | LineKind::Err | LineKind::Warn | LineKind::Dim | LineKind::Success | LineKind::Frame => (cols.mono, 2),
+                LineKind::Normal
+                | LineKind::Err
+                | LineKind::Warn
+                | LineKind::Dim
+                | LineKind::Success
+                | LineKind::Frame => (cols.mono, 2),
                 LineKind::Code if !marked => (cols.mono, 2),
                 LineKind::CardMsg | LineKind::CardHint => (cols.card, 0),
                 LineKind::Result if l.err => (cols.result, 0),
                 _ => (0, 0),
             };
             if width == 0 {
-                rows.push(Row { line: ix, text: l.text.clone(), first: true });
+                rows.push(Row {
+                    line: ix,
+                    text: l.text.clone(),
+                    first: true,
+                });
                 continue;
             }
             let shown = term::display_text(&l.text);
@@ -1492,11 +2051,23 @@ impl Workbench {
                     std::borrow::Cow::Borrowed(_) => l.text.clone(),
                     std::borrow::Cow::Owned(s) => s.into(),
                 };
-                rows.push(Row { line: ix, text, first: true });
+                rows.push(Row {
+                    line: ix,
+                    text,
+                    first: true,
+                });
             } else {
                 for (n, (a, b)) in pieces.into_iter().enumerate() {
-                    let piece = if n == 0 { &shown[a..b] } else { shown[a..b].trim_start() };
-                    rows.push(Row { line: ix, text: piece.to_string().into(), first: n == 0 });
+                    let piece = if n == 0 {
+                        &shown[a..b]
+                    } else {
+                        shown[a..b].trim_start()
+                    };
+                    rows.push(Row {
+                        line: ix,
+                        text: piece.to_string().into(),
+                        first: n == 0,
+                    });
                 }
             }
         }
@@ -1506,22 +2077,32 @@ impl Workbench {
     }
 
     fn ran_python(lines: &[Line]) -> bool {
-        lines.iter().rev().find(|l| l.kind == LineKind::Cmd).is_some_and(|l| {
-            let mut words = l.text.split_whitespace();
-            let first = words.next().unwrap_or("").trim_matches('"');
-            term::is_python(first)
-                || ["pip", "pip3", "pip.exe"].iter().any(|p| first.eq_ignore_ascii_case(p))
-                || l.text.split_whitespace().any(|w| {
-                    let w = w.trim_matches('"').to_ascii_lowercase();
-                    w.ends_with(".py") || w.ends_with(".pyw")
-                })
-        })
+        lines
+            .iter()
+            .rev()
+            .find(|l| l.kind == LineKind::Cmd)
+            .is_some_and(|l| {
+                let mut words = l.text.split_whitespace();
+                let first = words.next().unwrap_or("").trim_matches('"');
+                term::is_python(first)
+                    || ["pip", "pip3", "pip.exe"]
+                        .iter()
+                        .any(|p| first.eq_ignore_ascii_case(p))
+                    || l.text.split_whitespace().any(|w| {
+                        let w = w.trim_matches('"').to_ascii_lowercase();
+                        w.ends_with(".py") || w.ends_with(".pyw")
+                    })
+            })
     }
 
     fn collect_problems_rows(&self) -> Vec<ProblemRow> {
         let mut rows = Vec::new();
         for p in &self.problems {
-            let file = p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let file = p
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             rows.push(ProblemRow {
                 is_error: true,
                 path: p.path.clone(),
@@ -1570,8 +2151,15 @@ impl Workbench {
                 .gap_1()
                 .text_xs()
                 .text_color(c(theme::FG_DIM))
-                .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(tr("No problems detected")))
-                .child(tr("Syntax and writing errors in open files appear here as you type."))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(tr("No problems detected")),
+                )
+                .child(tr(
+                    "Syntax and writing errors in open files appear here as you type.",
+                ))
                 .into_any_element();
         }
         let count = rows.len();
@@ -1590,7 +2178,8 @@ impl Workbench {
                         };
                         let path = r.path.clone();
                         let (line, col_ix) = (r.line, r.col);
-                        let loc: SharedString = format!("{}  Ln {}, Col {}", r.file, r.line, r.col + 1).into();
+                        let loc: SharedString =
+                            format!("{}  Ln {}, Col {}", r.file, r.line, r.col + 1).into();
                         h_flex()
                             .id(("prob-row", i))
                             .w_full()
@@ -1603,8 +2192,20 @@ impl Workbench {
                             .cursor_pointer()
                             .text_xs()
                             .hover(|s| s.bg(c(theme::BG_HOVER)))
-                            .child(Icon::new(icon).flex_none().size(theme::u(13.)).text_color(c(col)))
-                            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_STRONG)).child(r.message.clone()))
+                            .child(
+                                Icon::new(icon)
+                                    .flex_none()
+                                    .size(theme::u(13.))
+                                    .text_color(c(col)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(r.message.clone()),
+                            )
                             .child(
                                 div()
                                     .flex_none()
@@ -1644,8 +2245,13 @@ impl Workbench {
             .into_any_element()
     }
 
-    pub(crate) fn render_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let prob_errs: usize = self.problems.len() + self.docs.iter().map(|d| d.error_count).sum::<usize>();
+    pub(crate) fn render_panel(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let prob_errs: usize =
+            self.problems.len() + self.docs.iter().map(|d| d.error_count).sum::<usize>();
         let prob_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
         let prob_total = prob_errs + prob_warns;
 
@@ -1659,13 +2265,30 @@ impl Workbench {
             (
                 "p-prob",
                 tr("Problems"),
-                (prob_total > 0).then_some((prob_total, if prob_errs > 0 { theme::DANGER } else { theme::WARN })),
+                (prob_total > 0).then_some((
+                    prob_total,
+                    if prob_errs > 0 {
+                        theme::DANGER
+                    } else {
+                        theme::WARN
+                    },
+                )),
                 PanelTab::Problems,
             ),
         ];
-        let active_tab_ix = tab_specs.iter().position(|(_, _, _, w)| *w == self.panel_tab);
+        let active_tab_ix = tab_specs
+            .iter()
+            .position(|(_, _, _, w)| *w == self.panel_tab);
         let tab_liq = crate::ui::liquid::keyed_state("panel-tab-liq", window, cx);
-        let (tab_frame, has_tab_liq) = crate::ui::liquid::keyed_sync_and_sample(&tab_liq, false, tab_specs.len(), active_tab_ix, tab_h, 190, motion);
+        let (tab_frame, has_tab_liq) = crate::ui::liquid::keyed_sync_and_sample(
+            &tab_liq,
+            false,
+            tab_specs.len(),
+            active_tab_ix,
+            tab_h,
+            190,
+            motion,
+        );
         let panel_view_id = window.current_view();
         let tab_origin = crate::ui::liquid::keyed_origin_probe(tab_liq.clone(), panel_view_id);
         let tab_liq_layer = tab_frame.map(|fr| {
@@ -1685,76 +2308,112 @@ impl Workbench {
             };
             crate::ui::liquid::render_coalesced_layer("panel-tab-liq-l", false, st, fr)
         });
-        let tab_bar = h_flex()
-            .id("panel-tab-bar")
-            .relative()
-            .h(theme::u(26.))
-            .items_center()
-            .gap_1()
-            .on_hover({
-                let h = tab_liq.clone();
-                move |entered: &bool, _, cx| {
-                    if !*entered && motion {
-                        crate::ui::liquid::keyed_hover_leave(&h, panel_view_id, cx);
-                    }
-                }
-            })
-            .child(tab_origin)
-            .children(tab_liq_layer)
-            .children(tab_specs.into_iter().enumerate().map(|(i, (id, label, badge, which))| {
-                let on = self.panel_tab == which;
-                let probe = crate::ui::liquid::keyed_item_probe(tab_liq.clone(), i, panel_view_id);
-                let h_hov = tab_liq.clone();
-                h_flex()
-                    .id(id)
-                    .relative()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .px_2p5()
-                    .h_full()
-                    .gap_1p5()
-                    .items_center()
-                    .rounded(px(6.))
-                    .text_sm()
-                    .cursor_pointer()
-                    .when(on && !has_tab_liq, |d| d.bg(c(theme::ACCENT).opacity(0.18)))
-                    .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                    .when(!on && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
-                    .when(!on && motion, |d| d.hover(|s| s.text_color(c(theme::FG))))
-                    .on_hover(move |entered: &bool, _, cx| {
-                        if *entered && motion {
-                            crate::ui::liquid::keyed_hover_enter(&h_hov, i, false, tab_h, 150, panel_view_id, cx);
+        let tab_bar =
+            h_flex()
+                .id("panel-tab-bar")
+                .relative()
+                .h(theme::u(26.))
+                .items_center()
+                .gap_1()
+                .on_hover({
+                    let h = tab_liq.clone();
+                    move |entered: &bool, _, cx| {
+                        if !*entered && motion {
+                            crate::ui::liquid::keyed_hover_leave(&h, panel_view_id, cx);
                         }
-                    })
-                    .child(probe)
-                    .child(label)
-                    .when_some(badge.filter(|(n, _)| *n > 0), |h, (n, col)| {
-                        h.child(
-                            div()
-                                .px_1()
-                                .min_w(theme::u(16.))
-                                .h(theme::u(16.))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(c(col).opacity(0.18))
-                                .text_color(c(col))
-                                .text_size(theme::u(10.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.panel_tab = which;
-                        cx.notify();
-                    }))
-            }));
+                    }
+                })
+                .child(tab_origin)
+                .children(tab_liq_layer)
+                .children(tab_specs.into_iter().enumerate().map(
+                    |(i, (id, label, badge, which))| {
+                        let on = self.panel_tab == which;
+                        let probe =
+                            crate::ui::liquid::keyed_item_probe(tab_liq.clone(), i, panel_view_id);
+                        let h_hov = tab_liq.clone();
+                        h_flex()
+                            .id(id)
+                            .relative()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .px_2p5()
+                            .h_full()
+                            .gap_1p5()
+                            .items_center()
+                            .rounded(px(6.))
+                            .text_sm()
+                            .cursor_pointer()
+                            .when(on && !has_tab_liq, |d| d.bg(c(theme::ACCENT).opacity(0.18)))
+                            .text_color(if on {
+                                c(theme::FG_STRONG)
+                            } else {
+                                c(theme::FG_MUTED)
+                            })
+                            .when(!on && !motion, |d| {
+                                d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                            })
+                            .when(!on && motion, |d| d.hover(|s| s.text_color(c(theme::FG))))
+                            .on_hover(move |entered: &bool, _, cx| {
+                                if *entered && motion {
+                                    crate::ui::liquid::keyed_hover_enter(
+                                        &h_hov,
+                                        i,
+                                        false,
+                                        tab_h,
+                                        150,
+                                        panel_view_id,
+                                        cx,
+                                    );
+                                }
+                            })
+                            .child(probe)
+                            .child(label)
+                            .when_some(badge.filter(|(n, _)| *n > 0), |h, (n, col)| {
+                                h.child(
+                                    div()
+                                        .px_1()
+                                        .min_w(theme::u(16.))
+                                        .h(theme::u(16.))
+                                        .rounded_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .bg(c(col).opacity(0.18))
+                                        .text_color(c(col))
+                                        .text_size(theme::u(10.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(if n > 99 {
+                                            "99+".to_string()
+                                        } else {
+                                            n.to_string()
+                                        }),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.panel_tab = which;
+                                cx.notify();
+                            }))
+                    },
+                ));
 
-        let running = if terminal { self.terms[self.term_ix].proc.is_some() } else if is_problems { false } else { self.out_proc.is_some() };
-        let shown_lines = if terminal { &self.terms[self.term_ix].lines } else { &self.out_lines };
+        let running = if terminal {
+            self.terms[self.term_ix].proc.is_some()
+        } else if is_problems {
+            false
+        } else {
+            self.out_proc.is_some()
+        };
+        let shown_lines = if terminal {
+            &self.terms[self.term_ix].lines
+        } else {
+            &self.out_lines
+        };
         let python = (!is_problems)
-            .then(|| self.python_version.clone().filter(|_| Self::ran_python(shown_lines)))
+            .then(|| {
+                self.python_version
+                    .clone()
+                    .filter(|_| Self::ran_python(shown_lines))
+            })
             .flatten();
         let header = h_flex()
             .w_full()
@@ -1767,56 +2426,80 @@ impl Workbench {
             .flex_none()
             .child(tab_bar)
             .when(terminal, |h| {
-                h.child(div().flex_none().w(px(1.)).h(theme::u(16.)).bg(c(theme::BORDER)))
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .gap_1()
-                            .items_center()
-                            .children((0..self.terms.len()).map(|ix| {
-                                let on = ix == self.term_ix;
-                                let name: SharedString = crate::trf!("Terminal {0}"; 0 => ix + 1).into();
-                                h_flex()
-                                    .id(("p-tt", ix))
-                                    .flex_none()
-                                    .h(theme::u(22.))
-                                    .px_1p5()
-                                    .gap_1()
-                                    .items_center()
-                                    .rounded(px(4.))
-                                    .text_xs()
-                                    .cursor_pointer()
-                                    .text_color(if on { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
-                                    .when(on, |d| d.bg(c(theme::BG_ELEVATED)))
-                                    .when(!on, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
-                                    .child(name)
-                                    .when(self.terms.len() > 1, |d| {
-                                        d.child(
-                                            div()
-                                                .id(("p-ttx", ix))
-                                                .flex_none()
-                                                .size(theme::u(14.))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .rounded(px(3.))
-                                                .text_color(c(theme::FG_DIM))
-                                                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                                .child("×")
-                                                .on_click(cx.listener(move |this, _, w, cx| {
-                                                    cx.stop_propagation();
-                                                    this.close_terminal(ix, w, cx);
-                                                })),
-                                        )
-                                    })
-                                    .on_click(cx.listener(move |this, _, w, cx| this.show_terminal(ix, w, cx)))
-                                    .into_any_element()
-                            })),
-                    )
-                    .child(tool_button("p-newterm", IconName::Plus, tr("New terminal"), cx, |this, w, cx| {
-                        this.on_new_terminal(&NewTerminal, w, cx)
-                    }))
+                h.child(
+                    div()
+                        .flex_none()
+                        .w(px(1.))
+                        .h(theme::u(16.))
+                        .bg(c(theme::BORDER)),
+                )
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .gap_1()
+                        .items_center()
+                        .children((0..self.terms.len()).map(|ix| {
+                            let on = ix == self.term_ix;
+                            let name: SharedString =
+                                crate::trf!("Terminal {0}"; 0 => ix + 1).into();
+                            h_flex()
+                                .id(("p-tt", ix))
+                                .flex_none()
+                                .h(theme::u(22.))
+                                .px_1p5()
+                                .gap_1()
+                                .items_center()
+                                .rounded(px(4.))
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(if on {
+                                    c(theme::FG_STRONG)
+                                } else {
+                                    c(theme::FG_MUTED)
+                                })
+                                .when(on, |d| d.bg(c(theme::BG_ELEVATED)))
+                                .when(!on, |d| {
+                                    d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                                })
+                                .child(name)
+                                .when(self.terms.len() > 1, |d| {
+                                    d.child(
+                                        div()
+                                            .id(("p-ttx", ix))
+                                            .flex_none()
+                                            .size(theme::u(14.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(3.))
+                                            .text_color(c(theme::FG_DIM))
+                                            .hover(|s| {
+                                                s.bg(c(theme::BG_HOVER))
+                                                    .text_color(c(theme::FG_STRONG))
+                                            })
+                                            .child("×")
+                                            .on_click(cx.listener(move |this, _, w, cx| {
+                                                cx.stop_propagation();
+                                                this.close_terminal(ix, w, cx);
+                                            })),
+                                    )
+                                })
+                                .on_click(
+                                    cx.listener(move |this, _, w, cx| {
+                                        this.show_terminal(ix, w, cx)
+                                    }),
+                                )
+                                .into_any_element()
+                        })),
+                )
+                .child(tool_button(
+                    "p-newterm",
+                    IconName::Plus,
+                    tr("New terminal"),
+                    cx,
+                    |this, w, cx| this.on_new_terminal(&NewTerminal, w, cx),
+                ))
             })
             .child(div().flex_1())
             .when_some(python, |h, v| {
@@ -1826,35 +2509,71 @@ impl Workbench {
                         .gap_1()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .child(div().flex_none().size(px(6.)).rounded_full().bg(c(theme::GREEN)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(c(theme::GREEN)),
+                        )
                         .child(div().min_w_0().truncate().child(v)),
                 )
             })
             .when(running, |h| {
-                h.child(tool_button("p-stop", IconName::Square, "Stop (Shift+F5 or Ctrl+C)", cx, |this, w, cx| this.on_stop_run(&StopRun, w, cx)))
+                h.child(tool_button(
+                    "p-stop",
+                    IconName::Square,
+                    "Stop (Shift+F5 or Ctrl+C)",
+                    cx,
+                    |this, w, cx| this.on_stop_run(&StopRun, w, cx),
+                ))
             })
-            .when(!is_problems && self.panel_sel.is_some_and(|s| s.terminal == terminal && !s.is_empty()), |h| {
-                h.child(tool_button("p-copy", IconName::Copy, "Copy the selection (Ctrl+C)", cx, |this, _, cx| {
-                    this.panel_copy(cx);
-                }))
-            })
+            .when(
+                !is_problems
+                    && self
+                        .panel_sel
+                        .is_some_and(|s| s.terminal == terminal && !s.is_empty()),
+                |h| {
+                    h.child(tool_button(
+                        "p-copy",
+                        IconName::Copy,
+                        "Copy the selection (Ctrl+C)",
+                        cx,
+                        |this, _, cx| {
+                            this.panel_copy(cx);
+                        },
+                    ))
+                },
+            )
             .when(!is_problems || !self.problems.is_empty(), |h| {
-                h.child(tool_button("p-clear", IconName::Delete, "Clear", cx, |this, _, cx| {
-                    this.panel_sel = None;
-                    match this.panel_tab {
-                        PanelTab::Terminal => this.terms[this.term_ix].lines.clear(),
-                        PanelTab::Output => this.out_lines.clear(),
-                        PanelTab::Problems => {
-                            this.problems.clear();
-                            this.apply_problems(cx);
+                h.child(tool_button(
+                    "p-clear",
+                    IconName::Delete,
+                    "Clear",
+                    cx,
+                    |this, _, cx| {
+                        this.panel_sel = None;
+                        match this.panel_tab {
+                            PanelTab::Terminal => this.terms[this.term_ix].lines.clear(),
+                            PanelTab::Output => this.out_lines.clear(),
+                            PanelTab::Problems => {
+                                this.problems.clear();
+                                this.apply_problems(cx);
+                            }
                         }
-                    }
-                    cx.notify();
-                }))
+                        cx.notify();
+                    },
+                ))
             })
-            .child(tool_button("p-close", IconName::Close, "Close Panel", cx, |this, _, cx| {
-                this.set_panel_open(false, cx);
-            }));
+            .child(tool_button(
+                "p-close",
+                IconName::Close,
+                "Close Panel",
+                cx,
+                |this, _, cx| {
+                    this.set_panel_open(false, cx);
+                },
+            ));
 
         let (prev_tab, mut tab_gen) = self.panel_tab_anim.get();
         if prev_tab != self.panel_tab {
@@ -1875,7 +2594,8 @@ impl Workbench {
                 .child(el)
                 .with_animation(
                     SharedString::from(format!("panel-tab-{tab_gen}")),
-                    Animation::new(std::time::Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                    Animation::new(std::time::Duration::from_millis(140))
+                        .with_easing(gpui_kit::ease_out_quint()),
                     |d, t| d.opacity(0.35 + 0.65 * t),
                 )
                 .into_any_element()
@@ -1892,25 +2612,49 @@ impl Workbench {
         }
 
         let count = shown_lines.len();
-        let scroll = if terminal { self.terms[self.term_ix].scroll.clone() } else { self.out_scroll.clone() };
+        let scroll = if terminal {
+            self.terms[self.term_ix].scroll.clone()
+        } else {
+            self.out_scroll.clone()
+        };
         let font_size = px((self.settings.font_size - 2.).clamp(10., 28.));
         let mono_font = theme::resolve_mono_font(&self.settings.font_family, cx);
         let (m, avg) = panel_font_metrics(window, &mono_font, font_size);
         let (width, height) = self.panel_size.get();
         let cols = if width <= 0. {
-            Cols { mono: 160, card: 160, result: 160 }
+            Cols {
+                mono: 160,
+                card: 160,
+                result: 160,
+            }
         } else {
-            let fit = |indent: f32, per: f32| (((width - indent - f32::from(theme::u(12.)) - 6.) / per).floor() as usize).max(16);
-            Cols { mono: fit(f32::from(theme::u(12.)), m.em).max(24), card: fit(f32::from(theme::u(46.)) + 2., avg), result: fit(f32::from(theme::u(34.)), avg) }
+            let fit = |indent: f32, per: f32| {
+                (((width - indent - f32::from(theme::u(12.)) - 6.) / per).floor() as usize).max(16)
+            };
+            Cols {
+                mono: fit(f32::from(theme::u(12.)), m.em).max(24),
+                card: fit(f32::from(theme::u(46.)) + 2., avg),
+                result: fit(f32::from(theme::u(34.)), avg),
+            }
         };
         let rows = self.wrapped_rows(terminal, cols);
         let gap = 4.;
         let row = f32::from(m.row);
         let measured = height > 0.;
         let air = terminal && count > 0 && height > gap + row * 3.;
-        let prompt_rows = if !terminal { 0. } else if air { 2. } else { 1. };
+        let prompt_rows = if !terminal {
+            0.
+        } else if air {
+            2.
+        } else {
+            1.
+        };
         let room = height - gap - prompt_rows * row;
-        let fit = if room > 0. { (room / row).floor() * row } else { 0. };
+        let fit = if room > 0. {
+            (room / row).floor() * row
+        } else {
+            0.
+        };
         let n_rows = rows.len();
         let list = uniform_list(
             "panel-lines",
@@ -1919,9 +2663,15 @@ impl Workbench {
                 range
                     .map(|i| {
                         let r = &rows[i];
-                        let lines = if terminal { &this.terms[this.term_ix].lines } else { &this.out_lines };
+                        let lines = if terminal {
+                            &this.terms[this.term_ix].lines
+                        } else {
+                            &this.out_lines
+                        };
                         match lines.get(r.line) {
-                            Some(l) => this.render_line(i, r.line, l, &r.text, r.first, terminal, m, cx),
+                            Some(l) => {
+                                this.render_line(i, r.line, l, &r.text, r.first, terminal, m, cx)
+                            }
                             None => div().id(("pl", i)).h(m.row).into_any_element(),
                         }
                     })
@@ -1933,7 +2683,11 @@ impl Workbench {
         .map(|l| {
             if terminal {
                 let all = n_rows as f32 * row;
-                l.flex_none().h(px(if measured { fit.min(all) } else { all.min(8. * row) }))
+                l.flex_none().h(px(if measured {
+                    fit.min(all)
+                } else {
+                    all.min(8. * row)
+                }))
             } else if fit > 0. {
                 l.h(px(fit))
             } else {
@@ -1977,7 +2731,8 @@ impl Workbench {
             .child(probe)
             .child(list)
             .when(terminal, |d| {
-                d.when(air, |d| d.child(div().h(m.row))).child(self.render_prompt(mono_font, font_size, narrow, m, window, cx))
+                d.when(air, |d| d.child(div().h(m.row)))
+                    .child(self.render_prompt(mono_font, font_size, narrow, m, window, cx))
             });
 
         let empty = count == 0;
@@ -2036,7 +2791,8 @@ impl Workbench {
         };
         let focused = self.term_input.focus_handle(cx).is_focused(window);
         let dark = theme::live_dark();
-        let hint = !self.terms[self.term_ix].typed && (busy || self.terms[self.term_ix].lines.is_empty());
+        let hint =
+            !self.terms[self.term_ix].typed && (busy || self.terms[self.term_ix].lines.is_empty());
         let box_h = m.row.max(theme::u(26.));
         h_flex()
             .h(box_h + px(6.))
@@ -2058,9 +2814,16 @@ impl Workbench {
                         .text_xs()
                         .text_color(c(theme::FG_MUTED))
                         .child(place)
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)
+                        }),
                 )
-                .child(div().flex_none().text_color(c(theme::ACCENT_TEXT)).child("❯"))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(c(theme::ACCENT_TEXT))
+                        .child("❯"),
+                )
             })
             .child(
                 crate::ui::mc_box_frame(
@@ -2077,11 +2840,12 @@ impl Workbench {
                     dark,
                 )
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .ml(px(-8.))
-                        .child(Input::new(&self.term_input).appearance(false).focus_bordered(false).with_size(px(f32::from(font_size) / 0.875))),
+                    div().flex_1().min_w_0().ml(px(-8.)).child(
+                        Input::new(&self.term_input)
+                            .appearance(false)
+                            .focus_bordered(false)
+                            .with_size(px(f32::from(font_size) / 0.875)),
+                    ),
                 )
                 .when(hint, |d| {
                     d.child(
@@ -2128,7 +2892,11 @@ struct Metrics {
     em: f32,
 }
 
-fn panel_font_metrics(window: &Window, mono_font: &SharedString, font_size: Pixels) -> (Metrics, f32) {
+fn panel_font_metrics(
+    window: &Window,
+    mono_font: &SharedString,
+    font_size: Pixels,
+) -> (Metrics, f32) {
     type Cached = (SharedString, u32, u32, Metrics, f32);
     thread_local! {
         static CACHE: std::cell::RefCell<Option<Cached>> = const { std::cell::RefCell::new(None) };
@@ -2143,11 +2911,25 @@ fn panel_font_metrics(window: &Window, mono_font: &SharedString, font_size: Pixe
         }
         let ts = window.text_system();
         let id = ts.resolve_font(&font(mono_font.clone()));
-        let em = ts.em_advance(id, font_size).map(f32::from).unwrap_or(f32::from(font_size) * 0.6).max(4.);
-        let m = Metrics { row: px((f32::from(font_size) * 1.6).round()), em };
+        let em = ts
+            .em_advance(id, font_size)
+            .map(f32::from)
+            .unwrap_or(f32::from(font_size) * 0.6)
+            .max(4.);
+        let m = Metrics {
+            row: px((f32::from(font_size) * 1.6).round()),
+            em,
+        };
         let ui_id = ts.resolve_font(&font(UI_FONT));
         let sample = "Python doesn't know this name, check the spelling: Main.java:12";
-        let w: f32 = sample.chars().map(|ch| ts.advance(ui_id, font_size, ch).map(|s| f32::from(s.width)).unwrap_or(em)).sum();
+        let w: f32 = sample
+            .chars()
+            .map(|ch| {
+                ts.advance(ui_id, font_size, ch)
+                    .map(|s| f32::from(s.width))
+                    .unwrap_or(em)
+            })
+            .sum();
         let avg = (w / sample.chars().count() as f32).max(3.) * 1.08;
         *cell.borrow_mut() = Some((mono_font.clone(), fs_bits, sc_bits, m, avg));
         (m, avg)
@@ -2159,8 +2941,13 @@ fn prompt_place(short: &str, width: f32) -> String {
         return term::fit_path_left(short, 40);
     }
     let narrow = width < 480.;
-    let budget = ((width * if narrow { 0.4 } else { 0.34 }) / (f32::from(theme::u(12.)) * 0.5)) as usize;
-    if narrow { term::fit_path_left(term::last_folder(short), budget.max(6)) } else { term::fit_path_left(short, budget.max(10)) }
+    let budget =
+        ((width * if narrow { 0.4 } else { 0.34 }) / (f32::from(theme::u(12.)) * 0.5)) as usize;
+    if narrow {
+        term::fit_path_left(term::last_folder(short), budget.max(6))
+    } else {
+        term::fit_path_left(short, budget.max(10))
+    }
 }
 
 const UI_FONT: &str = ".SystemUIFont";
@@ -2177,7 +2964,12 @@ fn block_status(lines: &[Line], cmd: usize) -> (Option<&Line>, bool) {
 }
 
 fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
-    if !lines.is_empty() && !matches!(lines.last().map(|l| l.kind), Some(LineKind::Cmd | LineKind::Blank)) {
+    if !lines.is_empty()
+        && !matches!(
+            lines.last().map(|l| l.kind),
+            Some(LineKind::Cmd | LineKind::Blank)
+        )
+    {
         push_line(lines, "", LineKind::Blank);
     }
     let compact_msg = !e.message.is_empty() && e.kind.len() + e.message.len() <= 84;
@@ -2190,9 +2982,14 @@ fn push_card(lines: &mut Vec<Line>, e: &PyError, cwd: &Path) {
     let col = e.col.unwrap_or(0);
     let link = match (&e.file, e.line) {
         (Some(file), Some(line)) => {
-            let shown = file.strip_prefix(cwd).map(|p| p.display().to_string()).unwrap_or_else(|_| {
-                file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            });
+            let shown = file
+                .strip_prefix(cwd)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| {
+                    file.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                });
             head.meta = if col > 0 {
                 format!("{shown}:{line}:{col}").into()
             } else {
@@ -2299,7 +3096,9 @@ pub(crate) fn probe_local_runtimes(workspace: Option<&Path>) -> u32 {
             Vec::new()
         };
         for dir in std::env::split_paths(&path_env) {
-            let Ok(entries) = std::fs::read_dir(dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let s = name.to_string_lossy();
@@ -2318,7 +3117,10 @@ pub(crate) fn probe_local_runtimes(workspace: Option<&Path>) -> u32 {
                     continue;
                 }
                 let bit = runtime_bit_for_stem(stem);
-                if bit != 0 && (mask & bit) == 0 && entry.file_type().map(|t| !t.is_dir()).unwrap_or(false) {
+                if bit != 0
+                    && (mask & bit) == 0
+                    && entry.file_type().map(|t| !t.is_dir()).unwrap_or(false)
+                {
                     mask |= bit;
                 }
             }
@@ -2334,7 +3136,9 @@ pub(crate) fn probe_wsl_runtimes(target: &crate::remote::WslTarget) -> u32 {
         "command -v \"$c\" >/dev/null 2>&1 && printf '%s\\n' \"$c\"; ",
         "done"
     );
-    let Ok(out) = crate::remote::program_command(target, &target.linux_root, "sh", &["-c", script]).output() else {
+    let Ok(out) =
+        crate::remote::program_command(target, &target.linux_root, "sh", &["-c", script]).output()
+    else {
         return 0;
     };
     let mut mask = 0u32;
@@ -2373,7 +3177,12 @@ fn runtime_spec_for_ext(ext: &str) -> Option<(u32, &'static str)> {
     })
 }
 
-fn find_ancestor_file(path: &Path, filename: &str, root: Option<&Path>, max_depth: usize) -> Option<PathBuf> {
+fn find_ancestor_file(
+    path: &Path,
+    filename: &str,
+    root: Option<&Path>,
+    max_depth: usize,
+) -> Option<PathBuf> {
     let mut dir = path.parent()?;
     for _ in 0..max_depth {
         let cand = dir.join(filename);
@@ -2406,7 +3215,9 @@ fn is_bedrock_pack_script(path: &Path, head: &str, root: Option<&Path>) -> bool 
         if let Ok(raw) = std::fs::read_to_string(manifest) {
             if raw.contains("\"format_version\"")
                 && raw.contains("\"modules\"")
-                && (raw.contains("\"script\"") || raw.contains("\"data\"") || raw.contains("\"resources\""))
+                && (raw.contains("\"script\"")
+                    || raw.contains("\"data\"")
+                    || raw.contains("\"resources\""))
             {
                 return true;
             }
@@ -2438,7 +3249,11 @@ fn has_non_empty_code(source: &str, ext: &str) -> bool {
             }
             "bat" | "cmd" => {
                 let low = s.to_ascii_lowercase();
-                if low.starts_with("rem ") || low == "rem" || low.starts_with("::") || low == "@echo off" {
+                if low.starts_with("rem ")
+                    || low == "rem"
+                    || low.starts_with("::")
+                    || low == "@echo off"
+                {
                     continue;
                 }
             }
@@ -2475,16 +3290,35 @@ fn has_non_empty_code(source: &str, ext: &str) -> bool {
 
 fn is_host_framework_import(head: &str) -> bool {
     const HOSTS: &[&str] = &[
-        "'react'", "\"react\"", "'react-dom", "\"react-dom", "'vue'", "\"vue\"",
-        "'svelte'", "\"svelte\"", "'next/", "\"next/", "'@angular/", "\"@angular/",
-        "'electron'", "\"electron\"", "'vscode'", "\"vscode\"", "'obsidian'", "\"obsidian\"",
-        "'three'", "\"three\"",
+        "'react'",
+        "\"react\"",
+        "'react-dom",
+        "\"react-dom",
+        "'vue'",
+        "\"vue\"",
+        "'svelte'",
+        "\"svelte\"",
+        "'next/",
+        "\"next/",
+        "'@angular/",
+        "\"@angular/",
+        "'electron'",
+        "\"electron\"",
+        "'vscode'",
+        "\"vscode\"",
+        "'obsidian'",
+        "\"obsidian\"",
+        "'three'",
+        "\"three\"",
     ];
     HOSTS.iter().any(|p| head.contains(p))
 }
 
 fn starts_with_kw(stmt: &str, kw: &str) -> bool {
-    stmt.strip_prefix(kw).is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == '{' || c == '*' || c == '('))
+    stmt.strip_prefix(kw).is_some_and(|rest| {
+        rest.is_empty()
+            || rest.starts_with(|c: char| c.is_whitespace() || c == '{' || c == '*' || c == '(')
+    })
 }
 
 fn js_has_top_level_execution(source: &str) -> bool {
@@ -2595,7 +3429,12 @@ fn js_has_top_level_execution(source: &str) -> bool {
                 _ => {}
             }
         }
-        if depth == 0 && !stmt.trim().is_empty() && !stmt.trim_end().ends_with(['=', ',', '+', '-', '*', '/', ':', '?', '&', '|']) {
+        if depth == 0
+            && !stmt.trim().is_empty()
+            && !stmt
+                .trim_end()
+                .ends_with(['=', ',', '+', '-', '*', '/', ':', '?', '&', '|'])
+        {
             // Handle ASI single-line calls like `main()` without trailing semicolon.
             let candidate = stmt.trim();
             if !starts_with_kw(candidate, "import") && !starts_with_kw(candidate, "export") {
@@ -2662,10 +3501,14 @@ pub(crate) fn check_script_runnable(
                 || name_lower.contains(".test.")
                 || name_lower.contains(".spec.")
             {
-                return RunVerdict::NotRunnable("Module, config, or type declaration is not standalone");
+                return RunVerdict::NotRunnable(
+                    "Module, config, or type declaration is not standalone",
+                );
             }
             if is_bedrock_pack_script(path, head, root) {
-                return RunVerdict::NotRunnable("Minecraft Bedrock script requires the game runtime");
+                return RunVerdict::NotRunnable(
+                    "Minecraft Bedrock script requires the game runtime",
+                );
             }
             if is_host_framework_import(head) {
                 return RunVerdict::NotRunnable("Browser or host-app module cannot run standalone");
@@ -2710,7 +3553,11 @@ pub(crate) fn check_script_runnable(
                 return RunVerdict::NotRunnable("Zig file has no pub fn main()");
             }
         }
-        "lua" if head.contains("game:GetService") || head.contains("RegisterNetEvent") || head.contains("minetest.") => {
+        "lua"
+            if head.contains("game:GetService")
+                || head.contains("RegisterNetEvent")
+                || head.contains("minetest.") =>
+        {
             return RunVerdict::NotRunnable("Embedded engine Lua script cannot run standalone");
         }
         _ => {}
@@ -2732,15 +3579,29 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
         "py" | "pyw" => (python(root), vec!["-u".into(), p]),
         "js" | "jsx" | "mjs" | "cjs" => ("node".into(), vec![p]),
         "ts" | "tsx" | "mts" | "cts" => ("npx".into(), vec!["--yes".into(), "tsx".into(), p]),
-        "ps1" => ("powershell".into(), vec!["-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-File".into(), p]),
+        "ps1" => (
+            "powershell".into(),
+            vec![
+                "-NoProfile".into(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                p,
+            ],
+        ),
         "bat" | "cmd" => ("cmd.exe".into(), vec!["/d".into(), "/c".into(), p]),
         "sh" => ("bash".into(), vec![p]),
         "rs" => {
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
-            let parent = path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_ascii_lowercase());
+            let parent = path
+                .parent()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().to_ascii_lowercase());
             match (parent.as_deref(), stem) {
                 (Some("bin"), Some(s)) => ("cargo".into(), vec!["run".into(), "--bin".into(), s]),
-                (Some("examples"), Some(s)) => ("cargo".into(), vec!["run".into(), "--example".into(), s]),
+                (Some("examples"), Some(s)) => {
+                    ("cargo".into(), vec!["run".into(), "--example".into(), s])
+                }
                 _ => ("cargo".into(), vec!["run".into()]),
             }
         }
@@ -2758,19 +3619,40 @@ fn run_command_for(path: &Path, root: Option<&Path>) -> Option<(String, Vec<Stri
     })
 }
 
-pub(crate) fn detect_python(root: Option<&Path>, target: Option<&crate::remote::WslTarget>) -> Option<String> {
+pub(crate) fn detect_python(
+    root: Option<&Path>,
+    target: Option<&crate::remote::WslTarget>,
+) -> Option<String> {
     if let Some(t) = target {
-        let out = crate::remote::program_command(t, &t.linux_root, "python3", &["--version"]).output().ok()?;
-        let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();
+        let out = crate::remote::program_command(t, &t.linux_root, "python3", &["--version"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(if out.stdout.is_empty() {
+            &out.stderr
+        } else {
+            &out.stdout
+        })
+        .trim()
+        .to_string();
         return text.starts_with("Python").then_some(text);
     }
     let exe = python(root);
     let out = proc::command(&exe).arg("--version").output().ok()?;
-    let text = String::from_utf8_lossy(if out.stdout.is_empty() { &out.stderr } else { &out.stdout }).trim().to_string();
+    let text = String::from_utf8_lossy(if out.stdout.is_empty() {
+        &out.stderr
+    } else {
+        &out.stdout
+    })
+    .trim()
+    .to_string();
     if !text.starts_with("Python") {
         return None;
     }
-    let venv = Path::new(&exe).parent().and_then(Path::parent).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned());
+    let venv = Path::new(&exe)
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .map(|n| n.to_string_lossy().into_owned());
     Some(match venv {
         Some(v) if exe.contains(['\\', '/']) => format!("{text} · {v}"),
         _ => text,
@@ -2787,31 +3669,93 @@ mod tests {
 
     #[test]
     fn close_index_lands_on_a_tab_that_still_exists() {
-        assert_eq!(close_index(0, 1, 2), 0, "closing a tab to the right keeps the active one");
-        assert_eq!(close_index(2, 0, 2), 1, "closing a tab to the left shifts the active one down");
+        assert_eq!(
+            close_index(0, 1, 2),
+            0,
+            "closing a tab to the right keeps the active one"
+        );
+        assert_eq!(
+            close_index(2, 0, 2),
+            1,
+            "closing a tab to the left shifts the active one down"
+        );
         assert_eq!(close_index(1, 0, 2), 0);
         assert_eq!(close_index(0, 0, 1), 0, "the last tab stays");
-        assert_eq!(close_index(1, 1, 1), 0, "closing the active last tab steps back");
+        assert_eq!(
+            close_index(1, 1, 1),
+            0,
+            "closing the active last tab steps back"
+        );
     }
 
     #[test]
     fn a_selection_covers_its_rows_in_either_direction() {
-        let s = PanelSel { terminal: true, anchor: (3, 10), head: (1, 4) };
+        let s = PanelSel {
+            terminal: true,
+            anchor: (3, 10),
+            head: (1, 4),
+        };
         assert_eq!(s.on_row(0, 20), None);
         assert_eq!(s.on_row(1, 20), Some((4, 20)));
-        assert_eq!(s.on_row(2, 0), Some((0, 0)), "an empty row in between is selected");
+        assert_eq!(
+            s.on_row(2, 0),
+            Some((0, 0)),
+            "an empty row in between is selected"
+        );
         assert_eq!(s.on_row(3, 20), Some((0, 10)));
         assert_eq!(s.on_row(4, 20), None);
-        assert_eq!(PanelSel { terminal: true, anchor: (0, 2), head: (0, usize::MAX) }.on_row(0, 5), Some((2, 5)));
-        assert!(PanelSel { terminal: true, anchor: (2, 3), head: (2, 3) }.on_row(2, 9).is_none());
+        assert_eq!(
+            PanelSel {
+                terminal: true,
+                anchor: (0, 2),
+                head: (0, usize::MAX)
+            }
+            .on_row(0, 5),
+            Some((2, 5))
+        );
+        assert!(PanelSel {
+            terminal: true,
+            anchor: (2, 3),
+            head: (2, 3)
+        }
+        .on_row(2, 9)
+        .is_none());
     }
 
     #[test]
     fn can_run_matches_run_command_for() {
         for name in [
-            "a.py", "A.PY", "b.pyw", "c.js", "c2.jsx", "d.mjs", "e.cjs", "f.ts", "f2.tsx", "g.mts", "g2.cts",
-            "h.ps1", "i.bat", "j.cmd", "k.sh", "l.rs", "m.go", "m2.java", "m3.dart", "m4.zig", "m5.swift",
-            "n.php", "o.lua", "p.rb", "p2.pl", "p3.exs", "warps.yml", "x.txt", "y.json", "noext", "z.html",
+            "a.py",
+            "A.PY",
+            "b.pyw",
+            "c.js",
+            "c2.jsx",
+            "d.mjs",
+            "e.cjs",
+            "f.ts",
+            "f2.tsx",
+            "g.mts",
+            "g2.cts",
+            "h.ps1",
+            "i.bat",
+            "j.cmd",
+            "k.sh",
+            "l.rs",
+            "m.go",
+            "m2.java",
+            "m3.dart",
+            "m4.zig",
+            "m5.swift",
+            "n.php",
+            "o.lua",
+            "p.rb",
+            "p2.pl",
+            "p3.exs",
+            "warps.yml",
+            "x.txt",
+            "y.json",
+            "noext",
+            "z.html",
         ] {
             let p = Path::new(name);
             assert_eq!(can_run(p), run_command_for(p, None).is_some(), "{name}");
@@ -2820,56 +3764,235 @@ mod tests {
 
     #[test]
     fn check_script_runnable_rejects_bedrock_libraries_and_missing_runtimes() {
-        let all = RT_PYTHON | RT_NODE | RT_NPX | RT_POWERSHELL | RT_CMD | RT_BASH | RT_CARGO | RT_GO | RT_JAVA;
-        let bedrock = Path::new("behavior_packs/KiwEssentialsVIP_BP/scripts/menu_member/functions/shop/index.js");
+        let all = RT_PYTHON
+            | RT_NODE
+            | RT_NPX
+            | RT_POWERSHELL
+            | RT_CMD
+            | RT_BASH
+            | RT_CARGO
+            | RT_GO
+            | RT_JAVA;
+        let bedrock = Path::new(
+            "behavior_packs/KiwEssentialsVIP_BP/scripts/menu_member/functions/shop/index.js",
+        );
         assert!(matches!(
             check_script_runnable(bedrock, "import { world } from '@minecraft/server';\nworld.afterEvents.worldInitialize.subscribe(() => {});", None, false, all),
             RunVerdict::NotRunnable(_)
         ));
         assert!(matches!(
-            check_script_runnable(Path::new("src/shop/index.js"), "import { world } from '@minecraft/server';\nconsole.log(world);", None, false, all),
+            check_script_runnable(
+                Path::new("src/shop/index.js"),
+                "import { world } from '@minecraft/server';\nconsole.log(world);",
+                None,
+                false,
+                all
+            ),
             RunVerdict::NotRunnable(_)
         ));
-        let pure_lib = "export function add(a, b) {\n  return a + b;\n}\nexport const VERSION = '1.0';";
-        assert!(matches!(check_script_runnable(Path::new("src/math.js"), pure_lib, None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("types.d.ts"), "export type Id = string;", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("App.tsx"), "export function App() { return null; }", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("vite.config.ts"), "export default { base: '/' };", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("math.test.js"), "test('ok', () => {});", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("Component.js"), "import React from 'react';\nconsole.log(React);", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("pkg/__init__.py"), "VERSION = '1.0'", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("empty.py"), "# just a comment\n   \n", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("README.md"), "# Hello", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("data.json"), "{\"ok\":true}", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("main_test.go"), "package main\nfunc TestX(t *testing.T) {}", None, false, all), RunVerdict::NotRunnable(_)));
-        assert!(matches!(check_script_runnable(Path::new("Helper.java"), "class Helper { int x() { return 1; } }", None, false, all), RunVerdict::NotRunnable(_)));
+        let pure_lib =
+            "export function add(a, b) {\n  return a + b;\n}\nexport const VERSION = '1.0';";
+        assert!(matches!(
+            check_script_runnable(Path::new("src/math.js"), pure_lib, None, false, all),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("types.d.ts"),
+                "export type Id = string;",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("App.tsx"),
+                "export function App() { return null; }",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("vite.config.ts"),
+                "export default { base: '/' };",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("math.test.js"),
+                "test('ok', () => {});",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("Component.js"),
+                "import React from 'react';\nconsole.log(React);",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("pkg/__init__.py"),
+                "VERSION = '1.0'",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("empty.py"),
+                "# just a comment\n   \n",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(Path::new("README.md"), "# Hello", None, false, all),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(Path::new("data.json"), "{\"ok\":true}", None, false, all),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("main_test.go"),
+                "package main\nfunc TestX(t *testing.T) {}",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert!(matches!(
+            check_script_runnable(
+                Path::new("Helper.java"),
+                "class Helper { int x() { return 1; } }",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
 
         // Standalone runnable scripts pass when runtime is present and fail when missing.
-        assert_eq!(check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, all), RunVerdict::Runnable("Python"));
-        assert!(matches!(check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, 0), RunVerdict::NotRunnable(_)));
         assert_eq!(
-            check_script_runnable(Path::new("index.js"), "import { x } from './x.js';\nconsole.log(x);", None, false, all),
+            check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, all),
+            RunVerdict::Runnable("Python")
+        );
+        assert!(matches!(
+            check_script_runnable(Path::new("hello.py"), "print('hi')", None, false, 0),
+            RunVerdict::NotRunnable(_)
+        ));
+        assert_eq!(
+            check_script_runnable(
+                Path::new("index.js"),
+                "import { x } from './x.js';\nconsole.log(x);",
+                None,
+                false,
+                all
+            ),
             RunVerdict::Runnable("Node.js")
         );
-        assert_eq!(check_script_runnable(Path::new("cli.ts"), "async function main() { console.log(1); }\nmain();", None, false, all), RunVerdict::Runnable("TypeScript"));
-        assert_eq!(check_script_runnable(Path::new("main.go"), "package main\nimport \"fmt\"\nfunc main() { fmt.Println(1) }", None, false, all), RunVerdict::Runnable("Go"));
-        assert_eq!(check_script_runnable(Path::new("Main.java"), "class Main { public static void main(String[] a) {} }", None, false, all), RunVerdict::Runnable("Java"));
-        assert_eq!(check_script_runnable(Path::new("deploy.sh"), "echo ok", None, true, all), RunVerdict::Runnable("Bash"));
-        assert!(matches!(check_script_runnable(Path::new("build.ps1"), "Write-Host 'ok'", None, true, all), RunVerdict::NotRunnable(_)));
+        assert_eq!(
+            check_script_runnable(
+                Path::new("cli.ts"),
+                "async function main() { console.log(1); }\nmain();",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::Runnable("TypeScript")
+        );
+        assert_eq!(
+            check_script_runnable(
+                Path::new("main.go"),
+                "package main\nimport \"fmt\"\nfunc main() { fmt.Println(1) }",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::Runnable("Go")
+        );
+        assert_eq!(
+            check_script_runnable(
+                Path::new("Main.java"),
+                "class Main { public static void main(String[] a) {} }",
+                None,
+                false,
+                all
+            ),
+            RunVerdict::Runnable("Java")
+        );
+        assert_eq!(
+            check_script_runnable(Path::new("deploy.sh"), "echo ok", None, true, all),
+            RunVerdict::Runnable("Bash")
+        );
+        assert!(matches!(
+            check_script_runnable(Path::new("build.ps1"), "Write-Host 'ok'", None, true, all),
+            RunVerdict::NotRunnable(_)
+        ));
 
         // Temp workspace tests: Bedrock manifest.json vs Cargo.toml main.rs.
         let tmp = std::env::temp_dir().join(format!("fluxcode_panel_test_{}", std::process::id()));
         let pack_scripts = tmp.join("my_pack").join("scripts");
         let _ = std::fs::create_dir_all(&pack_scripts);
-        let _ = std::fs::write(tmp.join("my_pack").join("manifest.json"), "{\"format_version\":2,\"modules\":[{\"type\":\"script\"}]}");
+        let _ = std::fs::write(
+            tmp.join("my_pack").join("manifest.json"),
+            "{\"format_version\":2,\"modules\":[{\"type\":\"script\"}]}",
+        );
         let pack_js = pack_scripts.join("main.js");
-        assert!(matches!(check_script_runnable(&pack_js, "console.log('tick');", Some(&tmp), false, all), RunVerdict::NotRunnable(_)));
+        assert!(matches!(
+            check_script_runnable(&pack_js, "console.log('tick');", Some(&tmp), false, all),
+            RunVerdict::NotRunnable(_)
+        ));
 
         let crate_src = tmp.join("rust_app").join("src");
         let _ = std::fs::create_dir_all(&crate_src);
-        let _ = std::fs::write(tmp.join("rust_app").join("Cargo.toml"), "[package]\nname=\"demo\"\nversion=\"0.1.0\"");
-        assert_eq!(check_script_runnable(&crate_src.join("main.rs"), "fn main() { println!(\"hi\"); }", Some(&tmp), false, all), RunVerdict::Runnable("Cargo"));
-        assert!(matches!(check_script_runnable(&crate_src.join("lib.rs"), "pub fn helper() -> i32 { 1 }", Some(&tmp), false, all), RunVerdict::NotRunnable(_)));
+        let _ = std::fs::write(
+            tmp.join("rust_app").join("Cargo.toml"),
+            "[package]\nname=\"demo\"\nversion=\"0.1.0\"",
+        );
+        assert_eq!(
+            check_script_runnable(
+                &crate_src.join("main.rs"),
+                "fn main() { println!(\"hi\"); }",
+                Some(&tmp),
+                false,
+                all
+            ),
+            RunVerdict::Runnable("Cargo")
+        );
+        assert!(matches!(
+            check_script_runnable(
+                &crate_src.join("lib.rs"),
+                "pub fn helper() -> i32 { 1 }",
+                Some(&tmp),
+                false,
+                all
+            ),
+            RunVerdict::NotRunnable(_)
+        ));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2878,16 +4001,25 @@ mod tests {
         let repo = Path::new(r"\\?\D:\App\Repo");
         let file = Path::new("d:/app/repo/src/scm_git.rs");
         if cfg!(windows) {
-            assert_eq!(super::repo_rel_path(repo, file).as_deref(), Some("src/scm_git.rs"));
+            assert_eq!(
+                super::repo_rel_path(repo, file).as_deref(),
+                Some("src/scm_git.rs")
+            );
             assert!(super::path_in_repo(repo, file));
-            assert!(!super::path_in_repo(repo, Path::new(r"D:\Other\src\scm_git.rs")));
+            assert!(!super::path_in_repo(
+                repo,
+                Path::new(r"D:\Other\src\scm_git.rs")
+            ));
         } else {
             let u_repo = Path::new("/work/repo");
             assert_eq!(
                 super::repo_rel_path(u_repo, Path::new("/work/repo/src/lib.rs")).as_deref(),
                 Some("src/lib.rs")
             );
-            assert!(!super::path_in_repo(u_repo, Path::new("/work/repo2/src/lib.rs")));
+            assert!(!super::path_in_repo(
+                u_repo,
+                Path::new("/work/repo2/src/lib.rs")
+            ));
         }
     }
 }

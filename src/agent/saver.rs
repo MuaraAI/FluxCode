@@ -1,19 +1,23 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
 use crate::workbench::Workbench;
-use gpui_kit::component::{
-    h_flex,
-    v_flex, Icon,
-};
+use gpui_kit::component::{h_flex, v_flex, Icon};
 use gpui_kit::{prelude::FluentBuilder, *};
 
 const REMIND_EVERY: u32 = 8;
 
 pub const PACKS: [(&str, &str, &str); 3] = [
     ("caveman", "Caveman", "Short answers: no filler, no recap."),
-    ("lean", "Lean code", "Diffs and changed lines, not whole files."),
-    ("quiet", "Quiet tools", "Reads and prints only what the task needs."),
+    (
+        "lean",
+        "Lean code",
+        "Diffs and changed lines, not whole files.",
+    ),
+    (
+        "quiet",
+        "Quiet tools",
+        "Reads and prints only what the task needs.",
+    ),
 ];
 
 pub const LEVELS: [(&str, &str); 3] = [("lite", "Lite"), ("full", "Full"), ("ultra", "Ultra")];
@@ -50,7 +54,11 @@ pub fn guidance(packs: &[String], level: &str) -> Option<String> {
     let mut lines = Vec::new();
     for (id, ..) in PACKS {
         if packs.iter().any(|p| p == id) {
-            lines.push(if id == "caveman" { caveman(level) } else { pack_line(id) });
+            lines.push(if id == "caveman" {
+                caveman(level)
+            } else {
+                pack_line(id)
+            });
         }
     }
     if lines.is_empty() {
@@ -93,14 +101,20 @@ impl Workbench {
         let session = self.agent.session.clone().unwrap_or_default();
         let key = self.saver_key();
         let st = &mut self.agent.saver;
-        let same = st.sent.as_ref().is_some_and(|(s, k)| *s == session && *k == key);
+        let same = st
+            .sent
+            .as_ref()
+            .is_some_and(|(s, k)| *s == session && *k == key);
         if same {
             st.turns += 1;
             if key.is_empty() || st.turns < REMIND_EVERY {
                 return None;
             }
         } else if key.is_empty() {
-            let had = st.sent.as_ref().is_some_and(|(s, k)| *s == session && !k.is_empty());
+            let had = st
+                .sent
+                .as_ref()
+                .is_some_and(|(s, k)| *s == session && !k.is_empty());
             if !had {
                 st.sent = Some((session, key));
                 return None;
@@ -138,7 +152,9 @@ impl Workbench {
             .when(n > 0, |d| d.bg(c(theme::GREEN).opacity(0.12)))
             .when(open, |d| d.bg(c(theme::BG_HOVER)))
             .hover(|s| s.bg(c(theme::BG_HOVER)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Token saver")).build(w, cx))
+            .tooltip(|w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tr("Token saver")).build(w, cx)
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
                 let may = this.pop_may_open("saver");
@@ -150,7 +166,13 @@ impl Workbench {
     }
 
     pub(crate) fn agent_context_fill(&self) -> f32 {
-        if let Some(l) = self.agent.usage.live.as_ref().filter(|l| l.size > 0 && l.used > 0) {
+        if let Some(l) = self
+            .agent
+            .usage
+            .live
+            .as_ref()
+            .filter(|l| l.size > 0 && l.used > 0)
+        {
             return l.used as f32 / l.size as f32;
         }
         let from = self.agent.compact_from.min(self.agent.items.len());
@@ -177,10 +199,18 @@ impl Workbench {
         if let Some(l) = self.agent.usage.live.as_mut() {
             l.used = 0;
         }
-        let cmd = self.agent.commands.iter().find(|c| c.name == "compact" || c.name == "summarize").map(|c| format!("/{}", c.name));
+        let cmd = self
+            .agent
+            .commands
+            .iter()
+            .find(|c| c.name == "compact" || c.name == "summarize")
+            .map(|c| format!("/{}", c.name));
         if let Some(cmd) = cmd {
             self.agent.compacting = true;
-            self.agent.items.push(super::Item::Note(crate::trf!("Context {pct}% full: compacting it…"; pct => pct), false));
+            self.agent.items.push(super::Item::Note(
+                crate::trf!("Context {pct}% full: compacting it…"; pct => pct),
+                false,
+            ));
             self.agent_send_probe(&cmd);
         } else {
             self.agent.items.push(super::Item::Note(crate::trf!("Context {pct}% full: the chat goes on in a fresh session that carries its recent messages."; pct => pct), false));
@@ -193,8 +223,24 @@ impl Workbench {
     }
 
     pub(crate) fn agent_compact_done(&mut self, ok: bool) {
-        let text = if ok { crate::i18n::tr("Context compacted: the conversation continues with a summary, using fewer tokens.").to_string() } else { crate::i18n::tr("Couldn't compact the context this time; it will try again after the next answer.").to_string() };
-        if let Some(super::Item::Note(t, err)) = self.agent.items.iter_mut().rev().find(|i| matches!(i, super::Item::Note(..))) {
+        let text = if ok {
+            crate::i18n::tr(
+                "Context compacted: the conversation continues with a summary, using fewer tokens.",
+            )
+            .to_string()
+        } else {
+            crate::i18n::tr(
+                "Couldn't compact the context this time; it will try again after the next answer.",
+            )
+            .to_string()
+        };
+        if let Some(super::Item::Note(t, err)) = self
+            .agent
+            .items
+            .iter_mut()
+            .rev()
+            .find(|i| matches!(i, super::Item::Note(..)))
+        {
             *t = text;
             *err = !ok;
         }
@@ -209,20 +255,66 @@ impl Workbench {
         let on = |id: &str| s.saver_packs.iter().any(|p| p == id);
         let pct = (estimate(&s.saver_packs, &s.saver_level) * 100.).round() as u32;
         let (panel_top, composer_top) = self.agent.geom.get();
-        let room = if composer_top > panel_top + 120. { composer_top - panel_top - 24. } else { 420. };
+        let room = if composer_top > panel_top + 120. {
+            composer_top - panel_top - 24.
+        } else {
+            420.
+        };
 
-        let row = |key: &'static str, icon: Ico, title: &'static str, tip: SharedString, checked: bool, cx: &mut Context<Self>, set: fn(&mut Workbench, bool, &mut Context<Workbench>)| {
+        let row = |key: &'static str,
+                   icon: Ico,
+                   title: &'static str,
+                   tip: SharedString,
+                   checked: bool,
+                   cx: &mut Context<Self>,
+                   set: fn(&mut Workbench, bool, &mut Context<Workbench>)| {
             h_flex()
                 .id(SharedString::from(format!("sv-row-{key}")))
                 .h(theme::u(30.))
                 .gap_2()
-                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
-                .child(Icon::new(icon).flex_none().size(theme::u(14.)).text_color(c(if checked { theme::FG_STRONG } else { theme::FG_DIM })))
-                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(if checked { theme::FG_STRONG } else { theme::FG_MUTED })).child(tr(title)))
-                .child(crate::ui::McToggle::new(SharedString::from(format!("sv-{key}"))).checked(checked).small().on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
+                .child(
+                    Icon::new(icon)
+                        .flex_none()
+                        .size(theme::u(14.))
+                        .text_color(c(if checked {
+                            theme::FG_STRONG
+                        } else {
+                            theme::FG_DIM
+                        })),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_sm()
+                        .text_color(c(if checked {
+                            theme::FG_STRONG
+                        } else {
+                            theme::FG_MUTED
+                        }))
+                        .child(tr(title)),
+                )
+                .child(
+                    crate::ui::McToggle::new(SharedString::from(format!("sv-{key}")))
+                        .checked(checked)
+                        .small()
+                        .on_click(cx.listener(move |this, v: &bool, _, cx| set(this, *v, cx))),
+                )
         };
-        let seg = |id: &'static str, opts: Vec<(SharedString, bool, Box<dyn Fn(&mut Workbench)>)>, cx: &mut Context<Self>| {
-            let mut h = h_flex().flex_1().min_w_0().p(px(2.)).gap(px(2.)).rounded(px(4.)).bg(c(theme::FG_DIM).opacity(0.12));
+        let seg = |id: &'static str,
+                   opts: Vec<(SharedString, bool, Box<dyn Fn(&mut Workbench)>)>,
+                   cx: &mut Context<Self>| {
+            let mut h = h_flex()
+                .flex_1()
+                .min_w_0()
+                .p(px(2.))
+                .gap(px(2.))
+                .rounded(px(4.))
+                .bg(c(theme::FG_DIM).opacity(0.12));
             for (k, (label, picked, f)) in opts.into_iter().enumerate() {
                 h = h.child(
                     div()
@@ -235,8 +327,17 @@ impl Workbench {
                         .rounded(px(3.))
                         .text_xs()
                         .cursor_pointer()
-                        .text_color(c(if picked { theme::FG_STRONG } else { theme::FG_MUTED }))
-                        .when(picked, |d| d.bg(theme::glass_pop_fill()).border_1().border_color(theme::glass_pop_edge()).shadow_sm())
+                        .text_color(c(if picked {
+                            theme::FG_STRONG
+                        } else {
+                            theme::FG_MUTED
+                        }))
+                        .when(picked, |d| {
+                            d.bg(theme::glass_pop_fill())
+                                .border_1()
+                                .border_color(theme::glass_pop_edge())
+                                .shadow_sm()
+                        })
                         .when(!picked, |d| d.hover(|s| s.text_color(c(theme::FG))))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             f(this);
@@ -254,28 +355,59 @@ impl Workbench {
 
         let level_tip: SharedString = match s.saver_level.as_str() {
             "lite" => tr("Short answers, Lite: brief, in full sentences; no greetings, no recap."),
-            "ultra" => tr("Short answers, Ultra: telegraphic, keywords and symbols; no prose around code."),
+            "ultra" => tr(
+                "Short answers, Ultra: telegraphic, keywords and symbols; no prose around code.",
+            ),
             _ => tr("Short answers, Full: terse; no filler or pleasantries, fragments are fine."),
         }
         .into();
-        body = body.child(row("caveman", Ico::TextAlignStart, "Short answers", level_tip, on("caveman"), cx, |w, v, cx| w.saver_set("caveman", v, cx)));
+        body = body.child(row(
+            "caveman",
+            Ico::TextAlignStart,
+            "Short answers",
+            level_tip,
+            on("caveman"),
+            cx,
+            |w, v, cx| w.saver_set("caveman", v, cx),
+        ));
         if on("caveman") {
             let opts = LEVELS
                 .iter()
                 .map(|&(lv, label)| {
-                    let f: Box<dyn Fn(&mut Workbench)> = Box::new(move |w| w.settings.saver_level = lv.into());
+                    let f: Box<dyn Fn(&mut Workbench)> =
+                        Box::new(move |w| w.settings.saver_level = lv.into());
                     (SharedString::from(tr(label)), s.saver_level == lv, f)
                 })
                 .collect();
             body = body.child(h_flex().pl(indent).pb_1().child(seg("sv-lv", opts, cx)));
         }
         body = body
-            .child(row("lean", Ico::Code, "Lean code", tr("Shows changed lines or a small diff, never whole files again.").into(), on("lean"), cx, |w, v, cx| w.saver_set("lean", v, cx)))
-            .child(row("quiet", Ico::SquareTerminal, "Quiet tools", tr("Reads only the lines it needs and keeps command output short.").into(), on("quiet"), cx, |w, v, cx| w.saver_set("quiet", v, cx)));
+            .child(row(
+                "lean",
+                Ico::Code,
+                "Lean code",
+                tr("Shows changed lines or a small diff, never whole files again.").into(),
+                on("lean"),
+                cx,
+                |w, v, cx| w.saver_set("lean", v, cx),
+            ))
+            .child(row(
+                "quiet",
+                Ico::SquareTerminal,
+                "Quiet tools",
+                tr("Reads only the lines it needs and keeps command output short.").into(),
+                on("quiet"),
+                cx,
+                |w, v, cx| w.saver_set("quiet", v, cx),
+            ));
 
         let fill = self.agent_context_fill().clamp(0., 1.);
         let at = s.saver_compact_at;
-        let meter = if fill * 100. >= at as f32 { theme::WARN } else { theme::GREEN };
+        let meter = if fill * 100. >= at as f32 {
+            theme::WARN
+        } else {
+            theme::GREEN
+        };
         body = body.child(div().my_1().h(px(1.)).bg(theme::glass_pop_edge())).child(row(
             "compact",
             Ico::Shrink,
@@ -293,7 +425,8 @@ impl Workbench {
             let opts = COMPACT_AT
                 .iter()
                 .map(|&p| {
-                    let f: Box<dyn Fn(&mut Workbench)> = Box::new(move |w| w.settings.saver_compact_at = p);
+                    let f: Box<dyn Fn(&mut Workbench)> =
+                        Box::new(move |w| w.settings.saver_compact_at = p);
                     (SharedString::from(format!("{p}%")), at == p, f)
                 })
                 .collect();
@@ -312,10 +445,35 @@ impl Workbench {
                                     .h(px(3.))
                                     .rounded_full()
                                     .bg(c(theme::FG_DIM).opacity(0.18))
-                                    .child(div().absolute().left_0().top_0().h_full().w(relative(fill.max(0.02))).rounded_full().bg(c(meter)))
-                                    .child(div().absolute().top(px(-2.)).h(px(7.)).w(px(1.5)).left(relative(at as f32 / 100.)).bg(c(theme::FG_MUTED))),
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .h_full()
+                                            .w(relative(fill.max(0.02)))
+                                            .rounded_full()
+                                            .bg(c(meter)),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top(px(-2.))
+                                            .h(px(7.))
+                                            .w(px(1.5))
+                                            .left(relative(at as f32 / 100.))
+                                            .bg(c(theme::FG_MUTED)),
+                                    ),
                             )
-                            .child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(crate::trf!("{n}% now"; n => (fill * 100.).round() as u32))),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(
+                                        crate::trf!("{n}% now"; n => (fill * 100.).round() as u32),
+                                    ),
+                            ),
                     ),
             );
         }

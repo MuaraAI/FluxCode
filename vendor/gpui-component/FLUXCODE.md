@@ -33,8 +33,8 @@ residual `mdast::Node::Html` with a custom fallback block renderer.
 **Split columns stay selectable, resizable, and cheap to paint.** `DiffState` exposes
 `split_ratio` resizing (`split_width`, `resize_split`), `SelectionGeometry` resolves
 split-column hits (`split_width` in `SelectionLayer`), `hunk_position`/`move_hunk`
-follow viewport scroll position via `partition_point`, and `overview_marks` are
-precomputed during `rebuild()` so overview ruler painting avoids per-frame row scans.
+follow viewport scroll position via `partition_point`, and `rebuild()` fuses row
+indexing with compact 12-byte `overview_marks` into a single linear pass.
 
 To update: copy the new upstream version over this folder (without `Cargo.toml.orig`,
 `Cargo.lock` and `.cargo_vcs_info.json`) and apply all three changes again unless upstream

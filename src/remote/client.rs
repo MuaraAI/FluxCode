@@ -8,7 +8,8 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use super::proto::{
-    read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, FRAME_BYTES, FRAME_JSON, PROTOCOL_VERSION,
+    read_frame, write_frame, DirEntry, Hello, Request, Response, SearchWire, FRAME_BYTES,
+    FRAME_JSON, PROTOCOL_VERSION,
 };
 use super::WslTarget;
 
@@ -48,10 +49,15 @@ fn spawn_frame_reader(mut stdout: impl Read + Send + 'static) -> mpsc::Receiver<
     rx
 }
 
-fn recv_frame_from(rx: &mpsc::Receiver<FrameMsg>, timeout: Duration) -> Result<(u8, Vec<u8>), String> {
+fn recv_frame_from(
+    rx: &mpsc::Receiver<FrameMsg>,
+    timeout: Duration,
+) -> Result<(u8, Vec<u8>), String> {
     match rx.recv_timeout(timeout) {
         Ok(Ok(Some(frame))) => Ok(frame),
-        Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => Err("the helper closed the connection".into()),
+        Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("the helper closed the connection".into())
+        }
         Ok(Err(e)) => Err(e),
         Err(mpsc::RecvTimeoutError::Timeout) => Err("the helper timed out".into()),
     }
@@ -87,7 +93,9 @@ impl RemoteClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| format!("the helper could not start: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("the helper could not start: {e}"))?;
         let stdin = child.stdin.take().ok_or("the helper has no stdin")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("the helper has no stdout")?);
         let rx = spawn_frame_reader(stdout);
@@ -138,7 +146,9 @@ impl RemoteClient {
             e.to_string()
         })?;
         if !r.ok {
-            return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
+            return Err(r
+                .error
+                .unwrap_or_else(|| "the helper refused the request".into()));
         }
         Ok(r.json.unwrap_or(serde_json::Value::Null))
     }
@@ -170,11 +180,19 @@ impl RemoteClient {
     }
 
     pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
-        self.json(Request::List { path: path.to_string() })
+        self.json(Request::List {
+            path: path.to_string(),
+        })
     }
 
     pub fn read(&mut self, path: &str, limit: u64) -> Result<Vec<u8>, String> {
-        self.bytes(Request::Read { path: path.to_string(), limit }, None)
+        self.bytes(
+            Request::Read {
+                path: path.to_string(),
+                limit,
+            },
+            None,
+        )
     }
 
     pub fn write(&mut self, path: &str, bytes: &[u8], crlf: bool) -> Result<(), String> {
@@ -191,16 +209,39 @@ impl RemoteClient {
         Ok(())
     }
 
-    pub fn search(&mut self, root: &str, query: &str, match_case: bool, whole_word: bool) -> Result<SearchWire, String> {
-        self.json(Request::Search { root: root.to_string(), query: query.to_string(), match_case, whole_word })
+    pub fn search(
+        &mut self,
+        root: &str,
+        query: &str,
+        match_case: bool,
+        whole_word: bool,
+    ) -> Result<SearchWire, String> {
+        self.json(Request::Search {
+            root: root.to_string(),
+            query: query.to_string(),
+            match_case,
+            whole_word,
+        })
     }
 
     pub fn scan(&mut self, root: &str, max: usize) -> Result<Vec<String>, String> {
-        self.json(Request::Scan { root: root.to_string(), max })
+        self.json(Request::Scan {
+            root: root.to_string(),
+            max,
+        })
     }
 
-    pub fn git(&mut self, cwd: &str, args: &[String], input: Option<&str>) -> Result<super::proto::GitWire, String> {
-        self.json(Request::Git { cwd: cwd.to_string(), args: args.to_vec(), input: input.map(str::to_string) })
+    pub fn git(
+        &mut self,
+        cwd: &str,
+        args: &[String],
+        input: Option<&str>,
+    ) -> Result<super::proto::GitWire, String> {
+        self.json(Request::Git {
+            cwd: cwd.to_string(),
+            args: args.to_vec(),
+            input: input.map(str::to_string),
+        })
     }
 
     pub fn exited(&mut self) -> bool {
@@ -246,7 +287,9 @@ fn read_json_from(stdout: &mut impl Read) -> Result<serde_json::Value, String> {
     }
     let r: Response = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
     if !r.ok {
-        return Err(r.error.unwrap_or_else(|| "the helper refused the request".into()));
+        return Err(r
+            .error
+            .unwrap_or_else(|| "the helper refused the request".into()));
     }
     Ok(r.json.unwrap_or(serde_json::Value::Null))
 }
@@ -286,18 +329,40 @@ fn helper_exe(distro: &str) -> Result<String, String> {
 }
 
 fn runs(distro: &str, path: &str) -> bool {
-    super::program_command(&WslTarget::new(distro, "/"), "/", "sh", &["-c", r#"test -x "$HOME/$1""#, "--", path])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    super::program_command(
+        &WslTarget::new(distro, "/"),
+        "/",
+        "sh",
+        &["-c", r#"test -x "$HOME/$1""#, "--", path],
+    )
+    .output()
+    .map(|o| o.status.success())
+    .unwrap_or(false)
 }
 
 fn curl_download_args() -> &'static [&'static str] {
-    &["-sSL", "--fail", "--connect-timeout", "8", "--max-time", "300", "-o"]
+    &[
+        "-sSL",
+        "--fail",
+        "--connect-timeout",
+        "8",
+        "--max-time",
+        "300",
+        "-o",
+    ]
 }
 
 fn curl_digest_args() -> &'static [&'static str] {
-    &["-sSL", "--fail", "--connect-timeout", "8", "--max-time", "25", "-H", "Accept: application/vnd.github+json"]
+    &[
+        "-sSL",
+        "--fail",
+        "--connect-timeout",
+        "8",
+        "--max-time",
+        "25",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
 }
 
 fn fetch(distro: &str) -> Result<PathBuf, String> {
@@ -317,22 +382,33 @@ fn fetch(distro: &str) -> Result<PathBuf, String> {
     );
     let mut cmd = crate::proc::command("curl");
     cmd.args(curl_download_args()).arg(&tmp).arg(&url);
-    let out = cmd.output().map_err(|e| format!("curl could not start ({e})"))?;
+    let out = cmd
+        .output()
+        .map_err(|e| format!("curl could not start ({e})"))?;
     if !out.status.success() || !tmp.is_file() {
-        return Err(format!("the Linux helper for {} could not be downloaded", crate::update::BUILD));
+        return Err(format!(
+            "the Linux helper for {} could not be downloaded",
+            crate::update::BUILD
+        ));
     }
     let want = release_digest(&asset)?;
     let got = sha256_of(&tmp)?;
     if got != want {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("the Linux helper for {} does not match the release's SHA-256", crate::update::BUILD));
+        return Err(format!(
+            "the Linux helper for {} does not match the release's SHA-256",
+            crate::update::BUILD
+        ));
     }
     let _ = distro;
     Ok(tmp)
 }
 
 fn release_digest(asset: &str) -> Result<String, String> {
-    let url = format!("https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}", crate::update::BUILD);
+    let url = format!(
+        "https://api.github.com/repos/MuaraAI/FluxCode/releases/tags/{}",
+        crate::update::BUILD
+    );
     let out = crate::proc::command("curl")
         .args(curl_digest_args())
         .arg(&url)
@@ -347,7 +423,9 @@ fn release_digest(asset: &str) -> Result<String, String> {
         .and_then(|a| a.iter().find(|x| x["name"].as_str() == Some(asset)))
         .and_then(|x| x["digest"].as_str())
         .ok_or("the release has no SHA-256 for the Linux helper")?;
-    let hex = digest.strip_prefix("sha256:").ok_or("the release's helper digest is not SHA-256")?;
+    let hex = digest
+        .strip_prefix("sha256:")
+        .ok_or("the release's helper digest is not SHA-256")?;
     Ok(hex.to_ascii_lowercase())
 }
 
@@ -412,7 +490,10 @@ fn push(distro: &str, tarball: &std::path::Path, dir: &str) -> Result<(), String
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!("the helper could not be unpacked: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "the helper could not be unpacked: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(())
 }
@@ -481,7 +562,11 @@ fn clear_all_backoffs() {
 fn begin_warming(distro: &str) -> bool {
     let mut guard = states().lock().unwrap_or_else(|p| p.into_inner());
     let entry = guard.entry(distro.to_string()).or_default();
-    if entry.warming || entry.backoff_until.is_some_and(|until| Instant::now() < until) {
+    if entry.warming
+        || entry
+            .backoff_until
+            .is_some_and(|until| Instant::now() < until)
+    {
         return false;
     }
     entry.warming = true;
@@ -658,8 +743,14 @@ mod tests {
         // Per-distro warming: warming A must not block warming B (when B is out of backoff).
         clear_connect_failure(b);
         assert!(begin_warming(a));
-        assert!(!begin_warming(a), "duplicate warm for same distro must be deduplicated");
-        assert!(begin_warming(b), "warming one distro must not block another distro");
+        assert!(
+            !begin_warming(a),
+            "duplicate warm for same distro must be deduplicated"
+        );
+        assert!(
+            begin_warming(b),
+            "warming one distro must not block another distro"
+        );
         finish_warming(a);
         finish_warming(b);
         assert!(begin_warming(a));
@@ -697,10 +788,16 @@ mod tests {
     #[test]
     fn curl_commands_enforce_connect_and_total_timeouts() {
         let dl = curl_download_args();
-        assert!(dl.windows(2).any(|w| w == ["--connect-timeout", "8"]), "{dl:?}");
+        assert!(
+            dl.windows(2).any(|w| w == ["--connect-timeout", "8"]),
+            "{dl:?}"
+        );
         assert!(dl.windows(2).any(|w| w == ["--max-time", "300"]), "{dl:?}");
         let dg = curl_digest_args();
-        assert!(dg.windows(2).any(|w| w == ["--connect-timeout", "8"]), "{dg:?}");
+        assert!(
+            dg.windows(2).any(|w| w == ["--connect-timeout", "8"]),
+            "{dg:?}"
+        );
         assert!(dg.windows(2).any(|w| w == ["--max-time", "25"]), "{dg:?}");
     }
 
@@ -717,7 +814,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("a.txt");
         std::fs::write(&f, b"abc").unwrap();
-        assert_eq!(sha256_of(&f).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            sha256_of(&f).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

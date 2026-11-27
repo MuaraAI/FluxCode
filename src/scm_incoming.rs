@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::scm::{code_color, lane_geometry, Commit, ROW_H, SCROLLBAR_PAD};
 use crate::theme::{self, c};
@@ -15,15 +14,33 @@ use std::time::{Duration, Instant};
 const EVERY: Duration = Duration::from_secs(300);
 pub const MAX_INCOMING: usize = 50;
 
-fn quiet_git(dir: &Path, args: &[&str], target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
+fn quiet_git(
+    dir: &Path,
+    args: &[&str],
+    target: Option<&crate::remote::WslTarget>,
+) -> Result<String, String> {
     crate::scm_git::run_step(dir, &crate::scm_git::git_step(args), target)
 }
 
-pub fn incoming(repo: &Path, target: Option<&crate::remote::WslTarget>) -> (Vec<Commit>, Option<String>) {
-    let head = quiet_git(repo, &["rev-parse", "@{u}"], target).ok().map(|s| s.trim().to_string());
+pub fn incoming(
+    repo: &Path,
+    target: Option<&crate::remote::WslTarget>,
+) -> (Vec<Commit>, Option<String>) {
+    let head = quiet_git(repo, &["rev-parse", "@{u}"], target)
+        .ok()
+        .map(|s| s.trim().to_string());
     let log = quiet_git(
         repo,
-        &["-c", "i18n.logOutputEncoding=UTF-8", "log", "HEAD..@{u}", "-n", &MAX_INCOMING.to_string(), "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"],
+        &[
+            "-c",
+            "i18n.logOutputEncoding=UTF-8",
+            "log",
+            "HEAD..@{u}",
+            "-n",
+            &MAX_INCOMING.to_string(),
+            "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
+            "-z",
+        ],
         target,
     )
     .map(|s| crate::scm::parse_log(&s))
@@ -59,7 +76,10 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;
             loop {
-                if this.update(cx, |this, cx| this.scm_fetch_quietly(cx)).is_err() {
+                if this
+                    .update(cx, |this, cx| this.scm_fetch_quietly(cx))
+                    .is_err()
+                {
                     break;
                 }
                 cx.background_executor().timer(EVERY).await;
@@ -69,7 +89,9 @@ impl Workbench {
     }
 
     pub(crate) fn scm_fetch_quietly(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         if self.scm.is_busy() || self.scm.status.upstream.is_none() {
             return;
         }
@@ -79,7 +101,15 @@ impl Workbench {
         let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let res = cx.background_spawn(async move { crate::scm_git::run_step(&repo, &crate::scm_git::Step::Remote(crate::scm_git::RemoteAction::Fetch), wsl.as_ref()) }).await;
+            let res = cx
+                .background_spawn(async move {
+                    crate::scm_git::run_step(
+                        &repo,
+                        &crate::scm_git::Step::Remote(crate::scm_git::RemoteAction::Fetch),
+                        wsl.as_ref(),
+                    )
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 if this.scm.workspace_generation != generation {
                     return;
@@ -94,7 +124,11 @@ impl Workbench {
     }
 
     pub(crate) fn scm_on_return(&mut self, cx: &mut Context<Self>) {
-        if self.scm.last_fetch.is_none_or(|t| t.elapsed() > Duration::from_secs(120)) {
+        if self
+            .scm
+            .last_fetch
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(120))
+        {
             self.scm_fetch_quietly(cx);
         }
     }
@@ -113,22 +147,38 @@ impl Workbench {
         if self.scm.incoming_files.contains_key(&hash) {
             return;
         }
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let h = hash.clone();
             let res = cx
                 .background_spawn(async move {
-                    quiet_git(&repo, &["-c", "core.quotepath=off", "show", "--format=", "--name-status", "-z", &h], wsl.as_ref())
-                        .map(|s| parse_name_status(&s))
-                        .map(|files| (repo, files))
+                    quiet_git(
+                        &repo,
+                        &[
+                            "-c",
+                            "core.quotepath=off",
+                            "show",
+                            "--format=",
+                            "--name-status",
+                            "-z",
+                            &h,
+                        ],
+                        wsl.as_ref(),
+                    )
+                    .map(|s| parse_name_status(&s))
+                    .map(|files| (repo, files))
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
                 match res {
                     Ok((repo, files)) => {
-                        if this.scm.workspace_generation != generation || this.scm.repo.as_ref() != Some(&repo) {
+                        if this.scm.workspace_generation != generation
+                            || this.scm.repo.as_ref() != Some(&repo)
+                        {
                             return;
                         }
                         this.scm.incoming_files.insert(hash, files);
@@ -153,7 +203,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let generation = self.scm.workspace_generation;
         let wsl = self.wsl.clone();
         let short = hash[..hash.len().min(7)].to_string();
@@ -173,7 +225,9 @@ impl Workbench {
                 })
                 .await;
             _ = this.update_in(cx, |this, window, cx| {
-                if this.scm.workspace_generation != generation || this.scm.repo.as_ref() != Some(&repo) {
+                if this.scm.workspace_generation != generation
+                    || this.scm.repo.as_ref() != Some(&repo)
+                {
                     return;
                 }
                 let patch = match res {
@@ -237,7 +291,11 @@ impl Workbench {
             .xsmall()
             .ghost()
             .disabled(s.is_busy())
-            .tooltip(if dirty { tr("Pull them in (your changes are set aside and put back: git pull --autostash)") } else { tr("Pull them in (git pull)") })
+            .tooltip(if dirty {
+                tr("Pull them in (your changes are set aside and put back: git pull --autostash)")
+            } else {
+                tr("Pull them in (git pull)")
+            })
             .on_click(cx.listener(|this, _, w, cx| this.on_scm_pull(&ScmPull, w, cx)));
         let later = Button::new("scm-in-later")
             .icon(Icon::new(IconName::Close))
@@ -354,12 +412,25 @@ impl Workbench {
                     for (k, (code, path)) in files.iter().enumerate().take(60) {
                         let (h, p) = (cm.hash.clone(), path.clone());
                         let name = path.rsplit('/').next().unwrap_or(path).to_string();
-                        let dir = path.rsplit_once('/').map(|(d, _)| d.replace('/', "\\")).unwrap_or_default();
+                        let dir = path
+                            .rsplit_once('/')
+                            .map(|(d, _)| d.replace('/', "\\"))
+                            .unwrap_or_default();
                         col = col.child(
                             crate::scm::scm_row()
                                 .id(("scm-in-file", i * 1000 + k))
                                 .relative()
-                                .when(i < last, |h| h.child(div().absolute().left(theme::u(18.)).top_0().bottom_0().w(px(2.)).bg(c(theme::BLUE).opacity(0.45))))
+                                .when(i < last, |h| {
+                                    h.child(
+                                        div()
+                                            .absolute()
+                                            .left(theme::u(18.))
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(px(2.))
+                                            .bg(c(theme::BLUE).opacity(0.45)),
+                                    )
+                                })
                                 .pl(pad)
                                 .pr(px(SCROLLBAR_PAD))
                                 .gap_1p5()
@@ -441,6 +512,13 @@ mod tests {
     #[test]
     fn name_status_with_renames() {
         let out = "M\0src/a.rs\0R100\0old.txt\0new.txt\0A\0docs/b.md\0";
-        assert_eq!(parse_name_status(out), [('M', "src/a.rs".to_string()), ('R', "new.txt".to_string()), ('A', "docs/b.md".to_string())]);
+        assert_eq!(
+            parse_name_status(out),
+            [
+                ('M', "src/a.rs".to_string()),
+                ('R', "new.txt".to_string()),
+                ('A', "docs/b.md".to_string())
+            ]
+        );
     }
 }

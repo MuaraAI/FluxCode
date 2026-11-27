@@ -394,14 +394,22 @@ impl DiskTree {
             (FileCategory::Temp, cat_bytes[4], cat_files[4]),
             (FileCategory::Other, cat_bytes[5], cat_files[5]),
         ];
-        let mut cat_list: Vec<_> = cats.into_iter().filter(|(_, b, f)| *b > 0 || *f > 0).collect();
+        let mut cat_list: Vec<_> = cats
+            .into_iter()
+            .filter(|(_, b, f)| *b > 0 || *f > 0)
+            .collect();
         cat_list.sort_by_key(|(_, b, _)| std::cmp::Reverse(*b));
         if !cat_list.is_empty() {
             let parts: Vec<String> = cat_list
                 .into_iter()
                 .map(|(cat, b, f)| {
                     let pct = (b as f64 / total * 100.).clamp(0., 100.);
-                    format!("{} {} ({pct:.1}%, {} files)", cat.label(), format_bytes(b), format_count(f))
+                    format!(
+                        "{} {} ({pct:.1}%, {} files)",
+                        cat.label(),
+                        format_bytes(b),
+                        format_count(f)
+                    )
                 })
                 .collect();
             let _ = writeln!(out, "Categories: {}", parts.join(" | "));
@@ -420,7 +428,12 @@ impl DiskTree {
             .take(5)
             .filter_map(|&(nid, s)| {
                 let n = self.nodes.get(nid as usize)?;
-                Some(format!("{}/ ({}, {} files)", n.name, format_bytes(s), format_count(n.files)))
+                Some(format!(
+                    "{}/ ({}, {} files)",
+                    n.name,
+                    format_bytes(s),
+                    format_count(n.files)
+                ))
             })
             .collect();
         if !light.is_empty() || tiny_files > 0 {
@@ -432,7 +445,12 @@ impl DiskTree {
                 if !light.is_empty() {
                     line.push_str("; ");
                 }
-                let _ = write!(line, "{} tiny files <1 KB ({} total)", format_count(tiny_files), format_bytes(tiny_bytes));
+                let _ = write!(
+                    line,
+                    "{} tiny files <1 KB ({} total)",
+                    format_count(tiny_files),
+                    format_bytes(tiny_bytes)
+                );
             }
             let _ = writeln!(out, "{line}");
         }
@@ -446,7 +464,10 @@ impl DiskTree {
             if seen_hot.insert(nid) {
                 let pct = (sz as f64 / total * 100.).clamp(0., 100.);
                 let rel = self.rel_path(nid);
-                hotspots.push((sz, format!("{rel}/: {} ({pct:.1}%, {why})", format_bytes(sz))));
+                hotspots.push((
+                    sz,
+                    format!("{rel}/: {} ({pct:.1}%, {why})", format_bytes(sz)),
+                ));
             }
         }
         for &(nid, sz) in sub_largest.iter().take(20) {
@@ -463,7 +484,10 @@ impl DiskTree {
             if let Some(why) = why {
                 if seen_hot.insert(nid) {
                     let rel = self.rel_path(nid);
-                    hotspots.push((sz, format!("{rel}: {} ({pct:.1}%, {why})", format_bytes(sz))));
+                    hotspots.push((
+                        sz,
+                        format!("{rel}: {} ({pct:.1}%, {why})", format_bytes(sz)),
+                    ));
                 }
             }
         }
@@ -476,7 +500,8 @@ impl DiskTree {
         }
 
         // Top extensions in scope.
-        let mut exts: Vec<(u16, u64, u64)> = ext_map.into_iter().map(|(id, (b, f))| (id, b, f)).collect();
+        let mut exts: Vec<(u16, u64, u64)> =
+            ext_map.into_iter().map(|(id, (b, f))| (id, b, f)).collect();
         exts.sort_by_key(|&(_, b, _)| std::cmp::Reverse(b));
         if !exts.is_empty() {
             let parts: Vec<String> = exts
@@ -489,7 +514,11 @@ impl DiskTree {
                         format!(".{}", self.ext_str(id))
                     };
                     let pct = (b as f64 / total * 100.).clamp(0., 100.);
-                    format!("{name} {} ({pct:.1}%, {})", format_bytes(b), format_count(f))
+                    format!(
+                        "{name} {} ({pct:.1}%, {})",
+                        format_bytes(b),
+                        format_count(f)
+                    )
                 })
                 .collect();
             let _ = writeln!(out, "Top extensions: {}", parts.join(", "));
@@ -500,7 +529,13 @@ impl DiskTree {
             out.push_str("Largest files:\n");
             for (rank, &(nid, sz)) in sub_largest.iter().take(12).enumerate() {
                 let pct = (sz as f64 / total * 100.).clamp(0., 100.);
-                let _ = writeln!(out, "  {}. {} ({}, {pct:.1}%)", rank + 1, self.rel_path(nid), format_bytes(sz));
+                let _ = writeln!(
+                    out,
+                    "  {}. {} ({}, {pct:.1}%)",
+                    rank + 1,
+                    self.rel_path(nid),
+                    format_bytes(sz)
+                );
             }
         }
 
@@ -508,7 +543,10 @@ impl DiskTree {
             "Instructions for AI agent: This workspace is already indexed natively by FluxCode WizTree above. Answer disk usage, folder size, waste, and largest-file questions directly from this summary with ZERO tool calls (do not run PowerShell, Get-ChildItem, Get-Process, find, du, or grep). Only if the user specifically asks to drill deeper into a subfolder not expanded above, run at most ONE single command: `fluxcode --wiztree <subfolder>`.",
         );
         if out.len() > max_chars && max_chars > 64 {
-            let cut = (0..=max_chars - 32).rev().find(|&i| out.is_char_boundary(i)).unwrap_or(0);
+            let cut = (0..=max_chars - 32)
+                .rev()
+                .find(|&i| out.is_char_boundary(i))
+                .unwrap_or(0);
             out.truncate(cut);
             out.push_str("\n...(truncated WizTree summary)");
         }
@@ -572,7 +610,10 @@ impl DiskTree {
             }
         }
         if dirs.len() > shown && *lines < max_lines {
-            let rest_bytes: u64 = dirs[shown..].iter().map(|&id| self.nodes[id as usize].size).sum();
+            let rest_bytes: u64 = dirs[shown..]
+                .iter()
+                .map(|&id| self.nodes[id as usize].size)
+                .sum();
             let _ = writeln!(
                 out,
                 "{indent}(+{} smaller folders, {} total)",
@@ -592,7 +633,11 @@ impl DiskTree {
                 })
                 .collect();
             let more = files.len().saturating_sub(sample.len());
-            let suffix = if more > 0 { format!(", +{more} more") } else { String::new() };
+            let suffix = if more > 0 {
+                format!(", +{more} more")
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 out,
                 "{indent}[direct files: {}, {} total: {}{suffix}]",
@@ -1701,38 +1746,38 @@ impl Workbench {
                                   desc: &'static str,
                                   on: bool,
                                   on_flip: ToggleFn| {
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .justify_between()
-                            .gap_3()
-                            .py_1()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(c(theme::FG_STRONG))
-                                            .child(tr(title)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(c(theme::FG_DIM))
-                                            .child(tr(desc)),
-                                    ),
-                            )
-                            .child(
-                                crate::ui::McToggle::new(id)
-                                    .small()
-                                    .checked(on)
-                                    .accessibility_label(tr(title))
-                                    .on_click(move |v, w, cx| on_flip(v, w, cx)),
-                            )
-                    };
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .py_1()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(tr(title)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(c(theme::FG_DIM))
+                                        .child(tr(desc)),
+                                ),
+                        )
+                        .child(
+                            crate::ui::McToggle::new(id)
+                                .small()
+                                .checked(on)
+                                .accessibility_label(tr(title))
+                                .on_click(move |v, w, cx| on_flip(v, w, cx)),
+                        )
+                };
 
                 let sort_seg = crate::ui::SegmentedControl::new(
                     "wt-cfg-sort",
@@ -2034,9 +2079,7 @@ impl Workbench {
                                 .label(tr("Ask Agent"))
                                 .xsmall()
                                 .outline()
-                                .tooltip(tr(
-                                    "Attach this WizTree disk summary to the AI agent",
-                                ))
+                                .tooltip(tr("Attach this WizTree disk summary to the AI agent"))
                                 .on_click(cx.listener(|this, _, w, cx| {
                                     this.wiztree_ask_agent(w, cx);
                                 })),
@@ -2044,8 +2087,7 @@ impl Workbench {
                         .child(
                             Button::new("wt-copy-ai")
                                 .icon(
-                                    Icon::new(gpui_kit::assets::IconName::Copy)
-                                        .size(theme::u(13.)),
+                                    Icon::new(gpui_kit::assets::IconName::Copy).size(theme::u(13.)),
                                 )
                                 .xsmall()
                                 .ghost()
@@ -2420,10 +2462,11 @@ impl Workbench {
                         }),
                     ))
                     .child(
-                        div()
-                            .w(theme::u(190.))
-                            .min_w(theme::u(120.))
-                            .child(crate::ui::McInput::new(&self.wiztree.filter).xsmall().cleanable(true)),
+                        div().w(theme::u(190.)).min_w(theme::u(120.)).child(
+                            crate::ui::McInput::new(&self.wiztree.filter)
+                                .xsmall()
+                                .cleanable(true),
+                        ),
                     ),
             );
 
@@ -2579,7 +2622,12 @@ impl Workbench {
                         let path = tree.full_path(rid);
                         let path_reveal = path.clone();
                         let row_icon = if is_dir {
-                            files::folder_icon_el(&node.name, expanded, row.depth == 0, theme::u(14.))
+                            files::folder_icon_el(
+                                &node.name,
+                                expanded,
+                                row.depth == 0,
+                                theme::u(14.),
+                            )
                         } else {
                             files::file_icon_el(&node.name, theme::u(14.))
                         };
@@ -3449,7 +3497,11 @@ mod tests {
         std::fs::create_dir_all(root.join("node_modules").join("bigpkg")).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("logs")).unwrap();
-        std::fs::write(root.join("node_modules").join("bigpkg").join("bundle.js"), vec![b'a'; 80_000]).unwrap();
+        std::fs::write(
+            root.join("node_modules").join("bigpkg").join("bundle.js"),
+            vec![b'a'; 80_000],
+        )
+        .unwrap();
         std::fs::write(root.join("logs").join("debug.log"), vec![b'b'; 12_000]).unwrap();
         std::fs::write(root.join("src").join("main.rs"), vec![b'c'; 600]).unwrap();
         std::fs::write(root.join("README.md"), vec![b'd'; 120]).unwrap();
@@ -3467,7 +3519,12 @@ mod tests {
         let tight = tree.ai_summary(0, 200);
         assert!(tight.len() <= 200, "len {}", tight.len());
 
-        let nm_id = tree.nodes[0].children.iter().copied().find(|&id| tree.nodes[id as usize].name == "node_modules").unwrap();
+        let nm_id = tree.nodes[0]
+            .children
+            .iter()
+            .copied()
+            .find(|&id| tree.nodes[id as usize].name == "node_modules")
+            .unwrap();
         let focused = tree.ai_summary(nm_id, 4000);
         assert!(focused.contains("focused subfolder"), "{focused}");
         assert!(focused.contains("bigpkg/"), "{focused}");

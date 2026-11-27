@@ -357,7 +357,6 @@ pub fn entry_path(name: &str) -> Option<PathBuf> {
     Some(p)
 }
 
-
 fn curl() -> Command {
     crate::proc::command(if cfg!(windows) { "curl.exe" } else { "curl" })
 }
@@ -568,7 +567,10 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
         let before = &rest[..i];
         let after = &rest[i + 2..];
         let end = after.find(')').unwrap_or(after.len());
-        if before.rfind('[').is_some_and(|o| o > 0 && before.as_bytes()[o - 1] == b'!') {
+        if before
+            .rfind('[')
+            .is_some_and(|o| o > 0 && before.as_bytes()[o - 1] == b'!')
+        {
             add(&after[..end]);
         }
         rest = &after[end.min(after.len())..];
@@ -577,7 +579,10 @@ pub fn readme_image_urls(md: &str) -> Vec<String> {
     let mut from = 0;
     while let Some(i) = lower[from..].find("<img") {
         let tag_start = from + i;
-        let tag_end = lower[tag_start..].find('>').map(|e| tag_start + e).unwrap_or(lower.len());
+        let tag_end = lower[tag_start..]
+            .find('>')
+            .map(|e| tag_start + e)
+            .unwrap_or(lower.len());
         let tag = &md[tag_start..tag_end];
         let tl = &lower[tag_start..tag_end];
         if let Some(val) = img_src_attr(tag, tl) {
@@ -672,7 +677,9 @@ fn clamp_image_to(src: &Path, dst: &Path, max_dim: u32) -> Option<PathBuf> {
     let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Triangle);
     let png_dst = dst.with_extension("png");
     let part = png_dst.with_extension("fit.part");
-    resized.save_with_format(&part, image::ImageFormat::Png).ok()?;
+    resized
+        .save_with_format(&part, image::ImageFormat::Png)
+        .ok()?;
     if png_dst.exists() {
         let _ = std::fs::remove_file(&png_dst);
     }
@@ -690,7 +697,10 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
     for url in readme_image_urls(md).into_iter().take(30) {
         if url.starts_with("http://") || url.starts_with("https://") {
             let key = sha1_smol::Sha1::from(url.as_bytes()).digest().to_string();
-            let known = ["png", "jpg", "gif", "webp", "bmp", "svg"].iter().map(|e| cache.join(format!("{key}.{e}"))).find(|p| p.is_file());
+            let known = ["png", "jpg", "gif", "webp", "bmp", "svg"]
+                .iter()
+                .map(|e| cache.join(format!("{key}.{e}")))
+                .find(|p| p.is_file());
             if let Some(p) = known {
                 if let Some(ready) = clamp_image_to(&p, &p, MAX_README_IMAGE_DIM) {
                     out.insert(url, ready);
@@ -718,16 +728,26 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
             }
             let _ = std::fs::remove_file(&part);
         } else if let Some(folder) = installed {
-            let rel = url.trim_start_matches("./").split(['?', '#']).next().unwrap_or("");
-            if Path::new(rel)
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)))
-            {
+            let rel = url
+                .trim_start_matches("./")
+                .split(['?', '#'])
+                .next()
+                .unwrap_or("");
+            if Path::new(rel).components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
                 continue;
             }
             let p = folder.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             if p.is_file() && p.starts_with(folder) {
-                let key = sha1_smol::Sha1::from(p.to_string_lossy().as_bytes()).digest().to_string();
+                let key = sha1_smol::Sha1::from(p.to_string_lossy().as_bytes())
+                    .digest()
+                    .to_string();
                 let fit = cache.join(format!("{key}-local.png"));
                 let ready = if fit.is_file() {
                     Some(fit)
@@ -742,7 +762,6 @@ pub fn fetch_readme_images(md: &str, installed: Option<&Path>) -> HashMap<String
     }
     out
 }
-
 
 pub fn dir() -> PathBuf {
     super::home().join(".fluxcode").join("vscode-extensions")
@@ -761,6 +780,7 @@ pub struct Installed {
     pub icon: Option<PathBuf>,
     pub contributes: Vec<String>,
     pub has_code: bool,
+    pub bundled: bool,
 }
 
 impl Installed {
@@ -783,7 +803,10 @@ pub fn contributes(pkg: &Value) -> Vec<String> {
         return Vec::new();
     };
     let n = |k: &str| c.get(k).and_then(Value::as_array).map_or(0, Vec::len);
-    let kinds: [(&str, &'static str, &'static str); 8] = [
+    let view_count = c.get("views").and_then(Value::as_object).map_or(0, |o| {
+        o.values().filter_map(Value::as_array).map(Vec::len).sum()
+    });
+    let kinds: [(&str, &'static str, &'static str); 9] = [
         ("themes", "1 color theme", "{n} color themes"),
         ("iconThemes", "1 file icon theme", "{n} file icon themes"),
         ("languages", "1 language", "{n} languages"),
@@ -792,18 +815,26 @@ pub fn contributes(pkg: &Value) -> Vec<String> {
         ("commands", "1 command", "{n} commands"),
         ("keybindings", "1 keybinding", "{n} keybindings"),
         ("debuggers", "1 debugger", "{n} debuggers"),
+        ("customEditors", "1 custom editor", "{n} custom editors"),
     ];
-    kinds
-        .into_iter()
-        .filter_map(|(k, one, many)| match n(k) {
-            0 => None,
-            1 => Some(tr(one).to_string()),
-            m => Some(crate::i18n::fill(
-                tr(many),
-                &[("n", &m as &dyn std::fmt::Display)],
-            )),
-        })
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    if view_count == 1 {
+        out.push(tr("1 sidebar view").to_string());
+    } else if view_count > 1 {
+        out.push(crate::i18n::fill(
+            tr("{n} sidebar views"),
+            &[("n", &view_count as &dyn std::fmt::Display)],
+        ));
+    }
+    out.extend(kinds.into_iter().filter_map(|(k, one, many)| match n(k) {
+        0 => None,
+        1 => Some(tr(one).to_string()),
+        m => Some(crate::i18n::fill(
+            tr(many),
+            &[("n", &m as &dyn std::fmt::Display)],
+        )),
+    }));
+    out
 }
 
 pub(crate) fn localized(folder: &Path, s: &str, nls: &mut Option<Value>) -> String {
@@ -864,6 +895,7 @@ fn read_installed(folder: &Path) -> Option<Installed> {
         icon,
         contributes: contributes(&pkg),
         has_code: pkg.get("main").is_some() || pkg.get("browser").is_some(),
+        bundled: false,
         publisher,
         name,
     })
@@ -878,6 +910,25 @@ pub fn installed_list() -> Vec<Installed> {
                 .collect()
         })
         .unwrap_or_default();
+    if !out
+        .iter()
+        .any(|i| i.id == super::vsx_icons::MATERIAL_EXT_ID)
+    {
+        out.push(Installed {
+            id: super::vsx_icons::MATERIAL_EXT_ID.into(),
+            folder: PathBuf::new(),
+            publisher: "PKief".into(),
+            name: "material-icon-theme".into(),
+            display: "Material Icon Theme".into(),
+            description: "Material Design Icons for Visual Studio Code".into(),
+            version: "5.40.0".into(),
+            categories: vec!["Themes".into()],
+            icon: None,
+            contributes: vec![tr("1 file icon theme").to_string()],
+            has_code: false,
+            bundled: true,
+        });
+    }
     out.sort_by_key(|i| i.display.to_lowercase());
     out
 }
@@ -986,7 +1037,6 @@ pub fn uninstall(folder: &Path) -> Result<(), String> {
     }
     std::fs::remove_dir_all(folder).map_err(|e| e.to_string())
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Busy {
@@ -1154,9 +1204,18 @@ mod tests {
     #[test]
     fn readme_pictures_are_found() {
         let md = "# X\n![logo](images/logo.png)\n[a link](https://x.dev)\n<p><img src=\"https://img.shields.io/badge/a-b-green\" width=\"80\"></p>\n![again](images/logo.png \"title\")\n";
-        assert_eq!(readme_image_urls(md), vec!["images/logo.png".to_string(), "https://img.shields.io/badge/a-b-green".to_string()]);
+        assert_eq!(
+            readme_image_urls(md),
+            vec![
+                "images/logo.png".to_string(),
+                "https://img.shields.io/badge/a-b-green".to_string()
+            ]
+        );
         assert_eq!(sniff_image(b"\x89PNG\r\n"), Some("png"));
-        assert_eq!(sniff_image(b"<?xml version=\"1.0\"?><svg xmlns=\"\">"), Some("svg"));
+        assert_eq!(
+            sniff_image(b"<?xml version=\"1.0\"?><svg xmlns=\"\">"),
+            Some("svg")
+        );
         assert_eq!(sniff_image(b"hello"), None);
     }
 
@@ -1369,13 +1428,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fx-img-clamp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let small = dir.join("small.png");
-        image::RgbaImage::new(100, 200).save_with_format(&small, image::ImageFormat::Png).unwrap();
-        assert_eq!(clamp_image_to(&small, &small, 400).as_deref(), Some(small.as_path()));
+        image::RgbaImage::new(100, 200)
+            .save_with_format(&small, image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(
+            clamp_image_to(&small, &small, 400).as_deref(),
+            Some(small.as_path())
+        );
         assert_eq!(image::image_dimensions(&small).unwrap(), (100, 200));
         assert!(valid_local_icon(&small));
 
         let tall_part = dir.join("tall.part");
-        image::RgbaImage::new(80, 400).save_with_format(&tall_part, image::ImageFormat::Png).unwrap();
+        image::RgbaImage::new(80, 400)
+            .save_with_format(&tall_part, image::ImageFormat::Png)
+            .unwrap();
         let out = clamp_image_to(&tall_part, &tall_part, 200).unwrap();
         assert_eq!(out, dir.join("tall.png"));
         assert_eq!(image::image_dimensions(&out).unwrap(), (40, 200));
