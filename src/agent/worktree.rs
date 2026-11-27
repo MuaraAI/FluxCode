@@ -56,6 +56,7 @@ struct ProfileMetaFile {
     email: Option<String>,
     tier: Option<String>,
     auth_method: Option<String>,
+    token_sig: Option<String>,
 }
 
 pub fn default_home_dir() -> PathBuf {
@@ -110,17 +111,196 @@ fn read_tail_text(path: &Path, max_bytes: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-pub fn detect_antigravity_profile_meta(base_home: &Path) -> (Option<String>, Option<String>) {
-    let meta_path = base_home.join(".fluxcode-profile.json");
-    let meta: ProfileMetaFile = std::fs::read_to_string(&meta_path)
+pub fn antigravity_meta_dir(account: Option<&Account>) -> PathBuf {
+    match account {
+        Some(a) => a.dir.clone(),
+        None => crate::settings::config_dir().join("antigravity-default"),
+    }
+}
+
+pub fn acp_token_signature(base_home: &Path) -> Option<String> {
+    let path = base_home
+        .join(".gemini")
+        .join("antigravity-acp")
+        .join("acp_token.json");
+    let bytes = std::fs::read(path).ok()?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(format!("{h:016x}"))
+}
+
+fn read_profile_meta_file(dir: &Path) -> ProfileMetaFile {
+    std::fs::read(dir.join(".fluxcode-profile.json"))
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+pub fn detect_antigravity_profile_meta_in(
+    base_home: &Path,
+    meta_dir: &Path,
+) -> (Option<String>, Option<String>) {
+    let cur_sig = acp_token_signature(base_home);
+    let mut meta = read_profile_meta_file(meta_dir);
+    if meta.email.is_none() && meta_dir != base_home {
+        let fallback = read_profile_meta_file(base_home);
+        if fallback.email.is_some() || fallback.tier.is_some() {
+            meta = fallback;
+        }
+    }
+    if let Some(sig) = cur_sig {
+        if meta.token_sig.as_deref() == Some(sig.as_str()) {
+            return (
+                meta.email.and_then(|e| valid_email(&e)),
+                meta.tier.filter(|t| !t.trim().is_empty()),
+            );
+        }
+        return (None, None);
+    }
     let email = meta
         .email
         .and_then(|e| valid_email(&e))
         .or_else(|| detect_antigravity_email(base_home));
     (email, meta.tier.filter(|t| !t.trim().is_empty()))
+}
+
+fn url_encode_form_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn curl_stdin(args: &[&str], stdin_data: &str) -> Option<Vec<u8>> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let exe = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().ok()?;
+    if let Some(mut pipe) = child.stdin.take() {
+        let _ = pipe.write_all(stdin_data.as_bytes());
+    }
+    let out = child.wait_with_output().ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// Resolves the live Google email bound to `.gemini/antigravity-acp/acp_token.json` without logging secrets.
+pub fn resolve_antigravity_email_blocking(base_home: &Path, meta_dir: &Path) -> Option<String> {
+    let Some(sig) = acp_token_signature(base_home) else {
+        return detect_antigravity_email(base_home);
+    };
+    let meta = read_profile_meta_file(meta_dir);
+    if meta.token_sig.as_deref() == Some(sig.as_str()) {
+        if let Some(em) = meta.email.as_deref().and_then(valid_email) {
+            return Some(em);
+        }
+    }
+    type NetCache =
+        std::collections::HashMap<(PathBuf, String), (std::time::Instant, Option<String>)>;
+    static NET_EMAIL_CACHE: std::sync::OnceLock<std::sync::Mutex<NetCache>> =
+        std::sync::OnceLock::new();
+    let cache = NET_EMAIL_CACHE.get_or_init(|| std::sync::Mutex::new(Default::default()));
+    let key = (base_home.to_path_buf(), sig.clone());
+    if let Ok(g) = cache.lock() {
+        if let Some((at, val)) = g.get(&key) {
+            if at.elapsed() < std::time::Duration::from_secs(30) {
+                return val.clone();
+            }
+        }
+    }
+    let tok_path = base_home
+        .join(".gemini")
+        .join("antigravity-acp")
+        .join("acp_token.json");
+    let tok: Value = std::fs::read(tok_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())?;
+    let client_id = tok.get("client_id").and_then(Value::as_str)?;
+    let client_secret = tok.get("client_secret").and_then(Value::as_str)?;
+    let refresh_token = tok.get("refresh_token").and_then(Value::as_str)?;
+    let token_uri = tok
+        .get("token_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("https://oauth2.googleapis.com/token");
+    if !token_uri.starts_with("https://oauth2.googleapis.com/") {
+        return None;
+    }
+    let form = format!(
+        "client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token",
+        url_encode_form_component(client_id),
+        url_encode_form_component(client_secret),
+        url_encode_form_component(refresh_token),
+    );
+    let mut resolved = None;
+    if let Some(tok_raw) = curl_stdin(
+        &[
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "6",
+            "--connect-timeout",
+            "4",
+            "--data-binary",
+            "@-",
+            token_uri,
+        ],
+        &form,
+    ) {
+        if let Ok(tok_json) = serde_json::from_slice::<Value>(&tok_raw) {
+            if let Some(access) = tok_json
+                .get("access_token")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty() && !s.contains(['\r', '\n', '"']))
+            {
+                let cfg = format!("header = \"Authorization: Bearer {access}\"\n");
+                if let Some(u_raw) = curl_stdin(
+                    &[
+                        "--silent",
+                        "--show-error",
+                        "--max-time",
+                        "6",
+                        "--connect-timeout",
+                        "4",
+                        "-K",
+                        "-",
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                    ],
+                    &cfg,
+                ) {
+                    if let Ok(u_json) = serde_json::from_slice::<Value>(&u_raw) {
+                        resolved = u_json
+                            .get("email")
+                            .and_then(Value::as_str)
+                            .and_then(valid_email);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ref em) = resolved {
+        save_profile_meta_sig(meta_dir, Some(em), None, None, Some(&sig));
+    }
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, (std::time::Instant::now(), resolved.clone()));
+    }
+    resolved
 }
 
 pub fn detect_antigravity_email(base_home: &Path) -> Option<String> {
@@ -206,14 +386,24 @@ pub fn save_profile_meta(
     tier: Option<&str>,
     auth_method: Option<&str>,
 ) {
+    save_profile_meta_sig(dir, email, tier, auth_method, None);
+}
+
+pub fn save_profile_meta_sig(
+    dir: &Path,
+    email: Option<&str>,
+    tier: Option<&str>,
+    auth_method: Option<&str>,
+    token_sig: Option<&str>,
+) {
+    let _ = std::fs::create_dir_all(dir);
     let gem = dir.join(".gemini");
-    let _ = std::fs::create_dir_all(gem.join("antigravity-cli"));
-    let _ = std::fs::write(gem.join(".fluxcode-account-ready"), b"1");
+    if gem.is_dir() {
+        let _ = std::fs::create_dir_all(gem.join("antigravity-cli"));
+        let _ = std::fs::write(gem.join(".fluxcode-account-ready"), b"1");
+    }
     let meta_path = dir.join(".fluxcode-profile.json");
-    let mut prev: ProfileMetaFile = std::fs::read_to_string(&meta_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let mut prev = read_profile_meta_file(dir);
     if let Some(e) = email.and_then(valid_email) {
         prev.email = Some(e);
     }
@@ -223,6 +413,23 @@ pub fn save_profile_meta(
     if let Some(m) = auth_method.filter(|m| !m.trim().is_empty()) {
         prev.auth_method = Some(m.to_string());
     }
+    if let Some(s) = token_sig.filter(|s| !s.trim().is_empty()) {
+        prev.token_sig = Some(s.to_string());
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&prev) {
+        let _ = std::fs::write(&meta_path, format!("{body}\n"));
+    }
+}
+
+pub fn clear_profile_meta_email(dir: &Path) {
+    let meta_path = dir.join(".fluxcode-profile.json");
+    if !meta_path.is_file() {
+        return;
+    }
+    let mut prev = read_profile_meta_file(dir);
+    prev.email = None;
+    prev.tier = None;
+    prev.token_sig = None;
     if let Ok(body) = serde_json::to_string_pretty(&prev) {
         let _ = std::fs::write(&meta_path, format!("{body}\n"));
     }
@@ -271,43 +478,63 @@ pub fn profile_identity(
     let base_home = account
         .map(|a| a.dir.clone())
         .unwrap_or_else(default_home_dir);
+    let meta_dir = if family == "antigravity" {
+        antigravity_meta_dir(account)
+    } else {
+        base_home.clone()
+    };
+    let cur_sig = if family == "antigravity" {
+        acp_token_signature(&base_home)
+    } else {
+        None
+    };
+    let meta_file = if family == "antigravity" {
+        let mut m = read_profile_meta_file(&meta_dir);
+        if m.email.is_none() && meta_dir != base_home {
+            let fallback = read_profile_meta_file(&base_home);
+            if fallback.email.is_some() || fallback.token_sig.is_some() {
+                m = fallback;
+            }
+        }
+        m
+    } else {
+        ProfileMetaFile::default()
+    };
     let (meta_email, meta_tier) = match family {
-        "antigravity" => detect_antigravity_profile_meta(&base_home),
+        "antigravity" => detect_antigravity_profile_meta_in(&base_home, &meta_dir),
         "claude" => (detect_claude_email(&base_home), None),
         _ => (None, None),
     };
+    let acct_email_valid = account
+        .and_then(|a| a.email.as_deref())
+        .and_then(valid_email)
+        .filter(|_| cur_sig.is_none() || meta_file.token_sig.as_deref() == cur_sig.as_deref());
+    let email = live_email
+        .and_then(valid_email)
+        .or(meta_email)
+        .or(acct_email_valid);
     let flow_profiles = if family == "antigravity" {
         crate::gflow::discover_profiles()
     } else {
         Vec::new()
     };
-    let matched_flow = account
-        .and_then(|a| a.flow_profile.as_deref())
-        .and_then(|fp| flow_profiles.iter().find(|p| p.name == fp))
-        .or_else(|| {
-            if account.is_none() {
-                let st = crate::gflow::load_state();
-                st.sticky_profile
-                    .as_deref()
-                    .and_then(|sp| flow_profiles.iter().find(|p| p.name == sp))
-                    .or_else(|| flow_profiles.iter().find(|p| p.is_default))
-                    .or_else(|| flow_profiles.first())
-            } else {
-                None
-            }
-        });
-    let flow_email = matched_flow
-        .and_then(|p| p.email.clone())
-        .and_then(|e| valid_email(&e));
-    let email = live_email
-        .and_then(valid_email)
-        .or_else(|| {
-            account
-                .and_then(|a| a.email.as_deref())
-                .and_then(valid_email)
+    let matched_flow = if let Some(em) = email.as_deref() {
+        flow_profiles.iter().find(|p| {
+            p.email
+                .as_deref()
+                .is_some_and(|fe| fe.eq_ignore_ascii_case(em))
         })
-        .or(meta_email)
-        .or(flow_email);
+    } else if let Some(a) = account {
+        a.flow_profile.as_deref().and_then(|fp| {
+            flow_profiles
+                .iter()
+                .find(|p| p.name == fp && p.email.is_none())
+        })
+    } else {
+        flow_profiles
+            .iter()
+            .find(|p| p.is_default && p.email.is_none())
+    };
     let tier = live_tier
         .filter(|t| !t.trim().is_empty())
         .map(String::from)
@@ -323,17 +550,22 @@ pub fn profile_identity(
     let initial = avatar_initial(email.as_deref(), &name);
     let synced = match account {
         Some(a) => signed_in(a) || live_email.is_some(),
-        None => email.is_some() || live_email.is_some(),
+        None => cur_sig.is_some() || email.is_some() || live_email.is_some(),
     };
+    let flow_profile = matched_flow.map(|p| p.name.clone()).or_else(|| {
+        if email.is_none() {
+            account.and_then(|a| a.flow_profile.clone())
+        } else {
+            None
+        }
+    });
     ProfileIdentity {
         name,
         email,
         tier,
         initial,
         synced,
-        flow_profile: account
-            .and_then(|a| a.flow_profile.clone())
-            .or_else(|| matched_flow.map(|p| p.name.clone())),
+        flow_profile,
     }
 }
 
@@ -366,6 +598,7 @@ pub fn signed_in(a: &Account) -> bool {
             gem.join("oauth_creds.json").is_file()
                 || gem.join("google_accounts.json").is_file()
                 || gem.join("credentials.json").is_file()
+                || gem.join("antigravity-acp").join("acp_token.json").is_file()
                 || gem.join(".fluxcode-account-ready").is_file()
                 || a.dir.join(".fluxcode-apikey").is_file()
                 || detect_antigravity_email(&a.dir).is_some()
@@ -407,6 +640,7 @@ pub fn account_envs(a: &Account) -> Vec<(&'static str, PathBuf)> {
             let mut vars = vec![
                 ("USERPROFILE", a.dir.clone()),
                 ("HOME", a.dir.clone()),
+                ("GEMINI_HOME", a.dir.join(".gemini")),
                 ("GEMINI_CLI_HOME", a.dir.join(".gemini")),
                 ("AGY_HOME", a.dir.join(".gemini").join("antigravity-cli")),
                 ("XDG_CONFIG_HOME", a.dir.join(".config")),
@@ -752,6 +986,9 @@ impl Workbench {
 
     pub(crate) fn agent_use_account(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
+        if self.agent_account().map(|a| a.name) == name {
+            return;
+        }
         self.agent.account = Some(name.clone().unwrap_or_default());
         match name {
             Some(n) => self.settings.agent_account.insert(f.to_string(), n),
@@ -760,7 +997,8 @@ impl Workbench {
         self.settings.save();
         let active = self.agent_account();
         if f == "antigravity" && self.settings.agent_gflow_sync {
-            if let Some(fp) = active.as_ref().and_then(|a| a.flow_profile.clone()) {
+            let id_info = profile_identity(f, active.as_ref(), None, None);
+            if let Some(fp) = id_info.flow_profile {
                 let st = crate::gflow::load_state();
                 if st.mode == crate::gflow::RoutingMode::Sticky
                     && crate::gflow::discover_profiles()
@@ -782,9 +1020,13 @@ impl Workbench {
         };
         self.agent.active_email = None;
         self.agent.active_tier = None;
+        self.agent.usage = Default::default();
         self.agent.auth_required = None;
         self.agent.auth_picker_open = false;
-        self.agent.items.push(Item::Branch(note));
+        self.agent.auth_picker_pinned = false;
+        if !matches!(self.agent.items.last(), Some(Item::Branch(prev)) if prev == &note) {
+            self.agent.items.push(Item::Branch(note));
+        }
         self.agent_restart_here(cx);
         self.agent_refresh_profile_identity(cx);
         cx.notify();
@@ -825,7 +1067,7 @@ impl Workbench {
                 name: name.clone(),
                 family: f.into(),
                 dir,
-                flow_profile: Some(format!("akun{n}")),
+                flow_profile: None,
                 email: None,
                 display_name: None,
                 auth_method: None,
@@ -1395,6 +1637,60 @@ mod tests {
         assert_eq!(id.tier.as_deref(), Some("Google AI Pro"));
         assert_eq!(id.initial, "K");
         assert!(id.synced);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn antigravity_env_and_token_signature_isolation() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-agy-iso-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let tok_dir = dir.join(".gemini").join("antigravity-acp");
+        std::fs::create_dir_all(&tok_dir).unwrap();
+        let log_dir = dir.join(".gemini").join("antigravity-cli").join("log");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("acp-server-20261127-100.log"),
+            "OAuth: authenticated successfully as wrong.stale@example.com\n",
+        )
+        .unwrap();
+        let tok_file = tok_dir.join("acp_token.json");
+        std::fs::write(&tok_file, r#"{"refresh_token":"one"}"#).unwrap();
+        let sig1 = super::acp_token_signature(&dir).unwrap();
+        std::fs::write(&tok_file, r#"{"refresh_token":"two"}"#).unwrap();
+        let sig2 = super::acp_token_signature(&dir).unwrap();
+        assert_ne!(sig1, sig2);
+
+        let acc = Account {
+            name: "Account 2".into(),
+            family: "antigravity".into(),
+            dir: dir.clone(),
+            flow_profile: None,
+            email: Some("wrong.cached@example.com".into()),
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
+        let envs = account_envs(&acc);
+        assert!(envs
+            .iter()
+            .any(|(k, v)| *k == "GEMINI_HOME" && v == &dir.join(".gemini")));
+        assert!(signed_in(&acc));
+
+        // When acp_token.json exists without a matching token_sig, never trust stale log or stale account email.
+        let id_unsig = profile_identity("antigravity", Some(&acc), None, None);
+        assert_eq!(id_unsig.email, None);
+        assert!(id_unsig.synced);
+
+        // Once matching token_sig is persisted, authoritative email is returned.
+        super::save_profile_meta_sig(
+            &dir,
+            Some("real@example.com"),
+            None,
+            Some("oauth"),
+            Some(&sig2),
+        );
+        let id_sig = profile_identity("antigravity", Some(&acc), None, None);
+        assert_eq!(id_sig.email.as_deref(), Some("real@example.com"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

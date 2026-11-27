@@ -387,6 +387,7 @@ pub struct Run {
     pub(crate) auth_required: Option<String>,
     pub(crate) auth_busy: bool,
     pub(crate) auth_picker_open: bool,
+    pub(crate) auth_picker_pinned: bool,
     pub(crate) auth_after_init: Option<(String, bool)>,
     pub(crate) auth_api_key_mode: bool,
     pub(crate) active_email: Option<String>,
@@ -467,6 +468,7 @@ impl Run {
             auth_required: None,
             auth_busy: false,
             auth_picker_open: false,
+            auth_picker_pinned: false,
             auth_after_init: None,
             auth_api_key_mode: false,
             active_email: None,
@@ -1290,6 +1292,7 @@ impl Workbench {
         gpui_kit::base::TextSelection::clear(window, cx);
         let h = self.agent.settings_focus.clone();
         h.focus(window, cx);
+        self.agent_refresh_profile_identity(cx);
         cx.notify();
     }
 
@@ -1302,12 +1305,14 @@ impl Workbench {
 
     pub(crate) fn agent_open_auth_picker(&mut self, cx: &mut Context<Self>) {
         self.agent.auth_picker_open = true;
+        self.agent.auth_picker_pinned = true;
         self.agent.auth_api_key_mode = false;
         cx.notify();
     }
 
     pub(crate) fn agent_close_auth_picker(&mut self, cx: &mut Context<Self>) {
         self.agent.auth_picker_open = false;
+        self.agent.auth_picker_pinned = false;
         self.agent.auth_api_key_mode = false;
         cx.notify();
     }
@@ -1327,10 +1332,19 @@ impl Workbench {
         let Some(fam) = worktree::family(&agent_id()) else {
             return;
         };
-        let acc = self.agent_account();
-        let acc_name = acc.as_ref().map(|a| a.name.clone());
-        let acc_dir = acc.as_ref().map(|a| a.dir.clone());
-        let flow_profile = acc.as_ref().and_then(|a| a.flow_profile.clone());
+        if fam != "antigravity" {
+            return;
+        }
+        let mut targets: Vec<(Option<String>, PathBuf, PathBuf)> = vec![(
+            None,
+            worktree::default_home_dir(),
+            worktree::antigravity_meta_dir(None),
+        )];
+        for a in &self.settings.agent_accounts {
+            if a.family == fam {
+                targets.push((Some(a.name.clone()), a.dir.clone(), a.dir.clone()));
+            }
+        }
         let tier_live = self.agent.active_tier.clone();
         let key = self.agent.key;
         let fam_s = fam.to_string();
@@ -1338,64 +1352,62 @@ impl Workbench {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(260))
                 .await;
-            let detected = cx
+            let resolved: Vec<(Option<String>, PathBuf, Option<String>)> = cx
                 .background_spawn(async move {
-                    let base = acc_dir.unwrap_or_else(worktree::default_home_dir);
-                    let email = match fam_s.as_str() {
-                        "antigravity" => worktree::detect_antigravity_email(&base),
-                        _ => None,
-                    };
-                    (email, base, fam_s, flow_profile)
+                    targets
+                        .into_iter()
+                        .map(|(name, base, meta)| {
+                            let em = worktree::resolve_antigravity_email_blocking(&base, &meta);
+                            (name, meta, em)
+                        })
+                        .collect()
                 })
                 .await;
-            let (email_opt, base, fam_s, flow_profile) = detected;
             _ = this.update(cx, |this, cx| {
+                let mut dirty_settings = false;
+                let cur_active = this.agent_account().map(|a| a.name);
+                for (name, meta, em_opt) in &resolved {
+                    let is_active = *name == cur_active;
+                    let em = em_opt.as_deref();
+                    if is_active {
+                        if let Some(t) = tier_live.as_deref() {
+                            worktree::save_profile_meta(meta, em, Some(t), None);
+                        }
+                    }
+                    if let Some(target_name) = name.as_ref() {
+                        if let Some(saved) = this
+                            .settings
+                            .agent_accounts
+                            .iter_mut()
+                            .find(|a| a.family == fam_s && a.name == *target_name)
+                        {
+                            let want_tier = if is_active { tier_live.as_ref() } else { None };
+                            let email_changed = em.is_some() && saved.email.as_deref() != em;
+                            let tier_changed =
+                                want_tier.is_some() && saved.tier.as_ref() != want_tier;
+                            if email_changed || tier_changed {
+                                if let Some(new_em) = em {
+                                    saved.email = Some(new_em.to_string());
+                                }
+                                if let Some(t) = want_tier {
+                                    saved.tier = Some(t.clone());
+                                }
+                                dirty_settings = true;
+                            }
+                        }
+                    }
+                }
+                if dirty_settings {
+                    this.settings.save();
+                }
                 this.agent_with_run(key, cx, |this, cx| {
-                    let resolved = email_opt.or_else(|| {
-                        let a = this.agent_account();
-                        worktree::profile_identity(
-                            &fam_s,
-                            a.as_ref(),
-                            this.agent.active_email.as_deref(),
-                            this.agent.active_tier.as_deref(),
-                        )
-                        .email
-                    });
-                    if let Some(em) = resolved.as_deref() {
+                    let active_now = this.agent_account().map(|a| a.name);
+                    if let Some(em) = resolved
+                        .iter()
+                        .find(|(n, _, _)| *n == active_now)
+                        .and_then(|(_, _, em)| em.as_deref())
+                    {
                         this.agent.active_email = Some(em.to_string());
-                        if let Some(ref target_name) = acc_name {
-                            if let Some(saved) = this
-                                .settings
-                                .agent_accounts
-                                .iter_mut()
-                                .find(|a| a.family == fam_s && a.name == *target_name)
-                            {
-                                let changed = saved.email.as_deref() != Some(em)
-                                    || (tier_live.is_some() && saved.tier != tier_live);
-                                if changed {
-                                    saved.email = Some(em.to_string());
-                                    if tier_live.is_some() {
-                                        saved.tier = tier_live.clone();
-                                    }
-                                    this.settings.save();
-                                }
-                            }
-                            worktree::save_profile_meta(
-                                &base,
-                                Some(em),
-                                tier_live.as_deref(),
-                                None,
-                            );
-                        }
-                        if fam_s == "antigravity" && this.settings.agent_gflow_sync {
-                            if let Some(fp) = flow_profile.as_deref() {
-                                let flow_dir =
-                                    crate::gflow::gflow_home().join(format!("profile_{fp}"));
-                                if flow_dir.is_dir() && !flow_dir.join(".gflow_account").is_file() {
-                                    let _ = std::fs::write(flow_dir.join(".gflow_account"), em);
-                                }
-                            }
-                        }
                     }
                     cx.notify();
                 });
@@ -1417,13 +1429,10 @@ impl Workbench {
         }
         self.agent.auth_api_key_mode = false;
         self.agent.auth_busy = true;
-        if self.agent.proc_id.is_some()
-            && matches!(
-                self.agent.status,
-                Status::Off | Status::Ready | Status::Starting
-            )
-        {
+        if self.agent.proc_id.is_some() && self.agent.status == Status::Ready {
             self.agent_send_authenticate(method_id, logout_first, cx);
+        } else if self.agent.proc_id.is_some() && self.agent.status == Status::Starting {
+            self.agent.auth_after_init = Some((method_id, logout_first));
         } else {
             if self.agent.proc_id.is_some() {
                 self.agent_stop(cx);
@@ -1476,6 +1485,7 @@ impl Workbench {
                     .update(cx, |s, cx| s.set_value("", window, cx));
                 self.agent.auth_api_key_mode = false;
                 self.agent.auth_picker_open = false;
+                self.agent.auth_picker_pinned = false;
                 self.agent.auth_required = None;
                 self.agent_stop(cx);
                 self.agent_start(cx);
@@ -2345,9 +2355,28 @@ impl Workbench {
                 self.agent.auth_busy = false;
                 self.agent.auth_required = None;
                 self.agent.auth_picker_open = false;
+                self.agent.auth_picker_pinned = false;
                 self.agent.auth_api_key_mode = false;
-                if let Some(a) = self.agent_account() {
-                    worktree::save_profile_meta(&a.dir, None, None, Some("oauth"));
+                self.agent.active_email = None;
+                self.agent.active_tier = None;
+                self.agent.usage = Default::default();
+                let acc = self.agent_account();
+                let meta_dir = worktree::antigravity_meta_dir(acc.as_ref());
+                worktree::clear_profile_meta_email(&meta_dir);
+                if let Some(ref target) = acc {
+                    if let Some(saved) = self
+                        .settings
+                        .agent_accounts
+                        .iter_mut()
+                        .find(|a| a.family == target.family && a.name == target.name)
+                    {
+                        saved.email = None;
+                        saved.tier = None;
+                        self.settings.save();
+                    }
+                    worktree::save_profile_meta(&target.dir, None, None, Some("oauth"));
+                } else {
+                    worktree::save_profile_meta(&meta_dir, None, None, Some("oauth"));
                 }
                 self.agent.status = Status::Starting;
                 let cwd = self.agent_cwd();
@@ -2362,7 +2391,9 @@ impl Workbench {
                 self.agent.session = self.agent.loading_id.take();
                 self.agent.status = Status::Ready;
                 self.agent.auth_required = None;
-                self.agent.auth_picker_open = false;
+                if !self.agent.auth_picker_pinned {
+                    self.agent.auth_picker_open = false;
+                }
                 self.agent.auth_busy = false;
                 self.agent.silent_load = false;
                 self.agent.hinted = false;
@@ -2383,7 +2414,9 @@ impl Workbench {
                     .and_then(Value::as_str)
                     .map(String::from);
                 self.agent.auth_required = None;
-                self.agent.auth_picker_open = false;
+                if !self.agent.auth_picker_pinned {
+                    self.agent.auth_picker_open = false;
+                }
                 self.agent.auth_busy = false;
                 self.agent.auth_api_key_mode = false;
                 self.agent.ctx_cache.clear();
@@ -3038,15 +3071,16 @@ impl Workbench {
                     .child(
                         div()
                             .min_w_0()
+                            .when(self.agent_width >= 520., |d| d.min_w(theme::u(96.)))
                             .flex_shrink(1.)
                             .overflow_hidden()
                             .child(self.render_agent_picker(cx)),
                     )
                     .child(div().flex_none().child(self.render_agent_switch(cx)))
-                    .when(self.agent_width >= 460., |h| {
+                    .when(self.agent_width >= 520., |h| {
                         h.children(self.render_agent_opt_badge(cx))
                     })
-                    .when(self.agent_width >= 540., |h| {
+                    .when(self.agent_width >= 640., |h| {
                         h.children(self.render_agent_profile_pill(cx))
                     })
                     .child(div().flex_1())
@@ -3109,6 +3143,7 @@ impl Workbench {
         self.agent.auth_required = None;
         self.agent.auth_busy = false;
         self.agent.auth_picker_open = false;
+        self.agent.auth_picker_pinned = false;
         self.agent.auth_after_init = None;
         self.agent.auth_api_key_mode = false;
         self.agent.active_email = None;
@@ -3137,13 +3172,20 @@ impl Workbench {
     pub(crate) fn render_agent_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = agent_id();
         let open = self.agent.menu.open == Some(Menu::Agent);
+        let full_name = agent_name();
+        let compact_hdr = !self.agent_full && self.agent_panel_width() < 380.;
+        let display_name = if compact_hdr {
+            full_name.strip_prefix("Google ").unwrap_or(full_name)
+        } else {
+            full_name
+        };
         let mut button = Button::new("ag-pick")
-            .label(agent_name())
+            .label(display_name)
             .ghost()
             .xsmall()
             .dropdown_caret(true)
             .selected(open)
-            .tooltip(tr("Choose the agent"));
+            .tooltip(crate::trf!("Choose the agent ({name})"; name => full_name));
         if let Some(path) = crate::acp::icon_asset(&current) {
             button = button.icon(Icon::new(IconName::Bot).path(path));
         }
@@ -3334,6 +3376,18 @@ impl Workbench {
         if crate::acp::locate(&id).is_none() || !opt::is_optimized(&id) {
             return None;
         }
+        let state_label = if self.agent.thermal.eco_active {
+            tr("EcoQoS idle")
+        } else if self.agent.thermal.trims_done > 0 {
+            tr("RAM trimmed")
+        } else {
+            tr("Auto RAM & delta")
+        };
+        let tip: SharedString = crate::trf!(
+            "ACP optimizer ({state}): adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.";
+            state => state_label
+        )
+        .into();
         Some(
             div()
                 .id("ag-opt-badge")
@@ -3341,7 +3395,9 @@ impl Workbench {
                 .cursor_pointer()
                 .rounded(px(4.))
                 .hover(|s| s.opacity(0.88))
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
                 .on_click(cx.listener(|this, _, w, cx| {
                     cx.stop_propagation();
                     this.agent.settings_tab = settings_modal::Tab::Agent;
@@ -3379,8 +3435,9 @@ impl Workbench {
         Some(
             h_flex()
                 .id("ag-profile-pill")
-                .flex_none()
-                .max_w(theme::u(240.))
+                .flex_shrink(1.)
+                .min_w_0()
+                .max_w(theme::u(260.))
                 .h(theme::u(22.))
                 .pl(px(3.))
                 .pr_2()
@@ -3456,35 +3513,28 @@ impl Workbench {
 
     fn render_agent_opt_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let wide_header =
-            self.agent_full || (self.settings.agent_right && self.agent_width >= 540.);
+            self.agent_full || (self.settings.agent_right && self.agent_width >= 640.);
         let id = agent_id();
         let has_opt = crate::acp::locate(&id).is_some() && opt::is_optimized(&id);
         let pill = (!wide_header)
             .then(|| self.render_agent_profile_pill(cx))
             .flatten();
         let show_opt_in_strip = has_opt
-            && !(self.agent_full || (self.settings.agent_right && self.agent_width >= 460.));
+            && !(self.agent_full || (self.settings.agent_right && self.agent_width >= 520.));
         if !show_opt_in_strip && pill.is_none() {
             return None;
         }
-        let state_label = if self.agent.thermal.eco_active {
-            tr("EcoQoS idle")
-        } else if self.agent.thermal.trims_done > 0 {
-            tr("RAM trimmed")
-        } else {
-            tr("Auto RAM & delta")
-        };
         let mut strip = h_flex()
             .id("ag-opt-strip")
             .relative()
             .flex_none()
             .w_full()
-            .flex_wrap()
+            .h(theme::u(28.))
+            .px_2p5()
+            .gap_2()
             .items_center()
-            .px_3()
-            .py_1()
-            .gap_x_2()
-            .gap_y_1()
+            .justify_between()
+            .overflow_hidden()
             .border_b_1()
             .border_color(if theme::glass() {
                 theme::glass_edge()
@@ -3494,25 +3544,13 @@ impl Workbench {
         if theme::glass() {
             strip = strip.bg(c(theme::BG_ELEVATED).opacity(0.32));
         }
-        if show_opt_in_strip {
-            strip = strip.child(
-                h_flex()
-                    .id("ag-opt-strip-btn")
-                    .gap_1p5()
-                    .items_center()
-                    .cursor_pointer()
-                    .hover(|s| s.opacity(0.88))
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("ACP optimizer active: adaptive Working Set trimming, EcoQoS when idle, lossless delta context, and frame-paced streaming.")).build(w, cx))
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        this.agent.settings_tab = settings_modal::Tab::Agent;
-                        this.agent_open_options(w, cx);
-                    }))
-                    .child(menu::optimized_badge())
-                    .child(div().text_xs().text_color(c(theme::FG_DIM)).child(state_label)),
-            );
-        }
         if let Some(p) = pill {
-            strip = strip.child(p);
+            strip = strip.child(div().flex_1().min_w_0().flex().items_center().child(p));
+        }
+        if show_opt_in_strip {
+            if let Some(badge) = self.render_agent_opt_badge(cx) {
+                strip = strip.child(div().flex_none().child(badge));
+            }
         }
         Some(strip.into_any_element())
     }
@@ -5967,7 +6005,7 @@ impl Workbench {
             .map(|p| p.initial.clone())
             .unwrap_or_else(|| "A".into());
         let is_secondary = self.agent_account().is_some();
-        let needs_logout = !a.auth_methods.is_empty() && a.can_logout && a.auth_required.is_none();
+        let needs_logout = a.auth_required.is_none() && identity.as_ref().is_some_and(|p| p.synced);
 
         let methods: Vec<AuthMethod> = if !a.auth_methods.is_empty() {
             a.auth_methods.clone()
@@ -7345,8 +7383,8 @@ impl Workbench {
             .child(
                 h_flex()
                     .h(theme::u(36.))
-                    .px_1p5()
-                    .gap_0p5()
+                    .when(tight, |h| h.px_1().gap_0())
+                    .when(!tight, |h| h.px_1p5().gap_0p5())
                     .items_center()
                     .min_w_0()
                     .overflow_hidden()
@@ -7752,8 +7790,9 @@ impl Workbench {
             self.agent.menu.open == Some(Menu::Model),
             tip,
         )
+        .px_1()
         .flex_shrink(1.)
-        .min_w_0()
+        .min_w(theme::u(76.))
         .child(
             div()
                 .min_w_0()

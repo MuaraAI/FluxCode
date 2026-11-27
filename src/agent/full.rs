@@ -188,8 +188,8 @@ impl Workbench {
                     .child(self.render_agent_picker(cx)),
             )
             .child(div().flex_none().child(self.render_agent_switch(cx)))
-            .when(w >= 540., |h| h.children(self.render_agent_opt_badge(cx)))
-            .when(w >= 660., |h| {
+            .when(w >= 560., |h| h.children(self.render_agent_opt_badge(cx)))
+            .when(w >= 720., |h| {
                 h.children(self.render_agent_profile_pill(cx))
             })
             .child(div().flex_1())

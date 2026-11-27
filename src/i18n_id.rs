@@ -1352,6 +1352,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Free model: no plan limits to count.", "Model gratis: tidak ada limit paket."),
     ("Turn the agent on to read your limits.", "Nyalakan agent untuk membaca limit kamu."),
     ("Limits show here once the agent reports them.", "Limit muncul di sini setelah agent melaporkannya."),
+    ("remaining", "tersisa"),
     ("Experimental", "Eksperimental"),
     ("Ocean", "Laut"),
     ("River", "Sungai"),
