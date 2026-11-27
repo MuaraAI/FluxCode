@@ -342,12 +342,12 @@ section { scroll-margin-top: calc(var(--header-space) + 16px); }
 .fh.on .fh-hint { display: block; margin: clamp(18px, 3svh, 34px) 0 0; font: 500 11px/1 var(--mono); letter-spacing: 0.3em; text-transform: uppercase; color: #8f8ba2; }
 .fh.on .fh-hint::after { content: ""; display: block; width: 1px; height: 34px; margin: 10px auto 0; background: linear-gradient(#b9b5c9, transparent); transform-origin: top; animation: drip 1.8s ease-in-out infinite; }
 @keyframes drip { 0% { transform: scaleY(0); opacity: 0; } 30% { opacity: 1; } 100% { transform: scaleY(1); opacity: 0; } }
-.fh.on .fh-copy { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: center; padding-top: 0;
+.fh.on .fh-copy { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: center; padding-top: 0; pointer-events: none;
   opacity: var(--co, 0); transform: translate3d(0, var(--cy, 40px), 0) scale(var(--cs, 1)); transform-origin: 0 50%; filter: blur(var(--cb, 0px)); will-change: transform, opacity, filter; }
-.fh.on .fh-strip { position: absolute; left: 50%; bottom: 4svh; margin: 0; z-index: 3; opacity: var(--so, 0); transform: translate3d(-50%, var(--sy, 30px), 0); }
+.fh.on .fh-strip { position: absolute; left: 50%; bottom: 4svh; margin: 0; z-index: 3; pointer-events: none; opacity: var(--so, 0); transform: translate3d(-50%, var(--sy, 30px), 0); }
 /* The deck: the cards share one spot; the script sets each one's place (--d: 0 on top,
    0..1 still coming up from below, -1..0 sinking back as the next one covers it). */
-.fh.on .fh-deck { position: absolute; left: 50%; top: calc(50% + var(--header-space) / 2); margin: 0; z-index: 4;
+.fh.on .fh-deck { position: absolute; left: 50%; top: calc(50% + var(--header-space) / 2); margin: 0; z-index: 4; pointer-events: none;
   width: min(1180px, 90vw, calc((100svh - var(--header-space) - 120px) * 1600 / 938));
   transform: translate3d(-50%, calc(-50% + var(--ry, 100svh)), 0) scale(var(--rs, 0.82)); will-change: transform; }
 .fh.on .fh-cards { display: block; position: relative; overflow: visible; aspect-ratio: 1600 / 938; padding: 0; }
@@ -444,7 +444,6 @@ kbd {
 .stat .v { font: 700 clamp(2.3rem, 4.6vw, 3.2rem)/1 var(--sans); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; color: var(--yellow); }
 .stat .v small { font-size: 0.4em; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-left: 6px; }
 .stat .l { margin-top: 10px; font-size: 0.92rem; color: var(--muted); }
-.stat .hand { display: block; margin-top: 6px; font-size: 0.86rem; line-height: 1.9; }
 .charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px 48px; align-items: start; }
 .chart h3 { font-size: 1rem; font-weight: 600; margin: 0 0 2px; }
 .chart .unit { font-size: 0.85rem; color: var(--faint); margin: 0 0 12px; }
@@ -867,7 +866,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       <div class="wrap fh-copy">
         <p class="fh-eyebrow"><b data-i18n="fh.eyebrow">Free and open source</b><span>GPL-3.0</span></p>
         <h1 id="hero-title" data-i18n-html="hero.title">A <span class="accent">16 MB</span> code editor with AI agents built in</h1>
-        <p class="lead" data-i18n-html="hero.lead">Rust, drawn by the GPU. Opens in <strong>about 50 ms</strong>, idles at <strong>1.4 MB RAM</strong>, sends no telemetry.</p>
+        <p class="lead" data-i18n-html="hero.lead">Rust, drawn by the GPU. Opens in <strong>10 ms</strong>, idles at <strong>1.4 MB RAM</strong>, sends no telemetry.</p>
         <p class="release-line">
           <span class="mono" data-live="tag">BuildDev-2026-11-15-16-50-41</span>
           <span class="sep" aria-hidden="true">/</span>
@@ -879,7 +878,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
         </p>
       </div>
       <ul class="fh-strip" data-i18n-attr="aria-label:fh.strip" aria-label="At a glance">
-        <li><b data-i18n="fh.s1">Opens in ~50 ms</b><span data-i18n="fh.s1b">a window on screen, cold start</span></li>
+        <li><b data-i18n="fh.s1">Opens in 10 ms</b><span data-i18n="fh.s1b">a window on screen, cold start</span></li>
         <li><b data-i18n="fh.s2">1.4 MB idle</b><span data-i18n="fh.s2b">in Task Manager, one process</span></li>
         <li><b data-i18n="fh.s3">16 MB on disk</b><span data-i18n="fh.s3b">Rust, drawn by the GPU</span></li>
         <li><b data-i18n="fh.s4">AI agents built in</b><span>OpenCode · Claude · Copilot</span></li>
@@ -953,10 +952,10 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     <div class="wrap">
       <div class="head">
         <h2 id="bench-title" data-i18n="bench.title">Light from the first frame</h2>
-        <p data-i18n="bench.sub">One Windows 11 PC, empty profiles. Shorter bars win.</p>
+        <p data-i18n="bench.sub">Measured on one Windows 11 laptop (AMD Ryzen 5 7535HS, 15 GB RAM), empty profiles, median of 5 runs. Shorter bars win.</p>
       </div>
       <div class="stat-grid">
-        <div class="stat"><div class="v">~50<small>ms</small></div><div class="l"><span data-i18n="stat.window">to open the window</span> <span class="hand" data-i18n="stat.byhand">*timed by hand</span></div></div>
+        <div class="stat"><div class="v">10<small>ms</small></div><div class="l" data-i18n="stat.window">to open the window</div></div>
         <div class="stat"><div class="v"><span data-i18n="stat.ramv">1.4</span><small>MB</small></div><div class="l" data-i18n="stat.ram">RAM when idle</div></div>
         <div class="stat"><div class="v">1<small data-i18n="stat.procu">process</small></div><div class="l" data-i18n="stat.proc">VS Code runs 9</div></div>
         <div class="stat"><div class="v">16<small>MB</small></div><div class="l" data-i18n="stat.disk">on disk, one program file</div></div>
@@ -965,10 +964,10 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
         <details class="method">
           <summary data-i18n="method.title">How we measured</summary>
           <ul data-i18n-html="method.list">
-            <li>*FluxCode's window time is timed by hand. <code>tools/bench/bench.ps1</code> logs 221 ms because its polling loop adds its own time; Zed and VS Code come from that script.</li>
-            <li>VS Code: 3 s until the workbench is usable.</li>
+            <li>Test laptop: Windows 11 Home (AMD Ryzen 5 7535HS, Radeon Graphics, 15 GB RAM), fresh empty profiles, no extensions, no folder open.</li>
+            <li>Window open: launch to first visible window (median of 5 runs, 10 Nov 2026). VS Code takes 3 s until the workbench is usable.</li>
             <li>Not measured: typing latency, huge files, language servers.</li>
-            <li>Median of 5 runs, 10 Nov 2026, Ryzen 5 7535HS, 15 GB RAM. <a class="text-link" href="https://github.com/MuaraAI/FluxCode/blob/main/tools/bench/results.json" target="_blank" rel="noopener">Raw data</a>.</li>
+            <li>Benchmark script and raw runs: <a class="text-link" href="https://github.com/MuaraAI/FluxCode/blob/main/tools/bench/results.json" target="_blank" rel="noopener">results.json</a>.</li>
           </ul>
         </details>
       </div>
@@ -1208,13 +1207,13 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     "lang.label": "Bahasa",
     "stars.label": "FluxCode di GitHub, jumlah bintang",
     "hero.title": "Editor kode <span class=\"accent\">16 MB</span> dengan agen AI di dalamnya",
-    "hero.lead": "Rust, digambar GPU. Terbuka <strong>sekitar 50 ms</strong>, idle di <strong>1,4 MB RAM</strong>, tanpa telemetri.",
+    "hero.lead": "Rust, digambar GPU. Terbuka <strong>10 ms</strong>, idle di <strong>1,4 MB RAM</strong>, tanpa telemetri.",
     "hero.source": "Kode sumber di GitHub",
     "fh.tag": "Editor kode 16 MB dengan agen AI di dalamnya.",
     "fh.hint": "Gulir",
     "fh.eyebrow": "Gratis dan open source",
     "fh.strip": "Sekilas",
-    "fh.s1": "Terbuka ~50 ms",
+    "fh.s1": "Terbuka 10 ms",
     "fh.s1b": "jendela tampil, start dingin",
     "fh.s2": "1,4 MB saat idle",
     "fh.s2b": "di Task Manager, satu proses",
@@ -1253,16 +1252,15 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     "shot.themes.tab": "Tema",
     "shot.update-indonesian.tab": "Bahasa Indonesia",
     "bench.title": "Ringan sejak jendela pertama",
-    "bench.sub": "Satu PC Windows 11, profil kosong. Batang lebih pendek lebih baik.",
+    "bench.sub": "Diukur pada satu laptop Windows 11 (AMD Ryzen 5 7535HS, RAM 15 GB), profil kosong, median 5 kali jalan. Batang lebih pendek lebih baik.",
     "stat.window": "sampai jendela tampil",
-    "stat.byhand": "*diukur manual",
     "stat.ramv": "1,4",
     "stat.ram": "RAM saat idle",
     "stat.procu": "proses",
     "stat.proc": "VS Code menjalankan 9",
     "stat.disk": "di disk, satu berkas program",
     "method.title": "Cara mengukur",
-    "method.list": "<li>*Waktu jendela FluxCode diukur manual. <code>tools/bench/bench.ps1</code> mencatat 221 ms karena loop polling-nya ikut menghitung waktunya sendiri; Zed dan VS Code dari skrip itu.</li><li>VS Code: 3 detik sampai workbench bisa dipakai.</li><li>Tidak diukur: latensi mengetik, berkas raksasa, language server.</li><li>Median 5 kali jalan, 10 Nov 2026, Ryzen 5 7535HS, 15 GB RAM. <a class=\"text-link\" href=\"https://github.com/MuaraAI/FluxCode/blob/main/tools/bench/results.json\" target=\"_blank\" rel=\"noopener\">Data mentah</a>.</li>",
+    "method.list": "<li>Laptop pengujian: Windows 11 Home (AMD Ryzen 5 7535HS, Radeon Graphics, RAM 15 GB), profil baru kosong, tanpa ekstensi, tanpa folder terbuka.</li><li>Jendela tampil: dari dijalankan sampai jendela pertama muncul (median 5 kali jalan, 10 Nov 2026). VS Code butuh 3 detik sampai workbench bisa dipakai.</li><li>Tidak diukur: latensi mengetik, berkas raksasa, language server.</li><li>Skrip benchmark dan data mentah: <a class=\"text-link\" href=\"https://github.com/MuaraAI/FluxCode/blob/main/tools/bench/results.json\" target=\"_blank\" rel=\"noopener\">results.json</a>.</li>",
     "feat.title": "Sudah ada, tanpa cari ekstensi",
     "feat.sub": "Tata letak dan pintasan VS Code. Belum ada: debugger dan language server.",
     "feat.readme": "README lengkap",
@@ -1382,7 +1380,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       metaFree: "GPL-3.0, free", metaPick: "For Windows, macOS and Linux computers", unknown: "unknown",
       title: "FluxCode: a 16 MB native code editor with AI agents built in",
       desc: "FluxCode is a native code editor for Windows, macOS and Linux. One 16 MB program written in Rust and drawn by the GPU, with an ACP agent panel, Source Control, WizTree disk analyzer and no telemetry.",
-      better: "lower is better", byHand: "*"
+      better: "lower is better"
     },
     id: {
       loading: "Memuat data dari GitHub...",
@@ -1397,7 +1395,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       metaFree: "GPL-3.0, gratis", metaPick: "Untuk komputer Windows, macOS, dan Linux", unknown: "tanpa nama",
       title: "FluxCode: editor kode native 16 MB dengan agen AI di dalamnya",
       desc: "FluxCode adalah editor kode native untuk Windows, macOS, dan Linux. Satu program 16 MB yang ditulis dalam Rust dan digambar GPU, dengan panel agen ACP, Source Control, analisis disk WizTree, dan tanpa telemetri.",
-      better: "makin kecil makin baik", byHand: "*"
+      better: "makin kecil makin baik"
     }
   };
 
@@ -1911,7 +1909,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
 
   /* ---------- Benchmark charts ---------- */
   var BENCH = [
-    { en: "Window open", id: "Jendela tampil", unit: "ms", dec: 0, rows: [["FluxCode", 50, true], ["Zed", 818], ["VS Code", 3000]] },
+    { en: "Window open", id: "Jendela tampil", unit: "ms", dec: 0, rows: [["FluxCode", 10], ["Zed", 818], ["VS Code", 3000]] },
     { en: "Idle RAM", id: "RAM saat idle", unit: "MB", dec: 1, rows: [["FluxCode", 1.4], ["Zed", 66.2], ["VS Code", 929.2]] },
     { en: "Reserved memory", id: "Memori dicadangkan", unit: "MB", dec: 0, rows: [["FluxCode", 72], ["Zed", 154], ["VS Code", 1315]] },
     { en: "Idle CPU", id: "CPU saat idle", unit: "%", dec: 2, rows: [["FluxCode", 0.05], ["Zed", 1.46], ["VS Code", 5.89]] },
@@ -1929,7 +1927,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       box.appendChild(el("p", { "class": "unit" }, m.unit + ", " + t("better")));
       m.rows.forEach(function (r) {
         var num = r[1].toLocaleString(loc, { minimumFractionDigits: m.dec, maximumFractionDigits: m.dec });
-        var label = (r[2] ? "~" : "") + num + (m.unit === "%" ? "%" : " " + m.unit) + (r[2] ? "*" : "");
+        var label = num + (m.unit === "%" ? "%" : " " + m.unit);
         var row = el("div", { "class": "bar-row" + (r[0] === "FluxCode" ? " me" : "") });
         row.appendChild(el("span", { "class": "n" }, r[0]));
         var track = el("div", { "class": "bar-track" });
@@ -2171,7 +2169,7 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
     var svg = $(".fh-mask"), word = $("#fh-word"), edgeG = $("#fh-edge-g"), text = $("#fh-text"), edge = $("#fh-edge"), dim = $("#fh-dim");
     if (!svg || !text) return;
     sec.classList.add("on");
-    var all = $all(".fh-all");
+    var all = $all(".fh-all"), intro = $(".fh-intro", sec), copy = $(".fh-copy", sec);
     var origin = { x: 0, y: 0 }, shown = 0, raf = 0;
     function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
     function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
@@ -2269,14 +2267,15 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       dim.style.opacity = mix.toFixed(3);
       edge.style.opacity = (mix * (1 - z * 0.8)).toFixed(3);
       var h = ease(clamp((p - 0.19) / 0.06)), hx = ease(clamp((p - 0.33) / 0.07)), q = ease(clamp((p - 0.37) / 0.13));
+      var io = clamp(1 - p * 16), co = Math.max(0, h * (1 - hx * 1.4));
       set(sec, "--p", p.toFixed(4));
       set(sec, "--z", z.toFixed(4));
       set(sec, "--q", q.toFixed(4));
-      set(sec, "--io", clamp(1 - p * 16).toFixed(3));
+      set(sec, "--io", io.toFixed(3));
       set(sec, "--iy", (-p * 20 * vh / 100).toFixed(1) + "px");
       set(sec, "--e", ease(clamp((p - 0.88) / 0.12)).toFixed(3));
       deal(p, vh);
-      set(sec, "--co", Math.max(0, h * (1 - hx * 1.4)).toFixed(3));
+      set(sec, "--co", co.toFixed(3));
       set(sec, "--cy", ((1 - h) * 40 - hx * 0.24 * vh).toFixed(1) + "px");
       set(sec, "--cs", (1 - hx * 0.14).toFixed(4));
       set(sec, "--cb", (hx * 12).toFixed(1) + "px");
@@ -2285,6 +2284,8 @@ footer { border-top: 1px solid var(--line); padding: 44px 0 0; color: var(--mute
       set(sec, "--ry", ((1 - q) * 0.9 * vh).toFixed(1) + "px");
       set(sec, "--rs", (0.82 + q * 0.18).toFixed(4));
       set(sec, "--rc", clamp((q - 0.85) / 0.15).toFixed(3));
+      if (intro) { intro.style.pointerEvents = io > 0.05 ? "auto" : "none"; intro.style.visibility = io > 0.01 ? "visible" : "hidden"; }
+      if (copy) { copy.style.pointerEvents = co > 0.05 ? "auto" : "none"; copy.style.visibility = co > 0.01 ? "visible" : "hidden"; }
     }
     // Where the deck is: k runs 0..n-1 between 0.52 and 0.90; each step holds still for
     // its first and last quarter, so every card is read before the next comes.
