@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt, UiSize, Visibility, PALETTES};
 use crate::workbench::{ScrollTarget, Workbench};
@@ -108,6 +107,10 @@ pub struct Settings {
     pub scroll_sensitivity: f32,
     #[serde(default = "default_true")]
     pub copilot: bool,
+    #[serde(default = "default_true")]
+    pub agent_gflow_mcp: bool,
+    #[serde(default = "default_true")]
+    pub agent_gflow_sync: bool,
     pub last_build: String,
     #[serde(default)]
     pub rev: u32,
@@ -124,7 +127,7 @@ impl Default for Settings {
             auto_save: true,
             agent_auto_approve: false,
             theme: PALETTES[0].id.into(),
-            icon_theme: String::new(),
+            icon_theme: crate::ext::vsx_icons::MATERIAL_ID.into(),
             bg_image: None,
             bg_visibility: Visibility::default(),
             ui_size: UiSize::default(),
@@ -170,6 +173,8 @@ impl Default for Settings {
             scroll_past_end: true,
             scroll_sensitivity: 1.,
             copilot: true,
+            agent_gflow_mcp: true,
+            agent_gflow_sync: true,
             last_build: String::new(),
             rev: SETTINGS_REV,
         }
@@ -198,6 +203,11 @@ impl Settings {
                 .collect();
             s.save();
         }
+        let normalized_icon = crate::ext::vsx_icons::normalize_id(&s.icon_theme).to_string();
+        if s.icon_theme != normalized_icon {
+            s.icon_theme = normalized_icon;
+            s.save();
+        }
         if s.rev < SETTINGS_REV {
             s.rev = SETTINGS_REV;
             s.save();
@@ -216,12 +226,20 @@ impl Settings {
     }
 
     pub fn access_off(&self) -> &'static str {
-        if self.agent_access_off == "read" { "read" } else { "write" }
+        if self.agent_access_off == "read" {
+            "read"
+        } else {
+            "write"
+        }
     }
 
     /// A hand-edited settings.json can hold anything; NaN falls back to the default step.
     pub fn scroll_speed(&self) -> f32 {
-        if self.scroll_sensitivity.is_finite() { self.scroll_sensitivity.clamp(0.5, 3.0) } else { 1. }
+        if self.scroll_sensitivity.is_finite() {
+            self.scroll_sensitivity.clamp(0.5, 3.0)
+        } else {
+            1.
+        }
     }
 
     pub fn background(&self) -> Option<&Path> {
@@ -308,13 +326,26 @@ impl EditorOpts {
         }
     }
 
-    pub fn apply(self, e: &mut gpui_kit::component::input::EditorState, window: &mut Window, cx: &mut Context<gpui_kit::component::input::EditorState>) {
+    pub fn apply(
+        self,
+        e: &mut gpui_kit::component::input::EditorState,
+        window: &mut Window,
+        cx: &mut Context<gpui_kit::component::input::EditorState>,
+    ) {
         e.set_line_number(self.line_numbers, window, cx);
         e.set_folding(self.folding, window, cx);
         e.set_auto_close(self.auto_close, window, cx);
         e.set_smart_indent(self.smart_indent, window, cx);
-        e.set_cursor_surrounding_lines((self.cursor_padding > 0).then_some(self.cursor_padding as usize), window, cx);
-        e.set_scroll_beyond_last_line(if self.scroll_past_end { None } else { Some(0) }, window, cx);
+        e.set_cursor_surrounding_lines(
+            (self.cursor_padding > 0).then_some(self.cursor_padding as usize),
+            window,
+            cx,
+        );
+        e.set_scroll_beyond_last_line(
+            if self.scroll_past_end { None } else { Some(0) },
+            window,
+            cx,
+        );
     }
 }
 
@@ -367,7 +398,8 @@ fn matches_query(query: &str, haystack: &[&str]) -> bool {
     if q.is_empty() {
         return true;
     }
-    q.split_whitespace().all(|tok| haystack.iter().any(|h| h.to_lowercase().contains(tok)))
+    q.split_whitespace()
+        .all(|tok| haystack.iter().any(|h| h.to_lowercase().contains(tok)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -517,7 +549,10 @@ impl SettingsSection {
                     || !s.agent_follow_edits
                     || w.github.is_some()
             }
-            SettingsSection::Windows | SettingsSection::SoulFiles | SettingsSection::Shortcuts | SettingsSection::About => false,
+            SettingsSection::Windows
+            | SettingsSection::SoulFiles
+            | SettingsSection::Shortcuts
+            | SettingsSection::About => false,
             SettingsSection::Updates => !s.update_check,
         }
     }
@@ -533,12 +568,38 @@ struct SettingEntry {
 }
 
 impl SettingEntry {
-    fn inline(group: &'static str, title: &'static str, desc: SharedString, keywords: &'static str, control: AnyElement) -> Self {
-        Self { group, title, desc, keywords, stacked: false, control }
+    fn inline(
+        group: &'static str,
+        title: &'static str,
+        desc: SharedString,
+        keywords: &'static str,
+        control: AnyElement,
+    ) -> Self {
+        Self {
+            group,
+            title,
+            desc,
+            keywords,
+            stacked: false,
+            control,
+        }
     }
 
-    fn stacked(group: &'static str, title: &'static str, desc: SharedString, keywords: &'static str, control: AnyElement) -> Self {
-        Self { group, title, desc, keywords, stacked: true, control }
+    fn stacked(
+        group: &'static str,
+        title: &'static str,
+        desc: SharedString,
+        keywords: &'static str,
+        control: AnyElement,
+    ) -> Self {
+        Self {
+            group,
+            title,
+            desc,
+            keywords,
+            stacked: true,
+            control,
+        }
     }
 
     fn render(self, compact: bool) -> AnyElement {
@@ -563,14 +624,24 @@ fn settings_row_inline(title: &'static str, desc: SharedString, control: AnyElem
                 .flex_1()
                 .min_w_0()
                 .gap_0p5()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c(theme::FG_STRONG))
+                        .child(title),
+                )
                 .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(desc)),
         )
         .child(div().flex_none().max_w_full().child(control))
         .into_any_element()
 }
 
-fn settings_row_stacked(title: &'static str, desc: SharedString, control: AnyElement) -> AnyElement {
+fn settings_row_stacked(
+    title: &'static str,
+    desc: SharedString,
+    control: AnyElement,
+) -> AnyElement {
     v_flex()
         .w_full()
         .py_3()
@@ -580,7 +651,13 @@ fn settings_row_stacked(title: &'static str, desc: SharedString, control: AnyEle
             v_flex()
                 .w_full()
                 .gap_0p5()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c(theme::FG_STRONG))
+                        .child(title),
+                )
                 .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(desc)),
         )
         .child(h_flex().w_full().child(control))
@@ -608,12 +685,22 @@ fn settings_group(label: &'static str, rows: Vec<AnyElement>) -> AnyElement {
     v_flex()
         .w_full()
         .gap_2()
-        .child(div().px_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr(label)))
+        .child(
+            div()
+                .px_1()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(theme::FG_MUTED))
+                .child(tr(label)),
+        )
         .child(settings_card(rows))
         .into_any_element()
 }
 
-fn settings_segmented(id: &'static str, items: impl IntoIterator<Item = crate::ui::SegItem>) -> AnyElement {
+fn settings_segmented(
+    id: &'static str,
+    items: impl IntoIterator<Item = crate::ui::SegItem>,
+) -> AnyElement {
     crate::ui::SegmentedControl::new(id, items).into_any_element()
 }
 
@@ -640,7 +727,13 @@ fn settings_switch(
         .into_any_element()
 }
 
-fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Context<Workbench>, flip: fn(&mut Workbench)) -> AnyElement {
+fn settings_toggle(
+    id: &'static str,
+    label: &'static str,
+    on: bool,
+    cx: &mut Context<Workbench>,
+    flip: fn(&mut Workbench),
+) -> AnyElement {
     crate::ui::McToggle::new(id)
         .checked(on)
         .accessibility_label(tr(label))
@@ -651,7 +744,14 @@ fn settings_toggle(id: &'static str, label: &'static str, on: bool, cx: &mut Con
         .into_any_element()
 }
 
-fn settings_stepper(id: &'static str, value: String, can_dec: bool, can_inc: bool, cx: &mut Context<Workbench>, step: fn(&mut Workbench, i32)) -> AnyElement {
+fn settings_stepper(
+    id: &'static str,
+    value: String,
+    can_dec: bool,
+    can_inc: bool,
+    cx: &mut Context<Workbench>,
+    step: fn(&mut Workbench, i32),
+) -> AnyElement {
     let step_btn = |ix: usize, lbl: &'static str, enabled: bool, delta: i32| {
         div()
             .id((id, ix))
@@ -717,13 +817,29 @@ fn scene_cards(cols: u16, current: &str, cx: &mut Context<Workbench>) -> AnyElem
                 .overflow_hidden()
                 .cursor_pointer()
                 .border_2()
-                .border_color(if on { c(theme::ACCENT) } else { c(theme::BORDER) })
-                .hover(move |st| st.border_color(c(if on { theme::ACCENT } else { theme::BORDER_STRONG })))
+                .border_color(if on {
+                    c(theme::ACCENT)
+                } else {
+                    c(theme::BORDER)
+                })
+                .hover(move |st| {
+                    st.border_color(c(if on {
+                        theme::ACCENT
+                    } else {
+                        theme::BORDER_STRONG
+                    }))
+                })
                 .on_click(cx.listener(move |this, _, w, cx| {
                     this.settings.bg_scene = sc.id().into();
                     this.apply_appearance(w, cx);
                 }))
-                .child(div().h(theme::u(74.)).w_full().overflow_hidden().child(crate::scene::preview(sc, 12.)))
+                .child(
+                    div()
+                        .h(theme::u(74.))
+                        .w_full()
+                        .overflow_hidden()
+                        .child(crate::scene::preview(sc, 12.)),
+                )
                 .child(
                     h_flex()
                         .px_2p5()
@@ -736,11 +852,25 @@ fn scene_cards(cols: u16, current: &str, cx: &mut Context<Workbench>) -> AnyElem
                                 .min_w_0()
                                 .truncate()
                                 .text_xs()
-                                .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                                .text_color(c(if on { theme::FG_STRONG } else { theme::FG_MUTED }))
+                                .font_weight(if on {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .text_color(c(if on {
+                                    theme::FG_STRONG
+                                } else {
+                                    theme::FG_MUTED
+                                }))
                                 .child(tr(sc.label())),
                         )
-                        .when(on, |h| h.child(Icon::new(gpui_kit::assets::IconName::Check).size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)))),
+                        .when(on, |h| {
+                            h.child(
+                                Icon::new(gpui_kit::assets::IconName::Check)
+                                    .size(theme::u(12.))
+                                    .text_color(c(theme::ACCENT_TEXT)),
+                            )
+                        }),
                 )
         }))
         .into_any_element()
@@ -808,7 +938,11 @@ impl Workbench {
         let opts = EditorOpts::of(&self.settings);
         for d in &self.docs {
             let Some(ed) = &d.editor else { continue };
-            let wrap = if d.wrap_override.is_none() && d.complex { false } else { d.wraps(wrap) };
+            let wrap = if d.wrap_override.is_none() && d.complex {
+                false
+            } else {
+                d.wraps(wrap)
+            };
             let complex_or_ro = d.complex || d.read_only;
             ed.update(cx, |s, cx| {
                 s.set_soft_wrap(wrap, window, cx);
@@ -827,6 +961,13 @@ impl Workbench {
         theme::set_ui_size(self.settings.ui_size);
         self.settings.apply_backdrop();
         theme::apply(cx);
+        let p = theme::palette();
+        self.ext_host
+            .host
+            .update_theme_css(crate::ext::webview_bridge::theme_css(p));
+        self.ext_host
+            .host
+            .update_workspace(&self.roots(), p.dark, None);
         window.refresh();
         cx.notify();
     }
@@ -846,7 +987,9 @@ impl Workbench {
             let start = motion_check::cpu_seconds();
             cx.background_executor().timer(motion_check::MEASURE).await;
             let pct = match (start, motion_check::cpu_seconds()) {
-                (Some(a), Some(b)) => Some(((b - a) / motion_check::MEASURE.as_secs_f64() * 100.) as f32),
+                (Some(a), Some(b)) => {
+                    Some(((b - a) / motion_check::MEASURE.as_secs_f64() * 100.) as f32)
+                }
                 _ => None,
             };
             let specs = cx.background_spawn(async { motion_check::specs() }).await;
@@ -978,11 +1121,11 @@ impl Workbench {
                 label
             }
             Ok(None) => {
-                self.settings.icon_theme.clear();
-                tr("FluxCode (Built-in)").to_string()
+                self.settings.icon_theme = crate::ext::vsx_icons::active_id();
+                crate::ext::vsx_icons::active_label()
             }
             Err(e) => {
-                self.settings.icon_theme.clear();
+                self.settings.icon_theme = crate::ext::vsx_icons::active_id();
                 self.settings.save();
                 self.status = e.into();
                 cx.notify();
@@ -1237,11 +1380,7 @@ impl Workbench {
     fn render_icon_theme_dropdown(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
         let active_id = crate::ext::vsx_icons::active_id();
         let active_label = crate::ext::vsx_icons::active_label();
-        let display: SharedString = if active_label.is_empty() {
-            tr("FluxCode (Built-in)").into()
-        } else {
-            active_label.into()
-        };
+        let display: SharedString = active_label.into();
         let open = self.settings_icon_open;
         let focus = self.settings_icon_focus.clone();
         let weak_open = cx.entity().downgrade();
@@ -1271,11 +1410,17 @@ impl Workbench {
                     ),
             );
         Popover::new("settings-icon-dd")
-            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .anchor(if compact {
+                Anchor::TopLeft
+            } else {
+                Anchor::TopRight
+            })
             .open(open)
             .track_focus(&focus)
             .appearance(false)
-            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .when(compact, |p| {
+                p.trigger_style(StyleRefinement::default().w_full())
+            })
             .on_open_change(move |next_open, _, cx| {
                 _ = weak_open.update(cx, |this, cx| {
                     this.settings_icon_open = *next_open;
@@ -1291,65 +1436,6 @@ impl Workbench {
                     .max_h(theme::u(300.))
                     .overflow_y_scroll()
                     .gap_0p5();
-                let builtin_on = active_id.is_empty();
-                let weak_builtin = weak_content.clone();
-                let pop_builtin = pop_entity.clone();
-                list = list.child(
-                    h_flex()
-                        .id("settings-icon-builtin")
-                        .w_full()
-                        .min_w_0()
-                        .h(theme::u(34.))
-                        .px_2()
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .when(builtin_on, |d| d.bg(c(theme::BG_HOVER)))
-                        .hover(|d| d.bg(c(theme::BG_HOVER)))
-                        .on_click(move |_, window, cx| {
-                            _ = weak_builtin.update(cx, |this, cx| {
-                                this.settings_icon_open = false;
-                                this.set_icon_theme("", cx);
-                            });
-                            _ = pop_builtin.update(cx, |st, cx| st.dismiss(window, cx));
-                        })
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_sm()
-                                        .font_weight(if builtin_on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                                        .text_color(c(theme::FG_STRONG))
-                                        .child(tr("FluxCode (Built-in)")),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_xs()
-                                        .text_color(c(theme::FG_DIM))
-                                        .child(tr("Built-in file and folder icons")),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .w(theme::u(14.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(builtin_on, |d| {
-                                    d.child(
-                                        Icon::new(gpui_kit::assets::IconName::Check)
-                                            .size(theme::u(13.))
-                                            .text_color(c(theme::ACCENT_TEXT)),
-                                    )
-                                }),
-                        ),
-                );
                 for (i, m) in installed.iter().enumerate() {
                     let on = m.id == active_id;
                     let tid = m.id.clone();
@@ -1383,7 +1469,11 @@ impl Workbench {
                                         div()
                                             .truncate()
                                             .text_sm()
-                                            .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                            .font_weight(if on {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::NORMAL
+                                            })
                                             .text_color(c(theme::FG_STRONG))
                                             .child(m.label.clone()),
                                     )
@@ -1425,39 +1515,47 @@ impl Workbench {
                     .glass_pop()
                     .occlude()
                     .child(list)
-                    .when(installed.is_empty(), |v| {
-                        v.child(
-                            h_flex()
-                                .id("settings-icon-browse")
-                                .mt_0p5()
-                                .pt_1p5()
-                                .px_2()
-                                .pb_0p5()
-                                .gap_2()
-                                .items_center()
-                                .border_t_1()
-                                .border_color(c(theme::BORDER))
-                                .rounded(px(5.))
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(c(theme::FG_MUTED))
-                                .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-                                .on_click(move |_, window, cx| {
-                                    _ = weak_browse.update(cx, |this, cx| {
-                                        this.settings_icon_open = false;
-                                        this.settings_open = false;
-                                        this.view = crate::workbench::SideView::Extensions;
-                                        this.sidebar_open = true;
-                                        this.ext.filter = crate::ext::Filter::Market;
-                                        this.ext.query.update(cx, |s, cx| s.set_value("icon theme", window, cx));
-                                        this.market_search(0, cx);
-                                    });
-                                    _ = pop_browse.update(cx, |st, cx| st.dismiss(window, cx));
-                                })
-                                .child(Icon::new(gpui_kit::assets::IconName::Search).size(theme::u(12.)))
-                                .child(div().flex_1().min_w_0().truncate().child(tr("Browse icon themes in Extensions"))),
-                        )
-                    })
+                    .child(
+                        h_flex()
+                            .id("settings-icon-browse")
+                            .mt_0p5()
+                            .pt_1p5()
+                            .px_2()
+                            .pb_0p5()
+                            .gap_2()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(c(theme::BORDER))
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                            .on_click(move |_, window, cx| {
+                                _ = weak_browse.update(cx, |this, cx| {
+                                    this.settings_icon_open = false;
+                                    this.settings_open = false;
+                                    this.view = crate::workbench::SideView::Extensions;
+                                    this.sidebar_open = true;
+                                    this.ext.filter = crate::ext::Filter::Market;
+                                    this.ext
+                                        .query
+                                        .update(cx, |s, cx| s.set_value("icon theme", window, cx));
+                                    this.market_search(0, cx);
+                                });
+                                _ = pop_browse.update(cx, |st, cx| st.dismiss(window, cx));
+                            })
+                            .child(
+                                Icon::new(gpui_kit::assets::IconName::Search).size(theme::u(12.)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(tr("Browse icon themes in Extensions")),
+                            ),
+                    )
                     .into_any_element()
             })
             .into_any_element()
@@ -1499,10 +1597,18 @@ impl Workbench {
     }
 
     fn settings_sections() -> Vec<SettingsSection> {
-        SettingsSection::ALL.iter().copied().filter(|s| cfg!(windows) || *s != SettingsSection::Windows).collect()
+        SettingsSection::ALL
+            .iter()
+            .copied()
+            .filter(|s| cfg!(windows) || *s != SettingsSection::Windows)
+            .collect()
     }
 
-    pub(crate) fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_settings(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let vp_w = f32::from(window.viewport_size().width);
         let stacked_nav = vp_w < 640.;
         let narrow_nav = vp_w < 820.;
@@ -1519,7 +1625,11 @@ impl Workbench {
         let compact = content_w < 540.;
 
         let sections = Self::settings_sections();
-        let active = if sections.contains(&self.settings_section) { self.settings_section } else { SettingsSection::Appearance };
+        let active = if sections.contains(&self.settings_section) {
+            self.settings_section
+        } else {
+            SettingsSection::Appearance
+        };
         let query = self.settings_search.read(cx).value().trim().to_string();
         let searching = !query.is_empty();
 
@@ -1551,9 +1661,18 @@ impl Workbench {
                     .when(vp_w >= 920., |d| d.px_8())
                     .pt_6()
                     .pb(theme::u(120.))
-                    .child(v_flex().w_full().max_w(theme::u(780.)).mx_auto().child(body)),
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .max_w(theme::u(780.))
+                            .mx_auto()
+                            .child(body),
+                    ),
             )
-            .child(self.smooth_scroll_layer(ScrollTarget::Handle(SETTINGS_SCROLL_KEY, self.settings_scroll.clone()), cx));
+            .child(self.smooth_scroll_layer(
+                ScrollTarget::Handle(SETTINGS_SCROLL_KEY, self.settings_scroll.clone()),
+                cx,
+            ));
 
         let root = if stacked_nav { v_flex() } else { h_flex() };
         root.id("settings")
@@ -1566,7 +1685,11 @@ impl Workbench {
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
-                    if this.settings_theme_open || this.settings_icon_open || this.settings_lang_open || this.settings_font_open {
+                    if this.settings_theme_open
+                        || this.settings_icon_open
+                        || this.settings_lang_open
+                        || this.settings_font_open
+                    {
                         this.settings_theme_open = false;
                         this.settings_icon_open = false;
                         this.settings_lang_open = false;
@@ -1648,8 +1771,19 @@ impl Workbench {
                     .flex_1()
                     .min_w(theme::u(160.))
                     .gap_1()
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr(active.title())))
-                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr(active.description()))),
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr(active.title())),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(tr(active.description())),
+                    ),
             )
             .children(reset_btn);
         let col = v_flex()
@@ -1681,8 +1815,20 @@ impl Workbench {
         let view_id = window.current_view();
         let pill_h = f32::from(theme::u(28.));
         let top_liq = crate::ui::liquid::keyed_state("settings-top-liq", window, cx);
-        let active_ix = if searching { None } else { sections.iter().position(|&s| s == active) };
-        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(&top_liq, false, sections.len(), active_ix, pill_h, 190, motion);
+        let active_ix = if searching {
+            None
+        } else {
+            sections.iter().position(|&s| s == active)
+        };
+        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(
+            &top_liq,
+            false,
+            sections.len(),
+            active_ix,
+            pill_h,
+            190,
+            motion,
+        );
         let origin_probe = crate::ui::liquid::keyed_origin_probe(top_liq.clone(), view_id);
         let liq_layer = frame.map(|fr| {
             let st = crate::ui::liquid::LiquidStyle {
@@ -1753,12 +1899,16 @@ impl Workbench {
                     })
                     .when(!on, |d| {
                         d.text_color(c(theme::FG_MUTED))
-                            .when(!motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
+                            .when(!motion, |d| {
+                                d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
+                            })
                             .when(motion, |d| d.hover(|s| s.text_color(c(theme::FG))))
                     })
                     .on_hover(move |entered: &bool, _, cx| {
                         if *entered && motion {
-                            crate::ui::liquid::keyed_hover_enter(&h_hov, i, false, pill_h, 150, view_id, cx);
+                            crate::ui::liquid::keyed_hover_enter(
+                                &h_hov, i, false, pill_h, 150, view_id, cx,
+                            );
                         }
                     })
                     .child(probe)
@@ -1846,8 +1996,20 @@ impl Workbench {
             .into_iter()
             .flat_map(|grp| sections.iter().copied().filter(move |s| s.group() == grp))
             .collect();
-        let active_ix = if searching { None } else { ordered_secs.iter().position(|&s| s == active) };
-        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(&nav_liq, true, ordered_secs.len(), active_ix, nav_cross, 200, motion);
+        let active_ix = if searching {
+            None
+        } else {
+            ordered_secs.iter().position(|&s| s == active)
+        };
+        let (frame, has_liq) = crate::ui::liquid::keyed_sync_and_sample(
+            &nav_liq,
+            true,
+            ordered_secs.len(),
+            active_ix,
+            nav_cross,
+            200,
+            motion,
+        );
         let origin_probe = crate::ui::liquid::keyed_origin_probe(nav_liq.clone(), view_id);
         let liq_layer = frame.map(|fr| {
             let st = crate::ui::liquid::LiquidStyle {
@@ -1898,7 +2060,14 @@ impl Workbench {
                     .pb_1()
                     .gap_2()
                     .items_center()
-                    .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("Settings")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr("Settings")),
+                    )
                     .child(close_btn),
             )
             .child(
@@ -1906,7 +2075,11 @@ impl Workbench {
                     crate::ui::McInput::new(&self.settings_search)
                         .small()
                         .cleanable(true)
-                        .prefix(Icon::new(gpui_kit::component::IconName::Search).xsmall().text_color(c(theme::FG_MUTED))),
+                        .prefix(
+                            Icon::new(gpui_kit::component::IconName::Search)
+                                .xsmall()
+                                .text_color(c(theme::FG_MUTED)),
+                        ),
                 ),
             );
         let mut inner = v_flex()
@@ -1926,7 +2099,11 @@ impl Workbench {
             .children(liq_layer);
         let mut item_ix = 0usize;
         for (gi, grp) in NavGroup::ALL.into_iter().enumerate() {
-            let group_secs: Vec<SettingsSection> = sections.iter().copied().filter(|s| s.group() == grp).collect();
+            let group_secs: Vec<SettingsSection> = sections
+                .iter()
+                .copied()
+                .filter(|s| s.group() == grp)
+                .collect();
             if group_secs.is_empty() {
                 continue;
             }
@@ -1962,17 +2139,34 @@ impl Workbench {
                         .when(!on && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER))))
                         .on_hover(move |entered: &bool, _, cx| {
                             if *entered && motion {
-                                crate::ui::liquid::keyed_hover_enter(&h_hov, i, true, nav_cross, 150, view_id, cx);
+                                crate::ui::liquid::keyed_hover_enter(
+                                    &h_hov, i, true, nav_cross, 150, view_id, cx,
+                                );
                             }
                         })
                         .child(probe)
-                        .child(sec.icon().size(theme::u(14.)).text_color(c(if on { theme::ACCENT_TEXT } else { theme::FG_MUTED })))
-                        .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(if on { theme::FG_STRONG } else { theme::FG })).child(tr(sec.nav_label())))
-                        .when(modified, |d| d.child(div().size(px(6.)).rounded_full().bg(c(theme::WARN))))
+                        .child(sec.icon().size(theme::u(14.)).text_color(c(if on {
+                            theme::ACCENT_TEXT
+                        } else {
+                            theme::FG_MUTED
+                        })))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .text_color(c(if on { theme::FG_STRONG } else { theme::FG }))
+                                .child(tr(sec.nav_label())),
+                        )
+                        .when(modified, |d| {
+                            d.child(div().size(px(6.)).rounded_full().bg(c(theme::WARN)))
+                        })
                         .on_click(cx.listener(move |this, _, w, cx| {
                             this.settings_section = sec;
                             if !this.settings_search.read(cx).value().is_empty() {
-                                this.settings_search.update(cx, |s, cx| s.set_value("", w, cx));
+                                this.settings_search
+                                    .update(cx, |s, cx| s.set_value("", w, cx));
                             }
                             this.settings_scroll.set_offset(point(px(0.), px(0.)));
                             cx.notify();
@@ -1980,12 +2174,22 @@ impl Workbench {
                 );
             }
         }
-        let list = v_flex().id("settings-nav-list").flex_1().min_h_0().overflow_y_scroll().child(inner);
+        let list = v_flex()
+            .id("settings-nav-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(inner);
         nav = nav.child(list);
         nav.into_any_element()
     }
 
-    fn settings_entries(&self, section: SettingsSection, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+    fn settings_entries(
+        &self,
+        section: SettingsSection,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<SettingEntry> {
         let s = &self.settings;
         match section {
             SettingsSection::Appearance => self.appearance_entries(s, compact, cx),
@@ -2074,15 +2278,34 @@ impl Workbench {
                     .min_w_0()
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(gpui_kit::component::IconName::Globe).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
-                    .child(div().flex_1().min_w_0().truncate().text_left().font_weight(FontWeight::MEDIUM).child(display)),
+                    .child(
+                        Icon::new(gpui_kit::component::IconName::Globe)
+                            .flex_none()
+                            .size(theme::u(14.))
+                            .text_color(c(theme::FG_MUTED)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(display),
+                    ),
             );
         Popover::new("settings-lang-dd")
-            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .anchor(if compact {
+                Anchor::TopLeft
+            } else {
+                Anchor::TopRight
+            })
             .open(open)
             .track_focus(&focus)
             .appearance(false)
-            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .when(compact, |p| {
+                p.trigger_style(StyleRefinement::default().w_full())
+            })
             .on_open_change(move |next_open, _, cx| {
                 _ = weak_open.update(cx, |this, cx| {
                     this.settings_lang_open = *next_open;
@@ -2127,12 +2350,21 @@ impl Workbench {
                                     .min_w_0()
                                     .truncate()
                                     .text_sm()
-                                    .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                    .font_weight(if on {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
                                     .text_color(c(theme::FG_STRONG))
                                     .child(name.clone()),
                             )
                             .when(on, |h| {
-                                h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))
+                                h.child(
+                                    Icon::new(gpui_kit::assets::IconName::Check)
+                                        .flex_none()
+                                        .size(theme::u(13.))
+                                        .text_color(c(theme::ACCENT_TEXT)),
+                                )
                             }),
                     );
                 }
@@ -2154,7 +2386,12 @@ impl Workbench {
         let fonts: &'static [&'static str] = if cfg!(windows) {
             &["Cascadia Code", "Cascadia Mono", "Consolas", "Courier New"]
         } else {
-            &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono"]
+            &[
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+                "Noto Sans Mono",
+                "Ubuntu Mono",
+            ]
         };
         let active = self.settings.font_family.clone();
         let open = self.settings_font_open;
@@ -2174,15 +2411,34 @@ impl Workbench {
                     .min_w_0()
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(gpui_kit::assets::IconName::FileType).flex_none().size(theme::u(14.)).text_color(c(theme::FG_MUTED)))
-                    .child(div().flex_1().min_w_0().truncate().text_left().font_weight(FontWeight::MEDIUM).child(active.clone())),
+                    .child(
+                        Icon::new(gpui_kit::assets::IconName::FileType)
+                            .flex_none()
+                            .size(theme::u(14.))
+                            .text_color(c(theme::FG_MUTED)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(active.clone()),
+                    ),
             );
         Popover::new("settings-font-dd")
-            .anchor(if compact { Anchor::TopLeft } else { Anchor::TopRight })
+            .anchor(if compact {
+                Anchor::TopLeft
+            } else {
+                Anchor::TopRight
+            })
             .open(open)
             .track_focus(&focus)
             .appearance(false)
-            .when(compact, |p| p.trigger_style(StyleRefinement::default().w_full()))
+            .when(compact, |p| {
+                p.trigger_style(StyleRefinement::default().w_full())
+            })
             .on_open_change(move |next_open, _, cx| {
                 _ = weak_open.update(cx, |this, cx| {
                     this.settings_font_open = *next_open;
@@ -2225,12 +2481,21 @@ impl Workbench {
                                     .truncate()
                                     .font_family(font)
                                     .text_sm()
-                                    .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                    .font_weight(if on {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
                                     .text_color(c(theme::FG_STRONG))
                                     .child(font),
                             )
                             .when(on, |h| {
-                                h.child(Icon::new(gpui_kit::assets::IconName::Check).flex_none().size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))
+                                h.child(
+                                    Icon::new(gpui_kit::assets::IconName::Check)
+                                        .flex_none()
+                                        .size(theme::u(13.))
+                                        .text_color(c(theme::ACCENT_TEXT)),
+                                )
                             }),
                     );
                 }
@@ -2248,16 +2513,29 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn appearance_entries(&self, s: &Settings, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+    fn appearance_entries(
+        &self,
+        s: &Settings,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<SettingEntry> {
         let lang_controls = self.render_language_dropdown(compact, cx);
         let size = s.ui_size;
-        let size_controls = settings_segmented("seg-ui-size", UiSize::ALL.iter().map(|z| {
-            let z = *z;
-            settings_pill(SharedString::from(format!("ui-size-{}", z.label())), tr(z.label()), z == size, cx.listener(move |this, _, w, cx| {
-                this.settings.ui_size = z;
-                this.apply_appearance(w, cx);
-            }))
-        }));
+        let size_controls = settings_segmented(
+            "seg-ui-size",
+            UiSize::ALL.iter().map(|z| {
+                let z = *z;
+                settings_pill(
+                    SharedString::from(format!("ui-size-{}", z.label())),
+                    tr(z.label()),
+                    z == size,
+                    cx.listener(move |this, _, w, cx| {
+                        this.settings.ui_size = z;
+                        this.apply_appearance(w, cx);
+                    }),
+                )
+            }),
+        );
         let bg_state: (SharedString, bool) = match (&s.bg_image, s.background()) {
             (None, _) => (tr("No image. Panels use the theme's solid colors.").into(), false),
             (Some(p), None) => (crate::trf!("{0} was not found. Choose another image or remove it."; 0 => p.display()).into(), true),
@@ -2266,23 +2544,46 @@ impl Workbench {
         let bg_controls = h_flex()
             .gap_2()
             .items_center()
-            .child(Button::new("bg-choose").label(if s.bg_image.is_some() { tr("Change image…") } else { tr("Choose image…") }).xsmall().on_click(cx.listener(|this, _, w, cx| this.choose_background(w, cx))))
+            .child(
+                Button::new("bg-choose")
+                    .label(if s.bg_image.is_some() {
+                        tr("Change image…")
+                    } else {
+                        tr("Choose image…")
+                    })
+                    .xsmall()
+                    .on_click(cx.listener(|this, _, w, cx| this.choose_background(w, cx))),
+            )
             .when(s.bg_image.is_some(), |h| {
-                h.child(Button::new("bg-remove").label(tr("Remove")).xsmall().ghost().on_click(cx.listener(|this, _, w, cx| {
-                    this.settings.bg_image = None;
-                    this.apply_appearance(w, cx);
-                    this.status = tr("Background image removed").into();
-                })))
+                h.child(
+                    Button::new("bg-remove")
+                        .label(tr("Remove"))
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.settings.bg_image = None;
+                            this.apply_appearance(w, cx);
+                            this.status = tr("Background image removed").into();
+                        })),
+                )
             })
             .into_any_element();
         let vis = s.bg_visibility;
-        let vis_controls = settings_segmented("seg-bg-vis", Visibility::ALL.iter().map(|v| {
-            let v = *v;
-            settings_pill(SharedString::from(format!("bg-vis-{}", v.label())), tr(v.label()), v == vis, cx.listener(move |this, _, w, cx| {
-                this.settings.bg_visibility = v;
-                this.apply_appearance(w, cx);
-            }))
-        }));
+        let vis_controls = settings_segmented(
+            "seg-bg-vis",
+            Visibility::ALL.iter().map(|v| {
+                let v = *v;
+                settings_pill(
+                    SharedString::from(format!("bg-vis-{}", v.label())),
+                    tr(v.label()),
+                    v == vis,
+                    cx.listener(move |this, _, w, cx| {
+                        this.settings.bg_visibility = v;
+                        this.apply_appearance(w, cx);
+                    }),
+                )
+            }),
+        );
         let vis_desc: SharedString = match vis {
             Visibility::Strong => tr("Strong: the picture shows clearly. Over very bright pictures, dim text (line numbers, hints) can drop below comfortable contrast.").into(),
             _ => tr("How much of the picture shows through the panels. The code side of the editor always gets less of it than the right edge.").into(),
@@ -2343,12 +2644,23 @@ impl Workbench {
             ),
         ];
         if s.backdrop_visibility().is_some() {
-            out.push(SettingEntry::inline("Backdrop & scenes", "Background visibility", vis_desc, "opacity visibility soft balanced strong", vis_controls));
+            out.push(SettingEntry::inline(
+                "Backdrop & scenes",
+                "Background visibility",
+                vis_desc,
+                "opacity visibility soft balanced strong",
+                vis_controls,
+            ));
         }
         out
     }
 
-    fn editor_entries(&self, s: &Settings, compact: bool, cx: &mut Context<Self>) -> Vec<SettingEntry> {
+    fn editor_entries(
+        &self,
+        s: &Settings,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<SettingEntry> {
         let font_controls = self.render_font_dropdown(compact, cx);
         vec![
             SettingEntry::inline(
@@ -2384,12 +2696,26 @@ impl Workbench {
 
     fn agent_entries(&self, s: &Settings, cx: &mut Context<Self>) -> Vec<SettingEntry> {
         let access = s.access().to_string();
-        let access_controls = settings_segmented("seg-access", [("read", tr("Read only")), ("write", tr("Read & write")), ("full", tr("Full access"))].into_iter().map(|(id, name)| {
-            settings_pill(SharedString::from(format!("access-{id}")), name, access == id, cx.listener(move |this, _, w, cx| {
-                this.settings.agent_access = id.into();
-                this.apply_settings(w, cx);
-            }))
-        }));
+        let access_controls = settings_segmented(
+            "seg-access",
+            [
+                ("read", tr("Read only")),
+                ("write", tr("Read & write")),
+                ("full", tr("Full access")),
+            ]
+            .into_iter()
+            .map(|(id, name)| {
+                settings_pill(
+                    SharedString::from(format!("access-{id}")),
+                    name,
+                    access == id,
+                    cx.listener(move |this, _, w, cx| {
+                        this.settings.agent_access = id.into();
+                        this.apply_settings(w, cx);
+                    }),
+                )
+            }),
+        );
         vec![
             SettingEntry::inline("Permissions & behavior", "AI agent: access", tr("Read only: it reads and explains, edits and commands are refused. Read & write: it edits files (Undo is under the chat), commands ask first. Full access: nothing asks.").into(), "agent access permissions", access_controls),
             SettingEntry::inline("Permissions & behavior", "AI agent: turn off when idle", tr("FluxCode already cools idle agent RAM and CPU automatically without disconnecting it. Turn this on only if you also want the agent process stopped after 10 quiet minutes.").into(), "idle memory agent timeout", settings_toggle("idle", "AI agent: turn off when idle", s.agent_idle_min > 0, cx, |w| w.settings.agent_idle_min = if w.settings.agent_idle_min == 0 { 10 } else { 0 })),
@@ -2397,23 +2723,42 @@ impl Workbench {
             SettingEntry::inline("Permissions & behavior", "Follow the agent's edits", tr("When the agent changes a file, it opens in the editor and the change is typed in line by line while the view follows it. Takes under a second and never slows the agent.").into(), "agent follow edits typing", settings_toggle("follow", "Follow the agent's edits", s.agent_follow_edits, cx, |w| w.settings.agent_follow_edits = !w.settings.agent_follow_edits)),
             SettingEntry::stacked("Accounts", "GitHub", tr("Sign in so gh, git and OpenCode inside FluxCode can use your account (GH_TOKEN).").into(), "github token cli account login", self.render_github(cx)),
             SettingEntry::stacked("Accounts", "GitHub Copilot", tr("Sign in so the editor can suggest the next lines of code. Needs the Copilot language server installed once, and a Copilot plan (a free plan exists).").into(), "copilot github login server", self.render_copilot(cx)),
+            SettingEntry::stacked("Accounts", "Antigravity & Google Flow", tr("Manage isolated Windows sessions for Antigravity and Google Flow, switch Sticky / Auto Rotate / Highest Credits mode, and check Flow credits.").into(), "antigravity gflow flow accounts rotate sticky credits video", self.render_gflow_panel(cx)),
         ]
     }
 
-    fn settings_section_content(&self, section: SettingsSection, content_w: f32, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn settings_section_content(
+        &self,
+        section: SettingsSection,
+        content_w: f32,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let s = &self.settings;
         match section {
             SettingsSection::Appearance => {
                 let mut entries = self.appearance_entries(s, compact, cx);
-                let idx_scene = entries.iter().position(|e| e.title == "Animated background").unwrap_or(entries.len());
-                let display_rows: Vec<AnyElement> = entries.drain(..idx_scene).map(|e| e.render(compact)).collect();
+                let idx_scene = entries
+                    .iter()
+                    .position(|e| e.title == "Animated background")
+                    .unwrap_or(entries.len());
+                let display_rows: Vec<AnyElement> = entries
+                    .drain(..idx_scene)
+                    .map(|e| e.render(compact))
+                    .collect();
                 let mut scene_rows: Vec<AnyElement> = Vec::new();
                 for e in entries {
                     let is_scene = e.title == "Animated background";
                     let is_motion = e.title == "Background animation";
                     scene_rows.push(e.render(compact));
                     if is_scene {
-                        scene_rows.push(div().px_4().pb_4().child(scene_cards(scene_grid_cols(content_w), &s.bg_scene, cx)).into_any_element());
+                        scene_rows.push(
+                            div()
+                                .px_4()
+                                .pb_4()
+                                .child(scene_cards(scene_grid_cols(content_w), &s.bg_scene, cx))
+                                .into_any_element(),
+                        );
                     }
                     if is_motion {
                         if let Some(banner) = self.render_motion_banner(cx) {
@@ -2435,12 +2780,21 @@ impl Workbench {
                     .child(settings_group("Backdrop & scenes", scene_rows))
                     .into_any_element()
             }
-            SettingsSection::Editor | SettingsSection::Agents => self.grouped_entries(self.settings_entries(section, compact, cx), compact),
+            SettingsSection::Editor | SettingsSection::Agents => {
+                self.grouped_entries(self.settings_entries(section, compact, cx), compact)
+            }
             SettingsSection::Wsl | SettingsSection::Windows | SettingsSection::Updates => {
-                let rows = self.settings_entries(section, compact, cx).into_iter().map(|e| e.render(compact)).collect();
+                let rows = self
+                    .settings_entries(section, compact, cx)
+                    .into_iter()
+                    .map(|e| e.render(compact))
+                    .collect();
                 settings_card(rows)
             }
-            SettingsSection::SoulFiles => settings_card(vec![div().p_4().child(self.render_soul_files(cx)).into_any_element()]),
+            SettingsSection::SoulFiles => settings_card(vec![div()
+                .p_4()
+                .child(self.render_soul_files(cx))
+                .into_any_element()]),
             SettingsSection::Shortcuts => self.render_shortcuts_card(None),
             SettingsSection::About => self.render_about_section(),
         }
@@ -2457,7 +2811,11 @@ impl Workbench {
                 groups.push((grp, vec![row]));
             }
         }
-        v_flex().w_full().gap_5().children(groups.into_iter().map(|(g, rows)| settings_group(g, rows))).into_any_element()
+        v_flex()
+            .w_full()
+            .gap_5()
+            .children(groups.into_iter().map(|(g, rows)| settings_group(g, rows)))
+            .into_any_element()
     }
 
     fn render_motion_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -2477,13 +2835,25 @@ impl Workbench {
                 .gap_3()
                 .items_center()
                 .child(div().flex_none().size(px(7.)).rounded_full().bg(c(tok)))
-                .child(div().flex_1().min_w_0().text_xs().text_color(c(tok)).child(text))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(c(tok))
+                        .child(text),
+                )
                 .when(heavy, |h| {
-                    h.child(Button::new("sc-anim-off").label(tr("Turn it off")).xsmall().on_click(cx.listener(|this, _, w, cx| {
-                        if this.settings.bg_motion {
-                            this.toggle_bg_motion(w, cx);
-                        }
-                    })))
+                    h.child(
+                        Button::new("sc-anim-off")
+                            .label(tr("Turn it off"))
+                            .xsmall()
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                if this.settings.bg_motion {
+                                    this.toggle_bg_motion(w, cx);
+                                }
+                            })),
+                    )
                 })
                 .into_any_element(),
         )
@@ -2508,7 +2878,15 @@ impl Workbench {
                     .py_2p5()
                     .gap_3()
                     .when(i % 2 == 1, |h| h.bg(c(theme::BG_SIDE).opacity(0.4)))
-                    .child(div().flex_1().min_w_0().truncate().text_sm().text_color(c(theme::FG)).child(tr(k.label)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(c(theme::FG))
+                            .child(tr(k.label)),
+                    )
                     .child(crate::quick::keys_chips(k.keys))
                     .into_any_element()
             })
@@ -2517,7 +2895,11 @@ impl Workbench {
     }
 
     fn render_about_section(&self) -> AnyElement {
-        let engine = if crate::accel::zig_enabled() { tr("Rust + Zig SIMD") } else { tr("Pure Rust") };
+        let engine = if crate::accel::zig_enabled() {
+            tr("Rust + Zig SIMD")
+        } else {
+            tr("Pure Rust")
+        };
         v_flex()
             .w_full()
             .gap_4()
@@ -2553,7 +2935,13 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn render_settings_search(&self, sections: &[SettingsSection], query: &str, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_settings_search(
+        &self,
+        sections: &[SettingsSection],
+        query: &str,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut results = v_flex().w_full().gap_5();
         let mut total = 0usize;
         let open_btn = |sec: SettingsSection, cx: &mut Context<Self>| {
@@ -2563,7 +2951,8 @@ impl Workbench {
                 .ghost()
                 .on_click(cx.listener(move |this, _, w, cx| {
                     this.settings_section = sec;
-                    this.settings_search.update(cx, |s, cx| s.set_value("", w, cx));
+                    this.settings_search
+                        .update(cx, |s, cx| s.set_value("", w, cx));
                     this.settings_scroll.set_offset(point(px(0.), px(0.)));
                     cx.notify();
                 }))
@@ -2571,7 +2960,19 @@ impl Workbench {
         for &sec in sections {
             let mut rows: Vec<AnyElement> = Vec::new();
             for entry in self.settings_entries(sec, compact, cx) {
-                if matches_query(query, &[sec.title(), tr(sec.title()), entry.group, tr(entry.group), entry.title, tr(entry.title), &entry.desc, entry.keywords]) {
+                if matches_query(
+                    query,
+                    &[
+                        sec.title(),
+                        tr(sec.title()),
+                        entry.group,
+                        tr(entry.group),
+                        entry.title,
+                        tr(entry.title),
+                        &entry.desc,
+                        entry.keywords,
+                    ],
+                ) {
                     rows.push(entry.render(compact));
                 }
             }
@@ -2581,15 +2982,55 @@ impl Workbench {
                 rows.insert(0, self.theme_setting_entry(compact, cx).render(compact));
             }
             if sec == SettingsSection::Appearance
-                && matches_query(query, &["icon file icons explorer theme pack vsx", tr("Theme"), tr("File icon theme")])
+                && matches_query(
+                    query,
+                    &[
+                        "icon file icons explorer theme pack vsx",
+                        tr("Theme"),
+                        tr("File icon theme"),
+                    ],
+                )
             {
-                rows.insert(usize::from(color_hit), self.icon_theme_setting_entry(compact, cx).render(compact));
+                rows.insert(
+                    usize::from(color_hit),
+                    self.icon_theme_setting_entry(compact, cx).render(compact),
+                );
             }
-            if sec == SettingsSection::SoulFiles && matches_query(query, &[sec.title(), tr(sec.title()), sec.description(), tr(sec.description()), "claude codex opencode gemini soul"]) {
-                rows.push(div().p_4().child(self.render_soul_files(cx)).into_any_element());
+            if sec == SettingsSection::SoulFiles
+                && matches_query(
+                    query,
+                    &[
+                        sec.title(),
+                        tr(sec.title()),
+                        sec.description(),
+                        tr(sec.description()),
+                        "claude codex opencode gemini soul",
+                    ],
+                )
+            {
+                rows.push(
+                    div()
+                        .p_4()
+                        .child(self.render_soul_files(cx))
+                        .into_any_element(),
+                );
             }
-            if sec == SettingsSection::About && matches_query(query, &[sec.title(), tr(sec.title()), "version license github engine rust zig simd", crate::update::BUILD]) {
-                rows.push(settings_row_inline(tr("About FluxCode"), tr(sec.description()).into(), open_btn(SettingsSection::About, cx).into_any_element()));
+            if sec == SettingsSection::About
+                && matches_query(
+                    query,
+                    &[
+                        sec.title(),
+                        tr(sec.title()),
+                        "version license github engine rust zig simd",
+                        crate::update::BUILD,
+                    ],
+                )
+            {
+                rows.push(settings_row_inline(
+                    tr("About FluxCode"),
+                    tr(sec.description()).into(),
+                    open_btn(SettingsSection::About, cx).into_any_element(),
+                ));
             }
             if !rows.is_empty() {
                 total += rows.len();
@@ -2602,15 +3043,28 @@ impl Workbench {
                                 .px_1()
                                 .gap_2()
                                 .items_center()
-                                .child(sec.icon().size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                                .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr(sec.title())))
+                                .child(
+                                    sec.icon()
+                                        .size(theme::u(13.))
+                                        .text_color(c(theme::FG_MUTED)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(theme::FG_MUTED))
+                                        .child(tr(sec.title())),
+                                )
                                 .child(open_btn(sec, cx)),
                         )
                         .child(settings_card(rows)),
                 );
             }
             if sec == SettingsSection::Shortcuts {
-                let has_keys = crate::commands::commands().into_iter().any(|k| !k.keys.is_empty() && matches_query(query, &[k.label, tr(k.label), k.keys]));
+                let has_keys = crate::commands::commands().into_iter().any(|k| {
+                    !k.keys.is_empty() && matches_query(query, &[k.label, tr(k.label), k.keys])
+                });
                 if has_keys {
                     total += 1;
                     results = results.child(
@@ -2622,8 +3076,19 @@ impl Workbench {
                                     .px_1()
                                     .gap_2()
                                     .items_center()
-                                    .child(sec.icon().size(theme::u(13.)).text_color(c(theme::FG_MUTED)))
-                                    .child(div().flex_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(tr(sec.title())))
+                                    .child(
+                                        sec.icon()
+                                            .size(theme::u(13.))
+                                            .text_color(c(theme::FG_MUTED)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(c(theme::FG_MUTED))
+                                            .child(tr(sec.title())),
+                                    )
                                     .child(open_btn(sec, cx)),
                             )
                             .child(self.render_shortcuts_card(Some(query))),
@@ -2638,13 +3103,28 @@ impl Workbench {
                 .px_4()
                 .gap_3()
                 .items_center()
-                .child(Icon::new(gpui_kit::component::IconName::Search).size(theme::u(20.)).text_color(c(theme::FG_DIM)))
-                .child(div().text_sm().text_color(c(theme::FG_MUTED)).child(crate::trf!("No settings match \"{q}\""; q => query)))
-                .child(Button::new("sr-clear").label(tr("Clear search")).xsmall().on_click(cx.listener(|this, _, w, cx| {
-                    this.settings_search.update(cx, |s, cx| s.set_value("", w, cx));
-                    this.settings_focus.focus(w, cx);
-                    cx.notify();
-                })))
+                .child(
+                    Icon::new(gpui_kit::component::IconName::Search)
+                        .size(theme::u(20.))
+                        .text_color(c(theme::FG_DIM)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(crate::trf!("No settings match \"{q}\""; q => query)),
+                )
+                .child(
+                    Button::new("sr-clear")
+                        .label(tr("Clear search"))
+                        .xsmall()
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.settings_search
+                                .update(cx, |s, cx| s.set_value("", w, cx));
+                            this.settings_focus.focus(w, cx);
+                            cx.notify();
+                        })),
+                )
                 .into_any_element()]);
         }
         v_flex()
@@ -2657,8 +3137,19 @@ impl Workbench {
                     .pb_3()
                     .border_b_1()
                     .border_color(c(theme::BORDER))
-                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("Search results")))
-                    .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(crate::trf!("Showing matches for \"{q}\""; q => query))),
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(tr("Search results")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(c(theme::FG_MUTED))
+                            .child(crate::trf!("Showing matches for \"{q}\""; q => query)),
+                    ),
             )
             .child(results)
             .into_any_element()
@@ -2667,26 +3158,62 @@ impl Workbench {
 
 impl Workbench {
     fn render_soul_files(&self, cx: &mut Context<Self>) -> AnyElement {
-        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
         let installed = crate::acp::installed();
         if installed.is_empty() {
-            return div().w_full().max_w(theme::u(760.)).py_2().text_xs().text_color(c(theme::FG_DIM)).child(tr("No agent installed yet. The agent panel (Ctrl+L) lists agents to download.")).into_any_element();
+            return div()
+                .w_full()
+                .max_w(theme::u(760.))
+                .py_2()
+                .text_xs()
+                .text_color(c(theme::FG_DIM))
+                .child(tr(
+                    "No agent installed yet. The agent panel (Ctrl+L) lists agents to download.",
+                ))
+                .into_any_element();
         }
         let mut list = v_flex().w_full().max_w(theme::u(760.));
         for id in installed {
             let mut files = v_flex().gap_1();
             for (k, place) in crate::acp::instruction_files(&id).iter().enumerate() {
                 let (label, path) = match *place {
-                    crate::acp::Place::Home(rel) => (format!("~/{rel}"), home.as_ref().map(|h| rel.split('/').fold(h.clone(), |p, s| p.join(s)))),
-                    crate::acp::Place::Project(rel) => (format!("{}/{rel}", tr("project")), self.root.as_ref().map(|r| rel.split('/').fold(r.clone(), |p, s| p.join(s)))),
+                    crate::acp::Place::Home(rel) => (
+                        format!("~/{rel}"),
+                        home.as_ref()
+                            .map(|h| rel.split('/').fold(h.clone(), |p, s| p.join(s))),
+                    ),
+                    crate::acp::Place::Project(rel) => (
+                        format!("{}/{rel}", tr("project")),
+                        self.root
+                            .as_ref()
+                            .map(|r| rel.split('/').fold(r.clone(), |p, s| p.join(s))),
+                    ),
                 };
                 let exists = path.as_ref().is_some_and(|p| p.is_file());
                 let key = SharedString::from(format!("soul-{id}-{k}"));
                 files = files.child(
                     h_flex()
                         .gap_2()
-                        .child(gpui_kit::component::Icon::new(gpui_kit::assets::IconName::ScrollText).size(theme::u(13.)).text_color(c(if exists { theme::FG_MUTED } else { theme::FG_DIM })))
-                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(if exists { theme::FG } else { theme::FG_DIM })).child(label))
+                        .child(
+                            gpui_kit::component::Icon::new(gpui_kit::assets::IconName::ScrollText)
+                                .size(theme::u(13.))
+                                .text_color(c(if exists {
+                                    theme::FG_MUTED
+                                } else {
+                                    theme::FG_DIM
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(if exists { theme::FG } else { theme::FG_DIM }))
+                                .child(label),
+                        )
                         .when_some(path, |h, p| {
                             h.child(
                                 Button::new(key)
@@ -2813,10 +3340,17 @@ impl Workbench {
                                 let r = cx
                                     .background_spawn(async move {
                                         #[cfg(windows)]
-                                        let out = crate::proc::shell_command("npm install -g @github/copilot-language-server").output();
+                                        let out = crate::proc::shell_command(
+                                            "npm install -g @github/copilot-language-server",
+                                        )
+                                        .output();
                                         #[cfg(not(windows))]
                                         let out = std::process::Command::new("npm")
-                                            .args(["install", "-g", "@github/copilot-language-server"])
+                                            .args([
+                                                "install",
+                                                "-g",
+                                                "@github/copilot-language-server",
+                                            ])
                                             .output();
                                         match out {
                                             Ok(o) if o.status.success() => Ok(()),
@@ -2835,11 +3369,14 @@ impl Workbench {
                                         match r {
                                             Ok(()) => {
                                                 this.copilot.retry();
-                                                this.status = tr("Copilot server installed.").into();
+                                                this.status =
+                                                    tr("Copilot server installed.").into();
                                                 Some(this.copilot.clone())
                                             }
                                             Err(e) => {
-                                                this.status = crate::trf!("Install failed: {e}"; e => e).into();
+                                                this.status =
+                                                    crate::trf!("Install failed: {e}"; e => e)
+                                                        .into();
                                                 None
                                             }
                                         }
@@ -2847,7 +3384,8 @@ impl Workbench {
                                     .ok()
                                     .flatten();
                                 if let Some(copilot) = installed {
-                                    let started = cx.background_spawn(async move { copilot.start() }).await;
+                                    let started =
+                                        cx.background_spawn(async move { copilot.start() }).await;
                                     _ = this.update(cx, |this, cx| {
                                         if let Err(e) = started {
                                             this.status = e.into();
@@ -2941,12 +3479,25 @@ impl Workbench {
             return h_flex()
                 .gap_2()
                 .text_sm()
-                .child(format!("{} ({})", a.login, if a.source == "gh" { "GitHub CLI" } else { "token" }))
-                .child(Button::new("gh-out").label(tr("Sign out")).xsmall().on_click(cx.listener(|this, _, _, cx| {
-                    let _ = crate::github::logout();
-                    this.github = None;
-                    cx.notify();
-                })))
+                .child(format!(
+                    "{} ({})",
+                    a.login,
+                    if a.source == "gh" {
+                        "GitHub CLI"
+                    } else {
+                        "token"
+                    }
+                ))
+                .child(
+                    Button::new("gh-out")
+                        .label(tr("Sign out"))
+                        .xsmall()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let _ = crate::github::logout();
+                            this.github = None;
+                            cx.notify();
+                        })),
+                )
                 .into_any_element();
         }
         v_flex()
@@ -2958,32 +3509,57 @@ impl Workbench {
                 h_flex()
                     .gap_1p5()
                     .flex_wrap()
-                    .child(Button::new("gh-token").label(tr("Sign in with token")).xsmall().primary().on_click(cx.listener(|this, _, _, cx| {
-                        let t = this.github_input.read(cx).value().to_string();
-                        cx.spawn(async move |this, cx| {
-                            let r = cx.background_spawn(async move { crate::github::login_token(&t) }).await;
-                            _ = this.update(cx, |this, cx| this.github_result(r, cx));
-                        })
-                        .detach();
-                    })))
-                    .child(Button::new("gh-cli").label(tr("Use GitHub CLI login")).xsmall().on_click(cx.listener(|_, _, _, cx| {
-                        cx.spawn(async move |this, cx| {
-                            let r = cx.background_spawn(async move { crate::github::login_cli() }).await;
-                            _ = this.update(cx, |this, cx| this.github_result(r, cx));
-                        })
-                        .detach();
-                    }))),
+                    .child(
+                        Button::new("gh-token")
+                            .label(tr("Sign in with token"))
+                            .xsmall()
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let t = this.github_input.read(cx).value().to_string();
+                                cx.spawn(async move |this, cx| {
+                                    let r = cx
+                                        .background_spawn(
+                                            async move { crate::github::login_token(&t) },
+                                        )
+                                        .await;
+                                    _ = this.update(cx, |this, cx| this.github_result(r, cx));
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        Button::new("gh-cli")
+                            .label(tr("Use GitHub CLI login"))
+                            .xsmall()
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.spawn(async move |this, cx| {
+                                    let r = cx
+                                        .background_spawn(async move { crate::github::login_cli() })
+                                        .await;
+                                    _ = this.update(cx, |this, cx| this.github_result(r, cx));
+                                })
+                                .detach();
+                            })),
+                    ),
             )
             .into_any_element()
     }
 }
 
 fn install_progress(animate: bool) -> AnyElement {
-    let bar = div().absolute().top_0().h_full().w(relative(0.35)).rounded_full().bg(c(theme::ACCENT));
+    let bar = div()
+        .absolute()
+        .top_0()
+        .h_full()
+        .w(relative(0.35))
+        .rounded_full()
+        .bg(c(theme::ACCENT));
     let bar_el = if animate {
         bar.with_animation(
             "cpl-install-bar",
-            Animation::new(Duration::from_millis(1300)).repeat().with_easing(gpui_kit::ease_in_out),
+            Animation::new(Duration::from_millis(1300))
+                .repeat()
+                .with_easing(gpui_kit::ease_in_out),
             |d, t| d.left(relative(-0.35 + 1.35 * t)),
         )
         .into_any_element()
@@ -3033,7 +3609,11 @@ mod tests {
     fn grid_columns_avoid_scene_orphans() {
         for w in [320., 460., 600., 780., 1024.] {
             let cols = scene_grid_cols(w);
-            assert_eq!(12 % cols, 0, "12 scenes should divide evenly for width {w} (got {cols})");
+            assert_eq!(
+                12 % cols,
+                0,
+                "12 scenes should divide evenly for width {w} (got {cols})"
+            );
         }
     }
 
@@ -3048,9 +3628,18 @@ mod tests {
     #[test]
     fn search_matches_multi_word_queries() {
         assert!(matches_query("", &["anything"]));
-        assert!(matches_query("font size", &["Font size", "Pixels in editor"]));
-        assert!(matches_query("liquid glass", &["Appearance", "Translucent Liquid Glass panel"]));
-        assert!(!matches_query("font missingword", &["Font size", "Pixels in editor"]));
+        assert!(matches_query(
+            "font size",
+            &["Font size", "Pixels in editor"]
+        ));
+        assert!(matches_query(
+            "liquid glass",
+            &["Appearance", "Translucent Liquid Glass panel"]
+        ));
+        assert!(!matches_query(
+            "font missingword",
+            &["Font size", "Pixels in editor"]
+        ));
     }
 
     #[test]

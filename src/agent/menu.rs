@@ -1,4 +1,3 @@
-
 use super::{agent_glyph, agent_id, model_groups, ConfigOpt, Status};
 use crate::i18n::tr;
 use crate::theme::{self, c, GlassExt};
@@ -41,7 +40,16 @@ impl MenuState {
                 cx.notify();
             }
         });
-        Self { open: None, query, focus: cx.focus_handle(), sel: 0, scroll: ScrollHandle::new(), reveal: Cell::new(false), closed: None, _sub }
+        Self {
+            open: None,
+            query,
+            focus: cx.focus_handle(),
+            sel: 0,
+            scroll: ScrollHandle::new(),
+            reveal: Cell::new(false),
+            closed: None,
+            _sub,
+        }
     }
 }
 
@@ -108,7 +116,12 @@ fn placeholder(m: Menu) -> &'static str {
 }
 
 impl Workbench {
-    pub(crate) fn agent_menu_toggle(&mut self, m: Menu, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn agent_menu_toggle(
+        &mut self,
+        m: Menu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let st = &mut self.agent.menu;
         if let Some((was, at)) = st.closed.take() {
             if was == m && at.elapsed().as_millis() < 300 {
@@ -146,7 +159,9 @@ impl Workbench {
             st.focus.focus(window, cx);
         }
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(30)).await;
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(30))
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.agent.menu.reveal.set(true);
                 cx.notify();
@@ -158,7 +173,9 @@ impl Workbench {
 
     fn agent_menu_load_catalog(&mut self, cx: &mut Context<Self>) {
         let view = self.agent_config_view();
-        let Some(o) = view.iter().find(|o| o.category == "model") else { return };
+        let Some(o) = view.iter().find(|o| o.category == "model") else {
+            return;
+        };
         let mut ids: Vec<String> = o.choices.iter().map(|c| c.0.clone()).collect();
         ids.extend(o.choices.iter().filter_map(|(_, n, _)| {
             let (v, _) = claude_version(n)?;
@@ -177,7 +194,9 @@ impl Workbench {
     }
 
     fn agent_menu_close(&mut self, quiet: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(m) = self.agent.menu.open.take() else { return };
+        let Some(m) = self.agent.menu.open.take() else {
+            return;
+        };
         if quiet {
             self.agent.menu.closed = Some((m, Instant::now()));
         } else {
@@ -188,7 +207,9 @@ impl Workbench {
     }
 
     fn agent_menu_filtered(&self, cx: &App) -> Vec<Row> {
-        let Some(m) = self.agent.menu.open else { return Vec::new() };
+        let Some(m) = self.agent.menu.open else {
+            return Vec::new();
+        };
         let rows = self.agent_menu_rows(m, cx);
         let q = self.agent.menu.query.read(cx).value().trim().to_lowercase();
         if q.is_empty() || !searchable(m, rows.len()) {
@@ -197,17 +218,31 @@ impl Workbench {
         rows.into_iter().filter(|r| r.matches(&q)).collect()
     }
 
-    pub(crate) fn on_agent_menu_up(&mut self, _: &crate::workbench::AgentMenuUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_menu_up(
+        &mut self,
+        _: &crate::workbench::AgentMenuUp,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let n = self.agent_menu_filtered(cx).len();
         let st = &mut self.agent.menu;
         if n > 0 {
-            st.sel = if st.sel == 0 { n - 1 } else { st.sel.min(n) - 1 };
+            st.sel = if st.sel == 0 {
+                n - 1
+            } else {
+                st.sel.min(n) - 1
+            };
             st.reveal.set(true);
         }
         cx.notify();
     }
 
-    pub(crate) fn on_agent_menu_down(&mut self, _: &crate::workbench::AgentMenuDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_menu_down(
+        &mut self,
+        _: &crate::workbench::AgentMenuDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let n = self.agent_menu_filtered(cx).len();
         let st = &mut self.agent.menu;
         if n > 0 {
@@ -217,7 +252,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_agent_menu_pick(&mut self, _: &crate::workbench::AgentMenuPick, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_menu_pick(
+        &mut self,
+        _: &crate::workbench::AgentMenuPick,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.agent_menu_filtered(cx);
         if let Some(r) = rows.get(self.agent.menu.sel.min(rows.len().saturating_sub(1))) {
             let act = r.act.clone();
@@ -225,7 +265,12 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn on_agent_menu_close(&mut self, _: &crate::workbench::AgentMenuClose, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_agent_menu_close(
+        &mut self,
+        _: &crate::workbench::AgentMenuClose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.agent_menu_close(false, window, cx);
     }
 
@@ -247,7 +292,9 @@ impl Workbench {
             Menu::Agent => self.agent_rows(),
             Menu::Model => {
                 let view = self.agent_config_view();
-                let Some(o) = view.iter().find(|o| o.category == "model") else { return Vec::new() };
+                let Some(o) = view.iter().find(|o| o.category == "model") else {
+                    return Vec::new();
+                };
                 if let Some(rows) = claude_rows(o) {
                     return rows;
                 }
@@ -258,10 +305,22 @@ impl Workbench {
                             "free" => tr("Free (OpenCode Zen)").into(),
                             g => g.to_string().into(),
                         };
-                        let (id, cur, free_group) = (o.id.clone(), o.current.clone(), group == "free");
+                        let (id, cur, free_group) =
+                            (o.id.clone(), o.current.clone(), group == "free");
                         models.into_iter().map(move |(v, n)| {
                             let meta = super::catalog::get(&v);
-                            let (ctx, out) = meta.map(|m| (super::catalog::tokens(m.context), if m.output > 0 { super::catalog::tokens(m.output) } else { String::new() })).unwrap_or_default();
+                            let (ctx, out) = meta
+                                .map(|m| {
+                                    (
+                                        super::catalog::tokens(m.context),
+                                        if m.output > 0 {
+                                            super::catalog::tokens(m.output)
+                                        } else {
+                                            String::new()
+                                        },
+                                    )
+                                })
+                                .unwrap_or_default();
                             Row {
                                 group: title.clone(),
                                 lead: Lead::None,
@@ -269,7 +328,11 @@ impl Workbench {
                                 sub: v.clone().into(),
                                 wrap: false,
                                 checked: v == cur,
-                                trail: Trail::Cols(ctx.into(), out.into(), !free_group && meta.is_some_and(|m| m.free)),
+                                trail: Trail::Cols(
+                                    ctx.into(),
+                                    out.into(),
+                                    !free_group && meta.is_some_and(|m| m.free),
+                                ),
                                 act: Act::Opt(id.clone(), v),
                             }
                         })
@@ -282,7 +345,14 @@ impl Workbench {
                     .iter()
                     .map(|&(id, icon, title, desc)| Row {
                         group: SharedString::default(),
-                        lead: Lead::Icon(icon, if id == "full" { theme::WARN } else { theme::FG_MUTED }),
+                        lead: Lead::Icon(
+                            icon,
+                            if id == "full" {
+                                theme::WARN
+                            } else {
+                                theme::FG_MUTED
+                            },
+                        ),
                         title: tr(title).into(),
                         sub: tr(desc).into(),
                         wrap: true,
@@ -301,7 +371,15 @@ impl Workbench {
         let current = agent_id();
         let busy = self.agent.installing.as_ref().map(|(id, _, _)| id.clone());
         let by_of = |id: &str| -> SharedString {
-            crate::acp::known(id).map(|k| k.by.to_string()).or_else(|| reg.iter().find(|e| e.id == id).map(|e| first_sentence(&e.description))).unwrap_or_default().into()
+            crate::acp::known(id)
+                .map(|k| k.by.to_string())
+                .or_else(|| {
+                    reg.iter()
+                        .find(|e| e.id == id)
+                        .map(|e| first_sentence(&e.description))
+                })
+                .unwrap_or_default()
+                .into()
         };
         let mut rows = Vec::new();
         let here: SharedString = tr("On this PC").into();
@@ -320,15 +398,45 @@ impl Workbench {
             } else {
                 Trail::State(theme::FG_DIM, tr("Off").into())
             };
-            rows.push(Row { group: here.clone(), lead: Lead::Agent(id.clone()), title: crate::acp::display_name(id).into(), sub: by_of(id), wrap: false, checked: on, trail, act: Act::Use(id.clone()) });
+            rows.push(Row {
+                group: here.clone(),
+                lead: Lead::Agent(id.clone()),
+                title: crate::acp::display_name(id).into(),
+                sub: by_of(id),
+                wrap: false,
+                checked: on,
+                trail,
+                act: Act::Use(id.clone()),
+            });
         }
         let get = |id: String, name: String, sub: SharedString, group: &SharedString| {
-            let trail = if busy.as_deref() == Some(id.as_str()) { Trail::Note(tr("Installing…").into()) } else { Trail::Download };
-            Row { group: group.clone(), lead: Lead::Agent(id.clone()), title: name.into(), sub, wrap: false, checked: false, trail, act: Act::Install(id) }
+            let trail = if busy.as_deref() == Some(id.as_str()) {
+                Trail::Note(tr("Installing…").into())
+            } else {
+                Trail::Download
+            };
+            Row {
+                group: group.clone(),
+                lead: Lead::Agent(id.clone()),
+                title: name.into(),
+                sub,
+                wrap: false,
+                checked: false,
+                trail,
+                act: Act::Install(id),
+            }
         };
         let avail: SharedString = tr("Available to download").into();
-        let mut known: Vec<_> = crate::acp::KNOWN.iter().filter(|k| !installed.iter().any(|i| i == k.id)).collect();
-        known.sort_by_key(|k| !crate::acp::recommended(k.id));
+        let mut known: Vec<_> = crate::acp::KNOWN
+            .iter()
+            .filter(|k| !installed.iter().any(|i| i == k.id))
+            .collect();
+        known.sort_by_key(|k| {
+            (
+                crate::acp::cli_without_bridge(k.id).is_none(),
+                !crate::acp::recommended(k.id),
+            )
+        });
         for k in known {
             let sub: SharedString = match crate::acp::cli_without_bridge(k.id) {
                 Some(cli) => crate::trf!("{cli} found · adds its ACP bridge"; cli => cli).into(),
@@ -337,13 +445,28 @@ impl Workbench {
             rows.push(get(k.id.to_string(), k.name.to_string(), sub, &avail));
         }
         let more: SharedString = tr("More in the ACP registry").into();
-        for e in reg.iter().filter(|e| crate::acp::known(&e.id).is_none() && !crate::acp::hidden(&e.id) && !installed.iter().any(|i| *i == e.id) && e.method().is_some()) {
-            rows.push(get(e.id.clone(), e.name.clone(), first_sentence(&e.description).into(), &more));
+        for e in reg.iter().filter(|e| {
+            crate::acp::known(&e.id).is_none()
+                && !crate::acp::hidden(&e.id)
+                && !installed.iter().any(|i| *i == e.id)
+                && e.method().is_some()
+        }) {
+            rows.push(get(
+                e.id.clone(),
+                e.name.clone(),
+                first_sentence(&e.description).into(),
+                &more,
+            ));
         }
         rows
     }
 
-    pub(crate) fn render_agent_menu(&self, top: bool, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_agent_menu(
+        &self,
+        top: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let m = self.agent.menu.open?;
         if (m == Menu::Agent) != top {
             return None;
@@ -355,10 +478,22 @@ impl Workbench {
         let sel = st.sel.min(rows.len().saturating_sub(1));
         let vh = window.viewport_size().height / px(1.);
         let u = |v: f32| f32::from(theme::u(v));
-        let chrome = u(34.) + if search { u(38.) } else { 0. } + if m == Menu::Agent { u(38.) } else { 0. } + if m == Menu::Model && self.agent_effort().is_some() { u(74.) } else { 0. } + 12.;
+        let chrome = u(34.)
+            + if search { u(38.) } else { 0. }
+            + if m == Menu::Agent { u(38.) } else { 0. }
+            + if m == Menu::Model && self.agent_effort().is_some() {
+                u(74.)
+            } else {
+                0.
+            }
+            + 12.;
         let (panel_top, composer_top) = self.agent.geom.get();
         let room = if composer_top > panel_top + 40. {
-            if top { composer_top - panel_top - u(40.) } else { composer_top - panel_top - u(10.) }
+            if top {
+                composer_top - panel_top - u(40.)
+            } else {
+                composer_top - panel_top - u(10.)
+            }
         } else if top {
             vh - 150.
         } else {
@@ -366,7 +501,12 @@ impl Workbench {
         };
         let max_list = (room - chrome).clamp(90., if top { 460. } else { 520. });
 
-        let mut list = v_flex().id("ag-menu-list").max_h(px(max_list)).overflow_y_scroll().track_scroll(&st.scroll).pb_1();
+        let mut list = v_flex()
+            .id("ag-menu-list")
+            .max_h(px(max_list))
+            .overflow_y_scroll()
+            .track_scroll(&st.scroll)
+            .pb_1();
         let mut last: Option<SharedString> = None;
         let (mut child, mut sel_child) = (0usize, 0usize);
         for (i, r) in rows.iter().enumerate() {
@@ -382,11 +522,34 @@ impl Workbench {
                         .gap_2()
                         .text_xs()
                         .text_color(c(theme::FG_DIM))
-                        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).child(r.group.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(r.group.clone()),
+                        )
                         .when(cols, |h| {
-                            h.child(div().flex_none().w(col_ctx()).text_right().whitespace_nowrap().text_size(theme::u(11.)).child(tr("Context")))
-                                .child(div().flex_none().w(col_out()).text_right().whitespace_nowrap().text_size(theme::u(11.)).child(tr("Output")))
-                                .child(div().flex_none().w(theme::u(14.)))
+                            h.child(
+                                div()
+                                    .flex_none()
+                                    .w(col_ctx())
+                                    .text_right()
+                                    .whitespace_nowrap()
+                                    .text_size(theme::u(11.))
+                                    .child(tr("Context")),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(col_out())
+                                    .text_right()
+                                    .whitespace_nowrap()
+                                    .text_size(theme::u(11.))
+                                    .child(tr("Output")),
+                            )
+                            .child(div().flex_none().w(theme::u(14.)))
                         }),
                 );
                 child += 1;
@@ -400,11 +563,20 @@ impl Workbench {
         }
         if rows.is_empty() {
             let q = st.query.read(cx).value().trim().to_string();
-            list = list.child(div().flex_none().px_3().py_2().text_xs().text_color(c(theme::FG_DIM)).child(if total == 0 {
-                tr("Nothing to choose yet: the agent lists these once it is on.").to_string()
-            } else {
-                crate::trf!("Nothing matches “{q}”"; q => q)
-            }));
+            list = list.child(
+                div()
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(if total == 0 {
+                        tr("Nothing to choose yet: the agent lists these once it is on.")
+                            .to_string()
+                    } else {
+                        crate::trf!("Nothing matches “{q}”"; q => q)
+                    }),
+            );
         }
         if st.reveal.replace(false) {
             st.scroll.scroll_to_item(sel_child);
@@ -431,38 +603,100 @@ impl Workbench {
                     .h(theme::u(30.))
                     .px_3()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().truncate().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_MUTED)).child(title))
-                    .child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(tr("↑↓ Enter · Esc"))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(theme::FG_MUTED))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child(tr("↑↓ Enter · Esc")),
+                    ),
             )
             .when(search, |v| {
                 v.child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .child(crate::ui::McInput::new(&st.query).small().cleanable(true).prefix(Icon::new(IconName::Search).size(theme::u(13.)).text_color(c(theme::FG_DIM)))),
+                    div().px_2().pb_1().child(
+                        crate::ui::McInput::new(&st.query)
+                            .small()
+                            .cleanable(true)
+                            .prefix(
+                                Icon::new(IconName::Search)
+                                    .size(theme::u(13.))
+                                    .text_color(c(theme::FG_DIM)),
+                            ),
+                    ),
                 )
             })
-            .when(m == Menu::Model, |v| v.children(self.render_effort_strip(cx)))
+            .when(m == Menu::Model, |v| {
+                v.children(self.render_effort_strip(cx))
+            })
             .child(div().h(px(1.)).bg(c(theme::BORDER)))
             .child(list)
-            .when(m == Menu::Agent, |v| v.child(self.render_agent_menu_footer(cx)));
+            .when(m == Menu::Agent, |v| {
+                v.child(self.render_agent_menu_footer(cx))
+            });
         Some(menu.into_any_element())
     }
 
     fn render_menu_row(&self, i: usize, r: &Row, sel: bool, cx: &mut Context<Self>) -> AnyElement {
         let lead: Option<AnyElement> = match &r.lead {
-            Lead::Agent(id) => Some(div().flex_none().size(theme::u(18.)).flex().items_center().justify_center().child(agent_glyph(id, 16.)).into_any_element()),
-            Lead::Icon(icon, tok) => Some(div().flex_none().pt(px(1.)).child(Icon::new(*icon).size(theme::u(14.)).text_color(c(*tok))).into_any_element()),
+            Lead::Agent(id) => Some(
+                div()
+                    .flex_none()
+                    .size(theme::u(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(agent_glyph(id, 16.))
+                    .into_any_element(),
+            ),
+            Lead::Icon(icon, tok) => Some(
+                div()
+                    .flex_none()
+                    .pt(px(1.))
+                    .child(Icon::new(*icon).size(theme::u(14.)).text_color(c(*tok)))
+                    .into_any_element(),
+            ),
             Lead::None => None,
         };
         let trail: Option<AnyElement> = match &r.trail {
-            Trail::Download => Some(Icon::new(IconName::Download).size(theme::u(14.)).text_color(c(theme::FG_MUTED)).into_any_element()),
-            Trail::Note(t) => Some(div().whitespace_nowrap().text_xs().text_color(c(theme::FG_DIM)).child(t.clone()).into_any_element()),
+            Trail::Download => Some(
+                Icon::new(IconName::Download)
+                    .size(theme::u(14.))
+                    .text_color(c(theme::FG_MUTED))
+                    .into_any_element(),
+            ),
+            Trail::Note(t) => Some(
+                div()
+                    .whitespace_nowrap()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(t.clone())
+                    .into_any_element(),
+            ),
             Trail::State(tok, t) => Some(
                 h_flex()
                     .gap_1()
                     .child(div().size(px(6.)).rounded_full().bg(c(*tok)))
-                    .child(div().whitespace_nowrap().text_xs().text_color(c(if *tok == theme::FG_DIM { theme::FG_DIM } else { theme::FG_MUTED })).child(t.clone()))
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .text_color(c(if *tok == theme::FG_DIM {
+                                theme::FG_DIM
+                            } else {
+                                theme::FG_MUTED
+                            }))
+                            .child(t.clone()),
+                    )
                     .into_any_element(),
             ),
             Trail::Cols(ctx, out, free) => Some(
@@ -470,14 +704,97 @@ impl Workbench {
                     .gap_2()
                     .text_xs()
                     .text_color(c(theme::FG_MUTED))
-                    .when(*free, |h| h.child(div().text_size(theme::u(11.)).text_color(c(theme::GREEN)).child(tr("Free"))))
+                    .when(*free, |h| {
+                        h.child(
+                            div()
+                                .text_size(theme::u(11.))
+                                .text_color(c(theme::GREEN))
+                                .child(tr("Free")),
+                        )
+                    })
                     .child(div().w(col_ctx()).text_right().child(ctx.clone()))
-                    .child(div().w(col_out()).text_right().text_color(c(theme::FG_DIM)).child(out.clone()))
+                    .child(
+                        div()
+                            .w(col_out())
+                            .text_right()
+                            .text_color(c(theme::FG_DIM))
+                            .child(out.clone()),
+                    )
                     .into_any_element(),
             ),
             Trail::None => None,
         };
         let act = r.act.clone();
+        let is_agent_row = matches!(&r.lead, Lead::Agent(_));
+        let is_installed_agent = matches!((&r.lead, &r.act), (Lead::Agent(id), Act::Use(_)) if crate::agent::opt::is_optimized(id));
+        let rec = matches!(&r.lead, Lead::Agent(id) if crate::acp::recommended(id));
+        let found = matches!((&r.lead, &r.act), (Lead::Agent(id), Act::Install(_)) if crate::acp::cli_without_bridge(id).is_some());
+        let wide_row = agent_menu_wide_row(self.agent_panel_width());
+        let name = div()
+            .text_sm()
+            .text_color(c(if r.checked {
+                theme::FG_STRONG
+            } else {
+                theme::FG
+            }))
+            .when(r.checked, |d| d.font_weight(FontWeight::MEDIUM))
+            .child(r.title.clone());
+
+        if is_agent_row && !wide_row {
+            let check = r.checked.then(|| {
+                Icon::new(IconName::Check)
+                    .size(theme::u(14.))
+                    .text_color(c(theme::ACCENT_TEXT))
+            });
+            let top_line = h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .children(lead)
+                .child(name.flex_1().min_w_0().truncate())
+                .children(trail.map(|t| div().flex_none().child(t)))
+                .children(check.map(|ic| div().flex_none().child(ic)));
+            let badges_row = (is_installed_agent || rec).then(|| {
+                h_flex()
+                    .w_full()
+                    .pl(theme::u(24.))
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .when(is_installed_agent, |h| h.child(optimized_badge()))
+                    .when(rec, |h| h.child(recommended_badge()))
+            });
+            let sub_row = found.then(|| {
+                div()
+                    .w_full()
+                    .pl(theme::u(24.))
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(r.sub.clone())
+            });
+            return v_flex()
+                .id(("ag-menu-row", i))
+                .flex_none()
+                .mx_1()
+                .px_2()
+                .py(px(5.))
+                .min_h(theme::u(28.))
+                .gap_1()
+                .rounded(px(5.))
+                .cursor_pointer()
+                .when(sel, |h| h.bg(c(theme::SELECT)))
+                .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
+                .child(top_line)
+                .children(badges_row)
+                .children(sub_row)
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.agent_menu_pick(act.clone(), w, cx)
+                }))
+                .into_any_element();
+        }
+
         h_flex()
             .id(("ag-menu-row", i))
             .flex_none()
@@ -492,39 +809,60 @@ impl Workbench {
             .when(sel, |h| h.bg(c(theme::SELECT)))
             .when(!sel, |h| h.hover(|s| s.bg(c(theme::BG_HOVER))))
             .children(lead)
-            .child({
-                let name = div().text_sm().text_color(c(if r.checked { theme::FG_STRONG } else { theme::FG })).when(r.checked, |d| d.font_weight(FontWeight::MEDIUM)).child(r.title.clone());
-                if r.wrap {
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(name.truncate())
-                        .when(!r.sub.is_empty(), |v| v.child(div().text_xs().text_color(c(theme::FG_DIM)).line_clamp(2).child(r.sub.clone())))
-                } else if matches!(r.trail, Trail::Cols(..)) {
-                    h_flex().flex_1().min_w_0().child(name.flex_1().min_w_0().truncate())
-                } else {
-                    let rec = matches!(&r.lead, Lead::Agent(id) if crate::acp::recommended(id));
-                    let w = self.agent.compose_w.get();
-                    let fit = |at: f32| w <= 0. || w >= f32::from(theme::u(at));
-                    let (show_sub, wide_badge) = (fit(400.), fit(290.));
-                    let found = matches!((&r.lead, &r.act), (Lead::Agent(id), Act::Install(_)) if crate::acp::cli_without_bridge(id).is_some());
-                    let line = h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .gap_2()
-                        .child(name.flex_shrink(1.).min_w(theme::u(48.)).truncate())
-                        .when(rec, |h| h.child(if wide_badge { recommended_badge() } else { recommended_star() }))
-                        .when(show_sub && !r.sub.is_empty(), |h| h.child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(r.sub.clone())));
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(line)
-                        .when(!show_sub && found, |v| v.child(div().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(r.sub.clone())))
-                }
+            .child(if r.wrap {
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(name.truncate())
+                    .when(!r.sub.is_empty(), |v| {
+                        v.child(
+                            div()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .line_clamp(2)
+                                .child(r.sub.clone()),
+                        )
+                    })
+            } else if matches!(r.trail, Trail::Cols(..)) {
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(name.flex_1().min_w_0().truncate())
+            } else {
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap_2()
+                    .child(name.flex_shrink(1.).min_w(theme::u(64.)).truncate())
+                    .when(is_installed_agent, |h| h.child(optimized_badge()))
+                    .when(rec, |h| h.child(recommended_badge()))
+                    .when(!r.sub.is_empty(), |h| {
+                        h.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(r.sub.clone()),
+                        )
+                    })
             })
             .children(trail.map(|t| div().flex_none().when(r.wrap, |d| d.pt(px(2.))).child(t)))
-            .child(div().flex_none().w(theme::u(14.)).when(r.wrap, |d| d.pt(px(2.))).when(r.checked, |d| d.child(Icon::new(IconName::Check).size(theme::u(14.)).text_color(c(theme::ACCENT_TEXT)))))
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme::u(14.))
+                    .when(r.wrap, |d| d.pt(px(2.)))
+                    .when(r.checked, |d| {
+                        d.child(
+                            Icon::new(IconName::Check)
+                                .size(theme::u(14.))
+                                .text_color(c(theme::ACCENT_TEXT)),
+                        )
+                    }),
+            )
             .on_click(cx.listener(move |this, _, w, cx| {
                 cx.stop_propagation();
                 this.agent_menu_pick(act.clone(), w, cx)
@@ -534,7 +872,12 @@ impl Workbench {
 
     fn render_effort_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let e = self.agent_effort()?;
-        let levels: Vec<(String, String)> = e.choices.iter().filter(|c| c.0 != "default").map(|c| (c.0.clone(), c.1.clone())).collect();
+        let levels: Vec<(String, String)> = e
+            .choices
+            .iter()
+            .filter(|c| c.0 != "default")
+            .map(|c| (c.0.clone(), c.1.clone()))
+            .collect();
         if levels.len() < 2 {
             return None;
         }
@@ -549,51 +892,113 @@ impl Workbench {
             Some(i) => levels[i].1.clone().into(),
             None => tr("Default").into(),
         };
-        let note: SharedString = tr(effort_note(shown.map_or("default", |i| levels[i].0.as_str()))).into();
+        let note: SharedString = tr(effort_note(
+            shown.map_or("default", |i| levels[i].0.as_str()),
+        ))
+        .into();
         let to = at.map(pos);
         let from = self.agent.effort_from.get().or(to).unwrap_or(0.);
-        let key: SharedString = format!("ag-effort-{}-{}", e.current, self.agent.effort_gen.get()).into();
+        let key: SharedString =
+            format!("ag-effort-{}-{}", e.current, self.agent.effort_gen.get()).into();
 
         let gap = px(5.);
         let rail_h = px(6.);
-        let rail = move |p: Option<f32>, held: bool| {
-            let mut d = div().absolute().inset_0().flex().items_center();
-            match p {
-                Some(p) => {
-                    d = d
-                        .child(div().absolute().left_0().w(relative(p)).h(rail_h).flex().child(div().flex_1().mr(gap).rounded_l_full().rounded_r(px(2.)).bg(c(theme::ACCENT))))
-                        .child(div().absolute().right_0().w(relative(1. - p)).h(rail_h).flex().child(div().flex_1().ml(gap).rounded_r_full().rounded_l(px(2.)).bg(c(theme::BG_HOVER))))
-                        .children((1..n).filter(|&i| (pos(i) - p).abs() > 0.035).map(move |i| {
-                            let on = pos(i) < p;
-                            div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(if on { theme::ON_ACCENT } else { theme::FG_DIM }))
-                        }))
-                        .child(
-                            div()
-                                .absolute()
-                                .left(relative(p))
-                                .ml(px(if held { -1.5 } else { -2. }))
-                                .w(px(if held { 3. } else { 4. }))
-                                .h(px(if held { 24. } else { 20. }))
-                                .rounded_full()
-                                .bg(c(theme::ACCENT)),
-                        );
+        let rail =
+            move |p: Option<f32>, held: bool| {
+                let mut d = div().absolute().inset_0().flex().items_center();
+                match p {
+                    Some(p) => {
+                        d = d
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .w(relative(p))
+                                    .h(rail_h)
+                                    .flex()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .mr(gap)
+                                            .rounded_l_full()
+                                            .rounded_r(px(2.))
+                                            .bg(c(theme::ACCENT)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right_0()
+                                    .w(relative(1. - p))
+                                    .h(rail_h)
+                                    .flex()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .ml(gap)
+                                            .rounded_r_full()
+                                            .rounded_l(px(2.))
+                                            .bg(c(theme::BG_HOVER)),
+                                    ),
+                            )
+                            .children((1..n).filter(|&i| (pos(i) - p).abs() > 0.035).map(
+                                move |i| {
+                                    let on = pos(i) < p;
+                                    div()
+                                        .absolute()
+                                        .left(relative(pos(i)))
+                                        .ml(px(-2.))
+                                        .size(px(4.))
+                                        .rounded_full()
+                                        .bg(c(if on { theme::ON_ACCENT } else { theme::FG_DIM }))
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(relative(p))
+                                    .ml(px(if held { -1.5 } else { -2. }))
+                                    .w(px(if held { 3. } else { 4. }))
+                                    .h(px(if held { 24. } else { 20. }))
+                                    .rounded_full()
+                                    .bg(c(theme::ACCENT)),
+                            );
+                    }
+                    None => {
+                        d = d
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .h(rail_h)
+                                    .rounded_full()
+                                    .bg(c(theme::BG_HOVER)),
+                            )
+                            .children((0..n).map(move |i| {
+                                div()
+                                    .absolute()
+                                    .left(relative(pos(i)))
+                                    .ml(px(-2.))
+                                    .size(px(4.))
+                                    .rounded_full()
+                                    .bg(c(theme::FG_DIM))
+                            }));
+                    }
                 }
-                None => {
-                    d = d.child(div().absolute().left_0().right_0().h(rail_h).rounded_full().bg(c(theme::BG_HOVER))).children((0..n).map(move |i| {
-                        div().absolute().left(relative(pos(i))).ml(px(-2.)).size(px(4.)).rounded_full().bg(c(theme::FG_DIM))
-                    }));
-                }
-            }
-            d
-        };
+                d
+            };
         let drawn = match (drag, to) {
             (Some(f), _) => rail(Some(f), true).into_any_element(),
             (None, Some(to)) => div()
                 .absolute()
                 .inset_0()
-                .with_animation(key, Animation::new(std::time::Duration::from_millis(240)).with_easing(gpui_kit::ease_out_quint()), move |el, t| {
-                    el.child(rail(Some(from + (to - from) * t), false))
-                })
+                .with_animation(
+                    key,
+                    Animation::new(std::time::Duration::from_millis(240))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                    move |el, t| el.child(rail(Some(from + (to - from) * t), false)),
+                )
                 .into_any_element(),
             (None, None) => rail(None, false).into_any_element(),
         };
@@ -609,7 +1014,10 @@ impl Workbench {
                 let w = weak.clone();
                 let hb = hitbox.clone();
                 window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !hb.is_hovered(window) {
+                    if phase != DispatchPhase::Bubble
+                        || ev.button != MouseButton::Left
+                        || !hb.is_hovered(window)
+                    {
                         return;
                     }
                     cx.stop_propagation();
@@ -644,7 +1052,9 @@ impl Workbench {
                             return;
                         }
                         this.agent.effort_from.set(Some(f));
-                        this.agent.effort_gen.set(this.agent.effort_gen.get().wrapping_add(1));
+                        this.agent
+                            .effort_gen
+                            .set(this.agent.effort_gen.get().wrapping_add(1));
                         let v = values[nearest(f)].clone();
                         this.agent_set_option(&opt, v, true, cx);
                         cx.notify();
@@ -654,36 +1064,51 @@ impl Workbench {
         )
         .absolute()
         .inset_0();
-        let track = div().relative().h(theme::u(26.)).mx(theme::u(8.)).child(drawn).child(input);
+        let track = div()
+            .relative()
+            .h(theme::u(26.))
+            .mx(theme::u(8.))
+            .child(drawn)
+            .child(input);
 
-        let labels = div().relative().h(theme::u(16.)).mx(theme::u(8.)).children(levels.iter().enumerate().map(|(i, (v, l))| {
-            let on = shown == Some(i);
-            let (id, v) = (e.id.clone(), v.clone());
-            let here = to.unwrap_or(pos(i));
-            let label = div()
-                .id(("ag-effort-l", i))
-                .absolute()
-                .top_0()
-                .text_size(theme::u(11.))
-                .whitespace_nowrap()
-                .cursor_pointer()
-                .text_color(c(if on { theme::FG_STRONG } else { theme::FG_DIM }))
-                .when(on, |d| d.font_weight(FontWeight::MEDIUM))
-                .hover(|s| s.text_color(c(theme::FG)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.agent.effort_from.set(Some(here));
-                    this.agent.effort_gen.set(this.agent.effort_gen.get().wrapping_add(1));
-                    this.agent_set_option(&id, v.clone(), true, cx)
-                }));
-            if i == 0 {
-                label.left_0().child(l.clone())
-            } else if i == n - 1 {
-                label.right_0().child(l.clone())
-            } else {
-                label.left(relative(pos(i))).ml(theme::u(-40.)).w(theme::u(80.)).flex().justify_center().child(l.clone())
-            }
-        }));
+        let labels = div().relative().h(theme::u(16.)).mx(theme::u(8.)).children(
+            levels.iter().enumerate().map(|(i, (v, l))| {
+                let on = shown == Some(i);
+                let (id, v) = (e.id.clone(), v.clone());
+                let here = to.unwrap_or(pos(i));
+                let label = div()
+                    .id(("ag-effort-l", i))
+                    .absolute()
+                    .top_0()
+                    .text_size(theme::u(11.))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .text_color(c(if on { theme::FG_STRONG } else { theme::FG_DIM }))
+                    .when(on, |d| d.font_weight(FontWeight::MEDIUM))
+                    .hover(|s| s.text_color(c(theme::FG)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.agent.effort_from.set(Some(here));
+                        this.agent
+                            .effort_gen
+                            .set(this.agent.effort_gen.get().wrapping_add(1));
+                        this.agent_set_option(&id, v.clone(), true, cx)
+                    }));
+                if i == 0 {
+                    label.left_0().child(l.clone())
+                } else if i == n - 1 {
+                    label.right_0().child(l.clone())
+                } else {
+                    label
+                        .left(relative(pos(i)))
+                        .ml(theme::u(-40.))
+                        .w(theme::u(80.))
+                        .flex()
+                        .justify_center()
+                        .child(l.clone())
+                }
+            }),
+        );
 
         let reset = (has_default && at.is_some()).then(|| {
             let id = e.id.clone();
@@ -711,9 +1136,30 @@ impl Workbench {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(div().flex_none().text_xs().text_color(c(theme::FG_MUTED)).child(tr("Effort")))
-                        .child(div().flex_none().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(name))
-                        .child(div().flex_1().min_w_0().truncate().text_xs().text_color(c(theme::FG_DIM)).child(note))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(c(theme::FG_MUTED))
+                                .child(tr("Effort")),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(c(theme::FG_STRONG))
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(note),
+                        )
                         .children(reset),
                 )
                 .child(track)
@@ -726,7 +1172,16 @@ impl Workbench {
         let current = agent_id();
         let name = super::agent_name();
         let link = |id: &'static str, label: SharedString| {
-            div().id(id).px_2().py_1().rounded(px(4.)).text_xs().text_color(c(theme::FG_MUTED)).cursor_pointer().hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))).child(label)
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded(px(4.))
+                .text_xs()
+                .text_color(c(theme::FG_MUTED))
+                .cursor_pointer()
+                .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                .child(label)
         };
         h_flex()
             .px_1()
@@ -735,29 +1190,58 @@ impl Workbench {
             .overflow_hidden()
             .border_t_1()
             .border_color(c(theme::BORDER))
-            .child(link("ag-menu-settings", tr("Agent settings").into()).flex_none().on_click(cx.listener(|this, _, w, cx| {
-                this.agent_menu_close(false, w, cx);
-                this.agent_open_options(w, cx);
-            })))
+            .child(
+                link("ag-menu-settings", tr("Agent settings").into())
+                    .flex_none()
+                    .on_click(cx.listener(|this, _, w, cx| {
+                        this.agent_menu_close(false, w, cx);
+                        this.agent_open_options(w, cx);
+                    })),
+            )
             .child(div().flex_1())
             .when(crate::acp::managed(&current), |h| {
-                h.child(link("ag-menu-remove", crate::trf!("Remove {name}…"; name => name).into()).min_w_0().truncate().on_click(cx.listener(move |this, _, w, cx| {
-                    this.agent_menu_close(false, w, cx);
-                    this.agent_ask_uninstall(&current, w, cx);
-                })))
+                h.child(
+                    link(
+                        "ag-menu-remove",
+                        crate::trf!("Remove {name}…"; name => name).into(),
+                    )
+                    .min_w_0()
+                    .truncate()
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        this.agent_menu_close(false, w, cx);
+                        this.agent_ask_uninstall(&current, w, cx);
+                    })),
+                )
             })
             .into_any_element()
     }
 
     fn agent_effort(&self) -> Option<ConfigOpt> {
-        self.agent_config_view().into_iter().find(|o| o.category == "thought_level")
+        self.agent_config_view()
+            .into_iter()
+            .find(|o| o.category == "thought_level")
     }
 }
 
 pub(super) const ACCESS: [(&str, IconName, &str, &str); 3] = [
-    ("read", IconName::Eye, "Read only", "Reads files and answers. Changes nothing."),
-    ("write", IconName::PencilLine, "Edit files", "Edits files. Asks before running commands."),
-    ("full", IconName::ShieldAlert, "Full access", "Edits files and runs commands without asking."),
+    (
+        "read",
+        IconName::Eye,
+        "Read only",
+        "Reads files and answers. Changes nothing.",
+    ),
+    (
+        "write",
+        IconName::PencilLine,
+        "Edit files",
+        "Edits files. Asks before running commands.",
+    ),
+    (
+        "full",
+        IconName::ShieldAlert,
+        "Full access",
+        "Edits files and runs commands without asking.",
+    ),
 ];
 
 pub(super) fn effort_note(level: &str) -> &'static str {
@@ -790,7 +1274,11 @@ pub(super) fn claude_price(name: &str) -> Option<(f32, f32)> {
         ("haiku 5.5", 0.10, 0.50),
         ("haiku 4.5", 1., 5.),
     ];
-    table.iter().filter(|(k, _, _)| n == *k || n.starts_with(&format!("{k} ")) || n.ends_with(k)).max_by_key(|(k, _, _)| k.len()).map(|(_, i, o)| (*i, *o))
+    table
+        .iter()
+        .filter(|(k, _, _)| n == *k || n.starts_with(&format!("{k} ")) || n.ends_with(k))
+        .max_by_key(|(k, _, _)| k.len())
+        .map(|(_, i, o)| (*i, *o))
 }
 
 fn limits_line(m: super::catalog::Meta) -> String {
@@ -803,7 +1291,13 @@ fn limits_line(m: super::catalog::Meta) -> String {
 }
 
 fn money(v: f32) -> String {
-    if v < 1. { format!("${v:.2}") } else if v.fract() == 0. { format!("${v:.0}") } else { format!("${v:.1}") }
+    if v < 1. {
+        format!("${v:.2}")
+    } else if v.fract() == 0. {
+        format!("${v:.0}")
+    } else {
+        format!("${v:.1}")
+    }
 }
 
 fn claude_version(name: &str) -> Option<(f32, u8)> {
@@ -821,15 +1315,26 @@ fn claude_version(name: &str) -> Option<(f32, u8)> {
 }
 
 fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
-    let named: Vec<(&String, &String, &String, Option<(f32, u8)>)> = o.choices.iter().map(|(v, n, d)| (v, n, d, claude_version(n))).collect();
+    let named: Vec<(&String, &String, &String, Option<(f32, u8)>)> = o
+        .choices
+        .iter()
+        .map(|(v, n, d)| (v, n, d, claude_version(n)))
+        .collect();
     if named.iter().filter(|x| x.3.is_some()).count() < 3 {
         return None;
     }
     let price_line = |name: &str| {
-        let price = claude_price(name).map(|(i, out)| crate::trf!("{i} / {o} per 1M"; i => money(i), o => money(out)));
+        let price = claude_price(name)
+            .map(|(i, out)| crate::trf!("{i} / {o} per 1M"; i => money(i), o => money(out)));
         let fam = name.split_whitespace().next().unwrap_or("");
-        let limits = claude_version(name).and_then(|(v, _)| super::catalog::get(&super::catalog::claude_id(fam, v))).map(limits_line);
-        [price, limits].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+        let limits = claude_version(name)
+            .and_then(|(v, _)| super::catalog::get(&super::catalog::claude_id(fam, v)))
+            .map(limits_line);
+        [price, limits]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ")
     };
     let row = |group: SharedString, v: &String, title: &String, sub: String| Row {
         group,
@@ -844,22 +1349,39 @@ fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
     let mut rows = Vec::new();
     for (v, n, d, ver) in &named {
         if ver.is_none() {
-            let sub = if d.is_empty() { String::new() } else { format!("{} · {}", d, price_line(d)) };
-            rows.push(row(SharedString::default(), v, n, sub.trim_end_matches(" · ").to_string()));
+            let sub = if d.is_empty() {
+                String::new()
+            } else {
+                format!("{} · {}", d, price_line(d))
+            };
+            rows.push(row(
+                SharedString::default(),
+                v,
+                n,
+                sub.trim_end_matches(" · ").to_string(),
+            ));
         }
     }
     let gens: [(&str, fn(f32) -> bool); 4] = [
-        ("Claude 5.5 · newest, the most for each token", |v| v >= 5.5),
+        ("Claude 5.5 · newest, the most for each token", |v| {
+            v >= 5.5
+        }),
         ("Claude 5", |v| (5.0..5.5).contains(&v)),
-        ("Claude 4 · older: more tokens for the same work", |v| (4.0..5.0).contains(&v)),
+        ("Claude 4 · older: more tokens for the same work", |v| {
+            (4.0..5.0).contains(&v)
+        }),
         ("Older", |v| v < 4.0),
     ];
     for (label, keep) in gens {
-        let mut g: Vec<_> = named.iter().filter(|x| x.3.is_some_and(|(v, _)| keep(v))).collect();
+        let mut g: Vec<_> = named
+            .iter()
+            .filter(|x| x.3.is_some_and(|(v, _)| keep(v)))
+            .collect();
         g.sort_by(|a, b| {
             let (va, ra) = a.3.unwrap();
             let (vb, rb) = b.3.unwrap();
-            ra.cmp(&rb).then(vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal))
+            ra.cmp(&rb)
+                .then(vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal))
         });
         let group: SharedString = tr(label).into();
         for (v, n, d, _) in g {
@@ -873,6 +1395,26 @@ fn claude_rows(o: &super::ConfigOpt) -> Option<Vec<Row>> {
         }
     }
     Some(rows)
+}
+
+pub(crate) fn agent_menu_wide_row(panel_w: f32) -> bool {
+    panel_w >= 460.
+}
+
+pub(crate) fn optimized_badge() -> Div {
+    h_flex()
+        .flex_none()
+        .h(theme::u(18.))
+        .px_1p5()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(c(theme::GREEN).opacity(0.45))
+        .bg(c(theme::BG_ELEVATED))
+        .whitespace_nowrap()
+        .text_size(theme::u(10.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(c(theme::GREEN))
+        .child(tr("Optimized"))
 }
 
 pub(crate) fn recommended_badge() -> Div {
@@ -891,13 +1433,13 @@ pub(crate) fn recommended_badge() -> Div {
         .child(tr("Recommended"))
 }
 
-fn recommended_star() -> Div {
-    div().flex_none().child(Icon::new(gpui_kit::assets::IconName::Star).size(theme::u(11.)).text_color(c(theme::ACCENT_TEXT)))
-}
-
 fn first_sentence(s: &str) -> String {
     let s = s.trim();
-    s.split(". ").next().unwrap_or(s).trim_end_matches('.').to_string()
+    s.split(". ")
+        .next()
+        .unwrap_or(s)
+        .trim_end_matches('.')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -905,7 +1447,16 @@ mod tests {
     use super::{first_sentence, searchable, Act, Lead, Menu, Row, Trail};
 
     fn row(title: &str, sub: &str, group: &str) -> Row {
-        Row { group: group.to_string().into(), lead: Lead::None, title: title.to_string().into(), sub: sub.to_string().into(), wrap: false, checked: false, trail: Trail::None, act: Act::Access("read") }
+        Row {
+            group: group.to_string().into(),
+            lead: Lead::None,
+            title: title.to_string().into(),
+            sub: sub.to_string().into(),
+            wrap: false,
+            checked: false,
+            trail: Trail::None,
+            act: Act::Access("read"),
+        }
     }
 
     #[test]
@@ -926,7 +1477,11 @@ mod tests {
             category: "model".into(),
             current: "haiku".into(),
             choices: vec![
-                ("default".into(), "Default (recommended)".into(), "Opus 5.5".into()),
+                (
+                    "default".into(),
+                    "Default (recommended)".into(),
+                    "Opus 5.5".into(),
+                ),
                 ("opus".into(), "Opus 5.5".into(), "For complex work".into()),
                 ("claude-opus-5".into(), "Opus 5".into(), "".into()),
                 ("sonnet".into(), "Sonnet 5.5".into(), "".into()),
@@ -938,9 +1493,25 @@ mod tests {
         };
         let rows = claude_rows(&o).unwrap();
         let order: Vec<&str> = rows.iter().map(|r| r.title.as_ref()).collect();
-        assert_eq!(order, ["Default (recommended)", "Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.1", "Opus 5", "Opus 4.8", "Sonnet 4.6"]);
+        assert_eq!(
+            order,
+            [
+                "Default (recommended)",
+                "Opus 5.5",
+                "Sonnet 5.5",
+                "Haiku 5.5",
+                "Fable 5.1",
+                "Opus 5",
+                "Opus 4.8",
+                "Sonnet 4.6"
+            ]
+        );
         assert!(rows[0].sub.contains("$4 / $20"), "{}", rows[0].sub);
-        assert!(rows[3].checked && rows[3].sub.starts_with("$0.10 / $0.50 per 1M"), "{}", rows[3].sub);
+        assert!(
+            rows[3].checked && rows[3].sub.starts_with("$0.10 / $0.50 per 1M"),
+            "{}",
+            rows[3].sub
+        );
         assert_eq!(claude_price("Opus 5"), Some((5., 25.)));
         assert_eq!(claude_price("Opus 5.5"), Some((4., 20.)));
         assert_eq!(claude_price("GPT-6"), None);
@@ -952,5 +1523,14 @@ mod tests {
         assert!(searchable(Menu::Agent, 1));
         assert!(!searchable(Menu::Access, 3));
         assert_eq!(first_sentence("An agent. It codes."), "An agent");
+    }
+
+    #[test]
+    fn sidebar_widths_reflow_agent_rows_to_prevent_badge_clipping() {
+        assert!(!super::agent_menu_wide_row(160.));
+        assert!(!super::agent_menu_wide_row(260.));
+        assert!(!super::agent_menu_wide_row(380.));
+        assert!(super::agent_menu_wide_row(460.));
+        assert!(super::agent_menu_wide_row(900.));
     }
 }

@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::settings::theme_swatch;
 use crate::theme::{self, c, GlassExt};
@@ -23,7 +22,9 @@ impl Workbench {
             .mr_1()
             .gap_1p5()
             .cursor_pointer()
-            .when(open, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+            .when(open, |d| {
+                d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))
+            })
             .hover(|d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
             .child(
                 div()
@@ -96,10 +97,33 @@ impl Workbench {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().truncate().text_sm().font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).text_color(c(theme::FG_STRONG)).child(p.name))
-                            .child(div().truncate().text_xs().text_color(c(theme::FG_DIM)).child(tr(p.note))),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_weight(if on {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .text_color(c(theme::FG_STRONG))
+                                    .child(p.name),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(tr(p.note)),
+                            ),
                     )
-                    .child(div().flex_none().w(theme::u(16.)).when(on, |d| d.child(Icon::new(IconName::Check).size(theme::u(14.)).text_color(c(theme::ACCENT_TEXT)))))
+                    .child(div().flex_none().w(theme::u(16.)).when(on, |d| {
+                        d.child(
+                            Icon::new(IconName::Check)
+                                .size(theme::u(14.))
+                                .text_color(c(theme::ACCENT_TEXT)),
+                        )
+                    }))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.theme_menu = false;
                         this.commit_theme(id, w, cx);
@@ -114,35 +138,6 @@ impl Workbench {
                 .gap_0p5()
                 .max_h(theme::u(140.))
                 .overflow_y_scroll();
-            let builtin_on = active_icon.is_empty();
-            ilist = ilist.child(
-                h_flex()
-                    .id("icon-theme-builtin")
-                    .h(theme::u(28.))
-                    .px_2()
-                    .gap_2()
-                    .items_center()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .when(builtin_on, |d| d.bg(c(theme::BG_HOVER)))
-                    .hover(|d| d.bg(c(theme::BG_HOVER)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .font_weight(if builtin_on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                            .text_color(c(theme::FG_STRONG))
-                            .child(tr("FluxCode (Built-in)")),
-                    )
-                    .child(div().flex_none().w(theme::u(16.)).when(builtin_on, |d| d.child(Icon::new(IconName::Check).size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))))
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        this.theme_menu = false;
-                        this.cancel_theme_preview(w, cx);
-                        this.set_icon_theme("", cx);
-                    })),
-            );
             for (i, m) in icon_themes.iter().enumerate() {
                 let on = m.id == active_icon;
                 let tid = m.id.clone();
@@ -163,12 +158,30 @@ impl Workbench {
                                 .min_w_0()
                                 .truncate()
                                 .text_xs()
-                                .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                                .font_weight(if on {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
                                 .text_color(c(theme::FG_STRONG))
                                 .child(m.label.clone()),
                         )
-                        .child(div().flex_none().max_w(theme::u(72.)).truncate().text_xs().text_color(c(theme::FG_DIM)).child(m.ext_display.clone()))
-                        .child(div().flex_none().w(theme::u(16.)).when(on, |d| d.child(Icon::new(IconName::Check).size(theme::u(13.)).text_color(c(theme::ACCENT_TEXT)))))
+                        .child(
+                            div()
+                                .flex_none()
+                                .max_w(theme::u(72.))
+                                .truncate()
+                                .text_xs()
+                                .text_color(c(theme::FG_DIM))
+                                .child(m.ext_display.clone()),
+                        )
+                        .child(div().flex_none().w(theme::u(16.)).when(on, |d| {
+                            d.child(
+                                Icon::new(IconName::Check)
+                                    .size(theme::u(13.))
+                                    .text_color(c(theme::ACCENT_TEXT)),
+                            )
+                        }))
                         .on_click(cx.listener(move |this, _, w, cx| {
                             this.theme_menu = false;
                             this.cancel_theme_preview(w, cx);
@@ -271,7 +284,8 @@ impl Workbench {
         } else {
             menu.with_animation(
                 "theme-menu-in",
-                Animation::new(std::time::Duration::from_millis(140)).with_easing(gpui_kit::ease_out_quint()),
+                Animation::new(std::time::Duration::from_millis(140))
+                    .with_easing(gpui_kit::ease_out_quint()),
                 |el, t| el.opacity(t).bottom(theme::u(30.) - px((1. - t) * 6.)),
             )
             .into_any_element()

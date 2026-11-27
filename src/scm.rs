@@ -1,9 +1,9 @@
-
 use crate::i18n::tr;
 use crate::proc;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::assets::IconName as Ico;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
@@ -15,7 +15,6 @@ use gpui_kit::{prelude::FluentBuilder, *};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use gpui_kit::component::tooltip::Tooltip;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileChange {
@@ -110,11 +109,15 @@ pub struct Scm {
 impl Scm {
     pub fn new(window: &mut Window, cx: &mut Context<Workbench>) -> (Self, Subscription) {
         let message = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Commit message")));
-        let sub = cx.subscribe_in(&message, window, |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = ev {
-                this.scm_commit(After::Nothing, false, window, cx);
-            }
-        });
+        let sub = cx.subscribe_in(
+            &message,
+            window,
+            |this: &mut Workbench, _, ev: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = ev {
+                    this.scm_commit(After::Nothing, false, window, cx);
+                }
+            },
+        );
         (
             Self {
                 repo: None,
@@ -150,7 +153,6 @@ impl Scm {
             sub,
         )
     }
-
 }
 
 pub fn code_color(code: char) -> theme::Tok {
@@ -162,11 +164,18 @@ pub fn code_color(code: char) -> theme::Tok {
     }
 }
 
-
 pub fn parse_status(out: &str) -> RepoStatus {
     let mut st = RepoStatus::default();
     let mut recs = out.split('\0').filter(|r| !r.is_empty());
-    let letter = |c: char| if c == '?' { 'U' } else if c == 'T' { 'M' } else { c };
+    let letter = |c: char| {
+        if c == '?' {
+            'U'
+        } else if c == 'T' {
+            'M'
+        } else {
+            c
+        }
+    };
     while let Some(r) = recs.next() {
         if let Some(h) = r.strip_prefix("# branch.head ") {
             st.branch = (h != "(detached)").then(|| h.to_string());
@@ -174,25 +183,51 @@ pub fn parse_status(out: &str) -> RepoStatus {
             st.upstream = Some(u.to_string());
         } else if let Some(ab) = r.strip_prefix("# branch.ab ") {
             let mut it = ab.split_whitespace();
-            st.ahead = it.next().and_then(|a| a.trim_start_matches('+').parse().ok()).unwrap_or(0);
-            st.behind = it.next().and_then(|b| b.trim_start_matches('-').parse().ok()).unwrap_or(0);
+            st.ahead = it
+                .next()
+                .and_then(|a| a.trim_start_matches('+').parse().ok())
+                .unwrap_or(0);
+            st.behind = it
+                .next()
+                .and_then(|b| b.trim_start_matches('-').parse().ok())
+                .unwrap_or(0);
         } else if let Some(p) = r.strip_prefix("? ") {
-            st.changes.push(FileChange { path: p.to_string(), code: 'U', orig: None });
+            st.changes.push(FileChange {
+                path: p.to_string(),
+                code: 'U',
+                orig: None,
+            });
         } else if r.starts_with("1 ") || r.starts_with("2 ") {
             let renamed = r.starts_with('2');
             let fields: Vec<&str> = r.splitn(if renamed { 10 } else { 9 }, ' ').collect();
             let xy: Vec<char> = fields.get(1).unwrap_or(&"..").chars().collect();
             let path = fields.last().unwrap_or(&"").to_string();
-            let orig = if renamed { recs.next().map(str::to_string) } else { None };
+            let orig = if renamed {
+                recs.next().map(str::to_string)
+            } else {
+                None
+            };
             if xy[0] != '.' {
-                st.staged.push(FileChange { path: path.clone(), code: letter(xy[0]), orig: orig.clone() });
+                st.staged.push(FileChange {
+                    path: path.clone(),
+                    code: letter(xy[0]),
+                    orig: orig.clone(),
+                });
             }
             if xy.get(1).is_some_and(|y| *y != '.') {
-                st.changes.push(FileChange { path, code: letter(xy[1]), orig });
+                st.changes.push(FileChange {
+                    path,
+                    code: letter(xy[1]),
+                    orig,
+                });
             }
         } else if r.starts_with("u ") {
             let path = r.splitn(11, ' ').last().unwrap_or("").to_string();
-            st.conflicts.push(FileChange { path, code: '!', orig: None });
+            st.conflicts.push(FileChange {
+                path,
+                code: '!',
+                orig: None,
+            });
         }
     }
     st
@@ -209,7 +244,11 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
                 subject: f[2].into(),
                 author: f[3].into(),
                 when: f[4].into(),
-                refs: f[5].split(", ").filter(|s| !s.is_empty() && *s != "origin/HEAD").map(|s| s.replace("HEAD -> ", "")).collect(),
+                refs: f[5]
+                    .split(", ")
+                    .filter(|s| !s.is_empty() && *s != "origin/HEAD")
+                    .map(|s| s.replace("HEAD -> ", ""))
+                    .collect(),
                 merge: f[6].split_whitespace().count() > 1,
             })
         })
@@ -218,13 +257,24 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
 
 fn find_url(s: &str) -> Option<String> {
     let i = s.find("https://")?;
-    Some(s[i..].split_whitespace().next()?.trim_end_matches(['.', ',', ')']).to_string())
+    Some(
+        s[i..]
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(['.', ',', ')'])
+            .to_string(),
+    )
 }
-
 
 #[derive(Clone)]
 pub enum Step {
-    Save { path: PathBuf, gen: u64, text: String, crlf: bool, nbt: Option<crate::nbt::NbtFormat> },
+    Save {
+        path: PathBuf,
+        gen: u64,
+        text: String,
+        crlf: bool,
+        nbt: Option<crate::nbt::NbtFormat>,
+    },
     Git(Vec<String>, Option<String>),
     Gh(Vec<String>),
 }
@@ -233,10 +283,20 @@ fn git_step(args: &[&str]) -> Step {
     Step::Git(args.iter().map(|s| s.to_string()).collect(), None)
 }
 
-fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) -> Result<String, String> {
+fn run_step(
+    dir: &Path,
+    step: &Step,
+    target: Option<&crate::remote::WslTarget>,
+) -> Result<String, String> {
     use std::io::Write;
     let (prog, args, input) = match step {
-        Step::Save { path, text, crlf, nbt, .. } => {
+        Step::Save {
+            path,
+            text,
+            crlf,
+            nbt,
+            ..
+        } => {
             crate::workbench::write_doc_to_disk(target, path, text, *crlf, *nbt)?;
             return Ok(String::new());
         }
@@ -249,19 +309,35 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
         Some(t) => {
             let cwd = t.linux_path(dir).unwrap_or_else(|| t.linux_root.clone());
             let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| c.git(&cwd, &owned, input.as_deref())) {
+            if let Some(r) = crate::remote::with_client(&t.distro.clone(), |c| {
+                c.git(&cwd, &owned, input.as_deref())
+            }) {
                 match r {
                     Ok(g) if g.success => {
-                        return Ok(if g.stdout.trim().is_empty() { g.stderr.trim().to_string() } else { g.stdout })
+                        return Ok(if g.stdout.trim().is_empty() {
+                            g.stderr.trim().to_string()
+                        } else {
+                            g.stdout
+                        })
                     }
-                    Ok(g) => return Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), g.stderr.trim())),
+                    Ok(g) => {
+                        return Err(format!(
+                            "{prog} {}: {}",
+                            args.first().map(String::as_str).unwrap_or(""),
+                            g.stderr.trim()
+                        ))
+                    }
                     Err(_) => {}
                 }
             }
             crate::remote::program_command_env(
                 t,
                 &cwd,
-                &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("NO_COLOR", "1")],
+                &[
+                    ("GIT_OPTIONAL_LOCKS", "0"),
+                    ("GIT_TERMINAL_PROMPT", "0"),
+                    ("NO_COLOR", "1"),
+                ],
                 prog,
                 &refs,
             )
@@ -280,7 +356,9 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     crate::github::apply_env(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("{prog} could not start: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{prog} could not start: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         if let Some(text) = input {
             let _ = stdin.write_all(text.as_bytes());
@@ -290,10 +368,22 @@ fn run_step(dir: &Path, step: &Step, target: Option<&crate::remote::WslTarget>) 
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if out.status.success() {
-        Ok(if stdout.trim().is_empty() { stderr } else { stdout })
+        Ok(if stdout.trim().is_empty() {
+            stderr
+        } else {
+            stdout
+        })
     } else {
-        let msg = if stderr.is_empty() { stdout.trim().to_string() } else { stderr };
-        Err(format!("{prog} {}: {}", args.first().map(String::as_str).unwrap_or(""), msg))
+        let msg = if stderr.is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr
+        };
+        Err(format!(
+            "{prog} {}: {}",
+            args.first().map(String::as_str).unwrap_or(""),
+            msg
+        ))
     }
 }
 
@@ -305,26 +395,58 @@ struct Snapshot {
 }
 
 fn snapshot(dir: &Path, with_log: bool, target: Option<&crate::remote::WslTarget>) -> Snapshot {
-    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"]), target).ok().map(|s| {
-        let p = s.trim();
-        match target {
-            Some(t) => t.unc_path(p),
-            None => PathBuf::from(p.replace('/', "\\")),
-        }
-    });
-    let Some(repo) = top else { return Snapshot { repo: None, status: RepoStatus::default(), log: None, incoming: Default::default() } };
-    let status = run_step(&repo, &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"]), target).map(|s| parse_status(&s)).unwrap_or_default();
+    let top = run_step(dir, &git_step(&["rev-parse", "--show-toplevel"]), target)
+        .ok()
+        .map(|s| {
+            let p = s.trim();
+            match target {
+                Some(t) => t.unc_path(p),
+                None => PathBuf::from(p.replace('/', "\\")),
+            }
+        });
+    let Some(repo) = top else {
+        return Snapshot {
+            repo: None,
+            status: RepoStatus::default(),
+            log: None,
+            incoming: Default::default(),
+        };
+    };
+    let status = run_step(
+        &repo,
+        &git_step(&["status", "--porcelain=v2", "--branch", "-z", "-uall"]),
+        target,
+    )
+    .map(|s| parse_status(&s))
+    .unwrap_or_default();
     let log = with_log.then(|| {
         run_step(
             &repo,
-            &git_step(&["-c", "i18n.logOutputEncoding=UTF-8", "log", "-n", "60", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P", "-z"]),
+            &git_step(&[
+                "-c",
+                "i18n.logOutputEncoding=UTF-8",
+                "log",
+                "-n",
+                "60",
+                "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1f%D%x1f%P",
+                "-z",
+            ]),
             target,
         )
         .map(|s| parse_log(&s))
         .unwrap_or_default()
     });
-    let incoming = if status.behind > 0 { crate::scm_incoming::incoming(&repo, target) } else { Default::default() };
-    Snapshot { repo: Some(repo), status, log, incoming }
+    let incoming = if status.behind > 0 {
+        crate::scm_incoming::incoming(&repo, target)
+    } else {
+        Default::default()
+    };
+    Snapshot {
+        repo: Some(repo),
+        status,
+        log,
+        incoming,
+    }
 }
 
 const MAX_ROWS: usize = 200;
@@ -391,7 +513,9 @@ fn more_rows(total: usize) -> Option<Div> {
 
 impl Workbench {
     pub(crate) fn scm_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else { return };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
         if self.scm.refreshing {
             self.scm.again = true;
             return;
@@ -401,14 +525,22 @@ impl Workbench {
         let with_log = self.scm.show_graph;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let snap = cx.background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) }).await;
+            let snap = cx
+                .background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) })
+                .await;
             _ = this.update(cx, |this, cx| {
                 let s = &mut this.scm;
                 s.refreshing = false;
                 let mut marks = HashMap::new();
                 let mut dirty_dirs = HashSet::new();
                 if let Some(repo) = &snap.repo {
-                    for ch in snap.status.changes.iter().chain(&snap.status.staged).chain(&snap.status.conflicts) {
+                    for ch in snap
+                        .status
+                        .changes
+                        .iter()
+                        .chain(&snap.status.staged)
+                        .chain(&snap.status.conflicts)
+                    {
                         let full = repo.join(ch.path.replace('/', "\\"));
                         let key = full.to_string_lossy().to_lowercase();
                         marks.entry(key).or_insert(ch.code);
@@ -450,8 +582,16 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn scm_run(&mut self, label: &str, steps: Vec<Step>, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static) {
-        let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else { return };
+    pub(crate) fn scm_run(
+        &mut self,
+        label: &str,
+        steps: Vec<Step>,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static,
+    ) {
+        let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else {
+            return;
+        };
         if self.scm.busy.is_some() {
             self.status = tr("Source Control is busy, try again in a moment").into();
             cx.notify();
@@ -496,7 +636,10 @@ impl Workbench {
                     Err(e) => {
                         if e.contains("already exists") {
                             if let Some(url) = find_url(&e) {
-                                this.scm.note = Some(("A pull request for this branch already exists".into(), Some(url)));
+                                this.scm.note = Some((
+                                    "A pull request for this branch already exists".into(),
+                                    Some(url),
+                                ));
                             } else {
                                 this.scm.error = Some(e);
                             }
@@ -520,7 +663,13 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn scm_commit(&mut self, after: After, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn scm_commit(
+        &mut self,
+        after: After,
+        amend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let msg = self.scm.message.read(cx).value().trim().to_string();
         let st = self.scm.status.clone();
         if !st.conflicts.is_empty() {
@@ -595,7 +744,9 @@ impl Workbench {
     pub(crate) fn scm_sync(&mut self, cx: &mut Context<Self>) {
         let mut steps = vec![git_step(&["pull", "--autostash"])];
         steps.extend(self.push_steps());
-        self.scm_run("Syncing…", steps, cx, |this, _, _| this.status = tr("Synced with the remote").into());
+        self.scm_run("Syncing…", steps, cx, |this, _, _| {
+            this.status = tr("Synced with the remote").into()
+        });
     }
 
     fn scm_create_pr(&mut self, cx: &mut Context<Self>) {
@@ -605,7 +756,11 @@ impl Workbench {
             return;
         }
         let mut steps = self.push_steps();
-        steps.push(Step::Gh(vec!["pr".into(), "create".into(), "--fill".into()]));
+        steps.push(Step::Gh(vec![
+            "pr".into(),
+            "create".into(),
+            "--fill".into(),
+        ]));
         self.scm_run("Creating pull request…", steps, cx, |this, out, _| {
             let url = find_url(out);
             this.scm.note = Some(("Pull request created".into(), url));
@@ -613,7 +768,9 @@ impl Workbench {
     }
 
     fn scm_load_actions(&mut self, cx: &mut Context<Self>) {
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         if !crate::github::gh_on_path() {
             self.scm.error = Some("GitHub Actions needs the GitHub CLI (gh).".into());
             cx.notify();
@@ -671,27 +828,53 @@ impl Workbench {
     }
 
     fn scm_run_workflow(&mut self, wf: Workflow, cx: &mut Context<Self>) {
-        let branch = self.scm.status.branch.clone().unwrap_or_else(|| "main".into());
-        let steps = vec![Step::Gh(vec!["workflow".into(), "run".into(), wf.id.clone(), "--ref".into(), branch.clone()])];
+        let branch = self
+            .scm
+            .status
+            .branch
+            .clone()
+            .unwrap_or_else(|| "main".into());
+        let steps = vec![Step::Gh(vec![
+            "workflow".into(),
+            "run".into(),
+            wf.id.clone(),
+            "--ref".into(),
+            branch.clone(),
+        ])];
         let name = wf.name.clone();
-        self.scm_run(&format!("Starting {name}…"), steps, cx, move |this, _, cx| {
-            this.scm.note = Some((format!("Started \"{name}\" on {branch}"), None));
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
-                _ = this.update(cx, |this, cx| this.scm_load_actions(cx));
-            })
-            .detach();
-        });
+        self.scm_run(
+            &format!("Starting {name}…"),
+            steps,
+            cx,
+            move |this, _, cx| {
+                this.scm.note = Some((format!("Started \"{name}\" on {branch}"), None));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(4))
+                        .await;
+                    _ = this.update(cx, |this, cx| this.scm_load_actions(cx));
+                })
+                .detach();
+            },
+        );
     }
 
     fn scm_stage(&mut self, path: Option<String>, stage: bool, cx: &mut Context<Self>) {
         let step = match (stage, path) {
             (true, Some(p)) => Step::Git(vec!["add".into(), "--".into(), p], None),
             (true, None) => git_step(&["add", "-A"]),
-            (false, Some(p)) => Step::Git(vec!["restore".into(), "--staged".into(), "--".into(), p], None),
+            (false, Some(p)) => Step::Git(
+                vec!["restore".into(), "--staged".into(), "--".into(), p],
+                None,
+            ),
             (false, None) => git_step(&["restore", "--staged", "."]),
         };
-        self.scm_run(if stage { "Staging…" } else { "Unstaging…" }, vec![step], cx, |_, _, _| {});
+        self.scm_run(
+            if stage { "Staging…" } else { "Unstaging…" },
+            vec![step],
+            cx,
+            |_, _, _| {},
+        );
     }
 
     fn scm_discard(&mut self, ch: FileChange, cx: &mut Context<Self>) {
@@ -713,14 +896,23 @@ impl Workbench {
             return;
         }
         let path = ch.path.clone();
-        self.scm_run("Discarding…", vec![Step::Git(vec!["restore".into(), "--".into(), path], None)], cx, |this, _, cx| {
-            this.agent.reloads.extend(this.docs.iter().map(|d| d.path.clone()));
-            cx.notify();
-        });
+        self.scm_run(
+            "Discarding…",
+            vec![Step::Git(vec!["restore".into(), "--".into(), path], None)],
+            cx,
+            |this, _, cx| {
+                this.agent
+                    .reloads
+                    .extend(this.docs.iter().map(|d| d.path.clone()));
+                cx.notify();
+            },
+        );
     }
 
     fn scm_show_diff(&mut self, ch: FileChange, staged: bool, cx: &mut Context<Self>) {
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         let mut args = vec!["-c".to_string(), "core.quotepath=off".into(), "diff".into()];
         if staged {
             args.push("--cached".into());
@@ -733,7 +925,14 @@ impl Workbench {
             let text = cx
                 .background_spawn(async move {
                     if untracked {
-                        std::fs::read_to_string(dir.join(&path)).map(|t| t.lines().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n")).unwrap_or_default()
+                        std::fs::read_to_string(dir.join(&path))
+                            .map(|t| {
+                                t.lines()
+                                    .map(|l| format!("+{l}"))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default()
                     } else {
                         run_step(&dir, &Step::Git(args, None), wsl.as_ref()).unwrap_or_else(|e| e)
                     }
@@ -742,10 +941,18 @@ impl Workbench {
             _ = this.update(cx, |this, cx| {
                 this.out_lines.clear();
                 let mut head = Line::new(&ch.path, crate::term::LineKind::Cmd);
-                head.meta = if staged { "Staged diff".into() } else { "Diff".into() };
+                head.meta = if staged {
+                    "Staged diff".into()
+                } else {
+                    "Diff".into()
+                };
                 this.out_lines.push(head);
                 for l in text.lines() {
-                    let kind = if l.starts_with("+++") || l.starts_with("---") || l.starts_with("diff ") || l.starts_with("index ") {
+                    let kind = if l.starts_with("+++")
+                        || l.starts_with("---")
+                        || l.starts_with("diff ")
+                        || l.starts_with("index ")
+                    {
                         crate::term::LineKind::Dim
                     } else if l.starts_with('+') {
                         crate::term::LineKind::Success
@@ -759,7 +966,11 @@ impl Workbench {
                     this.out_lines.push(Line::new(l, kind));
                 }
                 if text.trim().is_empty() {
-                    push_line(&mut this.out_lines, "No textual changes (binary file or mode change).", crate::term::LineKind::Dim);
+                    push_line(
+                        &mut this.out_lines,
+                        "No textual changes (binary file or mode change).",
+                        crate::term::LineKind::Dim,
+                    );
                 }
                 this.panel_open = true;
                 this.panel_tab = PanelTab::Output;
@@ -771,13 +982,30 @@ impl Workbench {
     }
 
     fn scm_show_commit(&mut self, hash: String, cx: &mut Context<Self>) {
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let text = cx
                 .background_spawn(async move {
-                    run_step(&dir, &Step::Git(["show", "--stat", "--format=%h  %s%n%an <%ae>, %ad%n%n%b", "--date=format:%Y-%m-%d %H:%M", &hash].map(String::from).to_vec(), None), wsl.as_ref())
-                        .unwrap_or_else(|e| e)
+                    run_step(
+                        &dir,
+                        &Step::Git(
+                            [
+                                "show",
+                                "--stat",
+                                "--format=%h  %s%n%an <%ae>, %ad%n%n%b",
+                                "--date=format:%Y-%m-%d %H:%M",
+                                &hash,
+                            ]
+                            .map(String::from)
+                            .to_vec(),
+                            None,
+                        ),
+                        wsl.as_ref(),
+                    )
+                    .unwrap_or_else(|e| e)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
@@ -800,24 +1028,42 @@ impl Workbench {
         .detach();
     }
 
-
     pub(crate) fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.scm;
         if self.root.is_none() {
-            return div().p_3().text_sm().text_color(c(theme::FG_DIM)).child(tr("Open a folder to use Source Control.")).into_any_element();
+            return div()
+                .p_3()
+                .text_sm()
+                .text_color(c(theme::FG_DIM))
+                .child(tr("Open a folder to use Source Control."))
+                .into_any_element();
         }
         if s.repo.is_none() {
             return v_flex()
                 .p_3()
                 .gap_3()
                 .text_sm()
-                .child(div().text_color(c(theme::FG_MUTED)).child(tr("This folder is not a Git repository.")))
                 .child(
-                    Button::new("scm-init").label(tr("Initialize Repository")).primary().small().w_full().on_click(cx.listener(|this, _, _, cx| {
-                        let dir = this.root.clone();
-                        this.scm.repo = dir;
-                        this.scm_run("Initializing…", vec![git_step(&["init"])], cx, |this, _, _| this.status = tr("Git repository created").into());
-                    })),
+                    div()
+                        .text_color(c(theme::FG_MUTED))
+                        .child(tr("This folder is not a Git repository.")),
+                )
+                .child(
+                    Button::new("scm-init")
+                        .label(tr("Initialize Repository"))
+                        .primary()
+                        .small()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let dir = this.root.clone();
+                            this.scm.repo = dir;
+                            this.scm_run(
+                                "Initializing…",
+                                vec![git_step(&["init"])],
+                                cx,
+                                |this, _, _| this.status = tr("Git repository created").into(),
+                            );
+                        })),
                 )
                 .into_any_element();
         }
@@ -852,15 +1098,29 @@ impl Workbench {
                 }),
             );
 
-        let mut body = v_flex().id("scm-body").flex_1().min_h_0().overflow_y_scroll().pb_2();
+        let mut body = v_flex()
+            .id("scm-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .pb_2();
         if s.confirm_uninit {
             let home = std::env::var("USERPROFILE").unwrap_or_default();
-            let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
+            let mut where_: String = s
+                .repo
+                .as_ref()
+                .map(|r| r.display().to_string())
+                .unwrap_or_default();
             let full: SharedString = where_.clone().into();
             if !home.is_empty() && where_.starts_with(&home) {
                 where_ = format!("~{}", &where_[home.len()..]);
             }
-            let folder = s.repo.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let folder = s
+                .repo
+                .as_ref()
+                .and_then(|r| r.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             body = body.child(
                 v_flex()
                     .flex_none()
@@ -905,7 +1165,9 @@ impl Workbench {
                 .gap_2()
                 .child(crate::ui::McInput::new(&s.message).small())
                 .child(commit_row)
-                .when_some(s.busy.clone(), |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)))
+                .when_some(s.busy.clone(), |v, b| {
+                    v.child(div().text_xs().text_color(c(theme::BLUE)).child(b))
+                })
                 .when_some(s.error.clone(), |v, e| {
                     v.child(
                         div()
@@ -916,7 +1178,16 @@ impl Workbench {
                             .bg(c(theme::BG_ELEVATED))
                             .text_xs()
                             .text_color(c(theme::DANGER))
-                            .child(e.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")),
+                            .child(
+                                e.lines()
+                                    .rev()
+                                    .take(4)
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            ),
                     )
                 })
                 .when_some(s.note.clone(), |v, (text, url)| {
@@ -1097,27 +1368,57 @@ impl Workbench {
             };
 
         if !st.conflicts.is_empty() {
-            body = body.child(section("scm-sec-conf", "Merge Changes".into(), st.conflicts.len(), true));
+            body = body.child(section(
+                "scm-sec-conf",
+                "Merge Changes".into(),
+                st.conflicts.len(),
+                true,
+            ));
             for (i, ch) in st.conflicts.iter().enumerate().take(MAX_ROWS) {
                 body = body.child(file_row(i, 2, ch, self, cx));
             }
         }
         if !st.staged.is_empty() {
-            body = body.child(section("scm-sec-staged", "Staged Changes".into(), st.staged.len(), true).child(
-                Button::new("scm-unstage-all").icon(Icon::new(IconName::Minus)).ghost().xsmall().tooltip(tr("Unstage All")).on_click(cx.listener(|this, _, _, cx| {
-                    this.scm_stage(None, false, cx);
-                })),
-            ));
+            body = body.child(
+                section(
+                    "scm-sec-staged",
+                    "Staged Changes".into(),
+                    st.staged.len(),
+                    true,
+                )
+                .child(
+                    Button::new("scm-unstage-all")
+                        .icon(Icon::new(IconName::Minus))
+                        .ghost()
+                        .xsmall()
+                        .tooltip(tr("Unstage All"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.scm_stage(None, false, cx);
+                        })),
+                ),
+            );
             for (i, ch) in st.staged.iter().enumerate().take(MAX_ROWS) {
                 body = body.child(file_row(i, 1, ch, self, cx));
             }
             body = body.children(more_rows(st.staged.len()));
         }
-        body = body.child(section("scm-sec-changes", "Changes".into(), st.changes.len(), true).when(!st.changes.is_empty(), |h| {
-            h.child(Button::new("scm-stage-all").icon(Icon::new(IconName::Plus)).ghost().xsmall().tooltip(tr("Stage All")).on_click(cx.listener(|this, _, _, cx| {
-                this.scm_stage(None, true, cx);
-            })))
-        }));
+        body = body.child(
+            section("scm-sec-changes", "Changes".into(), st.changes.len(), true).when(
+                !st.changes.is_empty(),
+                |h| {
+                    h.child(
+                        Button::new("scm-stage-all")
+                            .icon(Icon::new(IconName::Plus))
+                            .ghost()
+                            .xsmall()
+                            .tooltip(tr("Stage All"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.scm_stage(None, true, cx);
+                            })),
+                    )
+                },
+            ),
+        );
         let untracked = st.changes.iter().filter(|c| c.code == 'U').count();
         if untracked > 200 {
             let mut by: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -1184,15 +1485,25 @@ impl Workbench {
                 .gap_1()
                 .child(
                     Button::new("scm-sync")
-                        .icon(Icon::new(if st.upstream.is_none() { Ico::CloudUpload } else { Ico::RefreshCcw }))
+                        .icon(Icon::new(if st.upstream.is_none() {
+                            Ico::CloudUpload
+                        } else {
+                            Ico::RefreshCcw
+                        }))
                         .label(sync_label)
-                        .tooltip(if st.upstream.is_none() { format!("Push {branch} to origin and track it") } else { format!("Pull, then push {branch}") })
+                        .tooltip(if st.upstream.is_none() {
+                            format!("Push {branch} to origin and track it")
+                        } else {
+                            format!("Pull, then push {branch}")
+                        })
                         .small()
                         .flex_1()
                         .on_click(cx.listener(|this, _, _, cx| {
                             if this.scm.status.upstream.is_none() {
                                 let steps = this.push_steps();
-                                this.scm_run("Publishing branch…", steps, cx, |this, _, _| this.status = tr("Branch published").into());
+                                this.scm_run("Publishing branch…", steps, cx, |this, _, _| {
+                                    this.status = tr("Branch published").into()
+                                });
                             } else {
                                 this.scm_sync(cx);
                             }
@@ -1208,13 +1519,16 @@ impl Workbench {
         );
 
         body = body.child(
-            section("scm-sec-graph", "Graph".into(), 0, s.show_graph).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
-                this.scm.show_graph = !this.scm.show_graph;
-                if this.scm.show_graph {
-                    this.scm_refresh(cx);
-                }
-                cx.notify();
-            })),
+            section("scm-sec-graph", "Graph".into(), 0, s.show_graph)
+                .mt_2()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.scm.show_graph = !this.scm.show_graph;
+                    if this.scm.show_graph {
+                        this.scm_refresh(cx);
+                    }
+                    cx.notify();
+                })),
         );
         if s.show_graph {
             let n = s.log.len();
@@ -1249,23 +1563,53 @@ impl Workbench {
                                 .px_1p5()
                                 .rounded(px(8.))
                                 .text_xs()
-                                .bg(c(if remote { theme::BLUE } else { theme::ACCENT }).opacity(0.22))
-                                .text_color(c(if remote { theme::BLUE } else { theme::ACCENT_TEXT }))
+                                .bg(c(if remote { theme::BLUE } else { theme::ACCENT })
+                                    .opacity(0.22))
+                                .text_color(c(if remote {
+                                    theme::BLUE
+                                } else {
+                                    theme::ACCENT_TEXT
+                                }))
                                 .child(r.clone())
                         }))
-                        .when(cm.refs.len() > 1, |h| h.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child(format!("+{}", cm.refs.len() - 1))))
+                        .when(cm.refs.len() > 1, |h| {
+                            h.child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(c(theme::FG_DIM))
+                                    .child(format!("+{}", cm.refs.len() - 1)),
+                            )
+                        })
                         .tooltip({
-                            let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
-                            let tip = format!("{}  {}\n{} · {}{refs}", cm.short, cm.subject, cm.author, cm.when);
+                            let refs = if cm.refs.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\n{}", cm.refs.join(", "))
+                            };
+                            let tip = format!(
+                                "{}  {}\n{} · {}{refs}",
+                                cm.short, cm.subject, cm.author, cm.when
+                            );
                             move |w, cx| Tooltip::new(tip.clone()).build(w, cx)
                         })
-                        .on_click(cx.listener(move |this, _, _, cx| this.scm_show_commit(hash.clone(), cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.scm_show_commit(hash.clone(), cx)
+                        })),
                 );
             }
         }
 
         body = body.child(
-            section("scm-sec-actions", "GitHub Actions (deploy)".into(), 0, s.show_actions).mt_2().cursor_pointer().on_click(cx.listener(|this, _, _, cx| {
+            section(
+                "scm-sec-actions",
+                "GitHub Actions (deploy)".into(),
+                0,
+                s.show_actions,
+            )
+            .mt_2()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
                 this.scm.show_actions = !this.scm.show_actions;
                 if this.scm.show_actions {
                     this.scm_load_actions(cx);
@@ -1355,28 +1699,45 @@ impl Workbench {
     pub(crate) fn render_scm_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_px()
-            .child(tool_button("scm-h-commit", IconName::Check, "Commit", cx, |this, w, cx| this.scm_commit(After::Nothing, false, w, cx)))
-            .child(tool_button("scm-h-refresh", IconName::RefreshCw, "Refresh", cx, |this, _, cx| this.scm_refresh(cx)))
-            .child(Button::new("scm-h-more").icon(Icon::new(IconName::Ellipsis)).ghost().xsmall().dropdown_menu(|m: PopupMenu, _, _| {
-                m.min_w(px(230.))
-                    .menu(tr("Pull"), Box::new(ScmPull))
-                    .menu(tr("Push"), Box::new(ScmPush))
-                    .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
-                    .menu(tr("Fetch"), Box::new(ScmFetch))
-                    .separator()
-                    .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
-                    .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
-                    .separator()
-                    .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
-                    .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
-                    .separator()
-                    .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
-                    .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
-                    .separator()
-                    .menu(tr("Remove Git from This Folder…"), Box::new(ScmRemoveGit))
-            }))
+            .child(tool_button(
+                "scm-h-commit",
+                IconName::Check,
+                "Commit",
+                cx,
+                |this, w, cx| this.scm_commit(After::Nothing, false, w, cx),
+            ))
+            .child(tool_button(
+                "scm-h-refresh",
+                IconName::RefreshCw,
+                "Refresh",
+                cx,
+                |this, _, cx| this.scm_refresh(cx),
+            ))
+            .child(
+                Button::new("scm-h-more")
+                    .icon(Icon::new(IconName::Ellipsis))
+                    .ghost()
+                    .xsmall()
+                    .dropdown_menu(|m: PopupMenu, _, _| {
+                        m.min_w(px(230.))
+                            .menu(tr("Pull"), Box::new(ScmPull))
+                            .menu(tr("Push"), Box::new(ScmPush))
+                            .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
+                            .menu(tr("Fetch"), Box::new(ScmFetch))
+                            .separator()
+                            .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
+                            .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
+                            .separator()
+                            .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
+                            .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
+                            .separator()
+                            .menu(tr("Create Pull Request"), Box::new(ScmCreatePr))
+                            .menu(tr("Open Repository on GitHub"), Box::new(ScmOpenGithub))
+                            .separator()
+                            .menu(tr("Remove Git from This Folder…"), Box::new(ScmRemoveGit))
+                    }),
+            )
     }
-
 
     pub(crate) fn on_scm_show(&mut self, _: &ScmShow, _: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Scm;
@@ -1385,33 +1746,70 @@ impl Workbench {
         self.scm_refresh(cx);
         cx.notify();
     }
-    pub(crate) fn on_scm_commit_push(&mut self, _: &ScmCommitPush, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_push(
+        &mut self,
+        _: &ScmCommitPush,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Push, false, w, cx);
     }
-    pub(crate) fn on_scm_commit_sync(&mut self, _: &ScmCommitSync, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_sync(
+        &mut self,
+        _: &ScmCommitSync,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Sync, false, w, cx);
     }
-    pub(crate) fn on_scm_commit_amend(&mut self, _: &ScmCommitAmend, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_amend(
+        &mut self,
+        _: &ScmCommitAmend,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Nothing, true, w, cx);
     }
     pub(crate) fn on_scm_pull(&mut self, _: &ScmPull, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run("Pulling…", vec![git_step(&["pull", "--autostash"])], cx, |this, _, cx| {
-            this.agent.reloads.extend(this.docs.iter().filter(|d| !d.dirty).map(|d| d.path.clone()));
-            this.refresh_tree(cx);
-            this.status = tr("Pulled").into();
-        });
+        self.scm_run(
+            "Pulling…",
+            vec![git_step(&["pull", "--autostash"])],
+            cx,
+            |this, _, cx| {
+                this.agent.reloads.extend(
+                    this.docs
+                        .iter()
+                        .filter(|d| !d.dirty)
+                        .map(|d| d.path.clone()),
+                );
+                this.refresh_tree(cx);
+                this.status = tr("Pulled").into();
+            },
+        );
     }
     pub(crate) fn on_scm_push(&mut self, _: &ScmPush, _: &mut Window, cx: &mut Context<Self>) {
         let steps = self.push_steps();
-        self.scm_run("Pushing…", steps, cx, |this, _, _| this.status = tr("Pushed").into());
+        self.scm_run("Pushing…", steps, cx, |this, _, _| {
+            this.status = tr("Pushed").into()
+        });
     }
     pub(crate) fn on_scm_sync(&mut self, _: &ScmSync, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_sync(cx);
     }
     pub(crate) fn on_scm_fetch(&mut self, _: &ScmFetch, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run("Fetching…", vec![git_step(&["fetch", "--prune"])], cx, |this, _, _| this.status = tr("Fetched").into());
+        self.scm_run(
+            "Fetching…",
+            vec![git_step(&["fetch", "--prune"])],
+            cx,
+            |this, _, _| this.status = tr("Fetched").into(),
+        );
     }
-    pub(crate) fn on_scm_remove_git(&mut self, _: &ScmRemoveGit, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_remove_git(
+        &mut self,
+        _: &ScmRemoveGit,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.scm.repo.is_some() {
             self.scm.confirm_uninit = true;
             self.view = SideView::Scm;
@@ -1422,7 +1820,9 @@ impl Workbench {
 
     fn scm_remove_git(&mut self, cx: &mut Context<Self>) {
         self.scm.confirm_uninit = false;
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let git = repo.join(".git");
         self.scm.busy = Some(tr("Removing Git…").into());
         cx.notify();
@@ -1448,7 +1848,9 @@ impl Workbench {
     }
 
     fn scm_ignore(&mut self, pattern: String, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let path = repo.join(".gitignore");
         let mut text = std::fs::read_to_string(&path).unwrap_or_default();
         if text.lines().any(|l| l.trim() == pattern) {
@@ -1467,27 +1869,55 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_scm_stage_all(&mut self, _: &ScmStageAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_stage_all(
+        &mut self,
+        _: &ScmStageAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_stage(None, true, cx);
     }
-    pub(crate) fn on_scm_unstage_all(&mut self, _: &ScmUnstageAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_unstage_all(
+        &mut self,
+        _: &ScmUnstageAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_stage(None, false, cx);
     }
-    pub(crate) fn on_scm_create_pr(&mut self, _: &ScmCreatePr, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_create_pr(
+        &mut self,
+        _: &ScmCreatePr,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_create_pr(cx);
     }
-    pub(crate) fn on_scm_open_github(&mut self, _: &ScmOpenGithub, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_open_github(
+        &mut self,
+        _: &ScmOpenGithub,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let branch = self.scm.status.branch.clone();
-        self.scm_run("Opening GitHub…", vec![git_step(&["remote", "get-url", "origin"])], cx, move |_, out, cx| {
-            let url = out.trim().trim_end_matches(".git").replace("git@github.com:", "https://github.com/");
-            let url = match &branch {
-                Some(b) if url.starts_with("https://github.com/") => format!("{url}/tree/{b}"),
-                _ => url,
-            };
-            if url.starts_with("http") {
-                cx.open_url(&url);
-            }
-        });
+        self.scm_run(
+            "Opening GitHub…",
+            vec![git_step(&["remote", "get-url", "origin"])],
+            cx,
+            move |_, out, cx| {
+                let url = out
+                    .trim()
+                    .trim_end_matches(".git")
+                    .replace("git@github.com:", "https://github.com/");
+                let url = match &branch {
+                    Some(b) if url.starts_with("https://github.com/") => format!("{url}/tree/{b}"),
+                    _ => url,
+                };
+                if url.starts_with("http") {
+                    cx.open_url(&url);
+                }
+            },
+        );
     }
 }
 
@@ -1509,9 +1939,21 @@ mod tests {
         assert_eq!(st.branch.as_deref(), Some("main"));
         assert_eq!(st.upstream.as_deref(), Some("origin/main"));
         assert_eq!((st.ahead, st.behind), (2, 21));
-        assert_eq!(st.staged.iter().map(|c| (c.path.as_str(), c.code)).collect::<Vec<_>>(), vec![("new.txt", 'A'), ("both.rs", 'M'), ("renamed.py", 'R')]);
+        assert_eq!(
+            st.staged
+                .iter()
+                .map(|c| (c.path.as_str(), c.code))
+                .collect::<Vec<_>>(),
+            vec![("new.txt", 'A'), ("both.rs", 'M'), ("renamed.py", 'R')]
+        );
         assert_eq!(st.staged[2].orig.as_deref(), Some("old.py"));
-        assert_eq!(st.changes.iter().map(|c| (c.path.as_str(), c.code)).collect::<Vec<_>>(), vec![("src/app.py", 'M'), ("both.rs", 'M'), ("notes.md", 'U')]);
+        assert_eq!(
+            st.changes
+                .iter()
+                .map(|c| (c.path.as_str(), c.code))
+                .collect::<Vec<_>>(),
+            vec![("src/app.py", 'M'), ("both.rs", 'M'), ("notes.md", 'U')]
+        );
         assert_eq!(st.conflicts[0].path, "conflict.txt");
         assert_eq!(st.count(), 7);
     }
@@ -1533,7 +1975,10 @@ mod tests {
 
     #[test]
     fn urls() {
-        assert_eq!(find_url("Creating pull request\nhttps://github.com/o/r/pull/7\n").as_deref(), Some("https://github.com/o/r/pull/7"));
+        assert_eq!(
+            find_url("Creating pull request\nhttps://github.com/o/r/pull/7\n").as_deref(),
+            Some("https://github.com/o/r/pull/7")
+        );
     }
 
     #[test]

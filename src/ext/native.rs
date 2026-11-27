@@ -1,4 +1,3 @@
-
 use super::market;
 use super::vsx_icons::{self, IconThemeMeta};
 use super::vsx_theme;
@@ -13,6 +12,13 @@ pub struct Applied {
     pub themes: Vec<(String, String)>,
     pub icon_themes: Vec<(String, String)>,
     pub languages: Vec<String>,
+    pub activity_views: Vec<(String, String)>,
+    pub views: usize,
+    pub commands: usize,
+    pub keybindings: usize,
+    pub menus: usize,
+    pub custom_editors: usize,
+    pub has_main: bool,
     pub failed: Vec<String>,
 }
 
@@ -33,12 +39,27 @@ fn leak(s: String) -> &'static str {
 }
 
 pub fn load() {
+    let installed = market::installed_list();
+    super::vsc_registry::load(&installed);
     let mut applied = HashMap::new();
     let mut palettes = Vec::new();
     let mut langs = Vec::new();
     let mut icon_metas: Vec<IconThemeMeta> = Vec::new();
     let mut used_icon_ids: HashSet<String> = HashSet::new();
-    for ext in market::installed_list() {
+    for ext in installed {
+        if ext.bundled {
+            applied.insert(
+                ext.id.clone(),
+                Applied {
+                    icon_themes: vec![(
+                        vsx_icons::MATERIAL_ID.into(),
+                        "Material Icon Theme".into(),
+                    )],
+                    ..Default::default()
+                },
+            );
+            continue;
+        }
         let Some(pkg) = read_pkg(&ext.folder) else {
             continue;
         };
@@ -71,6 +92,14 @@ pub fn load() {
                 langs.push(lang);
             }
         }
+        let summary = super::vsc_registry::summary_for_ext(&ext.id);
+        a.activity_views = summary.activity_views;
+        a.views = summary.views;
+        a.commands = summary.commands;
+        a.keybindings = summary.keybindings;
+        a.menus = summary.menus;
+        a.custom_editors = summary.custom_editors;
+        a.has_main = summary.has_main;
         if a != Applied::default() {
             applied.insert(ext.id.clone(), a);
         }
@@ -121,7 +150,11 @@ fn icon_slug(raw: &str) -> String {
     while out.ends_with('-') {
         out.pop();
     }
-    if out.is_empty() { "icons".into() } else { out }
+    if out.is_empty() {
+        "icons".into()
+    } else {
+        out
+    }
 }
 
 pub fn icon_theme(
@@ -146,8 +179,15 @@ pub fn icon_theme(
     if rel.is_empty() || rel.contains("..") || Path::new(rel).is_absolute() {
         return Err(format!("{label}: no icon theme file"));
     }
-    let root = ext.folder.canonicalize().map_err(|e| format!("{label}: {e}"))?;
-    let path = ext.folder.join(rel).canonicalize().map_err(|e| format!("{label}: {e}"))?;
+    let root = ext
+        .folder
+        .canonicalize()
+        .map_err(|e| format!("{label}: {e}"))?;
+    let path = ext
+        .folder
+        .join(rel)
+        .canonicalize()
+        .map_err(|e| format!("{label}: {e}"))?;
     if !path.starts_with(&root) || !path.is_file() {
         return Err(format!("{label}: icon theme file missing"));
     }
@@ -171,6 +211,7 @@ pub fn icon_theme(
         ext_display: ext.display.clone(),
         ext_folder: root,
         path,
+        bundled: false,
     })
 }
 
@@ -513,11 +554,16 @@ mod tests {
 
     #[test]
     fn icon_theme_manifest_entry_parses_and_checks_path() {
-        let dir = std::env::temp_dir().join(format!("fluxcode-native-icons-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fluxcode-native-icons-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let ext = dir.join("acme.icons-1.0.0");
         std::fs::create_dir_all(&ext).unwrap();
-        std::fs::write(ext.join("dim.json"), r#"{ "file": "f", "iconDefinitions": {} }"#).unwrap();
+        std::fs::write(
+            ext.join("dim.json"),
+            r#"{ "file": "f", "iconDefinitions": {} }"#,
+        )
+        .unwrap();
         let installed = market::Installed {
             id: "acme.icons".into(),
             folder: ext.clone(),
@@ -535,8 +581,20 @@ mod tests {
         .unwrap();
         assert_eq!(ok.id, "vsx:acme.icons:acme-dim");
         assert_eq!(ok.label, "Acme Dim");
-        assert!(icon_theme(&installed, &json!({ "id": "bad", "path": "./missing.json" }), &mut nls, &mut used).is_err());
-        assert!(icon_theme(&installed, &json!({ "id": "esc", "path": "../evil.json" }), &mut nls, &mut used).is_err());
+        assert!(icon_theme(
+            &installed,
+            &json!({ "id": "bad", "path": "./missing.json" }),
+            &mut nls,
+            &mut used
+        )
+        .is_err());
+        assert!(icon_theme(
+            &installed,
+            &json!({ "id": "esc", "path": "../evil.json" }),
+            &mut nls,
+            &mut used
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
