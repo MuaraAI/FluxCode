@@ -769,8 +769,8 @@ impl Workbench {
                                 }
                                 _ => {
                                     let typed = name_input.read(cx).value();
-                                        files::file_icon_el(&typed, icon_sz)
-                                    }
+                                    files::file_icon_el(&typed, icon_sz)
+                                }
                             };
                             return name_row(
                                 PENDING_ROW_ID,
@@ -789,7 +789,7 @@ impl Workbench {
                                 .w_full()
                                 .h(theme::u(20.))
                                 .pl(pl)
-                                .pr(px(18.))
+                                .pr_2()
                                 .gap_1()
                                 .items_center()
                                 .text_size(theme::u(11.))
@@ -836,7 +836,7 @@ impl Workbench {
                                 .items_center()
                                 .justify_center()
                                 .when(is_dir, |d| {
-                                d.child(
+                                    d.child(
                                         Icon::new(if expanded {
                                             IconName::ChevronDown
                                         } else {
@@ -844,8 +844,8 @@ impl Workbench {
                                         })
                                         .xsmall()
                                         .text_color(c(theme::FG_DIM)),
-                                )
-                            })
+                                    )
+                                })
                         });
                         let icon = if is_dir {
                             files::folder_icon_el(
@@ -892,7 +892,7 @@ impl Workbench {
                             .h(theme::u(20.))
                             .overflow_hidden()
                             .pl(px(base_pl))
-                            .pr(px(18.))
+                            .pr_2()
                             .gap_1()
                             .items_center()
                             .cursor_pointer()
@@ -1140,9 +1140,9 @@ impl Workbench {
             let act_rect = sel_ix
                 .filter(|&i| i < count)
                 .map(|i| crate::ui::liquid::Rect1D {
-                pos: explorer_row_top(i, scroll_y, row_h),
-                len: row_h,
-            });
+                    pos: explorer_row_top(i, scroll_y, row_h),
+                    len: row_h,
+                });
             if scrolled {
                 if let Some(r) = act_rect {
                     liq.active_ix = sel_ix;
@@ -1155,14 +1155,14 @@ impl Workbench {
                 .hover_ix
                 .filter(|&i| i < count)
                 .map(|i| crate::ui::liquid::Rect1D {
-                pos: explorer_row_top(i, scroll_y, row_h),
-                len: row_h,
-            });
+                    pos: explorer_row_top(i, scroll_y, row_h),
+                    len: row_h,
+                });
             liq.sync_hover_rect(hov_rect, cross_w, now);
             liq.sample_frame(cross_w, now).map(|fr| {
                 let st = crate::ui::liquid::LiquidStyle {
                     inset_a: 4.0,
-                    inset_b: 14.0,
+                    inset_b: 6.0,
                     cross_base: cross_w,
                     max_squeeze: 3.5,
                     radius: 6.0,
@@ -1474,8 +1474,8 @@ fn name_row(
         .w_full()
         .h(theme::u(20.))
         .py_0()
+        .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
-        .pr(px(18.))
         .gap_1()
         .items_center()
         .bg(c(theme::SELECT))
@@ -1509,8 +1509,8 @@ fn delete_row(id: &str, depth: usize, path: &Path, view: &Entity<Workbench>) -> 
         .w_full()
         .h(theme::u(20.))
         .py_0()
+        .px_1()
         .pl(theme::u(10.) * depth + theme::u(6.))
-        .pr(px(18.))
         .gap_1()
         .items_center()
         .bg(c(theme::SELECT))
@@ -1597,8 +1597,8 @@ mod tests {
             "behavior_packs",
             true,
             vec![
-            dir("/bp/A", "KiwEssentialsVIP_BP", true, big_a),
-            dir("/bp/B", "KiwHitAnimation_BP", true, big_b),
+                dir("/bp/A", "KiwEssentialsVIP_BP", true, big_a),
+                dir("/bp/B", "KiwHitAnimation_BP", true, big_b),
             ],
         )];
         let mut expanded = HashSet::from(["/bp".to_string(), "/bp/B".to_string()]);

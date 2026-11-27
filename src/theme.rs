@@ -142,9 +142,7 @@ impl Palette {
     }
 }
 
-pub(crate) const CODE_OSS_DARK: &str = "code-oss-dark";
-
-pub static PALETTES: [Palette; 8] = [
+pub static PALETTES: [Palette; 7] = [
     Palette {
         id: "flux-dark",
         name: "FluxDark",
@@ -342,34 +340,6 @@ pub static PALETTES: [Palette; 8] = [
         folder: 0xd9ad8c,
         select: 0x2d2840,
         selection: 0x4a3a58,
-        syntax: None,
-    },
-    Palette {
-        id: CODE_OSS_DARK,
-        name: "Code OSS Dark",
-        note: "Dark workbench with a blue accent",
-        dark: true,
-        title: 0x181818,
-        side: 0x181818,
-        editor: 0x1f1f1f,
-        elevated: 0x252526,
-        hover: 0x2a2d2e,
-        border: 0x2b2b2b,
-        border_strong: 0x454545,
-        fg: 0xcccccc,
-        strong: 0xf0f0f0,
-        muted: 0xb0b0b0,
-        dim: 0xa0a0a0,
-        accent: 0x005fb8,
-        on_accent: 0xffffff,
-        accent_text: 0x79b8ff,
-        blue: 0x75beff,
-        green: 0x81b88b,
-        warn: 0xe2c08d,
-        danger: 0xf48771,
-        folder: 0xdcb67a,
-        select: 0x263447,
-        selection: 0x264f78,
         syntax: None,
     },
 ];
