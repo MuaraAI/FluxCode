@@ -26,7 +26,8 @@ Single 16 MB binary, 10 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree 
 | **Multi-Language Terminal** | Multi-tab shell with clickable `file:line:col` error jumps across 15+ languages |
 | **Non-Text & Game Files** | Editable Bedrock/Java NBT, LevelDB, SQLite, PDF, Office, ZIP, and Hex |
 | **Git, Projects & WSL2** | Commit graph, incoming fetch, 11 built-in project manifests, fast WSL2 helper |
-| **Privacy & Keys** | VS Code layout and shortcuts, Marketplace theme import, zero telemetry |
+| **VS Code Extensions** | Almost all VS Code extensions supported (icons, themes, AI, and more); report extension bugs in [Issues](https://github.com/MuaraAI/FluxCode/issues) |
+| **Privacy & Keys** | VS Code layout and shortcuts, zero telemetry |
 
 ## Benchmark
 
@@ -58,7 +59,7 @@ Single 16 MB binary, 10 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree 
 | Disk Analyzer | Built-in WizTree + `@wiztree` | No | Extensions only |
 | Non-Text & NBT | Editable NBT, LevelDB, SQLite, PDF, Office, Hex | Images | Images (+ extensions) |
 | LSP / Debugger | Planned / Run only | Yes / Yes | Extensions / Yes |
-| Extensions | Themes & grammars + 11 manifests | Yes | Largest catalog |
+| Extensions | Almost all VS Code extensions (icons, themes, AI); [report bugs](https://github.com/MuaraAI/FluxCode/issues) | Yes | Largest catalog |
 | Remote | WSL2 fast helper | SSH | SSH, Containers, WSL |
 | License | GPL-3.0-or-later | GPL-3.0 | MIT / Microsoft |
 
