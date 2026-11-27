@@ -41,7 +41,8 @@ Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis
 | **Multi-Language Terminal** | Multi-tab shell with clickable `file:line:col` error jumps across 15+ languages |
 | **Non-Text & Game Files** | Editable Bedrock/Java NBT, LevelDB, SQLite, PDF, Office, ZIP, and Hex |
 | **Git, Projects & WSL2** | Commit graph, incoming fetch, 11 built-in project manifests, fast WSL2 helper |
-| **Privacy & Keys** | VS Code layout and shortcuts, Marketplace theme import, zero telemetry |
+| **VS Code Extensions** | Almost all VS Code extensions supported (icons, themes, AI, and more); report extension bugs in [Issues](https://github.com/MuaraAI/FluxCode/issues) |
+| **Privacy & Keys** | VS Code layout and shortcuts, zero telemetry |
 @id
 ## Keunggulan Utama
 
@@ -55,7 +56,8 @@ Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis
 | **Terminal Multibahasa** | Multi-tab dengan klik error `file:baris:kolom` lintas 15+ bahasa |
 | **File Non-Teks & Game** | Edit NBT Bedrock/Java, LevelDB, SQLite, PDF, Office, ZIP, dan Hex |
 | **Git, Proyek & WSL2** | Grafik commit, cek incoming, 11 manifest proyek bawaan, helper disk cepat WSL2 |
-| **Privasi & Pintasan** | Tata letak dan shortcut VS Code, impor tema Marketplace, nol telemetri |
+| **Ekstensi VS Code** | Hampir semua ekstensi VS Code didukung (ikon, tema, AI, dan lainnya); laporkan bug ekstensi di [Issues](https://github.com/MuaraAI/FluxCode/issues) |
+| **Privasi & Pintasan** | Tata letak dan shortcut VS Code, nol telemetri |
 
 @en
 ## Benchmark
@@ -101,7 +103,7 @@ Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis
 | Disk Analyzer | Built-in WizTree + `@wiztree` | No | Extensions only |
 | Non-Text & NBT | Editable NBT, LevelDB, SQLite, PDF, Office, Hex | Images | Images (+ extensions) |
 | LSP / Debugger | Planned / Run only | Yes / Yes | Extensions / Yes |
-| Extensions | Themes & grammars + 11 manifests | Yes | Largest catalog |
+| Extensions | Almost all VS Code extensions (icons, themes, AI); [report bugs](https://github.com/MuaraAI/FluxCode/issues) | Yes | Largest catalog |
 | Remote | WSL2 fast helper | SSH | SSH, Containers, WSL |
 | License | GPL-3.0-or-later | GPL-3.0 | MIT / Microsoft |
 @id
@@ -117,7 +119,7 @@ Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis
 | Penganalisis Disk | WizTree bawaan + `@wiztree` | Tidak | Hanya extension |
 | File Non-Teks & NBT | Edit NBT, LevelDB, SQLite, PDF, Office, Hex | Gambar | Gambar (+ extension) |
 | LSP / Debugger | Terjadwal / Run saja | Ya / Ya | Extension / Ya |
-| Extension | Tema & grammar + 11 manifest | Ya | Katalog terbesar |
+| Extension | Hampir semua ekstensi VS Code (ikon, tema, AI); [laporkan bug](https://github.com/MuaraAI/FluxCode/issues) | Ya | Katalog terbesar |
 | Remote | Helper cepat WSL2 | SSH | SSH, Container, WSL |
 | Lisensi | GPL-3.0-or-later | GPL-3.0 | MIT / Microsoft |
 
