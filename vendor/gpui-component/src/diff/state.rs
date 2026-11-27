@@ -75,6 +75,16 @@ pub(crate) enum FoldExpansion {
     All,
 }
 
+/// Contiguous changed row range for rendering an overview ruler beside the scrollbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiffOverviewMark {
+    pub start_row: u32,
+    pub end_row: u32,
+    pub removed: bool,
+    pub added: bool,
+    pub conflict: bool,
+}
+
 /// Notifications from the readonly comparison surface.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -220,6 +230,10 @@ pub struct DiffState {
     header_rows: Vec<usize>,
     rows: Rc<Vec<DisplayRow>>,
     change_rows: Vec<usize>,
+    hunk_rows: Vec<usize>,
+    overview_marks: Vec<DiffOverviewMark>,
+    active_hunk: usize,
+    navigated_scroll_top: std::cell::Cell<Option<usize>>,
     list: ListState,
     horizontal_scroll: ScrollHandle,
     focus: FocusHandle,
@@ -233,6 +247,7 @@ pub struct DiffState {
     syntax_highlighter: Option<DiffSyntaxHighlighter>,
     presentations: Vec<Option<Arc<FilePresentation>>>,
     viewport: Size<Pixels>,
+    split_ratio: f32,
     layout: Option<LayoutKey>,
     content_width: Pixels,
     row_height: Option<Pixels>,
@@ -351,6 +366,10 @@ impl DiffState {
             header_rows: Vec::new(),
             rows: Rc::default(),
             change_rows: Vec::new(),
+            hunk_rows: Vec::new(),
+            overview_marks: Vec::new(),
+            active_hunk: 0,
+            navigated_scroll_top: std::cell::Cell::new(None),
             list: ListState::new(0, ListAlignment::Top, px(0.)),
             horizontal_scroll: ScrollHandle::new(),
             focus,
@@ -367,6 +386,7 @@ impl DiffState {
             },
             syntax_highlighter: None,
             viewport: Size::default(),
+            split_ratio: 0.5,
             layout: None,
             content_width: px(0.),
             row_height: None,
@@ -585,6 +605,22 @@ impl DiffState {
     /// The body's size as of the last paint.
     pub(crate) fn viewport(&self) -> Size<Pixels> {
         self.viewport
+    }
+    pub(crate) fn split_width(&self, width: Pixels) -> Pixels {
+        let min = px(120.).min(width / 2.);
+        (width * self.split_ratio).clamp(min, width - min)
+    }
+
+    pub(crate) fn resize_split(&mut self, x: Pixels, width: Pixels, cx: &mut Context<Self>) {
+        if width <= px(0.) {
+            return;
+        }
+        let min = px(120.).min(width / 2.);
+        let ratio = x.clamp(min, width - min) / width;
+        if self.split_ratio != ratio {
+            self.split_ratio = ratio;
+            cx.notify();
+        }
     }
     /// The width rows need to show their longest line.
     pub(crate) fn content_width(&self) -> Pixels {
@@ -852,6 +888,102 @@ impl DiffState {
     /// Moves to the previous changed group before the current viewport, across files.
     pub fn previous_change(&mut self, cx: &mut Context<Self>) {
         self.move_change(false, cx);
+    }
+
+    /// Returns the zero-based hunk position for the navigation toolbar.
+    pub fn hunk_position(&self) -> Option<(usize, usize)> {
+        let count = self.hunk_rows.len();
+        if count == 0 {
+            return None;
+        }
+        let top = self.list.logical_scroll_top().item_ix;
+        if self.navigated_scroll_top.get() == Some(top) {
+            return Some((self.active_hunk.min(count.saturating_sub(1)), count));
+        }
+        let (_, vis) = self.viewport_rows();
+        let probe = top + vis / 4;
+        let idx = self
+            .hunk_rows
+            .partition_point(|&r| r <= probe)
+            .saturating_sub(1);
+        Some((idx.min(count.saturating_sub(1)), count))
+    }
+
+    /// Navigates patch hunks, using changed groups for conflict-only views.
+    pub fn move_hunk(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some((current, count)) = self.hunk_position() else {
+            self.move_change(forward, cx);
+            return;
+        };
+        self.active_hunk = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+        self.list.scroll_to(ListOffset {
+            item_ix: self.hunk_rows[self.active_hunk],
+            offset_in_item: px(0.),
+        });
+        self.navigated_scroll_top
+            .set(Some(self.list.logical_scroll_top().item_ix));
+        cx.notify();
+    }
+
+    /// Scrolls to a zero-based hunk index (clamped to available hunks).
+    pub fn jump_to_hunk(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(&row) = self
+            .hunk_rows
+            .get(ix.min(self.hunk_rows.len().saturating_sub(1)))
+        else {
+            return;
+        };
+        self.active_hunk = ix.min(self.hunk_rows.len().saturating_sub(1));
+        self.list.scroll_to(ListOffset {
+            item_ix: row,
+            offset_in_item: px(0.),
+        });
+        self.navigated_scroll_top
+            .set(Some(self.list.logical_scroll_top().item_ix));
+        cx.notify();
+    }
+
+    /// Total virtualized rows currently projected in the diff viewer.
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Current top row index and estimated visible row count for overview indicators.
+    pub fn viewport_rows(&self) -> (usize, usize) {
+        let top = self.list.logical_scroll_top().item_ix;
+        let vh = f32::from(self.list.viewport_bounds().size.height);
+        let rh = f32::from(self.row_height.unwrap_or(px(20.))).max(1.);
+        let visible = ((vh / rh).ceil() as usize).max(1);
+        (top, visible)
+    }
+
+    /// Cached contiguous changed regions across all projected rows for the overview ruler.
+    pub fn overview_marks(&self) -> &[DiffOverviewMark] {
+        &self.overview_marks
+    }
+
+    /// Scrolls the diff viewer so `row_ix` lands near the upper third of the viewport.
+    pub fn scroll_to_row(&mut self, row_ix: usize, cx: &mut Context<Self>) -> bool {
+        if self.rows.is_empty() {
+            return false;
+        }
+        let (current_top, visible) = self.viewport_rows();
+        let max_ix = self.rows.len().saturating_sub(1);
+        let target = row_ix.min(max_ix).saturating_sub(visible / 3);
+        if current_top == target {
+            return false;
+        }
+        self.navigated_scroll_top.set(None);
+        self.list.scroll_to(ListOffset {
+            item_ix: target,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+        true
     }
 
     /// Reveals part or all of a collapsed unchanged range.
@@ -1317,13 +1449,13 @@ impl DiffState {
     /// measured heights of unchanged rows survive disclosure changes.
     fn rebuild(&mut self, reset: bool) {
         let rows = self.project_rows();
-        self.file_rows = source_rows(&self.files, &rows);
-        self.change_rows = changed_groups(&rows);
-        self.header_rows = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, row)| matches!(row, DisplayRow::File(_)).then_some(ix))
-            .collect();
+        let indexed = index_rows(&self.files, &rows);
+        self.file_rows = indexed.file_rows;
+        self.change_rows = indexed.change_rows;
+        self.hunk_rows = indexed.hunk_rows;
+        self.overview_marks = indexed.overview_marks;
+        self.header_rows = indexed.header_rows;
+        self.navigated_scroll_top.set(None);
         if reset {
             self.list.reset(rows.len());
         } else {
@@ -1507,10 +1639,19 @@ fn file_ixs(files: &[DiffFile]) -> HashMap<SharedString, usize> {
     ixs
 }
 
-/// Every source line maps to its code row or the disclosure hiding it; lines
-/// of a collapsed file have no row. Disjoint folds visit each pair once, so
-/// building the maps is linear.
-fn source_rows(files: &[DiffFile], rows: &[DisplayRow]) -> Vec<FileRows> {
+struct RowIndex {
+    file_rows: Vec<FileRows>,
+    change_rows: Vec<usize>,
+    hunk_rows: Vec<usize>,
+    overview_marks: Vec<DiffOverviewMark>,
+    header_rows: Vec<usize>,
+}
+
+/// Indexes source-line mappings, change groups, hunks, headers, and overview marks
+/// in one fused linear pass over `rows` to stay within cache bandwidth.
+fn index_rows(files: &[DiffFile], rows: &[DisplayRow]) -> RowIndex {
+    const _: () = assert!(std::mem::size_of::<DiffOverviewMark>() == 12);
+
     let mut file_rows = files
         .iter()
         .map(|file| FileRows {
@@ -1518,46 +1659,148 @@ fn source_rows(files: &[DiffFile], rows: &[DisplayRow]) -> Vec<FileRows> {
             modified: vec![None; file.lines_count(DiffSide::Modified)],
         })
         .collect::<Vec<_>>();
-    for (row_ix, row) in rows.iter().enumerate() {
+    let mut change_rows = Vec::new();
+    let mut hunk_rows = Vec::new();
+    let mut overview_marks: Vec<DiffOverviewMark> = Vec::new();
+    let mut header_rows = Vec::new();
+    let mut prev_changed_file: Option<usize> = None;
+
+    for (ix, row) in rows.iter().enumerate() {
         let mut map = |file: usize, original: Option<usize>, modified: Option<usize>| {
             if let Some(line) = original {
-                file_rows[file].original[line] = Some(row_ix);
+                file_rows[file].original[line] = Some(ix);
             }
             if let Some(line) = modified {
-                file_rows[file].modified[line] = Some(row_ix);
+                file_rows[file].modified[line] = Some(ix);
             }
         };
+        let mut is_changed_code = false;
+        let mut mark_flags: Option<(bool, bool, bool)> = None;
         match row {
             DisplayRow::Code {
                 file,
                 original,
                 modified,
-                ..
-            } => map(*file, *original, *modified),
+                changed,
+            } => {
+                map(*file, *original, *modified);
+                if *changed {
+                    is_changed_code = true;
+                    if prev_changed_file != Some(*file) {
+                        change_rows.push(ix);
+                    }
+                    prev_changed_file = Some(*file);
+                    mark_flags = Some((original.is_some(), modified.is_some(), false));
+                }
+            }
             DisplayRow::Fold { file, pairs } => {
                 for pair in &files[*file].pairs()[pairs.clone()] {
                     map(*file, pair.original(), pair.modified());
                 }
             }
-            DisplayRow::File(_)
-            | DisplayRow::Notice(_)
-            | DisplayRow::Hunk { .. }
-            | DisplayRow::Conflict { .. } => {}
+            DisplayRow::File(_) => header_rows.push(ix),
+            DisplayRow::Hunk { .. } => hunk_rows.push(ix),
+            DisplayRow::Conflict { .. } => {
+                mark_flags = Some((false, false, true));
+            }
+            DisplayRow::Notice(_) => {}
+        }
+        if !is_changed_code {
+            prev_changed_file = None;
+        }
+        if let Some((removed, added, conflict)) = mark_flags {
+            let start = ix as u32;
+            let end = ix.saturating_add(1).min(u32::MAX as usize) as u32;
+            if let Some(last) = overview_marks.last_mut()
+                && last.end_row == start
+                && last.removed == removed
+                && last.added == added
+                && last.conflict == conflict
+            {
+                last.end_row = end;
+            } else {
+                overview_marks.push(DiffOverviewMark {
+                    start_row: start,
+                    end_row: end,
+                    removed,
+                    added,
+                    conflict,
+                });
+            }
         }
     }
-    file_rows
+
+    RowIndex {
+        file_rows,
+        change_rows,
+        hunk_rows,
+        overview_marks,
+        header_rows,
+    }
 }
 
-fn changed_groups(rows: &[DisplayRow]) -> Vec<usize> {
-    let changed = |row: &DisplayRow| matches!(row, DisplayRow::Code { changed: true, .. });
-    rows.iter()
-        .enumerate()
-        .filter_map(|(ix, row)| {
-            (changed(row)
-                && (ix == 0 || !changed(&rows[ix - 1]) || rows[ix - 1].file() != row.file()))
-            .then_some(ix)
-        })
-        .collect()
+#[cfg(test)]
+mod overview_tests {
+    use super::*;
+
+    #[test]
+    fn overview_mark_fits_12_bytes_and_coalesces_adjacent_rows() {
+        assert_eq!(std::mem::size_of::<DiffOverviewMark>(), 12);
+        let rows = vec![
+            DisplayRow::File(0),
+            DisplayRow::Hunk { file: 0, hunk: 0 },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(0),
+                modified: None,
+                changed: true,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(1),
+                modified: None,
+                changed: true,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: Some(2),
+                modified: Some(0),
+                changed: false,
+            },
+            DisplayRow::Code {
+                file: 0,
+                original: None,
+                modified: Some(1),
+                changed: true,
+            },
+        ];
+        let files = DiffFile::parse("--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,2 @@\n-a\n-b\n c\n+d\n").unwrap();
+        let indexed = index_rows(&files, &rows);
+        assert_eq!(indexed.header_rows, vec![0]);
+        assert_eq!(indexed.hunk_rows, vec![1]);
+        assert_eq!(indexed.change_rows, vec![2, 5]);
+        assert_eq!(indexed.overview_marks.len(), 2);
+        assert_eq!(
+            indexed.overview_marks[0],
+            DiffOverviewMark {
+                start_row: 2,
+                end_row: 4,
+                removed: true,
+                added: false,
+                conflict: false,
+            }
+        );
+        assert_eq!(
+            indexed.overview_marks[1],
+            DiffOverviewMark {
+                start_row: 5,
+                end_row: 6,
+                removed: false,
+                added: true,
+                conflict: false,
+            }
+        );
+    }
 }
 
 const SIDE_BIT: u64 = 1 << 40;

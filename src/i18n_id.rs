@@ -1800,6 +1800,7 @@ pub const ID: &[(&str, &str)] = &[
     ("Generated {n} manifest(s)", "{n} manifest berhasil dibuat"),
     ("Manifests synced", "Manifest sudah sinkron"),
     ("Need a Behavior Pack first (generate one below)", "Butuh Behavior Pack dulu (buat di bawah)"),
+<<<<<<< HEAD
     ("Selection", "Seleksi"),
     ("Go", "Ke"),
     ("More menus", "Menu lainnya"),
@@ -2188,6 +2189,16 @@ pub const ID: &[(&str, &str)] = &[
     ("{n} media items", "{n} item media"),
     ("Open video", "Buka video"),
     ("Show in folder", "Tampilkan di folder"),
+    ("Side by side", "Berdampingan"),
+    ("Inline", "Sebaris"),
+    ("Full file", "Seluruh file"),
+    ("Changes only", "Perubahan saja"),
+    ("Previous change", "Perubahan sebelumnya"),
+    ("Next change", "Perubahan berikutnya"),
+    (
+        "No textual changes to compare (binary file or unchanged content).",
+        "Tidak ada perubahan teks untuk dibandingkan (file biner atau isinya sama).",
+    ),
 ];
 
 #[cfg(test)]
