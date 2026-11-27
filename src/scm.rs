@@ -2977,7 +2977,10 @@ mod tests {
         let out = "h1\x1fs1\x1fFix bug\x1fAna\x1f2 hours ago\x1fHEAD -> main, origin/main, origin/HEAD\x1fp1\0\nh2\x1fs2\x1fMerge\x1fBudi\x1f1 day ago\x1f\x1fp1 p2\0";
         let log = parse_log(out);
         assert_eq!(log.len(), 2);
-        assert_eq!(log[0].refs, vec!["HEAD -> main", "origin/main"]);
+        assert_eq!(
+            log[0].refs,
+            vec!["HEAD -> main", "origin/main", "origin/HEAD"]
+        );
         assert!(log[1].merge && !log[0].merge);
     }
 

@@ -208,9 +208,7 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
             (f.len() >= 7).then(|| {
                 let refs: Vec<String> = f[5]
                     .split(", ")
-                    .filter(|s| {
-                        !s.is_empty() && !matches!(*s, "origin/HEAD" | "refs/remotes/origin/HEAD")
-                    })
+                    .filter(|s| !s.is_empty())
                     .map(str::to_string)
                     .collect();
                 let is_head = refs
@@ -232,6 +230,41 @@ pub fn parse_log(out: &str) -> Vec<Commit> {
             })
         })
         .collect()
+}
+
+fn symbolic_remote_heads(
+    dir: &Path,
+    target: Option<&WslTarget>,
+) -> std::collections::HashSet<String> {
+    run_step(
+        dir,
+        &git_step(&[
+            "for-each-ref",
+            "--format=%(refname)%09%(symref)",
+            "refs/remotes",
+        ]),
+        target,
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|line| {
+        let (name, symref) = line.split_once('\t')?;
+        (name.starts_with("refs/remotes/") && name.ends_with("/HEAD") && !symref.is_empty())
+            .then(|| name.to_string())
+    })
+    .collect()
+}
+
+fn decoration_source(name: &str) -> &str {
+    name.split_once(" -> ").map_or(name, |(source, _)| source)
+}
+
+fn remove_symbolic_remote_heads(commits: &mut [Commit], refs: &std::collections::HashSet<String>) {
+    for commit in commits {
+        commit
+            .refs
+            .retain(|name| !refs.contains(decoration_source(name)));
+    }
 }
 
 #[derive(Clone)]
@@ -958,7 +991,16 @@ pub(crate) fn snapshot(
             ]),
             target,
         )
-        .map(|s| parse_log(&s))
+        .map(|s| {
+            let mut commits = parse_log(&s);
+            if commits.iter().flat_map(|cm| &cm.refs).any(|name| {
+                let source = decoration_source(name);
+                source.starts_with("refs/remotes/") && source.ends_with("/HEAD")
+            }) {
+                remove_symbolic_remote_heads(&mut commits, &symbolic_remote_heads(&repo, target));
+            }
+            commits
+        })
         .unwrap_or_default()
     });
     let incoming = if status.behind > 0 {
@@ -1039,6 +1081,29 @@ mod tests {
     fn spaces_in_paths() {
         let st = parse_status("1 .M N... 100644 100644 100644 a b my folder/a file.py\0");
         assert_eq!(st.changes[0].path, "my folder/a file.py");
+    }
+
+    #[test]
+    fn graph_hides_only_real_symbolic_remote_head_refs() {
+        let repo = TestRepo::new();
+        repo.write("file.txt", "initial\n");
+        repo.git(&["add", "file.txt"]);
+        commit(&repo.0, "initial", false, false, None).unwrap();
+        repo.git(&["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+        repo.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ]);
+        repo.git(&["update-ref", "refs/remotes/team/HEAD", "refs/heads/main"]);
+
+        let commits = snapshot(&repo.0, true, None).unwrap().log.unwrap();
+        let refs = &commits[0].refs;
+        assert!(!refs
+            .iter()
+            .any(|name| decoration_source(name) == "refs/remotes/origin/HEAD"));
+        assert!(refs.iter().any(|name| name == "refs/remotes/origin/main"));
+        assert!(refs.iter().any(|name| name == "refs/remotes/team/HEAD"));
     }
 
     #[test]

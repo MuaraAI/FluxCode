@@ -284,7 +284,7 @@ fn file_history_rows(log: &str, path: &str) -> Vec<Row> {
             let Some(old) = fields.next() else { break };
             if status.starts_with(['R', 'C']) {
                 let Some(new) = fields.next() else { break };
-                if status.starts_with('R') && new == path {
+                if new == path {
                     path = old;
                 }
             }
@@ -793,6 +793,24 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(paths, ["new name.txt", "new name.txt", "old\nname.txt"]);
+    }
+
+    #[test]
+    fn file_history_follows_copy_source_after_showing_the_copy() {
+        let log = concat!(
+            "\0c\x1fc\x1fedit copy\x1fdev\x1ftoday\x1f\x1fb\0\nM\0new name.txt\0",
+            "\0b\x1fb\x1fcopy\x1fdev\x1ftoday\x1f\x1fa\0\nC100\0source.txt\0new name.txt\0",
+            "\0a\x1fa\x1fadd source\x1fdev\x1ftoday\x1f\x1f\0\nA\0source.txt\0",
+        );
+        let rows = super::file_history_rows(log, "new name.txt");
+        let paths = rows
+            .iter()
+            .filter_map(|row| match &row.action {
+                super::RowAction::ShowFile { path, .. } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["new name.txt", "new name.txt", "source.txt"]);
     }
     use super::{checkout_args, form_args, parse_refs, worktree_start, Choice, Form, RefKind};
 
