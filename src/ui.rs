@@ -1,4 +1,3 @@
-
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
 use gpui_kit::component::{
@@ -55,7 +54,11 @@ impl Workbench {
     }
 }
 
-pub fn tool_button(id: impl Into<ElementId>, icon: impl Into<component::Icon>, on: bool) -> Stateful<Div> {
+pub fn tool_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<component::Icon>,
+    on: bool,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -65,9 +68,19 @@ pub fn tool_button(id: impl Into<ElementId>, icon: impl Into<component::Icon>, o
         .justify_center()
         .rounded(px(4.))
         .cursor_pointer()
-        .text_color(c(if on { theme::ACCENT_TEXT } else { theme::FG_MUTED }))
+        .text_color(c(if on {
+            theme::ACCENT_TEXT
+        } else {
+            theme::FG_MUTED
+        }))
         .when(on, |d| d.bg(c(theme::BG_HOVER)))
-        .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(if on { theme::ACCENT_TEXT } else { theme::FG_STRONG })))
+        .hover(|s| {
+            s.bg(c(theme::BG_HOVER)).text_color(c(if on {
+                theme::ACCENT_TEXT
+            } else {
+                theme::FG_STRONG
+            }))
+        })
         .active(|s| s.bg(c(theme::BG_ELEVATED)))
         .child(icon.into().size(theme::u(14.)))
 }
@@ -89,7 +102,15 @@ pub fn meander(size: f32, a: Hsla, b: Hsla) -> Div {
                 let re = if r == 4. { 4.5 * u } else { r * u + u };
                 (le, y0 * u, re - le, u)
             };
-            root = root.child(div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height)).bg(col));
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(width))
+                    .h(px(height))
+                    .bg(col),
+            );
         }
     }
     root
@@ -109,7 +130,12 @@ impl SegItem {
         active: bool,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        Self { id: id.into(), label: label.into(), active, on_click: std::rc::Rc::new(on_click) }
+        Self {
+            id: id.into(),
+            label: label.into(),
+            active,
+            on_click: std::rc::Rc::new(on_click),
+        }
     }
 }
 
@@ -121,18 +147,26 @@ pub struct SegmentedControl {
 
 impl SegmentedControl {
     pub fn new(id: impl Into<SharedString>, items: impl IntoIterator<Item = SegItem>) -> Self {
-        Self { id: id.into(), items: items.into_iter().collect() }
+        Self {
+            id: id.into(),
+            items: items.into_iter().collect(),
+        }
     }
 }
 
 impl RenderOnce for SegmentedControl {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let handle = liquid::keyed_state(SharedString::from(format!("seg-st-{}", self.id)), window, cx);
+        let handle = liquid::keyed_state(
+            SharedString::from(format!("seg-st-{}", self.id)),
+            window,
+            cx,
+        );
         let active_ix = self.items.iter().position(|it| it.active);
         let motion = !cx.reduce_motion();
         let count = self.items.len();
         let cross = f32::from(theme::u(26.));
-        let (frame, has_active_liq) = liquid::keyed_sync_and_sample(&handle, false, count, active_ix, cross, 200, motion);
+        let (frame, has_active_liq) =
+            liquid::keyed_sync_and_sample(&handle, false, count, active_ix, cross, 200, motion);
         let view_id = window.current_view();
         let origin_probe = liquid::keyed_origin_probe(handle.clone(), view_id);
 
@@ -151,13 +185,22 @@ impl RenderOnce for SegmentedControl {
                 union_border: c(theme::ACCENT).opacity(0.65),
                 bridge_bg: c(theme::ACCENT).opacity(0.55),
             };
-            liquid::render_coalesced_layer(SharedString::from(format!("seg-liq-{}", self.id)), false, style, fr)
+            liquid::render_coalesced_layer(
+                SharedString::from(format!("seg-liq-{}", self.id)),
+                false,
+                style,
+                fr,
+            )
         });
 
         let buttons = self.items.into_iter().enumerate().map(|(i, item)| {
             let probe = liquid::keyed_item_probe(handle.clone(), i, view_id);
             let fh = window
-                .use_keyed_state(SharedString::from(format!("seg-fh-{}", item.id)), cx, |_, cx| cx.focus_handle())
+                .use_keyed_state(
+                    SharedString::from(format!("seg-fh-{}", item.id)),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
                 .read(cx)
                 .clone();
             let focused = fh.is_focused(window);
@@ -175,16 +218,32 @@ impl RenderOnce for SegmentedControl {
                 .justify_center()
                 .rounded(theme::u(5.))
                 .text_xs()
-                .font_weight(if item.active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                .font_weight(if item.active {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
                 .cursor_pointer()
                 .track_focus(&fh)
                 .tab_stop(true)
                 .border_1()
-                .border_color(if focused && !item.active { c(theme::ACCENT).opacity(0.55) } else { gpui::transparent_black() })
+                .border_color(if focused && !item.active {
+                    c(theme::ACCENT).opacity(0.55)
+                } else {
+                    gpui::transparent_black()
+                })
                 .when(item.active && !has_active_liq, |d| d.bg(c(theme::ACCENT)))
-                .text_color(if item.active { c(theme::ON_ACCENT) } else { c(theme::FG_MUTED) })
-                .when(!item.active && !motion, |d| d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))))
-                .when(!item.active && motion, |d| d.hover(|s| s.text_color(c(theme::FG_STRONG))))
+                .text_color(if item.active {
+                    c(theme::ON_ACCENT)
+                } else {
+                    c(theme::FG_MUTED)
+                })
+                .when(!item.active && !motion, |d| {
+                    d.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
+                })
+                .when(!item.active && motion, |d| {
+                    d.hover(|s| s.text_color(c(theme::FG_STRONG)))
+                })
                 .on_hover(move |entered: &bool, _, cx| {
                     if *entered && motion {
                         liquid::keyed_hover_enter(&h_hov, i, false, cross, 155, view_id, cx);
@@ -194,7 +253,11 @@ impl RenderOnce for SegmentedControl {
                 .on_key_down(move |ev: &KeyDownEvent, w, cx| {
                     if matches!(ev.keystroke.key.as_str(), "enter" | "space") {
                         cx.stop_propagation();
-                        (on_key)(&ClickEvent::Keyboard(gpui::KeyboardClickEvent::default()), w, cx);
+                        (on_key)(
+                            &ClickEvent::Keyboard(gpui::KeyboardClickEvent::default()),
+                            w,
+                            cx,
+                        );
                     }
                 })
                 .child(probe)
@@ -283,15 +346,22 @@ impl RenderOnce for McToggle {
         let id = self.id;
         let view_id = window.current_view();
         let mem = window
-            .use_keyed_state(
-                SharedString::from(format!("mc-tgl-st-{id}")),
-                cx,
-                |_, _| Rc::new(RefCell::new(McToggleMem { checked, from_on: checked, seq: 0, hovered: false })),
-            )
+            .use_keyed_state(SharedString::from(format!("mc-tgl-st-{id}")), cx, |_, _| {
+                Rc::new(RefCell::new(McToggleMem {
+                    checked,
+                    from_on: checked,
+                    seq: 0,
+                    hovered: false,
+                }))
+            })
             .read(cx)
             .clone();
         let fh = window
-            .use_keyed_state(SharedString::from(format!("mc-tgl-fh-{id}")), cx, |_, cx| cx.focus_handle())
+            .use_keyed_state(
+                SharedString::from(format!("mc-tgl-fh-{id}")),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
             .read(cx)
             .clone();
         let focused = fh.is_focused(window) && !disabled;
@@ -307,12 +377,12 @@ impl RenderOnce for McToggle {
         };
 
         let sc = theme::scale();
-        let w = if small { 38.0 } else { 46.0 } * sc;
-        let h = if small { 22.0 } else { 26.0 } * sc;
-        let track_h = if small { 18.0 } else { 22.0 } * sc;
+        let w = if small { 28.0 } else { 34.0 } * sc;
+        let h = if small { 16.0 } else { 18.0 } * sc;
+        let track_h = if small { 13.0 } else { 15.0 } * sc;
         let track_top = (h - track_h) * 0.5;
-        let thumb_w = if small { 18.0 } else { 22.0 } * sc;
-        let thumb_h = if small { 20.0 } else { 24.0 } * sc;
+        let thumb_w = if small { 12.0 } else { 14.0 } * sc;
+        let thumb_h = if small { 14.0 } else { 16.0 } * sc;
         let travel = (w - thumb_w).max(0.0);
         let dark = theme::live_dark();
         let motion = !cx.reduce_motion() && seq > 0;
@@ -324,8 +394,9 @@ impl RenderOnce for McToggle {
             let th_w = thumb_w * j.sx;
             let th_h = thumb_h * j.sy;
             let cx_thumb = thumb_w * 0.5 + travel * j.pos;
-            let left = (cx_thumb - th_w * 0.5).clamp(-1.5 * sc, w - th_w + 1.5 * sc);
-            let top = ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-2.0 * sc, h - th_h + 2.0 * sc);
+            let left = (cx_thumb - th_w * 0.5).clamp(-1.0 * sc, w - th_w + 1.0 * sc);
+            let top =
+                ((h - th_h) * 0.5 + (thumb_h - th_h) * 0.15).clamp(-1.5 * sc, h - th_h + 1.5 * sc);
             let split_x = (left + th_w * 0.5).clamp(0.0, w);
 
             // Theme-synced KiwEssentials Ore-UI block toggle with jelly bounce and I/O glyphs.
@@ -352,9 +423,11 @@ impl RenderOnce for McToggle {
             } else {
                 c(theme::BORDER_STRONG).opacity(0.78)
             };
-            let glyph_w = (2.0 * sc).max(1.5);
-            let glyph_h = (8.0 * sc).max(6.0);
-            let o_sz = (6.0 * sc).max(5.0);
+            let glyph_w = (1.5 * sc).max(1.2);
+            let glyph_h = (if small { 5.0 } else { 6.0 } * sc).max(4.5);
+            let o_sz = (if small { 4.5 } else { 5.0 } * sc).max(4.0);
+            let track_rad = if small { 3.5 } else { 4.0 } * sc;
+            let thumb_rad = if small { 2.5 } else { 3.0 } * sc;
 
             let track = div()
                 .absolute()
@@ -362,20 +435,28 @@ impl RenderOnce for McToggle {
                 .top(px(track_top + tby))
                 .w(px(w))
                 .h(px(track_h))
-                .rounded(px(4.5 * sc))
+                .rounded(px(track_rad))
                 .border_1()
                 .border_color(track_border)
                 .overflow_hidden()
                 .bg(off_body)
-                .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(off_shade))
                 .child(
                     div()
                         .absolute()
-                        .right(px(thumb_w * 0.5 - o_sz * 0.5 - 1.5 * sc))
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(1.0 * sc))
+                        .bg(off_shade),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right(px((thumb_w * 0.5 - o_sz * 0.5 - 1.0 * sc).max(1.5)))
                         .top(px((track_h - 2.0 * sc - o_sz) * 0.5))
                         .size(px(o_sz))
-                        .rounded(px(1.5))
-                        .border(px(1.4 * sc))
+                        .rounded(px(1.2))
+                        .border(px(1.2 * sc))
                         .border_color(c(theme::FG_MUTED).opacity(0.75))
                         .opacity((1.0 - j.fill).clamp(0.18, 1.0)),
                 )
@@ -388,11 +469,19 @@ impl RenderOnce for McToggle {
                         .w(px(split_x))
                         .overflow_hidden()
                         .bg(accent_fill)
-                        .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(accent_hi))
                         .child(
                             div()
                                 .absolute()
-                                .left(px(thumb_w * 0.5 - glyph_w * 0.5 - 1.5 * sc))
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .h(px(1.0 * sc))
+                                .bg(accent_hi),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px((thumb_w * 0.5 - glyph_w * 0.5 - 1.0 * sc).max(1.5)))
                                 .top(px((track_h - 2.0 * sc - glyph_h) * 0.5))
                                 .w(px(glyph_w))
                                 .h(px(glyph_h))
@@ -408,13 +497,29 @@ impl RenderOnce for McToggle {
                 .top(px(top))
                 .w(px(th_w))
                 .h(px(th_h))
-                .rounded(px(3.5 * sc))
+                .rounded(px(thumb_rad))
                 .border_1()
                 .border_color(thumb_border)
                 .overflow_hidden()
                 .bg(thumb_face)
-                .child(div().absolute().top_0().left_0().right_0().h(px(1.5 * sc)).bg(thumb_bevel))
-                .child(div().absolute().bottom_0().left_0().right_0().h(px(2.0 * sc)).bg(thumb_lip));
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(1.0 * sc))
+                        .bg(thumb_bevel),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(1.5 * sc))
+                        .bg(thumb_lip),
+                );
 
             canvas_div.child(track).child(thumb)
         };
@@ -469,7 +574,11 @@ impl RenderOnce for McToggle {
 /// Theme-synced recessed input cavity with subtle bevel depth.
 pub fn mc_box_frame(base: Div, focused: bool, dark: bool) -> Div {
     let sc = theme::scale();
-    let outer = if focused { c(theme::ACCENT) } else { c(theme::BORDER) };
+    let outer = if focused {
+        c(theme::ACCENT)
+    } else {
+        c(theme::BORDER)
+    };
     let shadow = gpui::black().opacity(if dark { 0.16 } else { 0.05 });
     let rim = if focused {
         c(theme::ACCENT).opacity(0.35)
@@ -482,8 +591,24 @@ pub fn mc_box_frame(base: Div, focused: bool, dark: bool) -> Div {
         .border_color(outer)
         .bg(c(theme::BG_EDITOR))
         .overflow_hidden()
-        .child(div().absolute().top_0().left_0().right_0().h(px(1.)).bg(shadow))
-        .child(div().absolute().bottom_0().left_0().right_0().h(px(1.)).bg(rim))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(1.))
+                .bg(shadow),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(px(1.))
+                .bg(rim),
+        )
 }
 
 struct McInputFocusMem {
@@ -551,11 +676,12 @@ impl RenderOnce for McInput {
         let focused = self.focus_bordered && self.state.focus_handle(cx).is_focused(window);
         let dark = theme::live_dark();
         let mem = window
-            .use_keyed_state(
-                ("mc-inp-f", self.state.entity_id()),
-                cx,
-                |_, _| Rc::new(RefCell::new(McInputFocusMem { focused: false, seq: 0 })),
-            )
+            .use_keyed_state(("mc-inp-f", self.state.entity_id()), cx, |_, _| {
+                Rc::new(RefCell::new(McInputFocusMem {
+                    focused: false,
+                    seq: 0,
+                }))
+            })
             .read(cx)
             .clone();
         let pop_seq = {
@@ -564,10 +690,16 @@ impl RenderOnce for McInput {
                 m.seq = m.seq.wrapping_add(1);
             }
             m.focused = focused;
-            if focused && !cx.reduce_motion() { m.seq } else { 0 }
+            if focused && !cx.reduce_motion() {
+                m.seq
+            } else {
+                0
+            }
         };
 
-        let mut inner = Input::new(&self.state).appearance(false).focus_bordered(false);
+        let mut inner = Input::new(&self.state)
+            .appearance(false)
+            .focus_bordered(false);
         inner = match self.size {
             Some(Size::XSmall) => inner.xsmall(),
             Some(Size::Small) => inner.small(),
@@ -580,7 +712,8 @@ impl RenderOnce for McInput {
             inner = inner.prefix(p);
         }
 
-        let box_base = mc_box_frame(div().w_full().refine_style(&self.style), focused, dark).child(inner);
+        let box_base =
+            mc_box_frame(div().w_full().refine_style(&self.style), focused, dark).child(inner);
         if pop_seq > 0 {
             let eid = self.state.entity_id();
             box_base
@@ -608,13 +741,40 @@ mod tests {
     fn slide_retargets_continuously_mid_flight() {
         let mut s = Slide1D::default();
         let t0 = Instant::now();
-        s.snap(Rect1D { pos: 0.0, len: 60.0 }, false);
-        s.retarget(Rect1D { pos: 64.0, len: 80.0 }, 200, false, 24.0, t0);
+        s.snap(
+            Rect1D {
+                pos: 0.0,
+                len: 60.0,
+            },
+            false,
+        );
+        s.retarget(
+            Rect1D {
+                pos: 64.0,
+                len: 80.0,
+            },
+            200,
+            false,
+            24.0,
+            t0,
+        );
         let mid_time = t0 + Duration::from_millis(60);
         let live = s.sample(mid_time, 24.0);
         assert!(live.pos > 0.0 && live.pos < 64.0, "live mid: {live:?}");
-        s.retarget(Rect1D { pos: 148.0, len: 70.0 }, 200, false, 24.0, mid_time);
-        assert!((s.from.pos - live.pos).abs() < 1e-4, "must pick up from live pos");
+        s.retarget(
+            Rect1D {
+                pos: 148.0,
+                len: 70.0,
+            },
+            200,
+            false,
+            24.0,
+            mid_time,
+        );
+        assert!(
+            (s.from.pos - live.pos).abs() < 1e-4,
+            "must pick up from live pos"
+        );
     }
 }
 
@@ -712,7 +872,11 @@ pub mod liquid {
             1.0 - fast_exp_neg(ws) * (1.0 + ws)
         };
         let norm = raw(1.0);
-        if norm <= 1e-6 { u } else { (raw(u) / norm).clamp(0.0, 1.0) }
+        if norm <= 1e-6 {
+            u
+        } else {
+            (raw(u) / norm).clamp(0.0, 1.0)
+        }
     }
 
     /// Normalized overdamped bi-exponential harmonic oscillator (zeta > 1) for viscous trailing meniscus.
@@ -726,9 +890,14 @@ pub mod liquid {
         let r1 = w * (z - s);
         let r2 = w * (z + s);
         let inv_diff = 1.0 / (r2 - r1).max(1e-4);
-        let raw = |tau: f32| 1.0 - (r2 * fast_exp_neg(r1 * tau) - r1 * fast_exp_neg(r2 * tau)) * inv_diff;
+        let raw =
+            |tau: f32| 1.0 - (r2 * fast_exp_neg(r1 * tau) - r1 * fast_exp_neg(r2 * tau)) * inv_diff;
         let norm = raw(1.0);
-        if norm <= 1e-6 { u } else { (raw(u) / norm).clamp(0.0, 1.0) }
+        if norm <= 1e-6 {
+            u
+        } else {
+            (raw(u) / norm).clamp(0.0, 1.0)
+        }
     }
 
     /// Axis-agnostic area-conserving viscous liquid capsule between two 1D spans.
@@ -748,7 +917,11 @@ pub mod liquid {
         let a_lead = critically_damped(u, if hover { 11.5 } else { 10.5 });
         let a_trail = overdamped_trail(u, if hover { 8.4 } else { 7.6 }, 1.28);
         let moving_fwd = (to_pos + 0.5 * tl) >= (from_pos + 0.5 * fl);
-        let (a_start, a_end) = if moving_fwd { (a_trail, a_lead) } else { (a_lead, a_trail) };
+        let (a_start, a_end) = if moving_fwd {
+            (a_trail, a_lead)
+        } else {
+            (a_lead, a_trail)
+        };
         let start = from_pos + (to_pos - from_pos) * a_start;
         let end = (from_pos + fl) + ((to_pos + tl) - (from_pos + fl)) * a_end;
         let rest_len = fl + (tl - fl) * a_lead;
@@ -811,17 +984,22 @@ pub mod liquid {
         let union_border_alpha = blend * blend * (3.0 - 2.0 * blend);
         let split_border_alpha = 1.0 - union_border_alpha;
 
-        let (bridge_start, bridge_len, bridge_squeeze, bridge_alpha) = if gap > 0.5 && coupling > 0.01 {
-            let bs = a_end.min(h_end) - base_r * 0.35;
-            let be = a_pos.max(h_pos) + base_r * 0.35;
-            let s_neck = coupling * (0.42 + 0.58 * coupling);
-            let sq = (cross_base * (1.0 - s_neck) * 0.5).max(0.0);
-            let alpha = coupling * coupling * (3.0 - 2.0 * coupling);
-            (bs, (be - bs).max(0.0), sq, alpha)
+        let (bridge_start, bridge_len, bridge_squeeze, bridge_alpha) =
+            if gap > 0.5 && coupling > 0.01 {
+                let bs = a_end.min(h_end) - base_r * 0.35;
+                let be = a_pos.max(h_pos) + base_r * 0.35;
+                let s_neck = coupling * (0.42 + 0.58 * coupling);
+                let sq = (cross_base * (1.0 - s_neck) * 0.5).max(0.0);
+                let alpha = coupling * coupling * (3.0 - 2.0 * coupling);
+                (bs, (be - bs).max(0.0), sq, alpha)
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
+        let seam_alpha = if overlap_boost < 0.5 {
+            union_border_alpha * 0.55
         } else {
-            (0.0, 0.0, 0.0, 0.0)
+            0.0
         };
-        let seam_alpha = if overlap_boost < 0.5 { union_border_alpha * 0.55 } else { 0.0 };
 
         LiquidCoalesce {
             coupling,
@@ -861,12 +1039,20 @@ pub mod liquid {
     impl Slide1D {
         pub fn sample(&self, now: Instant, cross_base: f32) -> LiquidSpan {
             let u = match self.started {
-                Some(s) if self.dur_ms > 0 => {
-                    (now.saturating_duration_since(s).as_secs_f32() / (self.dur_ms as f32 * 0.001)).clamp(0.0, 1.0)
-                }
+                Some(s) if self.dur_ms > 0 => (now.saturating_duration_since(s).as_secs_f32()
+                    / (self.dur_ms as f32 * 0.001))
+                    .clamp(0.0, 1.0),
                 _ => 1.0,
             };
-            capsule_1d(self.from.pos, self.to.pos, self.from.len, self.to.len, cross_base, u, self.hover)
+            capsule_1d(
+                self.from.pos,
+                self.to.pos,
+                self.from.len,
+                self.to.len,
+                cross_base,
+                u,
+                self.hover,
+            )
         }
 
         pub fn snap(&mut self, rect: Rect1D, hover: bool) {
@@ -876,17 +1062,29 @@ pub mod liquid {
             self.hover = hover;
         }
 
-        pub fn retarget(&mut self, next: Rect1D, dur_ms: u32, hover: bool, cross_base: f32, now: Instant) {
+        pub fn retarget(
+            &mut self,
+            next: Rect1D,
+            dur_ms: u32,
+            hover: bool,
+            cross_base: f32,
+            now: Instant,
+        ) {
             let live = self.sample(now, cross_base);
             self.from = if self.from.len > 0.5 || self.to.len > 0.5 {
-                Rect1D { pos: live.pos, len: live.len }
+                Rect1D {
+                    pos: live.pos,
+                    len: live.len,
+                }
             } else {
                 next
             };
             self.to = next;
             self.dur_ms = dur_ms;
             self.hover = hover;
-            self.started = if (self.from.pos - next.pos).abs() < 0.5 && (self.from.len - next.len).abs() < 0.5 {
+            self.started = if (self.from.pos - next.pos).abs() < 0.5
+                && (self.from.len - next.len).abs() < 0.5
+            {
                 None
             } else {
                 Some(now)
@@ -917,8 +1115,16 @@ pub mod liquid {
     }
 
     impl AnimTrack {
-        pub fn from_slide(s: &Slide1D, cross_base: f32, now: Instant, fade_in: bool, fade_out: bool) -> Self {
-            let elapsed0 = s.started.map_or(1.0, |st| now.saturating_duration_since(st).as_secs_f32());
+        pub fn from_slide(
+            s: &Slide1D,
+            cross_base: f32,
+            now: Instant,
+            fade_in: bool,
+            fade_out: bool,
+        ) -> Self {
+            let elapsed0 = s
+                .started
+                .map_or(1.0, |st| now.saturating_duration_since(st).as_secs_f32());
             let dur_s = (s.dur_ms as f32 * 0.001).max(0.001);
             Self {
                 from: s.from,
@@ -934,7 +1140,15 @@ pub mod liquid {
 
         pub fn eval(&self, elapsed_anim: f32) -> (LiquidSpan, f32) {
             let u = ((self.elapsed0 + elapsed_anim) / self.dur_s).clamp(0.0, 1.0);
-            let span = capsule_1d(self.from.pos, self.to.pos, self.from.len, self.to.len, self.cross_base, u, self.hover);
+            let span = capsule_1d(
+                self.from.pos,
+                self.to.pos,
+                self.from.len,
+                self.to.len,
+                self.cross_base,
+                u,
+                self.hover,
+            );
             let op = if self.fade_out {
                 1.0 - quintic_fade(u)
             } else if self.fade_in {
@@ -967,7 +1181,14 @@ pub mod liquid {
     }
 
     impl LiquidTrackState {
-        pub fn sync_active(&mut self, ix: Option<usize>, rect: Option<Rect1D>, cross: f32, dur_ms: u32, now: Instant) {
+        pub fn sync_active(
+            &mut self,
+            ix: Option<usize>,
+            rect: Option<Rect1D>,
+            cross: f32,
+            dur_ms: u32,
+            now: Instant,
+        ) {
             if self.active_ix != ix {
                 self.active_ix = ix;
                 if let Some(r) = rect {
@@ -981,7 +1202,9 @@ pub mod liquid {
             } else if let Some(r) = rect {
                 if self.active.to.len <= 0.5 {
                     self.active.snap(r, false);
-                } else if (self.active.to.pos - r.pos).abs() > 1.0 || (self.active.to.len - r.len).abs() > 1.0 {
+                } else if (self.active.to.pos - r.pos).abs() > 1.0
+                    || (self.active.to.len - r.len).abs() > 1.0
+                {
                     // Layout shift or scroll snaps cleanly to stay locked to row/tab text.
                     self.active.snap(r, false);
                 }
@@ -990,21 +1213,35 @@ pub mod liquid {
 
         pub fn sync_hover_rect(&mut self, rect: Option<Rect1D>, cross: f32, now: Instant) {
             if let Some(r) = rect {
-                if (self.hover.to.pos - r.pos).abs() > 1.0 || (self.hover.to.len - r.len).abs() > 1.0 {
+                if (self.hover.to.pos - r.pos).abs() > 1.0
+                    || (self.hover.to.len - r.len).abs() > 1.0
+                {
                     let _ = (cross, now);
                     self.hover.snap(r, true);
                 }
             }
         }
 
-        pub fn hover_enter(&mut self, ix: usize, rect: Option<Rect1D>, cross: f32, dur_ms: u32, now: Instant) -> bool {
+        pub fn hover_enter(
+            &mut self,
+            ix: usize,
+            rect: Option<Rect1D>,
+            cross: f32,
+            dur_ms: u32,
+            now: Instant,
+        ) -> bool {
             let Some(r) = rect else { return false };
-            if self.hover_ix == Some(ix) && (self.hover.to.pos - r.pos).abs() < 0.5 && (self.hover.to.len - r.len).abs() < 0.5 {
+            if self.hover_ix == Some(ix)
+                && (self.hover.to.pos - r.pos).abs() < 0.5
+                && (self.hover.to.len - r.len).abs() < 0.5
+            {
                 return false;
             }
             let gliding = self.hover_ix.is_some()
                 || self.leave.is_some()
-                || self.last_hover_at.is_some_and(|t| t.elapsed() < Duration::from_millis(145));
+                || self
+                    .last_hover_at
+                    .is_some_and(|t| t.elapsed() < Duration::from_millis(145));
             if gliding {
                 if let Some((lr, _)) = self.leave.take() {
                     if self.hover.to.len <= 0.5 {
@@ -1031,7 +1268,13 @@ pub mod liquid {
             }
             self.last_hover_at = Some(now);
             let live = self.hover.sample(now, 28.0);
-            self.leave = Some((Rect1D { pos: live.pos, len: live.len }, now));
+            self.leave = Some((
+                Rect1D {
+                    pos: live.pos,
+                    len: live.len,
+                },
+                now,
+            ));
             self.seq = self.seq.wrapping_add(1);
             true
         }
@@ -1040,7 +1283,13 @@ pub mod liquid {
             let active = (self.active_ix.is_some() && self.active.to.len > 0.5)
                 .then(|| AnimTrack::from_slide(&self.active, cross, now, false, false));
             let hover = if self.hover_ix.is_some() && self.hover.to.len > 0.5 {
-                Some(AnimTrack::from_slide(&self.hover, cross, now, self.fade_in, false))
+                Some(AnimTrack::from_slide(
+                    &self.hover,
+                    cross,
+                    now,
+                    self.fade_in,
+                    false,
+                ))
             } else if let Some((lr, lstart)) = self.leave {
                 let el = now.saturating_duration_since(lstart).as_millis() as u32;
                 if el >= 120 {
@@ -1064,15 +1313,32 @@ pub mod liquid {
             if active.is_none() && hover.is_none() {
                 return None;
             }
-            let rem_a = if active.is_some() { self.active.remaining_ms(now) } else { 0 };
+            let rem_a = if active.is_some() {
+                self.active.remaining_ms(now)
+            } else {
+                0
+            };
             let rem_h = if self.hover_ix.is_some() {
-                self.hover.remaining_ms(now).max(if self.fade_in { 115u32.saturating_sub(self.hover.started.map_or(115, |s| now.saturating_duration_since(s).as_millis() as u32)) } else { 0 })
+                self.hover.remaining_ms(now).max(if self.fade_in {
+                    115u32.saturating_sub(
+                        self.hover
+                            .started
+                            .map_or(115, |s| now.saturating_duration_since(s).as_millis() as u32),
+                    )
+                } else {
+                    0
+                })
             } else if let Some((_, lstart)) = self.leave {
                 120u32.saturating_sub(now.saturating_duration_since(lstart).as_millis() as u32)
             } else {
                 0
             };
-            Some(CoalesceFrame { seq: self.seq, anim_ms: rem_a.max(rem_h), active, hover })
+            Some(CoalesceFrame {
+                seq: self.seq,
+                anim_ms: rem_a.max(rem_h),
+                active,
+                hover,
+            })
         }
     }
 
@@ -1158,18 +1424,30 @@ pub mod liquid {
 
     pub type KeyedLiquidHandle = std::rc::Rc<std::cell::RefCell<KeyedLiquid>>;
 
-    pub fn keyed_state(id: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> KeyedLiquidHandle {
+    pub fn keyed_state(
+        id: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> KeyedLiquidHandle {
         window
-            .use_keyed_state(id.into(), cx, |_, _| std::rc::Rc::new(std::cell::RefCell::new(KeyedLiquid::default())))
+            .use_keyed_state(id.into(), cx, |_, _| {
+                std::rc::Rc::new(std::cell::RefCell::new(KeyedLiquid::default()))
+            })
             .read(cx)
             .clone()
     }
 
     fn rect_1d(origin: Point<Pixels>, b: Bounds<Pixels>, vertical: bool) -> Rect1D {
         if vertical {
-            Rect1D { pos: f32::from(b.origin.y - origin.y), len: f32::from(b.size.height) }
+            Rect1D {
+                pos: f32::from(b.origin.y - origin.y),
+                len: f32::from(b.size.height),
+            }
         } else {
-            Rect1D { pos: f32::from(b.origin.x - origin.x), len: f32::from(b.size.width) }
+            Rect1D {
+                pos: f32::from(b.origin.x - origin.x),
+                len: f32::from(b.size.width),
+            }
         }
     }
 
@@ -1188,15 +1466,28 @@ pub mod liquid {
             st.rects.resize(count, None);
         }
         let origin = st.origin;
-        let act_rect = active_ix
-            .and_then(|ix| Some(rect_1d(origin?, st.rects.get(ix).copied().flatten()?, vertical)));
-        st.track.sync_active(active_ix, act_rect, cross_base, active_dur_ms, now);
-        let hov_rect = st
-            .track
-            .hover_ix
-            .and_then(|ix| Some(rect_1d(origin?, st.rects.get(ix).copied().flatten()?, vertical)));
+        let act_rect = active_ix.and_then(|ix| {
+            Some(rect_1d(
+                origin?,
+                st.rects.get(ix).copied().flatten()?,
+                vertical,
+            ))
+        });
+        st.track
+            .sync_active(active_ix, act_rect, cross_base, active_dur_ms, now);
+        let hov_rect = st.track.hover_ix.and_then(|ix| {
+            Some(rect_1d(
+                origin?,
+                st.rects.get(ix).copied().flatten()?,
+                vertical,
+            ))
+        });
         st.track.sync_hover_rect(hov_rect, cross_base, now);
-        let frame = if motion { st.track.sample_frame(cross_base, now) } else { None };
+        let frame = if motion {
+            st.track.sample_frame(cross_base, now)
+        } else {
+            None
+        };
         (frame, motion && act_rect.is_some())
     }
 
@@ -1256,10 +1547,17 @@ pub mod liquid {
         cx: &mut App,
     ) {
         let mut st = handle.borrow_mut();
-        let rect = st
-            .origin
-            .and_then(|o| st.rects.get(ix).copied().flatten().map(|b| rect_1d(o, b, vertical)));
-        if st.track.hover_enter(ix, rect, cross_base, dur_ms, Instant::now()) {
+        let rect = st.origin.and_then(|o| {
+            st.rects
+                .get(ix)
+                .copied()
+                .flatten()
+                .map(|b| rect_1d(o, b, vertical))
+        });
+        if st
+            .track
+            .hover_enter(ix, rect, cross_base, dur_ms, Instant::now())
+        {
             cx.notify(view_id);
         }
     }
@@ -1280,9 +1578,19 @@ pub mod liquid {
         let place = |pos: f32, len: f32, sq: f32| -> Div {
             let sq = sq.min(st.max_squeeze);
             if vertical {
-                div().absolute().left(px(st.inset_a + sq)).right(px(st.inset_b + sq)).top(px(pos)).h(px(len))
+                div()
+                    .absolute()
+                    .left(px(st.inset_a + sq))
+                    .right(px(st.inset_b + sq))
+                    .top(px(pos))
+                    .h(px(len))
             } else {
-                div().absolute().top(px(st.inset_a + sq)).bottom(px(st.inset_b + sq)).left(px(pos)).w(px(len))
+                div()
+                    .absolute()
+                    .top(px(st.inset_a + sq))
+                    .bottom(px(st.inset_b + sq))
+                    .left(px(pos))
+                    .w(px(len))
             }
         };
         let radii_axis = |d: Div, r_start: f32, r_end: f32| -> Div {
@@ -1308,7 +1616,15 @@ pub mod liquid {
                     .border_color(st.hover_border.opacity(op)),
             ),
             (Some(a), Some((h, op))) => {
-                let mut co = coalesce_1d(a.pos, a.len, h.pos, h.len, st.cross_base, st.radius, st.capillary);
+                let mut co = coalesce_1d(
+                    a.pos,
+                    a.len,
+                    h.pos,
+                    h.len,
+                    st.cross_base,
+                    st.radius,
+                    st.capillary,
+                );
                 let eff_k = co.coupling * op;
                 co.bridge_alpha *= op;
                 co.union_border_alpha *= op;
@@ -1327,41 +1643,55 @@ pub mod liquid {
                 }
                 if co.overlap_boost > 0.55 && op > 0.7 {
                     return layer.child(
-                        radii_axis(place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)), st.radius, st.radius)
-                            .bg(st.active_bg)
-                            .border_1()
-                            .border_color(st.union_border),
+                        radii_axis(
+                            place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)),
+                            st.radius,
+                            st.radius,
+                        )
+                        .bg(st.active_bg)
+                        .border_1()
+                        .border_color(st.union_border),
                     );
                 }
                 let mut out = layer;
                 if co.bridge_alpha > 0.01 && co.bridge_len > 0.5 {
                     let bsq = co.bridge_squeeze.clamp(0.0, st.max_squeeze + 3.0);
                     out = out.child(
-                        place(co.bridge_start, co.bridge_len, bsq).bg(st.bridge_bg.opacity(co.bridge_alpha)),
+                        place(co.bridge_start, co.bridge_len, bsq)
+                            .bg(st.bridge_bg.opacity(co.bridge_alpha)),
                     );
                 }
                 out = out.child(
                     radii_axis(place(h.pos, h.len, h.squeeze), co.h_r_start, co.h_r_end)
                         .bg(st.hover_bg.opacity(op))
                         .when(co.split_border_alpha > 0.02, |d| {
-                            d.border_1().border_color(st.hover_border.opacity(op * co.split_border_alpha))
+                            d.border_1()
+                                .border_color(st.hover_border.opacity(op * co.split_border_alpha))
                         }),
                 );
                 out = out.child(
                     radii_axis(place(a.pos, a.len, a.squeeze), co.a_r_start, co.a_r_end)
                         .bg(st.active_bg)
                         .when(co.split_border_alpha > 0.02, |d| {
-                            d.border_1().border_color(st.active_border.opacity(co.split_border_alpha))
+                            d.border_1()
+                                .border_color(st.active_border.opacity(co.split_border_alpha))
                         }),
                 );
                 if co.seam_alpha > 0.01 {
-                    out = out.child(place(co.seam_center - 3.0, 6.0, 0.0).bg(st.bridge_bg.opacity(co.seam_alpha)));
+                    out = out.child(
+                        place(co.seam_center - 3.0, 6.0, 0.0)
+                            .bg(st.bridge_bg.opacity(co.seam_alpha)),
+                    );
                 }
                 if co.union_border_alpha > 0.01 {
                     out = out.child(
-                        radii_axis(place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)), st.radius, st.radius)
-                            .border_1()
-                            .border_color(st.union_border.opacity(co.union_border_alpha)),
+                        radii_axis(
+                            place(co.union_start, co.union_len, a.squeeze.min(h.squeeze)),
+                            st.radius,
+                            st.radius,
+                        )
+                        .border_1()
+                        .border_color(st.union_border.opacity(co.union_border_alpha)),
                     );
                 }
                 out
@@ -1385,10 +1715,24 @@ pub mod liquid {
         let to = if to_on { 1.0 } else { 0.0 };
         let dir = to - from;
         if from_on == to_on || u >= 1.0 {
-            return JellySample { pos: to, fill: to, sx: 1.0, sy: 1.0, track_bump_x: 0.0, track_bump_y: 0.0 };
+            return JellySample {
+                pos: to,
+                fill: to,
+                sx: 1.0,
+                sy: 1.0,
+                track_bump_x: 0.0,
+                track_bump_y: 0.0,
+            };
         }
         if u <= 0.0 {
-            return JellySample { pos: from, fill: from, sx: 1.0, sy: 1.0, track_bump_x: 0.0, track_bump_y: 0.0 };
+            return JellySample {
+                pos: from,
+                fill: from,
+                sx: 1.0,
+                sy: 1.0,
+                track_bump_x: 0.0,
+                track_bump_y: 0.0,
+            };
         }
         let zeta = 0.44f32;
         let omega = 15.0f32;
@@ -1396,7 +1740,8 @@ pub mod liquid {
         let omega_d = omega * sq;
         let ratio = zeta / sq;
         let raw = |t: f32| {
-            1.0 - fast_exp_neg(zeta * omega * t) * ((omega_d * t).cos() + ratio * (omega_d * t).sin())
+            1.0 - fast_exp_neg(zeta * omega * t)
+                * ((omega_d * t).cos() + ratio * (omega_d * t).sin())
         };
         let norm = raw(1.0);
         let s = if norm.abs() < 1e-5 { u } else { raw(u) / norm };
@@ -1419,6 +1764,96 @@ pub mod liquid {
         }
     }
 
+    /// Schlick (1994) dielectric glass Fresnel reflectance `F(cos_theta) = F0 + (1 - F0)(1 - cos_theta)^5`.
+    #[inline]
+    pub fn schlick_fresnel(cos_theta: f32, f0: f32) -> f32 {
+        let x = 1.0 - cos_theta.clamp(0.0, 1.0);
+        let x2 = x * x;
+        f0 + (1.0 - f0) * (x2 * x2 * x)
+    }
+
+    /// Evaluated critically-damped entrance pose with grazing Fresnel specular sheen.
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct GlassPose {
+        pub offset_px: f32,
+        pub opacity: f32,
+        pub rim_alpha: f32,
+    }
+
+    /// Combines critically-damped displacement (`zeta = 1`, zero overshoot), C^2 quintic opacity, and Schlick Fresnel rim fade.
+    #[inline]
+    pub fn spring_glass_pose(u: f32, omega: f32, travel_px: f32) -> GlassPose {
+        let t = u.clamp(0.0, 1.0);
+        let disp = critically_damped(t, omega);
+        let opacity = quintic_fade(t);
+        let cos_eff = 1.0 - 0.65 * (1.0 - t);
+        let rim_alpha = schlick_fresnel(cos_eff, 0.04) * opacity;
+        GlassPose {
+            offset_px: travel_px * (1.0 - disp),
+            opacity,
+            rim_alpha,
+        }
+    }
+
+    /// Zero-cost 1px Fresnel top specular rim for elevated liquid glass surfaces.
+    pub fn fresnel_top_sheen() -> AnyElement {
+        if !crate::theme::glass() {
+            return div().into_any_element();
+        }
+        let dark = crate::theme::live_dark();
+        let fresnel = schlick_fresnel(0.35, 0.04);
+        let rim = if dark {
+            (fresnel * 1.15).clamp(0.08, 0.22)
+        } else {
+            (fresnel * 3.1).clamp(0.28, 0.54)
+        };
+        div()
+            .absolute()
+            .top_0()
+            .left(px(8.))
+            .right(px(8.))
+            .h(px(1.))
+            .bg(gpui_kit::hsla(0., 0., 1., rim))
+            .into_any_element()
+    }
+
+    /// Builds a palette-calibrated `LiquidStyle` with Schlick Fresnel edges and WCAG-safe fill opacities.
+    pub fn agent_liquid_style(cross_base: f32, radius: f32) -> LiquidStyle {
+        let dark = crate::theme::live_dark();
+        let rim_active = schlick_fresnel(0.28, 0.04);
+        let rim_hover = schlick_fresnel(0.42, 0.04);
+        LiquidStyle {
+            inset_a: 4.0,
+            inset_b: 4.0,
+            cross_base,
+            max_squeeze: 2.2,
+            radius,
+            capillary: 0.36,
+            active_bg: crate::theme::c(crate::theme::SELECT).opacity(if dark {
+                0.88
+            } else {
+                0.82
+            }),
+            active_border: crate::theme::c(crate::theme::ACCENT)
+                .opacity((0.36 + rim_active * 0.45).clamp(0.35, 0.65)),
+            hover_bg: crate::theme::c(crate::theme::BG_HOVER).opacity(if dark {
+                0.78
+            } else {
+                0.72
+            }),
+            hover_border: crate::theme::c(crate::theme::BORDER)
+                .opacity((0.45 + rim_hover).clamp(0.45, 0.80)),
+            union_border: crate::theme::c(crate::theme::ACCENT)
+                .opacity((0.42 + rim_active * 0.5).clamp(0.42, 0.72)),
+            bridge_bg: crate::theme::c(crate::theme::ACCENT).opacity(if dark {
+                0.16
+            } else {
+                0.12
+            }),
+        }
+    }
+
     #[cfg(test)]
     mod liquid_tests {
         use super::*;
@@ -1430,14 +1865,20 @@ pub mod liquid {
                 let exact = 1.0 / x.sqrt();
                 let approx = fast_inv_sqrt(x);
                 let rel = (approx - exact).abs() / exact;
-                assert!(rel < 0.002, "inv_sqrt({x}): exact={exact}, approx={approx}, rel={rel}");
+                assert!(
+                    rel < 0.002,
+                    "inv_sqrt({x}): exact={exact}, approx={approx}, rel={rel}"
+                );
             }
             for i in 0..=240 {
                 let x = i as f32 * 0.05;
                 let exact = (-x).exp();
                 let approx = fast_exp_neg(x);
                 let err = (approx - exact).abs();
-                assert!(err < 5e-4, "exp(-{x}): exact={exact}, approx={approx}, err={err}");
+                assert!(
+                    err < 5e-4,
+                    "exp(-{x}): exact={exact}, approx={approx}, err={err}"
+                );
             }
             assert_eq!(quintic_fade(0.0), 0.0);
             assert_eq!(quintic_fade(0.5), 0.5);
@@ -1449,7 +1890,10 @@ pub mod liquid {
             for i in 0..=100 {
                 let t = i as f32 * 0.01;
                 let v = overdamped_trail(t, 8.0, 1.28);
-                assert!(v >= prev - 1e-6 && v <= 1.0 + 1e-6, "non-monotonic overdamped at {t}: {v}");
+                assert!(
+                    v >= prev - 1e-6 && v <= 1.0 + 1e-6,
+                    "non-monotonic overdamped at {t}: {v}"
+                );
                 prev = v;
             }
             assert_eq!(overdamped_trail(0.0, 8.0, 1.28), 0.0);
@@ -1504,8 +1948,16 @@ pub mod liquid {
             }
             let elapsed = t0.elapsed();
             std::hint::black_box(acc);
-            eprintln!("liquid 10,000 capsule+coalesce evals: {:?} ({:.2} ns/eval)", elapsed, elapsed.as_nanos() as f64 / 10_000.0);
-            assert!(elapsed.as_millis() < 20, "10k evaluations took {:?}", elapsed);
+            eprintln!(
+                "liquid 10,000 capsule+coalesce evals: {:?} ({:.2} ns/eval)",
+                elapsed,
+                elapsed.as_nanos() as f64 / 10_000.0
+            );
+            assert!(
+                elapsed.as_millis() < 20,
+                "10k evaluations took {:?}",
+                elapsed
+            );
         }
 
         #[test]
@@ -1522,14 +1974,56 @@ pub mod liquid {
                 let mut squashed = false;
                 for i in 1..100 {
                     let j = jelly_toggle_eval(from, to, i as f32 * 0.01);
-                    assert!((j.sx * j.sy - 1.0).abs() < 0.02, "area not conserved: {j:?}");
-                    if to && j.pos > 1.03 { overshot = true; }
-                    if !to && j.pos < -0.03 { overshot = true; }
-                    if j.sx > 1.04 { stretched = true; }
-                    if j.sx < 0.96 { squashed = true; }
+                    assert!(
+                        (j.sx * j.sy - 1.0).abs() < 0.02,
+                        "area not conserved: {j:?}"
+                    );
+                    if to && j.pos > 1.03 {
+                        overshot = true;
+                    }
+                    if !to && j.pos < -0.03 {
+                        overshot = true;
+                    }
+                    if j.sx > 1.04 {
+                        stretched = true;
+                    }
+                    if j.sx < 0.96 {
+                        squashed = true;
+                    }
                 }
                 assert!(overshot, "expected bumble overshoot for {from}->{to}");
-                assert!(stretched && squashed, "expected squash & stretch for {from}->{to}");
+                assert!(
+                    stretched && squashed,
+                    "expected squash & stretch for {from}->{to}"
+                );
+            }
+        }
+
+        #[test]
+        fn schlick_fresnel_and_spring_glass_pose_stay_monotone_without_overshoot() {
+            assert!((schlick_fresnel(1.0, 0.04) - 0.04).abs() < 1e-6);
+            assert!((schlick_fresnel(0.0, 0.04) - 1.0).abs() < 1e-6);
+            let mut prev_f = 2.0f32;
+            for i in 0..=50 {
+                let f = schlick_fresnel(i as f32 / 50.0, 0.04);
+                assert!(f.is_finite() && f <= prev_f + 1e-6);
+                prev_f = f;
+            }
+
+            let p0 = spring_glass_pose(0.0, 10.5, 8.0);
+            let p1 = spring_glass_pose(1.0, 10.5, 8.0);
+            assert!((p0.offset_px - 8.0).abs() < 1e-5 && p0.opacity == 0.0 && p0.rim_alpha == 0.0);
+            assert!(p1.offset_px.abs() < 1e-5 && (p1.opacity - 1.0).abs() < 1e-6);
+            assert!((p1.rim_alpha - 0.04).abs() < 1e-5);
+
+            let mut prev_off = 9.0f32;
+            let mut prev_op = -0.1f32;
+            for i in 0..=100 {
+                let pose = spring_glass_pose(i as f32 * 0.01, 10.5, 8.0);
+                assert!(pose.offset_px <= prev_off + 1e-5 && pose.offset_px >= -1e-5);
+                assert!(pose.opacity >= prev_op - 1e-6 && pose.opacity <= 1.0 + 1e-6);
+                prev_off = pose.offset_px;
+                prev_op = pose.opacity;
             }
         }
     }

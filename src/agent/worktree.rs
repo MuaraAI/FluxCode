@@ -1,4 +1,3 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::Workbench;
@@ -10,6 +9,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,6 +28,545 @@ pub struct Account {
     pub name: String,
     pub family: String,
     pub dir: PathBuf,
+    #[serde(default)]
+    pub flow_profile: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub auth_method: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileIdentity {
+    pub name: String,
+    pub email: Option<String>,
+    pub tier: Option<String>,
+    pub initial: String,
+    pub synced: bool,
+    pub flow_profile: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct ProfileMetaFile {
+    email: Option<String>,
+    tier: Option<String>,
+    auth_method: Option<String>,
+    token_sig: Option<String>,
+}
+
+pub fn default_home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn valid_email(s: &str) -> Option<String> {
+    let t = s
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';' | '<' | '>' | ')' | '.'));
+    let (local, domain) = t.split_once('@')?;
+    if local.is_empty()
+        || domain.is_empty()
+        || !domain.contains('.')
+        || t.contains(char::is_whitespace)
+    {
+        return None;
+    }
+    Some(t.to_string())
+}
+
+/// Extracts non-secret account email from `agy.exe` ACP log lines without reading credentials.
+pub fn extract_email_from_text(line: &str) -> Option<String> {
+    for marker in [
+        "OAuth: authenticated successfully as ",
+        "applyAuthResult: email=",
+    ] {
+        if let Some(rest) = line.split(marker).nth(1) {
+            let token = rest
+                .split([',', ' ', '\t', '\r', '\n'])
+                .next()
+                .unwrap_or("");
+            if let Some(email) = valid_email(token) {
+                return Some(email);
+            }
+        }
+    }
+    None
+}
+
+fn read_tail_text(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len > max_bytes {
+        let _ = f.seek(SeekFrom::End(-(max_bytes as i64)));
+    }
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+pub fn antigravity_meta_dir(account: Option<&Account>) -> PathBuf {
+    match account {
+        Some(a) => a.dir.clone(),
+        None => crate::settings::config_dir().join("antigravity-default"),
+    }
+}
+
+pub fn acp_token_signature(base_home: &Path) -> Option<String> {
+    let path = base_home
+        .join(".gemini")
+        .join("antigravity-acp")
+        .join("acp_token.json");
+    let bytes = std::fs::read(path).ok()?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(format!("{h:016x}"))
+}
+
+fn read_profile_meta_file(dir: &Path) -> ProfileMetaFile {
+    std::fs::read(dir.join(".fluxcode-profile.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+pub fn detect_antigravity_profile_meta_in(
+    base_home: &Path,
+    meta_dir: &Path,
+) -> (Option<String>, Option<String>) {
+    let cur_sig = acp_token_signature(base_home);
+    let mut meta = read_profile_meta_file(meta_dir);
+    if meta.email.is_none() && meta_dir != base_home {
+        let fallback = read_profile_meta_file(base_home);
+        if fallback.email.is_some() || fallback.tier.is_some() {
+            meta = fallback;
+        }
+    }
+    if let Some(sig) = cur_sig {
+        if meta.token_sig.as_deref() == Some(sig.as_str()) {
+            return (
+                meta.email.and_then(|e| valid_email(&e)),
+                meta.tier.filter(|t| !t.trim().is_empty()),
+            );
+        }
+        return (None, None);
+    }
+    let email = meta
+        .email
+        .and_then(|e| valid_email(&e))
+        .or_else(|| detect_antigravity_email(base_home));
+    (email, meta.tier.filter(|t| !t.trim().is_empty()))
+}
+
+fn url_encode_form_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn curl_stdin(args: &[&str], stdin_data: &str) -> Option<Vec<u8>> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let exe = if cfg!(windows) { "curl.exe" } else { "curl" };
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().ok()?;
+    if let Some(mut pipe) = child.stdin.take() {
+        let _ = pipe.write_all(stdin_data.as_bytes());
+    }
+    let out = child.wait_with_output().ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// Resolves the live Google email bound to `.gemini/antigravity-acp/acp_token.json` without logging secrets.
+pub fn resolve_antigravity_email_blocking(base_home: &Path, meta_dir: &Path) -> Option<String> {
+    let Some(sig) = acp_token_signature(base_home) else {
+        return detect_antigravity_email(base_home);
+    };
+    let meta = read_profile_meta_file(meta_dir);
+    if meta.token_sig.as_deref() == Some(sig.as_str()) {
+        if let Some(em) = meta.email.as_deref().and_then(valid_email) {
+            return Some(em);
+        }
+    }
+    type NetCache =
+        std::collections::HashMap<(PathBuf, String), (std::time::Instant, Option<String>)>;
+    static NET_EMAIL_CACHE: std::sync::OnceLock<std::sync::Mutex<NetCache>> =
+        std::sync::OnceLock::new();
+    let cache = NET_EMAIL_CACHE.get_or_init(|| std::sync::Mutex::new(Default::default()));
+    let key = (base_home.to_path_buf(), sig.clone());
+    if let Ok(g) = cache.lock() {
+        if let Some((at, val)) = g.get(&key) {
+            if at.elapsed() < std::time::Duration::from_secs(30) {
+                return val.clone();
+            }
+        }
+    }
+    let tok_path = base_home
+        .join(".gemini")
+        .join("antigravity-acp")
+        .join("acp_token.json");
+    let tok: Value = std::fs::read(tok_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())?;
+    let client_id = tok.get("client_id").and_then(Value::as_str)?;
+    let client_secret = tok.get("client_secret").and_then(Value::as_str)?;
+    let refresh_token = tok.get("refresh_token").and_then(Value::as_str)?;
+    let token_uri = tok
+        .get("token_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("https://oauth2.googleapis.com/token");
+    if !token_uri.starts_with("https://oauth2.googleapis.com/") {
+        return None;
+    }
+    let form = format!(
+        "client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token",
+        url_encode_form_component(client_id),
+        url_encode_form_component(client_secret),
+        url_encode_form_component(refresh_token),
+    );
+    let mut resolved = None;
+    if let Some(tok_raw) = curl_stdin(
+        &[
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "6",
+            "--connect-timeout",
+            "4",
+            "--data-binary",
+            "@-",
+            token_uri,
+        ],
+        &form,
+    ) {
+        if let Ok(tok_json) = serde_json::from_slice::<Value>(&tok_raw) {
+            if let Some(access) = tok_json
+                .get("access_token")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty() && !s.contains(['\r', '\n', '"']))
+            {
+                let cfg = format!("header = \"Authorization: Bearer {access}\"\n");
+                if let Some(u_raw) = curl_stdin(
+                    &[
+                        "--silent",
+                        "--show-error",
+                        "--max-time",
+                        "6",
+                        "--connect-timeout",
+                        "4",
+                        "-K",
+                        "-",
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                    ],
+                    &cfg,
+                ) {
+                    if let Ok(u_json) = serde_json::from_slice::<Value>(&u_raw) {
+                        resolved = u_json
+                            .get("email")
+                            .and_then(Value::as_str)
+                            .and_then(valid_email);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ref em) = resolved {
+        save_profile_meta_sig(meta_dir, Some(em), None, None, Some(&sig));
+    }
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, (std::time::Instant::now(), resolved.clone()));
+    }
+    resolved
+}
+
+pub fn detect_antigravity_email(base_home: &Path) -> Option<String> {
+    let meta_path = base_home.join(".fluxcode-profile.json");
+    if let Ok(raw) = std::fs::read_to_string(&meta_path) {
+        if let Ok(meta) = serde_json::from_str::<ProfileMetaFile>(&raw) {
+            if let Some(email) = meta.email.and_then(|e| valid_email(&e)) {
+                return Some(email);
+            }
+        }
+    }
+    let gacct = base_home.join(".gemini").join("google_accounts.json");
+    if let Ok(raw) = std::fs::read_to_string(&gacct) {
+        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+            if let Some(email) = v
+                .get("active")
+                .and_then(Value::as_str)
+                .and_then(valid_email)
+            {
+                return Some(email);
+            }
+        }
+    }
+    type CacheMap = std::collections::HashMap<PathBuf, (std::time::Instant, Option<String>)>;
+    static LOG_EMAIL_CACHE: std::sync::OnceLock<std::sync::Mutex<CacheMap>> =
+        std::sync::OnceLock::new();
+    let cache = LOG_EMAIL_CACHE.get_or_init(|| std::sync::Mutex::new(Default::default()));
+    if let Ok(g) = cache.lock() {
+        if let Some((at, val)) = g.get(base_home) {
+            if at.elapsed() < std::time::Duration::from_secs(5) {
+                return val.clone();
+            }
+        }
+    }
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for dir in [
+        base_home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("log"),
+        base_home.join(".gemini").join("antigravity").join("log"),
+    ] {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("acp-server-") && n.ends_with(".log"))
+            {
+                let mtime = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                logs.push((mtime, p));
+            }
+        }
+    }
+    logs.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut found = None;
+    for (_, path) in logs.into_iter().take(4) {
+        let Some(tail) = read_tail_text(&path, 65_536) else {
+            continue;
+        };
+        if let Some(email) = tail.lines().rev().find_map(extract_email_from_text) {
+            found = Some(email);
+            break;
+        }
+    }
+    if let Ok(mut g) = cache.lock() {
+        g.insert(
+            base_home.to_path_buf(),
+            (std::time::Instant::now(), found.clone()),
+        );
+    }
+    found
+}
+
+pub fn save_profile_meta(
+    dir: &Path,
+    email: Option<&str>,
+    tier: Option<&str>,
+    auth_method: Option<&str>,
+) {
+    save_profile_meta_sig(dir, email, tier, auth_method, None);
+}
+
+pub fn save_profile_meta_sig(
+    dir: &Path,
+    email: Option<&str>,
+    tier: Option<&str>,
+    auth_method: Option<&str>,
+    token_sig: Option<&str>,
+) {
+    let _ = std::fs::create_dir_all(dir);
+    let gem = dir.join(".gemini");
+    if gem.is_dir() {
+        let _ = std::fs::create_dir_all(gem.join("antigravity-cli"));
+        let _ = std::fs::write(gem.join(".fluxcode-account-ready"), b"1");
+    }
+    let meta_path = dir.join(".fluxcode-profile.json");
+    let mut prev = read_profile_meta_file(dir);
+    if let Some(e) = email.and_then(valid_email) {
+        prev.email = Some(e);
+    }
+    if let Some(t) = tier.filter(|t| !t.trim().is_empty()) {
+        prev.tier = Some(t.to_string());
+    }
+    if let Some(m) = auth_method.filter(|m| !m.trim().is_empty()) {
+        prev.auth_method = Some(m.to_string());
+    }
+    if let Some(s) = token_sig.filter(|s| !s.trim().is_empty()) {
+        prev.token_sig = Some(s.to_string());
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&prev) {
+        let _ = std::fs::write(&meta_path, format!("{body}\n"));
+    }
+}
+
+pub fn clear_profile_meta_email(dir: &Path) {
+    let meta_path = dir.join(".fluxcode-profile.json");
+    if !meta_path.is_file() {
+        return;
+    }
+    let mut prev = read_profile_meta_file(dir);
+    prev.email = None;
+    prev.tier = None;
+    prev.token_sig = None;
+    if let Ok(body) = serde_json::to_string_pretty(&prev) {
+        let _ = std::fs::write(&meta_path, format!("{body}\n"));
+    }
+}
+
+pub fn save_profile_api_key(dir: &Path, key: &str) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API key is empty.".into());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    crate::gflow::harden_profile_acl(dir);
+    std::fs::write(dir.join(".fluxcode-apikey"), trimmed).map_err(|e| e.to_string())?;
+    save_profile_meta(dir, None, None, Some("gemini-api-key"));
+    Ok(())
+}
+
+pub fn load_profile_api_key(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(dir.join(".fluxcode-apikey")).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn detect_claude_email(base_dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(base_dir.join(".claude.json")).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    v.pointer("/oauthAccount/emailAddress")
+        .and_then(Value::as_str)
+        .and_then(valid_email)
+}
+
+fn avatar_initial(email: Option<&str>, name: &str) -> String {
+    email
+        .and_then(|e| e.chars().find(|c| c.is_ascii_alphanumeric()))
+        .or_else(|| name.chars().find(|c| c.is_ascii_alphanumeric()))
+        .map(|c| c.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "A".into())
+}
+
+pub fn profile_identity(
+    family: &str,
+    account: Option<&Account>,
+    live_email: Option<&str>,
+    live_tier: Option<&str>,
+) -> ProfileIdentity {
+    let base_home = account
+        .map(|a| a.dir.clone())
+        .unwrap_or_else(default_home_dir);
+    let meta_dir = if family == "antigravity" {
+        antigravity_meta_dir(account)
+    } else {
+        base_home.clone()
+    };
+    let cur_sig = if family == "antigravity" {
+        acp_token_signature(&base_home)
+    } else {
+        None
+    };
+    let meta_file = if family == "antigravity" {
+        let mut m = read_profile_meta_file(&meta_dir);
+        if m.email.is_none() && meta_dir != base_home {
+            let fallback = read_profile_meta_file(&base_home);
+            if fallback.email.is_some() || fallback.token_sig.is_some() {
+                m = fallback;
+            }
+        }
+        m
+    } else {
+        ProfileMetaFile::default()
+    };
+    let (meta_email, meta_tier) = match family {
+        "antigravity" => detect_antigravity_profile_meta_in(&base_home, &meta_dir),
+        "claude" => (detect_claude_email(&base_home), None),
+        _ => (None, None),
+    };
+    let acct_email_valid = account
+        .and_then(|a| a.email.as_deref())
+        .and_then(valid_email)
+        .filter(|_| cur_sig.is_none() || meta_file.token_sig.as_deref() == cur_sig.as_deref());
+    let email = live_email
+        .and_then(valid_email)
+        .or(meta_email)
+        .or(acct_email_valid);
+    let flow_profiles = if family == "antigravity" {
+        crate::gflow::discover_profiles()
+    } else {
+        Vec::new()
+    };
+    let matched_flow = if let Some(em) = email.as_deref() {
+        flow_profiles.iter().find(|p| {
+            p.email
+                .as_deref()
+                .is_some_and(|fe| fe.eq_ignore_ascii_case(em))
+        })
+    } else if let Some(a) = account {
+        a.flow_profile.as_deref().and_then(|fp| {
+            flow_profiles
+                .iter()
+                .find(|p| p.name == fp && p.email.is_none())
+        })
+    } else {
+        flow_profiles
+            .iter()
+            .find(|p| p.is_default && p.email.is_none())
+    };
+    let tier = live_tier
+        .filter(|t| !t.trim().is_empty())
+        .map(String::from)
+        .or_else(|| {
+            account
+                .and_then(|a| a.tier.clone())
+                .filter(|t| !t.trim().is_empty())
+        })
+        .or(meta_tier);
+    let name = account
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| tr("Default account").to_string());
+    let initial = avatar_initial(email.as_deref(), &name);
+    let synced = match account {
+        Some(a) => signed_in(a) || live_email.is_some(),
+        None => cur_sig.is_some() || email.is_some() || live_email.is_some(),
+    };
+    let flow_profile = matched_flow.map(|p| p.name.clone()).or_else(|| {
+        if email.is_none() {
+            account.and_then(|a| a.flow_profile.clone())
+        } else {
+            None
+        }
+    });
+    ProfileIdentity {
+        name,
+        email,
+        tier,
+        initial,
+        synced,
+        flow_profile,
+    }
 }
 
 pub fn family(id: &str) -> Option<&'static str> {
@@ -34,21 +574,42 @@ pub fn family(id: &str) -> Option<&'static str> {
         Some("claude")
     } else if crate::acp::is_opencode(id) {
         Some("opencode")
+    } else if id == "antigravity-acp" || id.starts_with("antigravity") {
+        Some("antigravity")
     } else {
         None
     }
 }
 
 pub fn signed_in(a: &Account) -> bool {
-    let has = |p: PathBuf, any: &[&str]| std::fs::read_to_string(p).is_ok_and(|s| any.iter().any(|k| s.contains(k)));
+    let has = |p: PathBuf, any: &[&str]| {
+        std::fs::read_to_string(p).is_ok_and(|s| any.iter().any(|k| s.contains(k)))
+    };
     match a.family.as_str() {
-        "claude" => a.dir.join(".credentials.json").is_file() || has(a.dir.join(".claude.json"), &["\"oauthAccount\"", "\"primaryApiKey\""]),
+        "claude" => {
+            a.dir.join(".credentials.json").is_file()
+                || has(
+                    a.dir.join(".claude.json"),
+                    &["\"oauthAccount\"", "\"primaryApiKey\""],
+                )
+        }
+        "antigravity" => {
+            let gem = a.dir.join(".gemini");
+            gem.join("oauth_creds.json").is_file()
+                || gem.join("google_accounts.json").is_file()
+                || gem.join("credentials.json").is_file()
+                || gem.join("antigravity-acp").join("acp_token.json").is_file()
+                || gem.join(".fluxcode-account-ready").is_file()
+                || a.dir.join(".fluxcode-apikey").is_file()
+                || detect_antigravity_email(&a.dir).is_some()
+        }
         _ => has(a.dir.join("opencode").join("auth.json"), &["\"type\""]),
     }
 }
 
 pub fn prune_accounts(s: &mut crate::settings::Settings) {
-    let (keep, gone): (Vec<Account>, Vec<Account>) = s.agent_accounts.drain(..).partition(signed_in);
+    let (keep, gone): (Vec<Account>, Vec<Account>) =
+        s.agent_accounts.drain(..).partition(signed_in);
     s.agent_accounts = keep;
     if gone.is_empty() {
         return;
@@ -57,33 +618,69 @@ pub fn prune_accounts(s: &mut crate::settings::Settings) {
         forget_dir(a);
     }
     let accounts = s.agent_accounts.clone();
-    s.agent_account.retain(|f, name| accounts.iter().any(|a| &a.family == f && &a.name == name));
+    s.agent_account
+        .retain(|f, name| accounts.iter().any(|a| &a.family == f && &a.name == name));
     s.save();
 }
 
 fn forget_dir(a: &Account) {
-    if a.dir.parent().and_then(Path::file_name).is_some_and(|n| n == "accounts") {
+    if a.dir
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == "accounts")
+    {
         let _ = std::fs::remove_dir_all(&a.dir);
     }
 }
 
-pub fn account_env(a: &Account) -> (&'static str, PathBuf) {
+pub fn account_envs(a: &Account) -> Vec<(&'static str, PathBuf)> {
     match a.family.as_str() {
-        "claude" => ("CLAUDE_CONFIG_DIR", a.dir.clone()),
-        _ => ("XDG_DATA_HOME", a.dir.clone()),
+        "claude" => vec![("CLAUDE_CONFIG_DIR", a.dir.clone())],
+        "antigravity" => {
+            let mut vars = vec![
+                ("USERPROFILE", a.dir.clone()),
+                ("HOME", a.dir.clone()),
+                ("GEMINI_HOME", a.dir.join(".gemini")),
+                ("GEMINI_CLI_HOME", a.dir.join(".gemini")),
+                ("AGY_HOME", a.dir.join(".gemini").join("antigravity-cli")),
+                ("XDG_CONFIG_HOME", a.dir.join(".config")),
+                ("XDG_DATA_HOME", a.dir.join(".local").join("share")),
+            ];
+            if let Some(fp) = &a.flow_profile {
+                if !fp.is_empty() {
+                    vars.push(("GFLOW_CLI_PROFILE", PathBuf::from(fp)));
+                }
+            }
+            vars
+        }
+        _ => vec![("XDG_DATA_HOME", a.dir.clone())],
     }
+}
+
+pub fn account_env(a: &Account) -> (&'static str, PathBuf) {
+    account_envs(a)
+        .into_iter()
+        .next()
+        .unwrap_or(("XDG_DATA_HOME", a.dir.clone()))
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(["-c", "core.longpaths=true"]).args(args);
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["-c", "core.longpaths=true"])
+        .args(args);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let out = cmd.output().map_err(|e| e.to_string())?;
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     if out.status.success() {
         Ok(text.trim().to_string())
     } else {
@@ -97,12 +694,26 @@ fn create(repo: &Path) -> Result<Worktree, String> {
     let branch = format!("fluxcode/agent-{stamp}");
     let path = top.join(".fluxcode").join("worktrees").join(&stamp);
     if let Ok(common) = git(&top, &["rev-parse", "--git-common-dir"]) {
-        let common = if Path::new(&common).is_absolute() { PathBuf::from(common) } else { top.join(common) };
+        let common = if Path::new(&common).is_absolute() {
+            PathBuf::from(common)
+        } else {
+            top.join(common)
+        };
         let exclude = common.join("info").join("exclude");
         let old = std::fs::read_to_string(&exclude).unwrap_or_default();
         if !old.lines().any(|l| l.trim() == "/.fluxcode/") {
             let _ = std::fs::create_dir_all(exclude.parent().unwrap_or(&common));
-            let _ = std::fs::write(&exclude, format!("{old}{}/.fluxcode/\n", if old.is_empty() || old.ends_with('\n') { "" } else { "\n" }));
+            let _ = std::fs::write(
+                &exclude,
+                format!(
+                    "{old}{}/.fluxcode/\n",
+                    if old.is_empty() || old.ends_with('\n') {
+                        ""
+                    } else {
+                        "\n"
+                    }
+                ),
+            );
         }
     }
     let p = path.to_string_lossy().into_owned();
@@ -115,14 +726,21 @@ fn create(repo: &Path) -> Result<Worktree, String> {
             }
         }
     }
-    Ok(Worktree { path, branch, repo: top })
+    Ok(Worktree {
+        path,
+        branch,
+        repo: top,
+    })
 }
 
 fn merge(w: &Worktree, title: &str) -> Result<String, String> {
     let wt = &w.path;
     git(wt, &["add", "-A"])?;
     if !git(wt, &["status", "--porcelain"])?.is_empty() {
-        let msg = format!("FluxCode agent: {}", if title.is_empty() { "changes" } else { title });
+        let msg = format!(
+            "FluxCode agent: {}",
+            if title.is_empty() { "changes" } else { title }
+        );
         git(wt, &["commit", "-m", &msg])?;
     }
     let out = git(&w.repo, &["merge", "--no-ff", "--no-edit", &w.branch])?;
@@ -141,7 +759,12 @@ impl Workbench {
     pub(crate) fn agent_cwd(&self) -> PathBuf {
         match &self.agent.worktree {
             Some(w) => w.path.clone(),
-            None => self.agent.folder.clone().or_else(|| self.root.clone()).unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
+            None => self
+                .agent
+                .folder
+                .clone()
+                .or_else(|| self.root.clone())
+                .unwrap_or_else(|| self.terms[self.term_ix].cwd.clone()),
         }
     }
 
@@ -151,13 +774,22 @@ impl Workbench {
             return;
         }
         if self.agent.worktree.is_some() {
-            self.agent.items.push(Item::Note(tr("This chat works in its own worktree: remove it first to pick another folder.").into(), true));
+            self.agent.items.push(Item::Note(
+                tr("This chat works in its own worktree: remove it first to pick another folder.")
+                    .into(),
+                true,
+            ));
             return cx.notify();
         }
         self.agent.folder = folder.clone();
         if self.agent.items.iter().any(|i| matches!(i, Item::User(_))) {
-            let name = folder.as_deref().map(|f| super::chats::folder_name(&f.display().to_string())).unwrap_or_default();
-            self.agent.items.push(Item::Branch(crate::trf!("Now working in {folder}."; folder => name)));
+            let name = folder
+                .as_deref()
+                .map(|f| super::chats::folder_name(&f.display().to_string()))
+                .unwrap_or_default();
+            self.agent.items.push(Item::Branch(
+                crate::trf!("Now working in {folder}."; folder => name),
+            ));
         }
         if self.agent.live() {
             self.agent_restart_here(cx);
@@ -166,7 +798,12 @@ impl Workbench {
     }
 
     pub(crate) fn agent_pick_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(tr("Work in this folder").into()) });
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(tr("Work in this folder").into()),
+        });
         let key = self.agent.key;
         cx.spawn_in(window, async move |this, cx| {
             let picked = paths.await.ok()?.ok()??.into_iter().next()?;
@@ -179,11 +816,17 @@ impl Workbench {
     }
 
     pub(crate) fn agent_other_folder(&self) -> Option<PathBuf> {
-        self.agent.folder.clone().filter(|f| self.agent.worktree.is_none() && Some(f) != self.root.as_ref())
+        self.agent
+            .folder
+            .clone()
+            .filter(|f| self.agent.worktree.is_none() && Some(f) != self.root.as_ref())
     }
 
     fn agent_restart_here(&mut self, cx: &mut Context<Self>) {
-        let was_on = matches!(self.agent.status, Status::Starting | Status::Ready | Status::Busy);
+        let was_on = matches!(
+            self.agent.status,
+            Status::Starting | Status::Ready | Status::Busy
+        );
         if self.agent.items.iter().any(|i| matches!(i, Item::User(_))) {
             self.agent.carry = Some(super::transcript(&self.agent.items));
         }
@@ -199,10 +842,15 @@ impl Workbench {
             self.agent_worktree_remove(w, cx);
             return;
         }
-        let Some(repo) = self.agent.folder.clone().or_else(|| self.root.clone()) else { return };
+        let Some(repo) = self.agent.folder.clone().or_else(|| self.root.clone()) else {
+            return;
+        };
         let key = self.agent.key;
         if self.wsl.is_some() {
-            self.agent.items.push(Item::Note(tr("A worktree inside a WSL folder isn't supported yet.").into(), true));
+            self.agent.items.push(Item::Note(
+                tr("A worktree inside a WSL folder isn't supported yet.").into(),
+                true,
+            ));
             cx.notify();
             return;
         }
@@ -233,26 +881,47 @@ impl Workbench {
     }
 
     fn agent_worktree_merge(&mut self, cx: &mut Context<Self>) {
-        let Some(w) = self.agent.worktree.clone() else { return };
+        let Some(w) = self.agent.worktree.clone() else {
+            return;
+        };
         let key = self.agent.key;
-        let title = self.agent.items.iter().find_map(|i| if let Item::User(t) = i { Some(t.chars().take(60).collect::<String>()) } else { None }).unwrap_or_default();
+        let title = self
+            .agent
+            .items
+            .iter()
+            .find_map(|i| {
+                if let Item::User(t) = i {
+                    Some(t.chars().take(60).collect::<String>())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         self.agent.worktree_busy = true;
         cx.notify();
         let task = cx.background_spawn(async move { merge(&w, &title) });
         cx.spawn(async move |this, cx| {
             let r = task.await;
-            _ = this.update(cx, |this, cx| this.agent_with_run(key, cx, |this, cx| {
-                this.agent.worktree_busy = false;
-                match r {
-                    Ok(_) => {
-                        this.agent.items.push(Item::Note(tr("Merged the agent's branch into your checkout.").into(), false));
-                        this.agent.changes.clear();
-                        this.scm_refresh(cx);
+            _ = this.update(cx, |this, cx| {
+                this.agent_with_run(key, cx, |this, cx| {
+                    this.agent.worktree_busy = false;
+                    match r {
+                        Ok(_) => {
+                            this.agent.items.push(Item::Note(
+                                tr("Merged the agent's branch into your checkout.").into(),
+                                false,
+                            ));
+                            this.agent.changes.clear();
+                            this.scm_refresh(cx);
+                        }
+                        Err(e) => this
+                            .agent
+                            .items
+                            .push(Item::Note(crate::trf!("Merge stopped: {e}"; e => e), true)),
                     }
-                    Err(e) => this.agent.items.push(Item::Note(crate::trf!("Merge stopped: {e}"; e => e), true)),
-                }
-                cx.notify();
-            }));
+                    cx.notify();
+                })
+            });
         })
         .detach();
     }
@@ -266,22 +935,38 @@ impl Workbench {
         let task = cx.background_spawn(async move { remove(&w) });
         cx.spawn(async move |this, cx| {
             let r = task.await;
-            _ = this.update(cx, |this, cx| this.agent_with_run(key, cx, |this, cx| {
-                this.agent.worktree_busy = false;
-                let note = match r {
-                    Ok(()) => Item::Branch(tr("Back in your checkout; the worktree is removed.").into()),
-                    Err(e) => Item::Note(crate::trf!("Couldn't remove the worktree: {e}"; e => e), true),
-                };
-                this.agent.items.push(note);
-                cx.notify();
-            }));
+            _ = this.update(cx, |this, cx| {
+                this.agent_with_run(key, cx, |this, cx| {
+                    this.agent.worktree_busy = false;
+                    let note = match r {
+                        Ok(()) => Item::Branch(
+                            tr("Back in your checkout; the worktree is removed.").into(),
+                        ),
+                        Err(e) => Item::Note(
+                            crate::trf!("Couldn't remove the worktree: {e}"; e => e),
+                            true,
+                        ),
+                    };
+                    this.agent.items.push(note);
+                    cx.notify();
+                })
+            });
         })
         .detach();
     }
 
-    fn agent_accounts(&self) -> (Option<&'static str>, Vec<Account>) {
+    pub(crate) fn agent_accounts(&self) -> (Option<&'static str>, Vec<Account>) {
         let fam = family(&agent_id());
-        let list = fam.map(|f| self.settings.agent_accounts.iter().filter(|a| a.family == f).cloned().collect()).unwrap_or_default();
+        let list = fam
+            .map(|f| {
+                self.settings
+                    .agent_accounts
+                    .iter()
+                    .filter(|a| a.family == f)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         (fam, list)
     }
 
@@ -292,45 +977,130 @@ impl Workbench {
             Some(n) => n,
             None => self.settings.agent_account.get(f)?,
         };
-        self.settings.agent_accounts.iter().find(|a| a.family == f && &a.name == name).cloned()
+        self.settings
+            .agent_accounts
+            .iter()
+            .find(|a| a.family == f && &a.name == name)
+            .cloned()
     }
 
-    fn agent_use_account(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn agent_use_account(&mut self, name: Option<String>, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
+        if self.agent_account().map(|a| a.name) == name {
+            return;
+        }
         self.agent.account = Some(name.clone().unwrap_or_default());
         match name {
             Some(n) => self.settings.agent_account.insert(f.to_string(), n),
             None => self.settings.agent_account.remove(f),
         };
         self.settings.save();
-        let note = match self.agent_account() {
+        let active = self.agent_account();
+        if f == "antigravity" && self.settings.agent_gflow_sync {
+            let id_info = profile_identity(f, active.as_ref(), None, None);
+            if let Some(fp) = id_info.flow_profile {
+                let st = crate::gflow::load_state();
+                if st.mode == crate::gflow::RoutingMode::Sticky
+                    && crate::gflow::discover_profiles()
+                        .iter()
+                        .any(|p| p.name == fp)
+                {
+                    let _ = crate::gflow::set_mode(
+                        crate::gflow::RoutingMode::Sticky,
+                        Some(fp),
+                        None,
+                        None,
+                    );
+                }
+            }
+        }
+        let note = match active {
             Some(a) => crate::trf!("Now using the account {name}."; name => a.name),
             None => tr("Now using the default account.").into(),
         };
-        self.agent.items.push(Item::Branch(note));
+        self.agent.active_email = None;
+        self.agent.active_tier = None;
+        self.agent.usage = Default::default();
+        self.agent.auth_required = None;
+        self.agent.auth_picker_open = false;
+        self.agent.auth_picker_pinned = false;
+        if !matches!(self.agent.items.last(), Some(Item::Branch(prev)) if prev == &note) {
+            self.agent.items.push(Item::Branch(note));
+        }
         self.agent_restart_here(cx);
+        self.agent_refresh_profile_identity(cx);
         cx.notify();
     }
 
-    fn agent_add_account(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn agent_add_account(&mut self, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
         if self.agent.account_wait.is_some() {
             return;
         }
         prune_accounts(&mut self.settings);
-        let n = self.settings.agent_accounts.iter().filter(|a| a.family == f).count() + 2;
-        let name = crate::trf!("Account {n}"; n => n);
-        let base = std::env::var_os("APPDATA").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
-        let dir = base.join("FluxCode").join("accounts").join(format!("{f}-{n}"));
+        let mut n = 2usize;
+        let name = loop {
+            let cand = crate::trf!("Account {n}"; n => n);
+            if !self
+                .settings
+                .agent_accounts
+                .iter()
+                .any(|a| a.family == f && a.name == cand)
+            {
+                break cand;
+            }
+            n += 1;
+        };
+        let base = std::env::var_os("APPDATA")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let dir = base
+            .join("FluxCode")
+            .join("accounts")
+            .join(format!("{f}-{n}"));
         let _ = std::fs::create_dir_all(&dir);
-        let acc = Account { name, family: f.into(), dir };
+        if f == "antigravity" {
+            let _ = std::fs::create_dir_all(dir.join(".gemini").join("antigravity-cli"));
+            crate::gflow::harden_profile_acl(&dir);
+            let acc = Account {
+                name: name.clone(),
+                family: f.into(),
+                dir,
+                flow_profile: None,
+                email: None,
+                display_name: None,
+                auth_method: None,
+                tier: None,
+            };
+            self.settings.agent_accounts.push(acc);
+            self.agent_use_account(Some(name), cx);
+            self.agent_open_auth_picker(cx);
+            return;
+        }
+        let acc = Account {
+            name,
+            family: f.into(),
+            dir,
+            flow_profile: None,
+            email: None,
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
         open_login(&acc);
         self.agent.account_wait = Some(acc.clone());
         cx.notify();
         cx.spawn(async move |this, cx| {
             for _ in 0..450 {
-                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
-                let Ok(waiting) = this.update(cx, |this, _| this.agent.account_wait.as_ref() == Some(&acc)) else { return };
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                let Ok(waiting) =
+                    this.update(cx, |this, _| this.agent.account_wait.as_ref() == Some(&acc))
+                else {
+                    return;
+                };
                 if !waiting {
                     return;
                 }
@@ -340,7 +1110,9 @@ impl Workbench {
                         this.agent.account_wait = None;
                         this.settings.agent_accounts.push(acc.clone());
                         this.agent_use_account(Some(acc.name.clone()), cx);
-                        this.agent.items.push(Item::Branch(crate::trf!("Signed in: {name} added and in use."; name => acc.name)));
+                        this.agent.items.push(Item::Branch(
+                            crate::trf!("Signed in: {name} added and in use."; name => acc.name),
+                        ));
                     });
                     return;
                 }
@@ -350,20 +1122,31 @@ impl Workbench {
         .detach();
     }
 
-    fn agent_cancel_account(&mut self, cx: &mut Context<Self>) {
-        let Some(a) = self.agent.account_wait.take() else { return };
+    pub(crate) fn agent_cancel_account(&mut self, cx: &mut Context<Self>) {
+        let Some(a) = self.agent.account_wait.take() else {
+            return;
+        };
         if signed_in(&a) {
             self.settings.agent_accounts.push(a.clone());
             return self.agent_use_account(Some(a.name), cx);
         }
         forget_dir(&a);
-        self.agent.items.push(Item::Branch(crate::trf!("{name} wasn't signed in, so it wasn't added."; name => a.name)));
+        self.agent.items.push(Item::Branch(
+            crate::trf!("{name} wasn't signed in, so it wasn't added."; name => a.name),
+        ));
         cx.notify();
     }
 
-    fn agent_sign_out(&mut self, name: String, cx: &mut Context<Self>) {
+    pub(crate) fn agent_sign_out(&mut self, name: String, cx: &mut Context<Self>) {
         let Some(f) = family(&agent_id()) else { return };
-        let Some(pos) = self.settings.agent_accounts.iter().position(|a| a.family == f && a.name == name) else { return };
+        let Some(pos) = self
+            .settings
+            .agent_accounts
+            .iter()
+            .position(|a| a.family == f && a.name == name)
+        else {
+            return;
+        };
         let a = self.settings.agent_accounts.remove(pos);
         let was_current = self.settings.agent_account.get(f) == Some(&name);
         if was_current {
@@ -371,7 +1154,9 @@ impl Workbench {
         }
         self.settings.save();
         if was_current {
-            self.agent.items.push(Item::Branch(crate::trf!("Signed out of {name}; using the default account."; name => name)));
+            self.agent.items.push(Item::Branch(
+                crate::trf!("Signed out of {name}; using the default account."; name => name),
+            ));
             self.agent_restart_here(cx);
             cx.background_spawn(async move {
                 std::thread::sleep(std::time::Duration::from_secs(4));
@@ -380,7 +1165,9 @@ impl Workbench {
             .detach();
         } else {
             forget_dir(&a);
-            self.agent.items.push(Item::Branch(crate::trf!("Signed out of {name}."; name => name)));
+            self.agent.items.push(Item::Branch(
+                crate::trf!("Signed out of {name}."; name => name),
+            ));
         }
         cx.notify();
     }
@@ -390,14 +1177,63 @@ impl Workbench {
         let (fam, accounts) = self.agent_accounts();
         let current = self.agent_account().map(|a| a.name);
         let waiting = self.agent.account_wait.as_ref().map(|a| a.name.clone());
-        let mode = self.agent_config_view().into_iter().find(|o| o.category == "mode").filter(|o| o.choices.len() > 1);
+        let mode = self
+            .agent_config_view()
+            .into_iter()
+            .find(|o| o.category == "mode")
+            .filter(|o| o.choices.len() > 1);
         let right = self.settings.agent_right;
         let other = self.agent_other_folder();
-        let open_name = self.root.as_ref().map(|r| super::chats::folder_name(&r.display().to_string()));
+        let open_name = self
+            .root
+            .as_ref()
+            .map(|r| super::chats::folder_name(&r.display().to_string()));
         let risky = mode.as_ref().is_some_and(|m| {
             let c = m.current.to_ascii_lowercase();
-            c.contains("bypass") || c.contains("yolo") || c.contains("dontask") || c.contains("dont_ask")
+            c.contains("bypass")
+                || c.contains("yolo")
+                || c.contains("dontask")
+                || c.contains("dont_ask")
         });
+        let live_email = self.agent.active_email.clone();
+        let live_tier = self.agent.active_tier.clone();
+        let def_label = fam.map(|f| {
+            let em = if current.is_none() {
+                live_email.as_deref()
+            } else {
+                None
+            };
+            let tr_s = if current.is_none() {
+                live_tier.as_deref()
+            } else {
+                None
+            };
+            match profile_identity(f, None, em, tr_s).email {
+                Some(email) => format!("{} ({email})", tr("Default account")),
+                None => tr("Default account").into(),
+            }
+        });
+        let acc_rows: Vec<(String, String)> = fam
+            .map(|f| {
+                accounts
+                    .iter()
+                    .map(|a| {
+                        let is_cur = current.as_deref() == Some(a.name.as_str());
+                        let em = if is_cur { live_email.as_deref() } else { None };
+                        let tr_s = if is_cur { live_tier.as_deref() } else { None };
+                        let id_info = profile_identity(f, Some(a), em, tr_s);
+                        let label = match &id_info.email {
+                            Some(email) => format!("{} ({email})", a.name),
+                            None if !id_info.synced => {
+                                format!("{} ({})", a.name, tr("Sign in required"))
+                            }
+                            None => a.name.clone(),
+                        };
+                        (a.name.clone(), label)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let weak = cx.entity().downgrade();
         Button::new("ag-more")
             .icon(Icon::new(IconName::Ellipsis).when(risky, |i| i.text_color(c(theme::WARN))))
@@ -443,12 +1279,20 @@ impl Workbench {
                     on,
                     Box::new(|this, _, cx| this.agent_worktree_toggle(cx)),
                 ));
-                if fam.is_some() {
+                if let Some(f) = fam {
                     m = m.separator().label(tr("Account"));
-                    m = m.item(act(tr("Default account").into(), current.is_none(), Box::new(|this, _, cx| this.agent_use_account(None, cx))));
-                    for a in &accounts {
-                        let name = a.name.clone();
-                        m = m.item(act(a.name.clone(), current.as_deref() == Some(a.name.as_str()), Box::new(move |this, _, cx| this.agent_use_account(Some(name.clone()), cx))));
+                    m = m.item(act(
+                        def_label.clone().unwrap_or_else(|| tr("Default account").into()),
+                        current.is_none(),
+                        Box::new(|this, _, cx| this.agent_use_account(None, cx)),
+                    ));
+                    for (name, label) in &acc_rows {
+                        let is_cur = current.as_deref() == Some(name.as_str());
+                        let name_use = name.clone();
+                        m = m.item(act(label.clone(), is_cur, Box::new(move |this, _, cx| this.agent_use_account(Some(name_use.clone()), cx))));
+                    }
+                    if f == "antigravity" {
+                        m = m.item(act(tr("Choose login method…").into(), false, Box::new(|this, _, cx| this.agent_open_auth_picker(cx))));
                     }
                     m = match &waiting {
                         Some(w) => m.item(act(crate::trf!("Waiting for {name} to sign in… (cancel)"; name => w), false, Box::new(|this, _, cx| this.agent_cancel_account(cx)))),
@@ -495,11 +1339,36 @@ impl Workbench {
                     .border_color(c(theme::BORDER))
                     .bg(c(theme::BG_ELEVATED))
                     .text_xs()
-                    .child(Icon::new(IconName::Folder).flex_none().size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)))
-                    .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(f.display().to_string()))
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .flex_none()
+                            .size(theme::u(12.))
+                            .text_color(c(theme::ACCENT_TEXT)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(c(theme::FG))
+                            .child(f.display().to_string()),
+                    )
                     .child(div().flex_1())
-                    .child(Button::new("ag-dir-open").label(tr("Open folder")).xsmall().ghost().on_click(move |_, _, cx| cx.reveal_path(&open)))
-                    .child(Button::new("ag-dir-back").label(tr("Use the open folder")).xsmall().ghost().on_click(cx.listener(|this, _, _, cx| this.agent_use_folder(None, cx))))
+                    .child(
+                        Button::new("ag-dir-open")
+                            .label(tr("Open folder"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(move |_, _, cx| cx.reveal_path(&open)),
+                    )
+                    .child(
+                        Button::new("ag-dir-back")
+                            .label(tr("Use the open folder"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.agent_use_folder(None, cx)),
+                            ),
+                    )
                     .into_any_element(),
             );
         }
@@ -518,10 +1387,27 @@ impl Workbench {
                 .border_color(c(theme::BORDER))
                 .bg(c(theme::BG_ELEVATED))
                 .text_xs()
-                .child(Icon::new(gpui_kit::assets::IconName::GitFork).flex_none().size(theme::u(12.)).text_color(c(theme::ACCENT_TEXT)))
-                .child(div().min_w_0().truncate().text_color(c(theme::FG)).child(w.branch.clone()))
+                .child(
+                    Icon::new(gpui_kit::assets::IconName::GitFork)
+                        .flex_none()
+                        .size(theme::u(12.))
+                        .text_color(c(theme::ACCENT_TEXT)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(c(theme::FG))
+                        .child(w.branch.clone()),
+                )
                 .child(div().flex_1())
-                .child(Button::new("ag-wt-open").label(tr("Open folder")).xsmall().ghost().on_click(move |_, _, cx| cx.reveal_path(&path)))
+                .child(
+                    Button::new("ag-wt-open")
+                        .label(tr("Open folder"))
+                        .xsmall()
+                        .ghost()
+                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                )
                 .child(
                     Button::new("ag-wt-merge")
                         .icon(Icon::new(gpui_kit::assets::IconName::GitMerge))
@@ -537,19 +1423,78 @@ impl Workbench {
 }
 
 fn open_login(a: &Account) {
+    if a.family == "antigravity" {
+        let _ = std::fs::create_dir_all(a.dir.join(".gemini").join("antigravity-cli"));
+        if let Some(fp) = &a.flow_profile {
+            let _ = crate::gflow::launch_browser_login(fp);
+        }
+        let agy = crate::acp::locate("antigravity-acp")
+            .map(|l| l.cmd)
+            .or_else(|| crate::acp::which("agy"));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let sets: Vec<String> = account_envs(a)
+                .into_iter()
+                .map(|(k, v)| format!("set \"{k}={}\"", v.display()))
+                .collect();
+            let env_str = sets.join(" && ");
+            let cmd_tail = match agy {
+                Some(bin) => format!("\"{}\" acp --login", bin.display()),
+                None => "echo Isolated Antigravity dir ready && echo Run: agy acp --login".into(),
+            };
+            let line = format!(
+                "/c start \"FluxCode Antigravity sign-in\" cmd /k \"{env_str} && {cmd_tail}\""
+            );
+            let _ = Command::new("cmd").raw_arg(line).spawn();
+        }
+        #[cfg(not(windows))]
+        {
+            let env_str: Vec<String> = account_envs(a)
+                .into_iter()
+                .map(|(k, v)| format!("{k}='{}'", v.display()))
+                .collect();
+            let bin = agy
+                .map(|b| format!("'{}' acp --login", b.display()))
+                .unwrap_or_else(|| "echo 'Run agy acp --login'".into());
+            let script = format!("{} {bin}; exec $SHELL", env_str.join(" "));
+            for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
+                if Command::new(term)
+                    .args(["-e", "sh", "-c", &script])
+                    .spawn()
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
     let (var, dir) = account_env(a);
-    let login = if a.family == "claude" { "claude /login" } else { "opencode auth login" };
+    let login = if a.family == "claude" {
+        "claude /login"
+    } else {
+        "opencode auth login"
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let line = format!("/c start \"FluxCode sign-in\" cmd /k \"set \"{var}={}\" && {login}\"", dir.display());
+        let line = format!(
+            "/c start \"FluxCode sign-in\" cmd /k \"set \"{var}={}\" && {login}\"",
+            dir.display()
+        );
         let _ = Command::new("cmd").raw_arg(line).spawn();
     }
     #[cfg(not(windows))]
     {
         let script = format!("{var}='{}' {login}; exec $SHELL", dir.display());
         for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
-            if Command::new(term).args(["-e", "sh", "-c", &script]).spawn().is_ok() {
+            if Command::new(term)
+                .args(["-e", "sh", "-c", &script])
+                .spawn()
+                .is_ok()
+            {
                 break;
             }
         }
@@ -558,7 +1503,10 @@ fn open_login(a: &Account) {
 
 #[cfg(test)]
 mod tests {
-    use super::{account_env, family, signed_in, Account};
+    use super::{
+        account_env, account_envs, detect_antigravity_email, extract_email_from_text, family,
+        profile_identity, save_profile_meta, signed_in, Account,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -566,18 +1514,47 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fluxcode-acct-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("opencode")).unwrap();
-        let claude = Account { name: "A".into(), family: "claude".into(), dir: dir.clone() };
-        let open = Account { family: "opencode".into(), ..claude.clone() };
+        std::fs::create_dir_all(dir.join(".gemini")).unwrap();
+        let claude = Account {
+            name: "A".into(),
+            family: "claude".into(),
+            dir: dir.clone(),
+            flow_profile: None,
+            email: None,
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
+        let open = Account {
+            family: "opencode".into(),
+            ..claude.clone()
+        };
+        let agy = Account {
+            family: "antigravity".into(),
+            flow_profile: Some("akun2".into()),
+            ..claude.clone()
+        };
         assert!(!signed_in(&claude));
         assert!(!signed_in(&open));
+        assert!(!signed_in(&agy));
         std::fs::write(dir.join(".claude.json"), r#"{"numStartups":1}"#).unwrap();
         assert!(!signed_in(&claude));
-        std::fs::write(dir.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"x"}}"#).unwrap();
+        std::fs::write(
+            dir.join(".claude.json"),
+            r#"{"oauthAccount":{"emailAddress":"x"}}"#,
+        )
+        .unwrap();
         assert!(signed_in(&claude));
         std::fs::write(dir.join("opencode").join("auth.json"), "{}").unwrap();
         assert!(!signed_in(&open));
-        std::fs::write(dir.join("opencode").join("auth.json"), r#"{"anthropic":{"type":"oauth"}}"#).unwrap();
+        std::fs::write(
+            dir.join("opencode").join("auth.json"),
+            r#"{"anthropic":{"type":"oauth"}}"#,
+        )
+        .unwrap();
         assert!(signed_in(&open));
+        std::fs::write(dir.join(".gemini").join("oauth_creds.json"), "{}").unwrap();
+        assert!(signed_in(&agy));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -585,10 +1562,135 @@ mod tests {
     fn families_and_env() {
         assert_eq!(family("claude-acp"), Some("claude"));
         assert_eq!(family("opencode-v2"), Some("opencode"));
+        assert_eq!(family("antigravity-acp"), Some("antigravity"));
         assert_eq!(family("gemini"), None);
-        let a = Account { name: "Work".into(), family: "claude".into(), dir: PathBuf::from("x") };
+        let a = Account {
+            name: "Work".into(),
+            family: "claude".into(),
+            dir: PathBuf::from("x"),
+            flow_profile: None,
+            email: None,
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
         assert_eq!(account_env(&a).0, "CLAUDE_CONFIG_DIR");
-        let o = Account { family: "opencode".into(), ..a };
+        let o = Account {
+            family: "opencode".into(),
+            ..a.clone()
+        };
         assert_eq!(account_env(&o).0, "XDG_DATA_HOME");
+        let agy = Account {
+            family: "antigravity".into(),
+            flow_profile: Some("akun2".into()),
+            ..a
+        };
+        let envs = account_envs(&agy);
+        assert!(envs.iter().any(|(k, _)| *k == "GEMINI_CLI_HOME"));
+        assert!(envs.iter().any(|(k, _)| *k == "AGY_HOME"));
+        assert!(envs
+            .iter()
+            .any(|(k, v)| *k == "GFLOW_CLI_PROFILE" && v == &PathBuf::from("akun2")));
+    }
+
+    #[test]
+    fn extracts_and_persists_antigravity_email_metadata() {
+        assert_eq!(
+            extract_email_from_text("I1127 12:55:40 server_oauth.go:226] OAuth: authenticated successfully as kiworaid2@gmail.com"),
+            Some("kiworaid2@gmail.com".into())
+        );
+        assert_eq!(
+            extract_email_from_text("I1127 12:55:40 server_oauth.go:221] applyAuthResult: email=alice.dev@example.com, authMethod=consumer, quotaProject="),
+            Some("alice.dev@example.com".into())
+        );
+        let dir = std::env::temp_dir().join(format!("fluxcode-meta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log_dir = dir.join(".gemini").join("antigravity-cli").join("log");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("acp-server-20261127_125540-100.log"),
+            "OAuth: authenticated successfully as kiworaid2@gmail.com\n",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_antigravity_email(&dir),
+            Some("kiworaid2@gmail.com".into())
+        );
+        save_profile_meta(
+            &dir,
+            Some("kiworaid2@gmail.com"),
+            Some("Google AI Pro"),
+            Some("oauth-personal"),
+        );
+        let acc = Account {
+            name: "Account 2".into(),
+            family: "antigravity".into(),
+            dir: dir.clone(),
+            flow_profile: Some("akun2".into()),
+            email: None,
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
+        let id = profile_identity("antigravity", Some(&acc), None, None);
+        assert_eq!(id.email.as_deref(), Some("kiworaid2@gmail.com"));
+        assert_eq!(id.tier.as_deref(), Some("Google AI Pro"));
+        assert_eq!(id.initial, "K");
+        assert!(id.synced);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn antigravity_env_and_token_signature_isolation() {
+        let dir = std::env::temp_dir().join(format!("fluxcode-agy-iso-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let tok_dir = dir.join(".gemini").join("antigravity-acp");
+        std::fs::create_dir_all(&tok_dir).unwrap();
+        let log_dir = dir.join(".gemini").join("antigravity-cli").join("log");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("acp-server-20261127-100.log"),
+            "OAuth: authenticated successfully as wrong.stale@example.com\n",
+        )
+        .unwrap();
+        let tok_file = tok_dir.join("acp_token.json");
+        std::fs::write(&tok_file, r#"{"refresh_token":"one"}"#).unwrap();
+        let sig1 = super::acp_token_signature(&dir).unwrap();
+        std::fs::write(&tok_file, r#"{"refresh_token":"two"}"#).unwrap();
+        let sig2 = super::acp_token_signature(&dir).unwrap();
+        assert_ne!(sig1, sig2);
+
+        let acc = Account {
+            name: "Account 2".into(),
+            family: "antigravity".into(),
+            dir: dir.clone(),
+            flow_profile: None,
+            email: Some("wrong.cached@example.com".into()),
+            display_name: None,
+            auth_method: None,
+            tier: None,
+        };
+        let envs = account_envs(&acc);
+        assert!(envs
+            .iter()
+            .any(|(k, v)| *k == "GEMINI_HOME" && v == &dir.join(".gemini")));
+        assert!(signed_in(&acc));
+
+        // When acp_token.json exists without a matching token_sig, never trust stale log or stale account email.
+        let id_unsig = profile_identity("antigravity", Some(&acc), None, None);
+        assert_eq!(id_unsig.email, None);
+        assert!(id_unsig.synced);
+
+        // Once matching token_sig is persisted, authoritative email is returned.
+        super::save_profile_meta_sig(
+            &dir,
+            Some("real@example.com"),
+            None,
+            Some("oauth"),
+            Some(&sig2),
+        );
+        let id_sig = profile_identity("antigravity", Some(&acc), None, None);
+        assert_eq!(id_sig.email.as_deref(), Some("real@example.com"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

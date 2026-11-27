@@ -1,15 +1,19 @@
-
 pub mod bedrock;
 pub mod compile;
+pub mod host;
 pub mod java;
 pub mod market;
 mod market_view;
 pub mod mcbe_types;
 pub mod mcbe_view;
 pub mod native;
+pub mod native_webview;
 pub mod view;
+pub mod vsc_registry;
+pub mod vsc_view;
 pub mod vsx_icons;
 pub mod vsx_theme;
+pub mod webview_bridge;
 pub mod zip;
 
 use serde::Deserialize;
@@ -121,8 +125,16 @@ impl Manifest {
 
 pub fn parse(text: &str) -> Result<Manifest, String> {
     let m: Manifest = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    if m.id.is_empty() || !m.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
-        return Err(format!("\"id\" must be letters, digits, '-' or '.', got {:?}", m.id));
+    if m.id.is_empty()
+        || !m
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
+        return Err(format!(
+            "\"id\" must be letters, digits, '-' or '.', got {:?}",
+            m.id
+        ));
     }
     if m.name.trim().is_empty() {
         return Err("\"name\" is empty".into());
@@ -131,7 +143,9 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default()
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 pub fn user_dir() -> PathBuf {
@@ -139,11 +153,17 @@ pub fn user_dir() -> PathBuf {
 }
 
 pub fn catalog() -> Vec<Manifest> {
-    let mut all: Vec<Manifest> = BUILTIN.iter().map(|t| parse(t).expect("built-in extension manifest")).collect();
+    let mut all: Vec<Manifest> = BUILTIN
+        .iter()
+        .map(|t| parse(t).expect("built-in extension manifest"))
+        .collect();
     if let Ok(rd) = std::fs::read_dir(user_dir()) {
         for e in rd.flatten() {
             let p = e.path().join("extension.json");
-            if let Some(mut m) = std::fs::read_to_string(&p).ok().and_then(|t| parse(&t).ok()) {
+            if let Some(mut m) = std::fs::read_to_string(&p)
+                .ok()
+                .and_then(|t| parse(&t).ok())
+            {
                 if all.iter().any(|b| b.id == m.id) {
                     continue;
                 }
@@ -161,7 +181,6 @@ pub fn remove_file(m: &Manifest) {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
     pub ext: String,
@@ -169,10 +188,26 @@ pub struct Project {
     pub name: String,
 }
 
-const SKIP: &[&str] = &["node_modules", "build", "target", ".gradle", ".git", "dist", "out", "bin", "obj", ".venv", "venv", "__pycache__", "libraries", "cache"];
+const SKIP: &[&str] = &[
+    "node_modules",
+    "build",
+    "target",
+    ".gradle",
+    ".git",
+    "dist",
+    "out",
+    "bin",
+    "obj",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "libraries",
+    "cache",
+];
 
 fn skipped(path: &str) -> bool {
-    path.split(['/', '\\']).any(|seg| SKIP.iter().any(|s| seg.eq_ignore_ascii_case(s)))
+    path.split(['/', '\\'])
+        .any(|seg| SKIP.iter().any(|s| seg.eq_ignore_ascii_case(s)))
 }
 
 pub fn matches(path: &str, pattern: &str) -> bool {
@@ -182,19 +217,33 @@ pub fn matches(path: &str, pattern: &str) -> bool {
         return false;
     }
     let tail = &segs[segs.len() - pat.len()..];
-    tail.iter().zip(&pat).all(|(s, p)| match p.strip_prefix('*') {
-        Some(suffix) => s.to_ascii_lowercase().ends_with(&suffix.to_ascii_lowercase()),
-        None => s.eq_ignore_ascii_case(p),
-    })
+    tail.iter()
+        .zip(&pat)
+        .all(|(s, p)| match p.strip_prefix('*') {
+            Some(suffix) => s
+                .to_ascii_lowercase()
+                .ends_with(&suffix.to_ascii_lowercase()),
+            None => s.eq_ignore_ascii_case(p),
+        })
 }
 
 pub fn has_any(dir: &Path, alts: &str) -> bool {
-    alts.split('|').map(str::trim).filter(|a| !a.is_empty()).any(|a| match a.strip_prefix('*') {
-        Some(suffix) => std::fs::read_dir(dir)
-            .map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().to_ascii_lowercase().ends_with(&suffix.to_ascii_lowercase())))
-            .unwrap_or(false),
-        None => dir.join(a).exists(),
-    })
+    alts.split('|')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .any(|a| match a.strip_prefix('*') {
+            Some(suffix) => std::fs::read_dir(dir)
+                .map(|rd| {
+                    rd.flatten().any(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .to_ascii_lowercase()
+                            .ends_with(&suffix.to_ascii_lowercase())
+                    })
+                })
+                .unwrap_or(false),
+            None => dir.join(a).exists(),
+        })
 }
 
 fn rule_hits(rule: &Rule, path: &str) -> bool {
@@ -204,7 +253,9 @@ fn rule_hits(rule: &Rule, path: &str) -> bool {
     if rule.contains.is_empty() {
         return true;
     }
-    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
     if meta.len() > 512 * 1024 {
         return false;
     }
@@ -238,11 +289,20 @@ pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<
                 continue;
             }
             let file = Path::new(f);
-            let Some(top) = roots.iter().find(|r| file.starts_with(r)) else { continue };
+            let Some(top) = roots.iter().find(|r| file.starts_with(r)) else {
+                continue;
+            };
             let dir = project_dir(m, file, top);
             if !mine.iter().any(|p| p.dir == dir) {
-                let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string());
-                mine.push(Project { ext: m.id.clone(), dir, name });
+                let name = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| dir.display().to_string());
+                mine.push(Project {
+                    ext: m.id.clone(),
+                    dir,
+                    name,
+                });
             }
             if mine.len() >= 24 {
                 break;
@@ -262,9 +322,24 @@ pub fn detect(catalog: &[Manifest], roots: &[PathBuf], files: &[String]) -> Vec<
     }
     let shadowed: Vec<(String, PathBuf)> = found
         .iter()
-        .flat_map(|p| catalog.iter().find(|m| m.id == p.ext).map(|m| m.replaces.iter().map(|r| (r.clone(), p.dir.clone())).collect::<Vec<_>>()).unwrap_or_default())
+        .flat_map(|p| {
+            catalog
+                .iter()
+                .find(|m| m.id == p.ext)
+                .map(|m| {
+                    m.replaces
+                        .iter()
+                        .map(|r| (r.clone(), p.dir.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
         .collect();
-    found.retain(|p| !shadowed.iter().any(|(id, dir)| *id == p.ext && *dir == p.dir));
+    found.retain(|p| {
+        !shadowed
+            .iter()
+            .any(|(id, dir)| *id == p.ext && *dir == p.dir)
+    });
     found
 }
 
@@ -272,18 +347,29 @@ fn group(list: Vec<Project>) -> Vec<Project> {
     let mut out: Vec<Project> = Vec::new();
     for p in &list {
         let parent = p.dir.parent().map(Path::to_path_buf);
-        let siblings = list.iter().filter(|q| q.dir.parent().map(Path::to_path_buf) == parent).count();
+        let siblings = list
+            .iter()
+            .filter(|q| q.dir.parent().map(Path::to_path_buf) == parent)
+            .count();
         let (dir, name) = match parent {
-            Some(par) if siblings > 1 => (par.clone(), par.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            Some(par) if siblings > 1 => (
+                par.clone(),
+                par.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
             _ => (p.dir.clone(), p.name.clone()),
         };
         if !out.iter().any(|o| o.dir == dir) {
-            out.push(Project { ext: p.ext.clone(), dir, name });
+            out.push(Project {
+                ext: p.ext.clone(),
+                dir,
+                name,
+            });
         }
     }
     out
 }
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
@@ -299,9 +385,16 @@ pub struct Task {
 }
 
 fn wrapper(dir: &Path, name: &str, fallback: &str) -> String {
-    if dir.join(name).is_file() || dir.join(format!("{name}.bat")).is_file() || dir.join(format!("{name}.cmd")).is_file() {
+    if dir.join(name).is_file()
+        || dir.join(format!("{name}.bat")).is_file()
+        || dir.join(format!("{name}.cmd")).is_file()
+    {
         if cfg!(windows) {
-            let bat = if dir.join(format!("{name}.cmd")).is_file() { format!("{name}.cmd") } else { format!("{name}.bat") };
+            let bat = if dir.join(format!("{name}.cmd")).is_file() {
+                format!("{name}.cmd")
+            } else {
+                format!("{name}.bat")
+            };
             format!(".\\{bat}")
         } else {
             format!("./{name}")
@@ -333,18 +426,40 @@ fn fill(line: &str, p: &Project) -> String {
 }
 
 pub fn uses(dir: &Path, text: &str) -> bool {
-    let files = ["build.gradle.kts", "build.gradle", "pom.xml", "package.json", "settings.gradle.kts", "gradle/libs.versions.toml"];
+    let files = [
+        "build.gradle.kts",
+        "build.gradle",
+        "pom.xml",
+        "package.json",
+        "settings.gradle.kts",
+        "gradle/libs.versions.toml",
+    ];
     let mut dirs = vec![dir.to_path_buf()];
     if let Ok(rd) = std::fs::read_dir(dir) {
-        dirs.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !skipped(&p.to_string_lossy())));
+        dirs.extend(
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && !skipped(&p.to_string_lossy())),
+        );
     }
-    dirs.iter().any(|d| files.iter().any(|f| std::fs::read_to_string(d.join(f)).is_ok_and(|t| t.contains(text))))
+    dirs.iter().any(|d| {
+        files
+            .iter()
+            .any(|f| std::fs::read_to_string(d.join(f)).is_ok_and(|t| t.contains(text)))
+    })
 }
 
 pub fn npm_scripts(dir: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else { return Vec::new() };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
-    v.get("scripts").and_then(|s| s.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
+    let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    v.get("scripts")
+        .and_then(|s| s.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
@@ -366,7 +481,15 @@ pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
                 out.push(Task {
                     id: format!("npm:{s}"),
                     label: format!("{pm} run {s}"),
-                    icon: if primary { "play".into() } else if s.contains("build") { "hammer".into() } else if s.contains("test") { "flask-conical".into() } else { "terminal".into() },
+                    icon: if primary {
+                        "play".into()
+                    } else if s.contains("build") {
+                        "hammer".into()
+                    } else if s.contains("test") {
+                        "flask-conical".into()
+                    } else {
+                        "terminal".into()
+                    },
                     line: format!("{pm} run {s}"),
                     native: String::new(),
                     then: String::new(),
@@ -381,7 +504,11 @@ pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
             id: t.id.clone(),
             label: t.label.clone(),
             icon: t.icon.clone(),
-            line: if t.run.is_empty() { String::new() } else { fill(&t.run, p) },
+            line: if t.run.is_empty() {
+                String::new()
+            } else {
+                fill(&t.run, p)
+            },
             native: t.native.clone(),
             then: t.then.clone(),
             java: t.java,
@@ -392,11 +519,14 @@ pub fn tasks(m: &Manifest, p: &Project) -> Vec<Task> {
     out
 }
 
-
 pub fn which(cmd: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into()).split(';').map(|e| e.to_ascii_lowercase()).collect()
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .map(|e| e.to_ascii_lowercase())
+            .collect()
     } else {
         vec![String::new()]
     };
@@ -422,18 +552,26 @@ pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
         .iter()
         .filter(|n| {
             projects.is_empty()
-                || projects.iter().any(|p| (n.when.is_empty() || has_any(&p.dir, &n.when)) && (n.unless.is_empty() || !has_any(&p.dir, &n.unless)))
+                || projects.iter().any(|p| {
+                    (n.when.is_empty() || has_any(&p.dir, &n.when))
+                        && (n.unless.is_empty() || !has_any(&p.dir, &n.unless))
+                })
         })
         .map(|n| {
             let mut need = n.clone();
             let found = if n.cmd == "java" {
-                match projects.iter().find_map(|p| java::wanted(&p.dir).map(|w| (w, *p))) {
+                match projects
+                    .iter()
+                    .find_map(|p| java::wanted(&p.dir).map(|w| (w, *p)))
+                {
                     Some((w, p)) => {
                         need.label = format!("Java {w} (JDK)");
                         need.winget = java::winget_jdk(w);
-                        java::best_jdk(Some(p)).map(|j| format!("JDK {} · {}", j.major, j.home.display()))
+                        java::best_jdk(Some(p))
+                            .map(|j| format!("JDK {} · {}", j.major, j.home.display()))
                     }
-                    None => java::best_jdk(None).map(|j| format!("JDK {} · {}", j.major, j.home.display())),
+                    None => java::best_jdk(None)
+                        .map(|j| format!("JDK {} · {}", j.major, j.home.display())),
                 }
             } else {
                 which(&n.cmd).map(|p| p.display().to_string())
@@ -443,20 +581,35 @@ pub fn check_needs(m: &Manifest, projects: &[&Project]) -> Vec<(Need, Tool)> {
         .collect()
 }
 
-
-pub fn agent_notes(catalog: &[Manifest], installed: &[String], found: &[Project], top: &[PathBuf]) -> Option<String> {
+pub fn agent_notes(
+    catalog: &[Manifest],
+    installed: &[String],
+    found: &[Project],
+    top: &[PathBuf],
+) -> Option<String> {
     let mut s = String::new();
     let mut noted: Vec<&str> = Vec::new();
     for p in found {
         if !installed.contains(&p.ext) {
             continue;
         }
-        let Some(m) = catalog.iter().find(|m| m.id == p.ext) else { continue };
-        let rel = top.iter().find_map(|r| p.dir.strip_prefix(r).ok()).map(|r| r.display().to_string()).unwrap_or_else(|| p.dir.display().to_string());
+        let Some(m) = catalog.iter().find(|m| m.id == p.ext) else {
+            continue;
+        };
+        let rel = top
+            .iter()
+            .find_map(|r| p.dir.strip_prefix(r).ok())
+            .map(|r| r.display().to_string())
+            .unwrap_or_else(|| p.dir.display().to_string());
         let rel = if rel.is_empty() { ".".to_string() } else { rel };
         s.push_str(&format!("- {} ({rel}): {}.", p.name, m.name));
         let ts = tasks(m, p);
-        let cmds: Vec<String> = ts.iter().filter(|t| !t.line.is_empty()).take(4).map(|t| format!("{}: `{}`", t.label, t.line)).collect();
+        let cmds: Vec<String> = ts
+            .iter()
+            .filter(|t| !t.line.is_empty())
+            .take(4)
+            .map(|t| format!("{}: `{}`", t.label, t.line))
+            .collect();
         if !cmds.is_empty() {
             s.push_str(&format!(" {}.", cmds.join("; ")));
         }
@@ -484,7 +637,12 @@ pub fn agent_notes(catalog: &[Manifest], installed: &[String], found: &[Project]
 }
 
 pub fn default_installed() -> Vec<String> {
-    BUILTIN.iter().filter_map(|t| parse(t).ok()).filter(|m| m.default).map(|m| m.id).collect()
+    BUILTIN
+        .iter()
+        .filter_map(|t| parse(t).ok())
+        .filter(|m| m.default)
+        .map(|m| m.id)
+        .collect()
 }
 
 pub struct Ext {
@@ -527,9 +685,18 @@ mod tests {
         assert_eq!(ids.len(), all.len());
         for m in &all {
             assert!(!m.summary.is_empty() && !m.tasks.is_empty(), "{}", m.id);
-            assert!(!m.summary.contains('\u{2014}') && !m.about.contains('\u{2014}'), "{}", m.id);
+            assert!(
+                !m.summary.contains('\u{2014}') && !m.about.contains('\u{2014}'),
+                "{}",
+                m.id
+            );
             for t in &m.tasks {
-                assert!(!t.run.is_empty() || !t.native.is_empty(), "{}:{}", m.id, t.id);
+                assert!(
+                    !t.run.is_empty() || !t.native.is_empty(),
+                    "{}:{}",
+                    m.id,
+                    t.id
+                );
             }
         }
         assert!(default_installed().contains(&"html-preview".to_string()));
@@ -537,8 +704,14 @@ mod tests {
 
     #[test]
     fn path_patterns() {
-        assert!(matches("C:\\a\\proj\\src\\main\\resources\\plugin.yml", "src/main/resources/plugin.yml"));
-        assert!(!matches("C:\\a\\plugin.yml", "src/main/resources/plugin.yml"));
+        assert!(matches(
+            "C:\\a\\proj\\src\\main\\resources\\plugin.yml",
+            "src/main/resources/plugin.yml"
+        ));
+        assert!(!matches(
+            "C:\\a\\plugin.yml",
+            "src/main/resources/plugin.yml"
+        ));
         assert!(matches("C:\\a\\App.csproj", "*.csproj"));
         assert!(matches("/x/Cargo.toml", "cargo.toml"));
         assert!(skipped("C:\\a\\node_modules\\x\\package.json"));
@@ -548,23 +721,50 @@ mod tests {
     #[test]
     fn finds_a_gradle_project_at_its_settings_file() {
         let root = std::env::temp_dir().join(format!("fx-ext-{}", std::process::id()));
-        let module = root.join("proj").join("main").join("src").join("main").join("resources");
+        let module = root
+            .join("proj")
+            .join("main")
+            .join("src")
+            .join("main")
+            .join("resources");
         std::fs::create_dir_all(&module).unwrap();
         std::fs::write(root.join("proj").join("settings.gradle.kts"), "").unwrap();
         std::fs::write(root.join("proj").join("main").join("build.gradle.kts"), "").unwrap();
         std::fs::write(module.join("plugin.yml"), "name: X\nmain: a.X\n").unwrap();
-        let files = vec![module.join("plugin.yml").to_string_lossy().into_owned(), root.join("proj").join("settings.gradle.kts").to_string_lossy().into_owned()];
+        let files = vec![
+            module.join("plugin.yml").to_string_lossy().into_owned(),
+            root.join("proj")
+                .join("settings.gradle.kts")
+                .to_string_lossy()
+                .into_owned(),
+        ];
         let cat = catalog();
         let found = detect(&cat, std::slice::from_ref(&root), &files);
         let paper: Vec<&Project> = found.iter().filter(|p| p.ext == "paper").collect();
         assert_eq!(paper.len(), 1, "{found:?}");
         assert_eq!(paper[0].dir, root.join("proj"));
-        assert!(!found.iter().any(|p| p.ext == "java-gradle" && p.dir == root.join("proj")));
+        assert!(!found
+            .iter()
+            .any(|p| p.ext == "java-gradle" && p.dir == root.join("proj")));
         let t = tasks(cat.iter().find(|m| m.id == "paper").unwrap(), paper[0]);
         assert!(t.iter().any(|t| t.primary), "{t:?}");
-        assert_eq!(agent_notes(&cat, &[], &found, std::slice::from_ref(&root)), None);
-        let notes = agent_notes(&cat, &["paper".to_string()], &found, std::slice::from_ref(&root)).unwrap();
-        assert!(notes.contains("Paper Plugins") && notes.contains("build -x test") && notes.contains("plugin.yml: name X"), "{notes}");
+        assert_eq!(
+            agent_notes(&cat, &[], &found, std::slice::from_ref(&root)),
+            None
+        );
+        let notes = agent_notes(
+            &cat,
+            &["paper".to_string()],
+            &found,
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
+        assert!(
+            notes.contains("Paper Plugins")
+                && notes.contains("build -x test")
+                && notes.contains("plugin.yml: name X"),
+            "{notes}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

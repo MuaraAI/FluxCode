@@ -1,7 +1,6 @@
-
-use crate::i18n::tr;
 use crate::core;
 use crate::files;
+use crate::i18n::tr;
 use crate::proc::{ProcEvent, Procs};
 use crate::theme::{self, c};
 use crate::ui;
@@ -10,7 +9,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Editor, EditorState, InputEvent, InputState, Position, TabSize},
-    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenuItem},
     resizable::{h_resizable, resizable_panel, v_resizable},
     v_flex, Icon, IconName, Sizable, TitleBar,
 };
@@ -32,29 +31,161 @@ const PANE_ANIM_MS: u64 = 185;
 actions!(
     fluxcode,
     [
-        Save, SaveAll, CloseTab, OpenFolder, AddFolderToWorkspace, OpenFolderInWsl, OpenFile, Quit, ToggleSidebar, NextTab, PrevTab,
-        ShowExplorer, FindInFiles, ShowRun, ShowAgent, TogglePanel, ToggleTerminal, ShowOutput, ShowProblems,
-        RunFile, StopRun, NewTerminal, NewTerminalCommand, ExplorerNewFile, ExplorerNewFolder, ExplorerRename,
-        ExplorerDelete, ExplorerRefresh, ExplorerUp, ExplorerDown, ExplorerLeft, ExplorerRight, ExplorerOpen,
-        CopyPath, CopyRelativePath, CancelPending, RevealInExplorer, ShowSettings, About, TogglePreview, ReloadPreview,
-        NextTheme, NextIconTheme, ChooseTheme, ChooseIconTheme, TabAccept, TermHistoryPrev, TermHistoryNext, TermComplete, TermInterrupt, TermEscape, TermClear,
-        GoToProblem, ScmShow, ScmCommitPush, ScmCommitSync, ScmCommitAmend, ScmCommitDefault, ScmCommitSignoff, ScmPull, ScmPush, ScmSync, ScmFetch,
-        ScmStageAll, ScmUnstageAll, ScmCreatePr, ScmOpenGithub, ScmRemoveGit, ScmCheckout, ScmManage, ScmFileHistory, QuickOpenFile, QuickClose, QuickUp, QuickDown,
-        AgentUseOpenCode, AgentMentionUp, AgentMentionDown, AgentMentionAccept, AgentMentionClose, AgentForceSend,
-        AgentMenuUp, AgentMenuDown, AgentMenuPick, AgentMenuClose,
-        AgentInsertCode, RemoveFolder, AgentShowOptions, ToggleAgent, AgentAccessRead, AgentAccessWrite, AgentAccessFull,
-        CheckUpdates, ToggleLineComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine,
-        InsertLineBelow, InsertLineAbove, GoToLine, CommandPalette, ReopenClosedTab, CloseAllTabs, ToggleWordWrap,
-        ZoomIn, ZoomOut, ZoomReset, ShowWhatsNew, ShowExtensions, ShowMcbe, ShowWizTree, NavBack, NavForward
+        Save,
+        SaveAs,
+        SaveAll,
+        CloseTab,
+        CloseOtherTabs,
+        CloseSavedTabs,
+        CloseFolder,
+        OpenFolder,
+        AddFolderToWorkspace,
+        OpenFolderInWsl,
+        OpenFile,
+        NewTextFile,
+        NewWindow,
+        ToggleAutoSave,
+        RevertFile,
+        Quit,
+        ToggleSidebar,
+        NextTab,
+        PrevTab,
+        ShowExplorer,
+        FindInFiles,
+        ShowRun,
+        ShowAgent,
+        TogglePanel,
+        ToggleTerminal,
+        ShowOutput,
+        ShowProblems,
+        RunFile,
+        StopRun,
+        NewTerminal,
+        NewTerminalCommand,
+        RunSelectedText,
+        ExplorerNewFile,
+        ExplorerNewFolder,
+        ExplorerRename,
+        ExplorerDelete,
+        ExplorerRefresh,
+        ExplorerUp,
+        ExplorerDown,
+        ExplorerLeft,
+        ExplorerRight,
+        ExplorerOpen,
+        CopyPath,
+        CopyRelativePath,
+        CancelPending,
+        RevealInExplorer,
+        ShowSettings,
+        About,
+        TogglePreview,
+        ReloadPreview,
+        NextTheme,
+        NextIconTheme,
+        ChooseTheme,
+        ChooseIconTheme,
+        TabAccept,
+        TermHistoryPrev,
+        TermHistoryNext,
+        TermComplete,
+        TermInterrupt,
+        TermEscape,
+        TermClear,
+        GoToProblem,
+        PrevProblem,
+        ScmShow,
+        ScmCommitPush,
+        ScmCommitSync,
+        ScmCommitAmend,
+        ScmCommitDefault,
+        ScmCommitSignoff,
+        ScmCheckout,
+        ScmManage,
+        ScmFileHistory,
+        ScmPull,
+        ScmPush,
+        ScmSync,
+        ScmFetch,
+        ScmStageAll,
+        ScmUnstageAll,
+        ScmCreatePr,
+        ScmOpenGithub,
+        ScmRemoveGit,
+        QuickOpenFile,
+        QuickClose,
+        QuickUp,
+        QuickDown,
+        AgentUseOpenCode,
+        AgentMentionUp,
+        AgentMentionDown,
+        AgentMentionAccept,
+        AgentMentionClose,
+        AgentForceSend,
+        AgentMenuUp,
+        AgentMenuDown,
+        AgentMenuPick,
+        AgentMenuClose,
+        AgentInsertCode,
+        RemoveFolder,
+        AgentShowOptions,
+        ToggleAgent,
+        AgentAccessRead,
+        AgentAccessWrite,
+        AgentAccessFull,
+        CheckUpdates,
+        ToggleLineComment,
+        ToggleBlockComment,
+        DuplicateSelection,
+        ExpandSelection,
+        ShrinkSelection,
+        MoveLineUp,
+        MoveLineDown,
+        CopyLineUp,
+        CopyLineDown,
+        DeleteLine,
+        InsertLineBelow,
+        InsertLineAbove,
+        GoToLine,
+        CommandPalette,
+        ReopenClosedTab,
+        CloseAllTabs,
+        ToggleWordWrap,
+        ToggleFullscreen,
+        ToggleLineNumbers,
+        ToggleRenderWhitespace,
+        ToggleGlass,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        ShowWhatsNew,
+        ShowExtensions,
+        ShowMcbe,
+        ShowWizTree,
+        NavBack,
+        NavForward,
+        FocusMenuBar,
+        MenuMnemonicF,
+        MenuMnemonicE,
+        MenuMnemonicS,
+        MenuMnemonicV,
+        MenuMnemonicG,
+        MenuMnemonicR,
+        MenuMnemonicT,
+        MenuMnemonicH
     ]
 );
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-s", Save, None),
+        KeyBinding::new("ctrl-shift-s", SaveAs, None),
         KeyBinding::new("ctrl-alt-s", SaveAll, None),
+        KeyBinding::new("ctrl-n", NewTextFile, None),
+        KeyBinding::new("ctrl-shift-n", NewWindow, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-k ctrl-o", OpenFolder, None),
+        KeyBinding::new("ctrl-k f", CloseFolder, None),
         KeyBinding::new("ctrl-o", OpenFile, None),
         KeyBinding::new("ctrl-b", ToggleSidebar, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
@@ -64,7 +195,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-d", ShowRun, None),
         KeyBinding::new("ctrl-shift-x", ShowExtensions, None),
         KeyBinding::new("ctrl-shift-y", ShowWizTree, None),
-        KeyBinding::new("ctrl-space", gpui_kit::component::input::ShowCompletions, Some("Input && mode == editor")),
+        KeyBinding::new(
+            "ctrl-space",
+            gpui_kit::component::input::ShowCompletions,
+            Some("Input && mode == editor"),
+        ),
         KeyBinding::new("alt-left", NavBack, None),
         KeyBinding::new("alt-right", NavForward, None),
         KeyBinding::new("ctrl-shift-a", ShowAgent, None),
@@ -94,9 +229,20 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-u", ShowOutput, None),
         KeyBinding::new("ctrl-shift-m", ShowProblems, None),
         KeyBinding::new("f8", GoToProblem, None),
+        KeyBinding::new("shift-f8", PrevProblem, None),
         KeyBinding::new("f5", RunFile, None),
         KeyBinding::new("ctrl-f5", RunFile, None),
         KeyBinding::new("shift-f5", StopRun, None),
+        KeyBinding::new("f11", ToggleFullscreen, None),
+        KeyBinding::new("alt-f10", FocusMenuBar, None),
+        KeyBinding::new("alt-f", MenuMnemonicF, None),
+        KeyBinding::new("alt-e", MenuMnemonicE, None),
+        KeyBinding::new("alt-s", MenuMnemonicS, None),
+        KeyBinding::new("alt-v", MenuMnemonicV, None),
+        KeyBinding::new("alt-g", MenuMnemonicG, None),
+        KeyBinding::new("alt-r", MenuMnemonicR, None),
+        KeyBinding::new("alt-t", MenuMnemonicT, None),
+        KeyBinding::new("alt-h", MenuMnemonicH, None),
         KeyBinding::new("ctrl-,", ShowSettings, None),
         KeyBinding::new("ctrl-k ctrl-t", ChooseTheme, None),
         KeyBinding::new("ctrl-k v", TogglePreview, None),
@@ -131,13 +277,40 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl--", ZoomOut, None),
         KeyBinding::new("ctrl-0", ZoomReset, None),
         KeyBinding::new("ctrl-/", ToggleLineComment, Some("Input && mode == editor")),
+        KeyBinding::new(
+            "shift-alt-a",
+            ToggleBlockComment,
+            Some("Input && mode == editor"),
+        ),
+        KeyBinding::new(
+            "shift-alt-right",
+            ExpandSelection,
+            Some("Input && mode == editor"),
+        ),
+        KeyBinding::new(
+            "shift-alt-left",
+            ShrinkSelection,
+            Some("Input && mode == editor"),
+        ),
         KeyBinding::new("alt-up", MoveLineUp, Some("Input && mode == editor")),
         KeyBinding::new("alt-down", MoveLineDown, Some("Input && mode == editor")),
         KeyBinding::new("shift-alt-up", CopyLineUp, Some("Input && mode == editor")),
-        KeyBinding::new("shift-alt-down", CopyLineDown, Some("Input && mode == editor")),
+        KeyBinding::new(
+            "shift-alt-down",
+            CopyLineDown,
+            Some("Input && mode == editor"),
+        ),
         KeyBinding::new("ctrl-shift-k", DeleteLine, Some("Input && mode == editor")),
-        KeyBinding::new("ctrl-enter", InsertLineBelow, Some("Input && mode == editor")),
-        KeyBinding::new("ctrl-shift-enter", InsertLineAbove, Some("Input && mode == editor")),
+        KeyBinding::new(
+            "ctrl-enter",
+            InsertLineBelow,
+            Some("Input && mode == editor"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-enter",
+            InsertLineAbove,
+            Some("Input && mode == editor"),
+        ),
     ]);
 }
 
@@ -150,6 +323,7 @@ pub(crate) enum SideView {
     Agent,
     Extensions,
     Mcbe,
+    Ext(u16),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -189,7 +363,15 @@ pub(crate) struct Line {
 
 impl Line {
     pub fn new(text: &str, kind: LineKind) -> Self {
-        Self { text: text.to_string().into(), kind, open: false, err: false, meta: SharedString::default(), link: None, run: None }
+        Self {
+            text: text.to_string().into(),
+            kind,
+            open: false,
+            err: false,
+            meta: SharedString::default(),
+            link: None,
+            run: None,
+        }
     }
 }
 
@@ -234,7 +416,11 @@ impl Doc {
             .unwrap_or_default()
             .into();
         let is_img = files::is_image(&path);
-        let (lang, label) = if is_img { ("image", "Image") } else { files::language_for(&path, "") };
+        let (lang, label) = if is_img {
+            ("image", "Image")
+        } else {
+            files::language_for(&path, "")
+        };
         Self {
             path,
             name,
@@ -279,13 +465,20 @@ impl Doc {
             (_, _, Some(ed)) => ed.read(cx).value().to_string(),
             (_, _, None) => core::read_text(&self.path)
                 .map(|f| f.text)
-                .or_else(|_| crate::nbt::decode_path(&self.path).map(|d| d.snbt).ok_or(()))
+                .or_else(|_| {
+                    crate::nbt::decode_path(&self.path)
+                        .map(|d| d.snbt)
+                        .ok_or(())
+                })
                 .unwrap_or_default(),
         }
     }
 
     pub fn cursor_position(&self, cx: &App) -> Position {
-        self.editor.as_ref().map(|e| e.read(cx).cursor_position()).unwrap_or(self.saved_cursor)
+        self.editor
+            .as_ref()
+            .map(|e| e.read(cx).cursor_position())
+            .unwrap_or(self.saved_cursor)
     }
 }
 
@@ -295,7 +488,10 @@ pub(crate) struct ImageDoc {
     pub zoom: Option<f32>,
 }
 
-const ZOOM_STEPS: &[f32] = &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1., 1.5, 2., 3., 5., 7., 10., 15., 20., 30., 50., 75., 100.];
+const ZOOM_STEPS: &[f32] = &[
+    0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1., 1.5, 2., 3., 5., 7., 10., 15., 20., 30., 50.,
+    75., 100.,
+];
 const ZOOM_MIN: f32 = 0.1;
 const ZOOM_MAX: f32 = 100.;
 
@@ -311,6 +507,8 @@ pub struct Workbench {
     pub(crate) root: Option<PathBuf>,
     pub(crate) update: crate::update::UpdateUi,
     pub(crate) title_menu_end: Rc<std::cell::Cell<f32>>,
+    pub(crate) menubar: crate::menubar::MenubarState,
+    pub(crate) sel_history: Vec<std::ops::Range<usize>>,
     pub(crate) workspace: crate::workspace::Workspace,
     pub(crate) drop_focus: FocusHandle,
     pub(crate) smooth: Option<SmoothScroll>,
@@ -357,7 +555,7 @@ pub struct Workbench {
     pub(crate) selected: Option<PathBuf>,
     pub(crate) pending: Option<PendingOp>,
     pub(crate) name_input: Entity<InputState>,
-    pub(crate) pending_icon: Option<(crate::fluxicon::FluxIcon, Option<u32>)>,
+    pub(crate) pending_icon: Option<crate::ext::vsx_icons::IconKey>,
     pub(crate) search_input: Entity<InputState>,
     pub(crate) match_case: bool,
     pub(crate) whole_word: bool,
@@ -409,6 +607,12 @@ pub struct Workbench {
     pub(crate) agent: crate::agent::AgentState,
     pub(crate) scm: crate::scm::Scm,
     pub(crate) ext: crate::ext::Ext,
+    pub(crate) ext_containers: Vec<String>,
+    pub(crate) ext_host: crate::ext::host::ExtHostState,
+    pub(crate) native_webviews: crate::ext::native_webview::NativeWebviewManager,
+    pub(crate) wv_frame_seq: u64,
+    pub(crate) ext_drawer_open: std::collections::HashSet<String>,
+    pub(crate) ext_submenu_open: Option<(String, String)>,
     pub(crate) mcbe: crate::ext::mcbe_view::McbeState,
     pub(crate) ink: Rc<RefCell<crate::fluxdoc::view::InkState>>,
     pub(crate) ink_bounds: Rc<std::cell::Cell<Option<[f32; 4]>>>,
@@ -449,7 +653,12 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(root: Option<PathBuf>, open: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        root: Option<PathBuf>,
+        open: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         crate::boot::mark("workbench new");
         let explorer = crate::explorer::ExplorerState::new(cx);
         let focus = cx.focus_handle();
@@ -458,7 +667,8 @@ impl Workbench {
         let name_input = cx.new(|cx| InputState::new(window, cx));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search")));
         let term_input = cx.new(|cx| InputState::new(window, cx));
-        let settings_search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search settings…")));
+        let settings_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr("Search settings…")));
         let settings_focus = cx.focus_handle();
         let github_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -470,28 +680,32 @@ impl Workbench {
             cx.subscribe_in(
                 &name_input,
                 window,
-                |this, _, ev: &InputEvent, window, cx| {
-                    match ev {
-                        InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
-                        InputEvent::Change => {
-                            if let Some(icon) = this.pending_file_icon(cx) {
-                                if this.pending_icon != Some(icon) {
-                                    this.pending_icon = Some(icon);
-                                    cx.notify();
-                                }
+                |this, _, ev: &InputEvent, window, cx| match ev {
+                    InputEvent::PressEnter { .. } => this.commit_pending(window, cx),
+                    InputEvent::Change => {
+                        if let Some(icon) = this.pending_file_icon(cx) {
+                            if this.pending_icon != Some(icon) {
+                                this.pending_icon = Some(icon);
+                                cx.notify();
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 },
             ),
-            cx.subscribe_in(&search_input, window, |this, _, ev: &InputEvent, _, cx| match ev {
-                InputEvent::PressEnter { .. } => this.run_search(cx),
-                InputEvent::Change => this.search_soon(cx),
-                _ => {}
-            }),
-            cx.subscribe_in(&term_input, window, |this, _, ev: &InputEvent, window, cx| {
-                match ev {
+            cx.subscribe_in(
+                &search_input,
+                window,
+                |this, _, ev: &InputEvent, _, cx| match ev {
+                    InputEvent::PressEnter { .. } => this.run_search(cx),
+                    InputEvent::Change => this.search_soon(cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
+                &term_input,
+                window,
+                |this, _, ev: &InputEvent, window, cx| match ev {
                     InputEvent::PressEnter { .. } => this.terminal_enter(window, cx),
                     InputEvent::Change => {
                         let val = this.term_input.read(cx).value();
@@ -508,14 +722,18 @@ impl Workbench {
                         }
                     }
                     _ => {}
-                }
-            }),
-            cx.subscribe_in(&settings_search, window, |this, _, ev: &InputEvent, _, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    this.settings_scroll.set_offset(point(px(0.), px(0.)));
-                    cx.notify();
-                }
-            }),
+                },
+            ),
+            cx.subscribe_in(
+                &settings_search,
+                window,
+                |this, _, ev: &InputEvent, _, cx| {
+                    if matches!(ev, InputEvent::Change) {
+                        this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                        cx.notify();
+                    }
+                },
+            ),
         ];
 
         let (procs, rx) = Procs::new();
@@ -530,7 +748,11 @@ impl Workbench {
                             // Coalesce adjacent output chunks for the same process & stream to avoid UI redraw storms.
                             match (batch.last_mut(), ev) {
                                 (
-                                    Some(ProcEvent::Output { id: lid, text: ltext, err: lerr }),
+                                    Some(ProcEvent::Output {
+                                        id: lid,
+                                        text: ltext,
+                                        err: lerr,
+                                    }),
                                     ProcEvent::Output { id, text, err },
                                 ) if *lid == id && *lerr == err => {
                                     ltext.push_str(&text);
@@ -558,7 +780,9 @@ impl Workbench {
         cx.on_app_quit(|this, _| {
             crate::wintitle::tray_hide();
             crate::instance::set_hidden(false);
+            this.native_webviews.shutdown();
             this.agent_stop_all();
+            this.ext_host.host.shutdown();
             this.procs.kill_all();
             this.copilot.stop_and_wait();
             async {}
@@ -567,7 +791,9 @@ impl Workbench {
 
         let close_weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
-            close_weak.update(cx, |this, cx| this.handle_close_request(window, cx)).unwrap_or(true)
+            close_weak
+                .update(cx, |this, cx| this.handle_close_request(window, cx))
+                .unwrap_or(true)
         });
 
         let mut settings = crate::settings::Settings::load();
@@ -581,13 +807,31 @@ impl Workbench {
             settings.save();
         }
         crate::agent::set_choice(&settings.agent_cli);
-        let term_cwd = root.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        let term_cwd = root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
         crate::boot::mark("  settings");
         let mut agent = crate::agent::AgentState::new(window, cx);
         agent.run.agent = settings.agent_cli.clone();
         crate::boot::mark("  agent state");
         let (scm, scm_sub) = crate::scm::Scm::new(window, cx);
         let ext = crate::ext::Ext::new(window, cx);
+        let (ext_tx, mut ext_rx) = futures::channel::mpsc::unbounded();
+        let ext_host = crate::ext::host::ExtHostState::new(ext_tx);
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(ev) = ext_rx.next().await {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        this.on_ext_host_event(ev, window, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         let mcbe = crate::ext::mcbe_view::McbeState::new(window, cx);
         subs.push(scm_sub);
         crate::boot::mark("  scm");
@@ -595,15 +839,40 @@ impl Workbench {
         crate::boot::mark("  quick open");
         subs.push(quick_sub);
         subs.push(cx.observe_window_activation(window, |this, window, cx| {
-            let recent = this.scm.last_refresh.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
-            if window.is_window_active() && !recent {
+            let recent = this
+                .scm
+                .last_refresh
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2));
+            let active = window.is_window_active();
+            if active && !recent {
                 this.scm_refresh(cx);
             }
-            if window.is_window_active() {
+            if active {
                 crate::wintitle::capture_main_hwnd();
                 this.scm_on_return(cx);
+                this.ext_host.host.wake();
+                this.native_webviews.maintenance_tick(true);
+                cx.notify();
+            } else {
+                this.ext_host.host.cool(true);
+                this.native_webviews.maintenance_tick(false);
             }
         }));
+        cx.spawn_in(window, async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_secs(10))
+                .await;
+            if this
+                .update_in(cx, |this, window, _| {
+                    this.native_webviews
+                        .maintenance_tick(window.is_window_active());
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
         let mut this = Self {
             root: None,
             workspace: Default::default(),
@@ -635,7 +904,10 @@ impl Workbench {
             settings_search,
             settings_focus,
             settings_anim: std::cell::Cell::new((false, 0)),
-            settings_sec_anim: std::cell::Cell::new((crate::settings::SettingsSection::Appearance, 0)),
+            settings_sec_anim: std::cell::Cell::new((
+                crate::settings::SettingsSection::Appearance,
+                0,
+            )),
             whats_new: None,
             closed_tabs: Vec::new(),
             nav_back: Vec::new(),
@@ -702,6 +974,12 @@ impl Workbench {
             agent,
             scm,
             ext,
+            ext_containers: Vec::new(),
+            ext_host,
+            native_webviews: crate::ext::native_webview::NativeWebviewManager::new(),
+            wv_frame_seq: 0,
+            ext_drawer_open: Default::default(),
+            ext_submenu_open: None,
             mcbe,
             ink: Rc::new(RefCell::new(crate::fluxdoc::view::InkState::new())),
             ink_bounds: Rc::new(std::cell::Cell::new(None)),
@@ -739,11 +1017,17 @@ impl Workbench {
             preview_ask_focus: cx.focus_handle(),
             update: Default::default(),
             title_menu_end: Rc::default(),
+            menubar: crate::menubar::MenubarState::new(cx),
+            sel_history: Vec::new(),
             _subs: subs,
         };
         crate::boot::mark("  struct");
+        this.reconcile_ext_views();
         if this.settings.last_build != crate::update::BUILD {
-            let before = std::mem::replace(&mut this.settings.last_build, crate::update::BUILD.to_string());
+            let before = std::mem::replace(
+                &mut this.settings.last_build,
+                crate::update::BUILD.to_string(),
+            );
             if crate::whatsnew::build_date(&before).is_some() {
                 this.whats_new = Some(crate::whatsnew::Page::after_update(&before));
             } else if before.is_empty() && crate::settings::existed_before_start() {
@@ -766,7 +1050,8 @@ impl Workbench {
         crate::boot::mark("  update check scheduled");
         this.start_copilot(cx);
         this.probe_runtimes(cx);
-        cx.background_spawn(async { crate::agent::shots::prune_cache() }).detach();
+        cx.background_spawn(async { crate::agent::shots::prune_cache() })
+            .detach();
         crate::memtrim::watch(window, cx);
         this
     }
@@ -778,7 +1063,9 @@ impl Workbench {
             let wsl_mask = cx
                 .background_spawn(async move {
                     let _ = crate::panel::probe_local_runtimes(root.as_deref());
-                    wsl.as_ref().map(crate::panel::probe_wsl_runtimes).unwrap_or(0)
+                    wsl.as_ref()
+                        .map(crate::panel::probe_wsl_runtimes)
+                        .unwrap_or(0)
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
@@ -802,15 +1089,18 @@ impl Workbench {
         let root = self.root.as_deref();
         let wsl = self.wsl.is_some();
         let mask = self.effective_runtimes_mask();
-        let Some(d) = self.docs.get_mut(ix) else { return };
-        d.runnable_runtime = if d.read_only || d.image.is_some() || d.nbt_format.is_some() || d.diff.is_some() {
-            None
-        } else {
-            match crate::panel::check_script_runnable(&d.path, source, root, wsl, mask) {
-                crate::panel::RunVerdict::Runnable(rt) => Some(rt),
-                crate::panel::RunVerdict::NotRunnable(_) => None,
-            }
+        let Some(d) = self.docs.get_mut(ix) else {
+            return;
         };
+        d.runnable_runtime =
+            if d.read_only || d.image.is_some() || d.nbt_format.is_some() || d.diff.is_some() {
+                None
+            } else {
+                match crate::panel::check_script_runnable(&d.path, source, root, wsl, mask) {
+                    crate::panel::RunVerdict::Runnable(rt) => Some(rt),
+                    crate::panel::RunVerdict::NotRunnable(_) => None,
+                }
+            };
     }
 
     pub(crate) fn refresh_all_doc_runnability(&mut self, cx: &App) {
@@ -826,7 +1116,13 @@ impl Workbench {
                 continue;
             }
             let src = d.text(cx);
-            d.runnable_runtime = match crate::panel::check_script_runnable(&d.path, &src, root.as_deref(), wsl, mask) {
+            d.runnable_runtime = match crate::panel::check_script_runnable(
+                &d.path,
+                &src,
+                root.as_deref(),
+                wsl,
+                mask,
+            ) {
                 crate::panel::RunVerdict::Runnable(rt) => Some(rt),
                 crate::panel::RunVerdict::NotRunnable(_) => None,
             };
@@ -854,9 +1150,13 @@ impl Workbench {
         let copilot = self.copilot.clone();
         let folder = self.root.clone();
         cx.spawn(async move |_, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
             if copilot.untried() {
-                cx.background_spawn(async move { copilot.start_in(folder) }).await.ok();
+                cx.background_spawn(async move { copilot.start_in(folder) })
+                    .await
+                    .ok();
             }
         })
         .detach();
@@ -866,15 +1166,21 @@ impl Workbench {
         if self.root.as_ref() != Some(&root) {
             self.scm_reset_workspace();
         }
+        self.menubar.recent.push_folder(root.clone());
         self.root = Some(root.clone());
         let previous = std::mem::replace(&mut self.wsl, crate::remote::WslTarget::from_path(&root));
-        if previous.as_ref().map(|t| t.distro.clone()) != self.wsl.as_ref().map(|t| t.distro.clone()) {
+        if previous.as_ref().map(|t| t.distro.clone())
+            != self.wsl.as_ref().map(|t| t.distro.clone())
+        {
             crate::remote::drop_client();
         }
         if let Some(t) = &self.wsl {
             crate::remote::warm(&t.distro);
         }
-        if !self.terms[self.term_ix].proc.is_some_and(|id| self.procs.is_running(id)) {
+        if !self.terms[self.term_ix]
+            .proc
+            .is_some_and(|id| self.procs.is_running(id))
+        {
             self.terms[self.term_ix].cwd = root.clone();
         }
         self.explorer.gen = self.explorer.gen.wrapping_add(1);
@@ -899,7 +1205,11 @@ impl Workbench {
         let root = self.root.clone();
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let v = cx.background_spawn(async move { crate::panel::detect_python(root.as_deref(), wsl.as_ref()) }).await;
+            let v = cx
+                .background_spawn(async move {
+                    crate::panel::detect_python(root.as_deref(), wsl.as_ref())
+                })
+                .await;
             _ = this.update(cx, |this, cx| {
                 this.python_version = v.map(Into::into);
                 cx.notify();
@@ -909,7 +1219,9 @@ impl Workbench {
     }
 
     pub(crate) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else { return };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
         let roots = self.roots();
         let multi = roots.len() > 1;
         let wsl = self.wsl.clone();
@@ -929,8 +1241,13 @@ impl Workbench {
             let listing = cx
                 .background_spawn(async move {
                     let mut nodes = if let Some(t) = &wsl {
-                        remote_listing(t, &root2, multi)
-                            .unwrap_or_else(|| if multi { files::scan_roots_shallow(&roots2) } else { files::scan_shallow(&root2) })
+                        remote_listing(t, &root2, multi).unwrap_or_else(|| {
+                            if multi {
+                                files::scan_roots_shallow(&roots2)
+                            } else {
+                                files::scan_shallow(&root2)
+                            }
+                        })
                     } else if multi {
                         files::scan_roots_shallow(&roots2)
                     } else {
@@ -959,7 +1276,10 @@ impl Workbench {
         cx.spawn(async move |this, cx| {
             let (all, lower) = cx
                 .background_spawn(async move {
-                    let mut all = if let Some(paths) = wsl_scan.as_ref().and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES)) {
+                    let mut all = if let Some(paths) = wsl_scan
+                        .as_ref()
+                        .and_then(|t| remote_scan(t, &root, files::MAX_ENTRIES))
+                    {
                         paths
                     } else if multi {
                         let mut paths = Vec::new();
@@ -975,9 +1295,9 @@ impl Workbench {
                         files::scan_paths(&root, files::MAX_ENTRIES)
                     };
                     all.shrink_to_fit();
-                    let lower = crate::memtrim::FlatStrings::from_iter(
-                        all.iter().map(|p| crate::workspace::rel_display_for(p, &roots, multi).to_lowercase()),
-                    );
+                    let lower = crate::memtrim::FlatStrings::from_iter(all.iter().map(|p| {
+                        crate::workspace::rel_display_for(p, &roots, multi).to_lowercase()
+                    }));
                     (all, lower)
                 })
                 .await;
@@ -995,23 +1315,34 @@ impl Workbench {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if path.is_file() {
+            self.menubar.recent.push_file(path.clone());
+        }
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
-        if self.wsl.is_some() || crate::remote::WslTarget::from_path(&path).is_some() || read_off_thread(&path) {
+        if self.wsl.is_some()
+            || crate::remote::WslTarget::from_path(&path).is_some()
+            || read_off_thread(&path)
+        {
             let wsl = self.wsl.clone();
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let res = cx
                     .background_spawn(async move {
                         let bytes = match &wsl {
-                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&p)),
+                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES)
+                                .map(Ok)
+                                .unwrap_or_else(|| read_head(&p)),
                             None => read_head(&p),
                         }?;
                         Ok(prepare_file(&p, bytes))
                     })
                     .await;
-                this.update_in(cx, |this, window, cx| this.finish_open_prepared(path, res, window, cx)).ok()
+                this.update_in(cx, |this, window, cx| {
+                    this.finish_open_prepared(path, res, window, cx)
+                })
+                .ok()
             })
             .detach();
             return;
@@ -1020,12 +1351,19 @@ impl Workbench {
         self.finish_open_prepared(path, res, window, cx);
     }
 
-    pub(crate) fn open_file_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_file_now(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.open_file_early(path.clone(), window, cx) {
             return;
         }
         let res = match &self.wsl {
-            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
+            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES)
+                .map(Ok)
+                .unwrap_or_else(|| read_head(&path)),
             None => read_head(&path),
         }
         .map(|bytes| prepare_file(&path, bytes));
@@ -1047,7 +1385,12 @@ impl Workbench {
         self.theme_menu = false;
     }
 
-    fn open_file_early(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn open_file_early(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.wiztree.page && !self.nav_replaying {
             self.push_nav_history(NavTarget::WizTree);
             self.nav_suppress_path = Some(path.clone());
@@ -1073,7 +1416,11 @@ impl Workbench {
     ) -> BuiltDocEditor {
         let s = &self.settings;
         let too_big_for_wrap = prep.text.len() > MAX_AUTO_WRAP_BYTES;
-        let (tab, wrap, dots) = (s.tab_size, !too_big_for_wrap && (s.word_wrap || prep.long_lines), s.show_whitespace);
+        let (tab, wrap, dots) = (
+            s.tab_size,
+            !too_big_for_wrap && (s.word_wrap || prep.long_lines),
+            s.show_whitespace,
+        );
         let opts = crate::settings::EditorOpts::of(s);
         let lang = prep.lang;
         let read_only = prep.read_only;
@@ -1088,7 +1435,10 @@ impl Workbench {
                 .line_number(opts.line_numbers)
                 .indent_guides(!read_only && !complex)
                 .show_whitespaces(dots && !read_only)
-                .tab_size(TabSize { tab_size: tab, hard_tabs: false })
+                .tab_size(TabSize {
+                    tab_size: tab,
+                    hard_tabs: false,
+                })
                 .soft_wrap(wrap)
                 .default_value(text)
         });
@@ -1110,25 +1460,38 @@ impl Workbench {
         let sub = cx.subscribe(&editor, |this, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let auto = this.settings.auto_save;
-                if let Some(d) = this.docs.iter_mut().find(|d| d.editor.as_ref() == Some(&editor) && !d.read_only) {
+                if let Some(d) = this
+                    .docs
+                    .iter_mut()
+                    .find(|d| d.editor.as_ref() == Some(&editor) && !d.read_only)
+                {
                     d.dirty = true;
                     d.gen += 1;
                     let gen = d.gen;
                     let checked = editor.clone();
                     cx.spawn(async move |this, cx| {
-                        cx.background_executor().timer(Duration::from_millis(300)).await;
-                        _ = this.update(cx, |this, cx| {
-                            if let Some(ix) = this.docs.iter().position(|d| d.editor.as_ref() == Some(&checked) && d.gen == gen) {
-                                this.apply_problems_to(ix, cx);
-                            }
-                        });
+                        cx.background_executor()
+                            .timer(Duration::from_millis(300))
+                            .await;
+                        _ =
+                            this.update(cx, |this, cx| {
+                                if let Some(ix) = this.docs.iter().position(|d| {
+                                    d.editor.as_ref() == Some(&checked) && d.gen == gen
+                                }) {
+                                    this.apply_problems_to(ix, cx);
+                                }
+                            });
                     })
                     .detach();
                     if auto {
                         cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(Duration::from_millis(1000)).await;
+                            cx.background_executor()
+                                .timer(Duration::from_millis(1000))
+                                .await;
                             _ = this.update(cx, |this, cx| {
-                                if let Some(ix) = this.docs.iter().position(|d| d.editor.as_ref() == Some(&editor) && d.gen == gen && d.dirty) {
+                                if let Some(ix) = this.docs.iter().position(|d| {
+                                    d.editor.as_ref() == Some(&editor) && d.gen == gen && d.dirty
+                                }) {
                                     this.save_doc(ix, cx);
                                     cx.notify();
                                 }
@@ -1145,11 +1508,19 @@ impl Workbench {
         let mut rest: Option<String> = None;
         let flux = prep.drawable.is_some().then(|| {
             if prep.file_text_for_flux.len() >= crate::fluxdoc::view::PROGRESSIVE_FROM {
-                let v = crate::fluxdoc::view::FluxView::first_part(&prep.file_text_for_flux, base.clone(), lang_ui);
+                let v = crate::fluxdoc::view::FluxView::first_part(
+                    &prep.file_text_for_flux,
+                    base.clone(),
+                    lang_ui,
+                );
                 rest = Some(std::mem::take(&mut prep.file_text_for_flux));
                 v
             } else {
-                crate::fluxdoc::view::FluxView::new(std::mem::take(&mut prep.file_text_for_flux), base.clone(), lang_ui)
+                crate::fluxdoc::view::FluxView::new(
+                    std::mem::take(&mut prep.file_text_for_flux),
+                    base.clone(),
+                    lang_ui,
+                )
             }
         });
         if let Some(full) = rest {
@@ -1158,7 +1529,13 @@ impl Workbench {
             cx.spawn(async move |this, cx| {
                 let p = task.await;
                 _ = this.update(cx, |this, cx| {
-                    if let Some(v) = this.docs.iter_mut().find(|d| d.path == at).and_then(|d| d.flux.as_mut()).filter(|v| v.pending) {
+                    if let Some(v) = this
+                        .docs
+                        .iter_mut()
+                        .find(|d| d.path == at)
+                        .and_then(|d| d.flux.as_mut())
+                        .filter(|v| v.pending)
+                    {
                         v.install(p, crate::fluxdoc::view::ui_lang());
                     }
                     cx.notify();
@@ -1177,7 +1554,10 @@ impl Workbench {
     }
 
     fn report_open_error(&mut self, path: &Path, e: String, cx: &mut Context<Self>) {
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         self.status = if e.contains("os error 32") || e.contains("os error 33") {
             crate::trf!("{name} is in use by another program (a running server, for example), so it can't be opened now"; name => name)
         } else {
@@ -1187,7 +1567,13 @@ impl Workbench {
         cx.notify();
     }
 
-    fn finish_open_prepared(&mut self, path: PathBuf, prep: Result<PreparedFile, String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_open_prepared(
+        &mut self,
+        path: PathBuf,
+        prep: Result<PreparedFile, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(ix) = self.docs.iter().position(|d| d.path == path) {
             self.activate(ix, window, cx);
             return;
@@ -1199,7 +1585,8 @@ impl Workbench {
         if prep.large && !prep.read_only {
             self.status = crate::i18n::tr("Large file: syntax colors are off").into();
         } else if prep.complex && !prep.read_only {
-            self.status = crate::i18n::tr("Long lines detected: syntax colors and folding are off").into();
+            self.status =
+                crate::i18n::tr("Long lines detected: syntax colors and folding are off").into();
         }
         let is_markdown = prep.drawable == Some(true);
         let built = self.build_doc_editor(&path, &mut prep, window, cx);
@@ -1261,7 +1648,11 @@ impl Workbench {
             let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             let size = image::image_dimensions(&path).ok();
             let d = &mut self.docs[ix];
-            d.image = Some(ImageDoc { size, bytes, zoom: None });
+            d.image = Some(ImageDoc {
+                size,
+                bytes,
+                zoom: None,
+            });
             d.read_only = true;
             d.loading = false;
             cx.notify();
@@ -1270,7 +1661,11 @@ impl Workbench {
         if doc.loading && !sync {
             return;
         }
-        if !sync && (self.wsl.is_some() || crate::remote::WslTarget::from_path(&path).is_some() || read_off_thread(&path)) {
+        if !sync
+            && (self.wsl.is_some()
+                || crate::remote::WslTarget::from_path(&path).is_some()
+                || read_off_thread(&path))
+        {
             self.docs[ix].loading = true;
             cx.notify();
             let wsl = self.wsl.clone();
@@ -1279,27 +1674,42 @@ impl Workbench {
                 let res = cx
                     .background_spawn(async move {
                         let bytes = match &wsl {
-                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&p)),
+                            Some(t) => remote_read(t, &p, core::MAX_FILE_BYTES)
+                                .map(Ok)
+                                .unwrap_or_else(|| read_head(&p)),
                             None => read_head(&p),
                         }?;
                         Ok(prepare_file(&p, bytes))
                     })
                     .await;
-                this.update_in(cx, |this, window, cx| this.install_hydrated(path, res, window, cx)).ok()
+                this.update_in(cx, |this, window, cx| {
+                    this.install_hydrated(path, res, window, cx)
+                })
+                .ok()
             })
             .detach();
             return;
         }
         let res = match &self.wsl {
-            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES).map(Ok).unwrap_or_else(|| read_head(&path)),
+            Some(t) => remote_read(t, &path, core::MAX_FILE_BYTES)
+                .map(Ok)
+                .unwrap_or_else(|| read_head(&path)),
             None => read_head(&path),
         }
         .map(|bytes| prepare_file(&path, bytes));
         self.install_hydrated(path, res, window, cx);
     }
 
-    fn install_hydrated(&mut self, path: PathBuf, prep: Result<PreparedFile, String>, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.docs.iter().position(|d| d.path == path) else { return };
+    fn install_hydrated(
+        &mut self,
+        path: PathBuf,
+        prep: Result<PreparedFile, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.docs.iter().position(|d| d.path == path) else {
+            return;
+        };
         self.docs[ix].loading = false;
         let mut prep = match prep {
             Ok(p) => p,
@@ -1344,7 +1754,17 @@ impl Workbench {
         self.apply_problems_to(ix, cx);
         if self.active == Some(ix) {
             let d = &self.docs[ix];
-            let handle = if d.image.is_some() || d.diff.as_ref().is_some_and(|x| !x.source) || (d.flux.is_some() && !d.flux_source) {
+            let handle = if let Some(st) = d
+                .diff
+                .as_ref()
+                .filter(|x| !x.source)
+                .and_then(|x| x.state.as_ref())
+            {
+                st.focus_handle(cx)
+            } else if d.image.is_some()
+                || d.diff.as_ref().is_some_and(|x| !x.source)
+                || (d.flux.is_some() && !d.flux_source)
+            {
                 self.focus.clone()
             } else {
                 editor.focus_handle(cx)
@@ -1355,7 +1775,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn ensure_doc_editor(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<EditorState>> {
+    pub(crate) fn ensure_doc_editor(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<EditorState>> {
         if ix >= self.docs.len()
             || self.docs[ix].image.is_some()
             || (self.docs[ix].diff.is_some() && self.docs[ix].editor.is_none())
@@ -1425,7 +1850,11 @@ impl Workbench {
             dirty: false,
             gen: 0,
             _sub: None,
-            image: Some(ImageDoc { size, bytes, zoom: None }),
+            image: Some(ImageDoc {
+                size,
+                bytes,
+                zoom: None,
+            }),
             flux: None,
             flux_source: false,
             flux_lazy: false,
@@ -1456,14 +1885,33 @@ impl Workbench {
         Some((aw / lw).min(ah / lh))
     }
 
-    pub(crate) fn image_zoom_step(&mut self, ix: usize, dir: i32, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn image_zoom_step(
+        &mut self,
+        ix: usize,
+        dir: i32,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let scale = window.scale_factor().max(0.5);
-        let Some(im) = self.docs.get(ix).and_then(|d| d.image.as_ref()) else { return };
-        let Some(now) = im.zoom.or_else(|| self.image_fit_scale(im, scale)) else { return };
+        let Some(im) = self.docs.get(ix).and_then(|d| d.image.as_ref()) else {
+            return;
+        };
+        let Some(now) = im.zoom.or_else(|| self.image_fit_scale(im, scale)) else {
+            return;
+        };
         let next = if dir > 0 {
-            ZOOM_STEPS.iter().copied().find(|z| *z > now * 1.001).unwrap_or(ZOOM_MAX)
+            ZOOM_STEPS
+                .iter()
+                .copied()
+                .find(|z| *z > now * 1.001)
+                .unwrap_or(ZOOM_MAX)
         } else {
-            ZOOM_STEPS.iter().rev().copied().find(|z| *z < now * 0.999).unwrap_or(ZOOM_MIN)
+            ZOOM_STEPS
+                .iter()
+                .rev()
+                .copied()
+                .find(|z| *z < now * 0.999)
+                .unwrap_or(ZOOM_MIN)
         };
         if let Some(im) = self.docs.get_mut(ix).and_then(|d| d.image.as_mut()) {
             im.zoom = Some(next);
@@ -1479,7 +1927,9 @@ impl Workbench {
     }
 
     fn render_image_tools(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(im) = self.docs[ix].image.as_ref() else { return div().into_any_element() };
+        let Some(im) = self.docs[ix].image.as_ref() else {
+            return div().into_any_element();
+        };
         let info = match im.size {
             Some((w, h)) => format!("{w} × {h} · {}", human_size(im.bytes)),
             None => human_size(im.bytes),
@@ -1493,12 +1943,25 @@ impl Workbench {
         h_flex()
             .flex_none()
             .gap_0p5()
-            .child(div().pr_2().text_xs().text_color(c(theme::FG_DIM)).child(info))
+            .child(
+                div()
+                    .pr_2()
+                    .text_xs()
+                    .text_color(c(theme::FG_DIM))
+                    .child(info),
+            )
             .when(can_zoom, |h| {
                 h.child(
                     ui::tool_button("img-zoom-out", gpui_kit::assets::IconName::ZoomOut, false)
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Zoom out (Ctrl+click, Ctrl+scroll)")).build(w, cx))
-                        .on_click(cx.listener(move |this, _, w, cx| this.image_zoom_step(ix, -1, w, cx))),
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tr(
+                                "Zoom out (Ctrl+click, Ctrl+scroll)",
+                            ))
+                            .build(w, cx)
+                        })
+                        .on_click(
+                            cx.listener(move |this, _, w, cx| this.image_zoom_step(ix, -1, w, cx)),
+                        ),
                 )
                 .child(
                     div()
@@ -1514,14 +1977,30 @@ impl Workbench {
                         .text_xs()
                         .text_color(c(theme::FG))
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(if fitted { tr("Fitted to the editor. Click for 100%") } else { tr("Click to fit the image to the editor") }).build(w, cx))
+                        .tooltip(move |w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(if fitted {
+                                tr("Fitted to the editor. Click for 100%")
+                            } else {
+                                tr("Click to fit the image to the editor")
+                            })
+                            .build(w, cx)
+                        })
                         .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| this.image_set_zoom(ix, if fitted { Some(1.) } else { None }, cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.image_set_zoom(ix, if fitted { Some(1.) } else { None }, cx)
+                        })),
                 )
                 .child(
                     ui::tool_button("img-zoom-in", gpui_kit::assets::IconName::ZoomIn, false)
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Zoom in (click the image, Ctrl+scroll)")).build(w, cx))
-                        .on_click(cx.listener(move |this, _, w, cx| this.image_zoom_step(ix, 1, w, cx))),
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tr(
+                                "Zoom in (click the image, Ctrl+scroll)",
+                            ))
+                            .build(w, cx)
+                        })
+                        .on_click(
+                            cx.listener(move |this, _, w, cx| this.image_zoom_step(ix, 1, w, cx)),
+                        ),
                 )
             })
             .into_any_element()
@@ -1529,14 +2008,20 @@ impl Workbench {
 
     fn render_image(&self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let d = &self.docs[ix];
-        let Some(im) = &d.image else { return div().into_any_element() };
+        let Some(im) = &d.image else {
+            return div().into_any_element();
+        };
         let path = d.path.clone();
         let scale = window.scale_factor().max(0.5);
         let picture = img(path).id(("image", ix)).object_fit(ObjectFit::Contain);
         let (bw, bh) = self.image_box.get();
-        let view: AnyElement = match (im.size, im.zoom.or_else(|| self.image_fit_scale(im, scale))) {
+        let view: AnyElement = match (im.size, im.zoom.or_else(|| self.image_fit_scale(im, scale)))
+        {
             (Some((w, h)), Some(k)) => {
-                let (pw, ph) = ((w as f32 / scale * k).round().max(1.), (h as f32 / scale * k).round().max(1.));
+                let (pw, ph) = (
+                    (w as f32 / scale * k).round().max(1.),
+                    (h as f32 / scale * k).round().max(1.),
+                );
                 div()
                     .id(("image-scroll", ix))
                     .size_full()
@@ -1556,7 +2041,13 @@ impl Workbench {
             }
             _ => {
                 let (aw, ah) = ((bw - 48.).max(16.), (bh - 48.).max(16.));
-                div().size_full().flex().items_center().justify_center().child(picture.w(px(aw)).h(px(ah))).into_any_element()
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(picture.w(px(aw)).h(px(ah)))
+                    .into_any_element()
             }
         };
         let probe = {
@@ -1600,7 +2091,14 @@ impl Workbench {
                     return;
                 }
                 let scale = w.scale_factor().max(0.5);
-                let Some(now) = this.docs.get(ix).and_then(|d| d.image.as_ref()).and_then(|im| im.zoom.or_else(|| this.image_fit_scale(im, scale))) else { return };
+                let Some(now) = this
+                    .docs
+                    .get(ix)
+                    .and_then(|d| d.image.as_ref())
+                    .and_then(|im| im.zoom.or_else(|| this.image_fit_scale(im, scale)))
+                else {
+                    return;
+                };
                 let k = if dy > 0. { 1.08 } else { 1. / 1.08 };
                 this.image_set_zoom(ix, Some(now * k), cx);
             }))
@@ -1637,7 +2135,9 @@ impl Workbench {
             let mut next_step: Option<(f32, std::time::Instant)> = None;
             _ = weak.update(cx, |this, cx| {
                 let cur = (-f32::from(this.tabs_scroll.offset().x)).max(0.);
-                let Some(target) = this.tab_scroll_target_for(ix, cur) else { return };
+                let Some(target) = this.tab_scroll_target_for(ix, cur) else {
+                    return;
+                };
                 if (target - cur).abs() < 0.75 {
                     return;
                 }
@@ -1793,12 +2293,7 @@ impl Workbench {
         }
     }
 
-    fn nav_apply_target(
-        &mut self,
-        target: NavTarget,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn nav_apply_target(&mut self, target: NavTarget, window: &mut Window, cx: &mut Context<Self>) {
         self.nav_replaying = true;
         match target {
             NavTarget::WizTree => {
@@ -1910,11 +2405,16 @@ impl Workbench {
             || crate::remote::WslTarget::from_path(&path).is_some()
             || text.len() as u64 > SAVE_OFF_THREAD_BYTES;
         if off_thread {
-            let wsl = self.wsl.clone().or_else(|| crate::remote::WslTarget::from_path(&path));
+            let wsl = self
+                .wsl
+                .clone()
+                .or_else(|| crate::remote::WslTarget::from_path(&path));
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let r = cx
-                    .background_spawn(async move { write_doc_to_disk(wsl.as_ref(), &p, &text, crlf, nbt_format) })
+                    .background_spawn(async move {
+                        write_doc_to_disk(wsl.as_ref(), &p, &text, crlf, nbt_format)
+                    })
                     .await;
                 _ = this.update(cx, |this, cx| {
                     this.finish_save(&path, gen, name, r, cx);
@@ -1927,7 +2427,14 @@ impl Workbench {
         self.finish_save(&path, gen, name, r, cx)
     }
 
-    fn finish_save(&mut self, path: &Path, gen: u64, name: SharedString, r: Result<(), String>, cx: &mut Context<Self>) -> bool {
+    fn finish_save(
+        &mut self,
+        path: &Path,
+        gen: u64,
+        name: SharedString,
+        r: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match r {
             Ok(()) => {
                 if let Some(d) = self.docs.iter_mut().find(|d| d.path.as_path() == path) {
@@ -1948,7 +2455,6 @@ impl Workbench {
             }
         }
     }
-
 
     pub(crate) fn save_session(&mut self, cx: &mut Context<Self>) {
         if self.session_save_pending {
@@ -1990,7 +2496,9 @@ impl Workbench {
 
     fn take_forwarded_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use futures::StreamExt;
-        let Some(mut rx) = crate::instance::listen() else { return };
+        let Some(mut rx) = crate::instance::listen() else {
+            return;
+        };
         cx.spawn_in(window, async move |this, cx| {
             while let Some(paths) = rx.next().await {
                 let alive = this.update_in(cx, |this, window, cx| {
@@ -2011,11 +2519,20 @@ impl Workbench {
 
     fn restore_session(&mut self, then: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let s = crate::settings::Session::load();
-        let has_wsl_root = s.root.as_ref().is_some_and(|r| crate::remote::WslTarget::from_path(r).is_some())
-            || s.extra.iter().any(|p| crate::remote::WslTarget::from_path(p).is_some());
+        let has_wsl_root = s
+            .root
+            .as_ref()
+            .is_some_and(|r| crate::remote::WslTarget::from_path(r).is_some())
+            || s.extra
+                .iter()
+                .any(|p| crate::remote::WslTarget::from_path(p).is_some());
         if has_wsl_root {
             // Validate WSL UNC roots off the UI thread too; a stopped distro can block `is_dir` for seconds.
-            if let Some(t) = s.root.as_ref().and_then(|r| crate::remote::WslTarget::from_path(r)) {
+            if let Some(t) = s
+                .root
+                .as_ref()
+                .and_then(|r| crate::remote::WslTarget::from_path(r))
+            {
                 crate::remote::warm(&t.distro);
             }
             let raw_root = s.root;
@@ -2026,8 +2543,10 @@ impl Workbench {
                 let (saved_root, extra, existing) = cx
                     .background_spawn(async move {
                         let saved_root = raw_root.filter(|r| r.is_dir());
-                        let extra: Vec<PathBuf> = raw_extra.into_iter().filter(|p| p.is_dir()).collect();
-                        let existing: Vec<PathBuf> = raw_files.into_iter().filter(|f| f.is_file()).collect();
+                        let extra: Vec<PathBuf> =
+                            raw_extra.into_iter().filter(|p| p.is_dir()).collect();
+                        let existing: Vec<PathBuf> =
+                            raw_files.into_iter().filter(|f| f.is_file()).collect();
                         (saved_root, extra, existing)
                     })
                     .await;
@@ -2059,7 +2578,9 @@ impl Workbench {
         // Only check existence off-thread; background tabs stay dormant until clicked.
         cx.spawn_in(window, async move |this, cx| {
             let existing: Vec<PathBuf> = cx
-                .background_spawn(async move { raw_files.into_iter().filter(|f| f.is_file()).collect() })
+                .background_spawn(
+                    async move { raw_files.into_iter().filter(|f| f.is_file()).collect() },
+                )
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.finish_restore_files(existing, active, then, window, cx);
@@ -2083,7 +2604,10 @@ impl Workbench {
             }
         }
         if then.is_empty() {
-            if let Some(a) = active.filter(|a| *a < self.docs.len()).or((!self.docs.is_empty()).then_some(0)) {
+            if let Some(a) = active
+                .filter(|a| *a < self.docs.len())
+                .or((!self.docs.is_empty()).then_some(0))
+            {
                 self.activate(a, window, cx);
             }
         }
@@ -2092,7 +2616,6 @@ impl Workbench {
         }
         cx.notify();
     }
-
 
     fn on_save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(ix) = self.active {
@@ -2134,7 +2657,12 @@ impl Workbench {
         .detach();
     }
 
-    fn on_open_folder_in_wsl(&mut self, _: &OpenFolderInWsl, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_open_folder_in_wsl(
+        &mut self,
+        _: &OpenFolderInWsl,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !crate::remote::available() {
             self.status = tr("WSL is only available on Windows.").into();
             cx.notify();
@@ -2146,7 +2674,12 @@ impl Workbench {
         self.quick_open_with("wsl:", window, cx);
     }
 
-    pub(crate) fn on_remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_remove_folder(
+        &mut self,
+        _: &RemoveFolder,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let target = self.ctx_target.borrow_mut().take();
         if let Some(p) = target {
             self.remove_folder(&p, cx);
@@ -2172,7 +2705,11 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn handle_close_request(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn handle_close_request(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         self.save_session_now();
         self.agent_save();
         if !self.force_quit && self.any_agent_working() && cfg!(windows) {
@@ -2266,7 +2803,9 @@ impl Workbench {
                 let seq = self.anim_seq;
                 self.side_closing = Some(seq);
                 cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(PANE_ANIM_MS))
+                        .await;
                     _ = this.update(cx, |this, cx| {
                         if this.side_closing == Some(seq) {
                             this.side_closing = None;
@@ -2293,7 +2832,9 @@ impl Workbench {
                 let seq = self.anim_seq;
                 self.right_closing = Some(seq);
                 cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(PANE_ANIM_MS))
+                        .await;
                     _ = this.update(cx, |this, cx| {
                         if this.right_closing == Some(seq) {
                             this.right_closing = None;
@@ -2320,7 +2861,9 @@ impl Workbench {
                 let seq = self.anim_seq;
                 self.panel_closing = Some(seq);
                 cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(Duration::from_millis(PANE_ANIM_MS)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(PANE_ANIM_MS))
+                        .await;
                     _ = this.update(cx, |this, cx| {
                         if this.panel_closing == Some(seq) {
                             this.panel_closing = None;
@@ -2356,7 +2899,12 @@ impl Workbench {
         self.show_view(SideView::Run, cx);
     }
 
-    fn on_show_extensions(&mut self, _: &ShowExtensions, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_show_extensions(
+        &mut self,
+        _: &ShowExtensions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_view(SideView::Extensions, cx);
         let h = self.ext.query.focus_handle(cx);
         h.focus(window, cx);
@@ -2366,7 +2914,12 @@ impl Workbench {
         self.toggle_mcbe(window, cx);
     }
 
-    pub(crate) fn on_show_agent(&mut self, _: &ShowAgent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_show_agent(
+        &mut self,
+        _: &ShowAgent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.settings.agent_right {
             self.right_view = SideView::Agent;
             self.settings_open = false;
@@ -2411,7 +2964,10 @@ impl Workbench {
 
     fn on_next_theme(&mut self, _: &NextTheme, window: &mut Window, cx: &mut Context<Self>) {
         let all = theme::all();
-        let ix = all.iter().position(|p| p.id == theme::palette().id).unwrap_or(0);
+        let ix = all
+            .iter()
+            .position(|p| p.id == theme::palette().id)
+            .unwrap_or(0);
         let next = all[(ix + 1) % all.len()].id;
         self.set_theme(next, window, cx);
     }
@@ -2419,26 +2975,31 @@ impl Workbench {
     fn on_next_icon_theme(&mut self, _: &NextIconTheme, _: &mut Window, cx: &mut Context<Self>) {
         let list = crate::ext::vsx_icons::list();
         if list.is_empty() {
-            self.status = tr("No file icon themes installed (browse Extensions to add one)").into();
-            cx.notify();
             return;
         }
-        let mut ids: Vec<&str> = Vec::with_capacity(list.len() + 1);
-        ids.push("");
-        ids.extend(list.iter().map(|m| m.id.as_str()));
         let cur = crate::ext::vsx_icons::active_id();
-        let ix = ids.iter().position(|&id| id == cur.as_str()).unwrap_or(0);
-        let next = ids[(ix + 1) % ids.len()].to_string();
+        let ix = list.iter().position(|m| m.id == cur).unwrap_or(0);
+        let next = list[(ix + 1) % list.len()].id.clone();
         self.set_icon_theme(&next, cx);
     }
 
     fn on_tab_accept(&mut self, _: &TabAccept, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::input::{Enter, IndentInline};
-        let editor = self.active.and_then(|ix| self.docs.get(ix)).and_then(|d| d.editor.clone());
+        let editor = self
+            .active
+            .and_then(|ix| self.docs.get(ix))
+            .and_then(|d| d.editor.clone());
         let accepted = editor.is_some_and(|editor| {
             editor.update(cx, |state, cx| {
                 state.completion_menu_state().open
-                    && state.route_overlay_action(Box::new(Enter { secondary: false, shift: false }), window, cx)
+                    && state.route_overlay_action(
+                        Box::new(Enter {
+                            secondary: false,
+                            shift: false,
+                        }),
+                        window,
+                        cx,
+                    )
             })
         });
         if !accepted {
@@ -2448,7 +3009,8 @@ impl Workbench {
 
     fn on_about(&mut self, _: &About, _: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(crate::update::BUILD.to_string()));
-        self.status = crate::trf!("FluxCode Development, {0} (copied)"; 0 => crate::update::BUILD).into();
+        self.status =
+            crate::trf!("FluxCode Development, {0} (copied)"; 0 => crate::update::BUILD).into();
         cx.notify();
     }
 
@@ -2465,22 +3027,37 @@ impl Workbench {
     }
 
     pub(crate) fn on_proc_event(&mut self, ev: ProcEvent, cx: &mut Context<Self>) {
+        let mut notify_now = false;
+        let mut defer_delay: Option<std::time::Duration> = None;
         match ev {
             ProcEvent::Output { id, text, err } => {
                 if let Some(ix) = self.terms.iter().position(|t| t.proc == Some(id)) {
                     push_text(&mut self.terms[ix].lines, &text, err);
                     self.terms[ix].scroll.scroll_to_bottom();
+                    notify_now = true;
                 } else if Some(id) == self.out_proc {
                     push_text(&mut self.out_lines, &text, err);
                     self.ext_fold();
                     self.out_scroll.scroll_to_bottom();
+                    notify_now = true;
                 } else if self.agent.owns(id) {
-                    self.agent_on_output(&text, err, cx);
+                    match self.agent_on_output(&text, err, cx) {
+                        crate::agent::opt::NotifyAction::None => {}
+                        crate::agent::opt::NotifyAction::Immediate => notify_now = true,
+                        crate::agent::opt::NotifyAction::Defer(d) => defer_delay = Some(d),
+                    }
                 } else if let Some(key) = self.agent.run_of(id) {
-                    self.agent_with_run(key, cx, |this, cx| this.agent_on_output(&text, err, cx));
+                    let mut act = crate::agent::opt::NotifyAction::None;
+                    self.agent_with_run(key, cx, |this, cx| {
+                        act = this.agent_on_output(&text, err, cx);
+                    });
+                    if matches!(act, crate::agent::opt::NotifyAction::Immediate) {
+                        notify_now = true;
+                    }
                 }
             }
             ProcEvent::Exit { id, code } => {
+                notify_now = true;
                 self.procs.forget(id);
                 if let Some(ix) = self.terms.iter().position(|t| t.proc == Some(id)) {
                     self.terms[ix].proc = None;
@@ -2495,16 +3072,24 @@ impl Workbench {
                 }
             }
         }
-        cx.notify();
-    }
-
-
-    fn render_menu(id: &'static str, label: &'static str, items: fn(PopupMenu) -> PopupMenu) -> impl IntoElement {
-        Button::new(id)
-            .label(label)
-            .ghost()
-            .xsmall()
-            .dropdown_menu(move |menu, _, _| items(menu.min_w(px(220.))))
+        if notify_now {
+            self.agent.notify_pending = false;
+            self.agent.coalescer.mark_flushed(std::time::Instant::now());
+            cx.notify();
+        } else if let Some(delay) = defer_delay {
+            if !self.agent.notify_pending {
+                self.agent.notify_pending = true;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(delay).await;
+                    _ = this.update(cx, |this, cx| {
+                        this.agent.notify_pending = false;
+                        this.agent.coalescer.mark_flushed(std::time::Instant::now());
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+        }
     }
 
     fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2514,16 +3099,21 @@ impl Workbench {
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned());
         let drag = |id: &'static str| {
-            div().id(id).flex_1().h_full().min_w(px(8.)).on_mouse_down(MouseButton::Left, |ev: &MouseDownEvent, window, _| {
-                if ev.click_count >= 2 {
-                    window.zoom_window();
-                } else {
-                    window.start_window_move();
-                }
-            })
+            div().id(id).flex_1().h_full().min_w(px(8.)).on_mouse_down(
+                MouseButton::Left,
+                |ev: &MouseDownEvent, window, _| {
+                    if ev.click_count >= 2 {
+                        window.zoom_window();
+                    } else {
+                        window.start_window_move();
+                    }
+                },
+            )
         };
         let label = match &folder {
-            Some(_) if !self.workspace.extra.is_empty() => tr("Search files in the workspace").to_string(),
+            Some(_) if !self.workspace.extra.is_empty() => {
+                tr("Search files in the workspace").to_string()
+            }
             Some(f) => crate::trf!("Search files in {f}"; f => f),
             None => "Open a folder to search its files".to_string(),
         };
@@ -2542,16 +3132,40 @@ impl Workbench {
             .bg(c(theme::BG_SIDE))
             .border_1()
             .border_color(c(theme::BORDER))
-            .hover(|s| s.bg(c(theme::BG_HOVER)).border_color(c(theme::BORDER_STRONG)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Go to File (Ctrl+P)")).build(w, cx))
+            .hover(|s| {
+                s.bg(c(theme::BG_HOVER))
+                    .border_color(c(theme::BORDER_STRONG))
+            })
+            .tooltip(|w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tr("Go to File (Ctrl+P)")).build(w, cx)
+            })
             .occlude()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, w, cx| {
-                cx.stop_propagation();
-                this.on_quick_open(&QuickOpenFile, w, cx);
-            }))
-            .child(Icon::new(IconName::Search).xsmall().text_color(c(theme::FG_MUTED)))
-            .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
-            .child(div().flex_none().text_color(c(theme::FG_DIM)).child("Ctrl+P"));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, w, cx| {
+                    cx.stop_propagation();
+                    this.on_quick_open(&QuickOpenFile, w, cx);
+                }),
+            )
+            .child(
+                Icon::new(IconName::Search)
+                    .xsmall()
+                    .text_color(c(theme::FG_MUTED)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(c(theme::FG_MUTED))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(c(theme::FG_DIM))
+                    .child("Ctrl+P"),
+            );
         let row = h_flex()
             .flex_1()
             .min_w_0()
@@ -2579,65 +3193,7 @@ impl Workbench {
                         gpui_kit::component::tooltip::Tooltip::new(crate::trf!("Development build {0}"; 0 => crate::update::BUILD)).build(w, cx)
                     }),
             )
-            .child(Self::render_menu("m-file", tr("File"), |m| {
-                m.menu(tr("Go to File..."), Box::new(QuickOpenFile))
-                    .menu(tr("Open File..."), Box::new(OpenFile))
-                    .menu(tr("Open Folder..."), Box::new(OpenFolder))
-                    .menu(tr("Add Folder to Workspace..."), Box::new(AddFolderToWorkspace))
-                    .menu(tr("Open Folder in WSL..."), Box::new(OpenFolderInWsl))
-                    .separator()
-                    .menu(tr("New File..."), Box::new(ExplorerNewFile))
-                    .menu(tr("New Folder..."), Box::new(ExplorerNewFolder))
-                    .separator()
-                    .menu(tr("Save"), Box::new(Save))
-                    .menu(tr("Save All"), Box::new(SaveAll))
-                    .separator()
-                    .menu(tr("Settings"), Box::new(ShowSettings))
-                    .separator()
-                    .menu(tr("Close Editor"), Box::new(CloseTab))
-                    .menu(tr("Exit"), Box::new(Quit))
-            }))
-            .child(Self::render_menu("m-edit", tr("Edit"), |m| {
-                m.menu(tr("Undo"), Box::new(gpui_kit::component::input::Undo))
-                    .menu(tr("Redo"), Box::new(gpui_kit::component::input::Redo))
-                    .separator()
-                    .menu(tr("Cut"), Box::new(gpui_kit::component::input::Cut))
-                    .menu(tr("Copy"), Box::new(gpui_kit::component::input::Copy))
-                    .menu(tr("Paste"), Box::new(gpui_kit::component::input::Paste))
-                    .separator()
-                    .menu(tr("Find"), Box::new(gpui_kit::component::input::Search))
-                    .menu(tr("Find in Files"), Box::new(FindInFiles))
-            }))
-            .child(Self::render_menu("m-view", tr("View"), |m| {
-                m.menu(tr("Explorer"), Box::new(ShowExplorer))
-                    .menu(tr("Search"), Box::new(FindInFiles))
-                    .menu(tr("Source Control"), Box::new(ScmShow))
-                    .menu(tr("Run"), Box::new(ShowRun))
-                    .menu(tr("AI Agent"), Box::new(ShowAgent))
-                    .menu(tr("Disk Usage (WizTree)"), Box::new(ShowWizTree))
-                    .separator()
-                    .menu(tr("Toggle Sidebar"), Box::new(ToggleSidebar))
-                    .menu(tr("Toggle Panel"), Box::new(TogglePanel))
-                    .menu(tr("Problems"), Box::new(ShowProblems))
-                    .menu(tr("Output"), Box::new(ShowOutput))
-            }))
-            .child(Self::render_menu("m-run", tr("Run"), |m| {
-                m.menu(tr("Run File"), Box::new(RunFile))
-                    .menu(tr("Stop"), Box::new(StopRun))
-                    .separator()
-                    .menu(tr("Live Preview"), Box::new(TogglePreview))
-            }))
-            .child(Self::render_menu("m-term", tr("Terminal"), |m| {
-                m.menu(tr("Toggle Terminal"), Box::new(ToggleTerminal)).menu(tr("New Terminal"), Box::new(NewTerminal))
-            }))
-            .child(Self::render_menu("m-help", tr("Help"), |m| {
-                m.menu(tr("Command Palette..."), Box::new(CommandPalette))
-                    .menu(tr("Next Color Theme"), Box::new(NextTheme))
-                    .separator()
-                    .menu(tr("What's New"), Box::new(ShowWhatsNew))
-                    .menu(tr("Check for Updates"), Box::new(CheckUpdates))
-                    .menu(tr("About FluxCode"), Box::new(About))
-            }))
+            .child(self.render_menubar(window, cx))
             .child(self.render_title_nav(cx))
             .child({
                 let cell = self.title_menu_end.clone();
@@ -2693,24 +3249,41 @@ impl Workbench {
             .justify_center()
             .cursor_pointer()
             .occlude()
-            .when(settings_active, |d| d.bg(c(theme::BG_HOVER)).text_color(c(theme::ACCENT_TEXT)))
+            .when(settings_active, |d| {
+                d.bg(c(theme::BG_HOVER)).text_color(c(theme::ACCENT_TEXT))
+            })
             .when(!settings_active, |d| {
                 d.text_color(c(theme::FG_MUTED))
                     .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
             })
             .active(|s| s.bg(c(theme::BG_ELEVATED)))
             .when(settings_active, |d| {
-                d.child(div().absolute().bottom_0().left(px(6.)).right(px(6.)).h(px(2.)).rounded_t_full().bg(c(theme::ACCENT)))
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left(px(6.))
+                        .right(px(6.))
+                        .h(px(2.))
+                        .rounded_t_full()
+                        .bg(c(theme::ACCENT)),
+                )
             })
             .child(Icon::new(IconName::Settings).size(theme::u(14.)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Settings (Ctrl+,)")).build(w, cx))
+            .tooltip(|w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tr("Settings (Ctrl+,)")).build(w, cx)
+            })
             .on_click(cx.listener(|this, _, w, cx| this.on_show_settings(&ShowSettings, w, cx)));
 
         let ink_tools = self.render_title_ink_tools(cx);
         let show_center = window.viewport_size().width > px(900.);
         if !cfg!(windows) {
             return TitleBar::new()
-                .child(row.when(show_center, |r| r.child(center).child(div().flex_1())).child(ink_tools).child(settings_btn))
+                .child(
+                    row.when(show_center, |r| r.child(center).child(div().flex_1()))
+                        .child(ink_tools)
+                        .child(settings_btn),
+                )
                 .into_any_element();
         }
         let win_w = f32::from(window.viewport_size().width);
@@ -2737,7 +3310,9 @@ impl Workbench {
             .h_full()
             .flex()
             .items_center()
-            .when(show_center && w >= 180., |d| d.child(center.w_full().max_w(relative(1.))));
+            .when(show_center && w >= 180., |d| {
+                d.child(center.w_full().max_w(relative(1.)))
+            });
         let maximized = window.is_maximized();
         // Centered 24x24 minimize bar (gpui-kit-assets window-minimize.svg sits above y=12).
         const MINIMIZE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="11.2" width="16" height="1.6" rx="0.8" fill="#000000"/></svg>"##;
@@ -2752,7 +3327,8 @@ impl Workbench {
                 .text_color(c(theme::FG_MUTED))
                 .hover(move |s| {
                     if close {
-                        s.bg(gpui_kit::Hsla::from(rgb(0xe81123))).text_color(gpui_kit::white())
+                        s.bg(gpui_kit::Hsla::from(rgb(0xe81123)))
+                            .text_color(gpui_kit::white())
                     } else {
                         s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG))
                     }
@@ -2772,18 +3348,41 @@ impl Workbench {
             .child(row)
             .child(ink_tools)
             .child(settings_btn)
-            .child(div().w(px(1.)).h(theme::u(14.)).my_auto().bg(c(theme::BORDER)))
-            .child(ctl("tb-min", Icon::default().data(MINIMIZE_SVG).size(theme::u(14.)), false).on_click(|_, w, _| w.minimize_window()))
+            .child(
+                div()
+                    .w(px(1.))
+                    .h(theme::u(14.))
+                    .my_auto()
+                    .bg(c(theme::BORDER)),
+            )
+            .child(
+                ctl(
+                    "tb-min",
+                    Icon::default().data(MINIMIZE_SVG).size(theme::u(14.)),
+                    false,
+                )
+                .on_click(|_, w, _| w.minimize_window()),
+            )
             .child(
                 ctl(
                     "tb-max",
-                    Icon::new(if maximized { IconName::WindowRestore } else { IconName::WindowMaximize }).size(theme::u(14.)),
+                    Icon::new(if maximized {
+                        IconName::WindowRestore
+                    } else {
+                        IconName::WindowMaximize
+                    })
+                    .size(theme::u(14.)),
                     false,
                 )
                 .on_click(|_, w, _| w.zoom_window()),
             )
             .child(
-                ctl("tb-close", Icon::new(IconName::WindowClose).size(theme::u(14.)), true).on_click(cx.listener(|this, _, w, cx| {
+                ctl(
+                    "tb-close",
+                    Icon::new(IconName::WindowClose).size(theme::u(14.)),
+                    true,
+                )
+                .on_click(cx.listener(|this, _, w, cx| {
                     this.handle_close_request(w, cx);
                 })),
             )
@@ -2866,15 +3465,16 @@ impl Workbench {
         } else if self.wiztree.page {
             Some(if self.has_mcbe_workspace() { 7 } else { 6 })
         } else if self.sidebar_open && !self.on_right(self.view) {
-            Some(Self::side_view_slot(self.view))
+            Some(self.side_view_slot(self.view))
         } else if self.right_dock_on() {
-            Some(Self::side_view_slot(self.right_view))
+            Some(self.side_view_slot(self.right_view))
         } else {
             None
         }
     }
 
-    fn side_view_slot(view: SideView) -> usize {
+    fn side_view_slot(&self, view: SideView) -> usize {
+        let ext_base = if self.has_mcbe_workspace() { 8 } else { 7 };
         match view {
             SideView::Explorer => 0,
             SideView::Search => 1,
@@ -2883,7 +3483,18 @@ impl Workbench {
             SideView::Extensions => 4,
             SideView::Agent => 5,
             SideView::Mcbe => 6,
+            SideView::Ext(ix) => ext_base + ix as usize,
         }
+    }
+
+    fn ab_slot_top(&self, slot: usize, slot_h: f32, pill_h: f32) -> f32 {
+        let ext_base = if self.has_mcbe_workspace() { 8 } else { 7 };
+        let extra = if !self.ext_containers.is_empty() && slot >= ext_base {
+            9.0
+        } else {
+            0.0
+        };
+        slot as f32 * slot_h + extra + (slot_h - pill_h) * 0.5
     }
 
     fn ab_hover_enter(&mut self, slot: usize, cx: &mut Context<Self>) {
@@ -2892,16 +3503,26 @@ impl Workbench {
         let pill_h = (slot_h - 6.).max(20.);
         let pill_w = (bar_w - 8.).max(20.);
         let rect = crate::ui::liquid::Rect1D {
-            pos: slot as f32 * slot_h + (slot_h - pill_h) * 0.5,
+            pos: self.ab_slot_top(slot, slot_h, pill_h),
             len: pill_h,
         };
-        if self.ab_liq.borrow_mut().hover_enter(slot, Some(rect), pill_w, 165, std::time::Instant::now()) {
+        if self.ab_liq.borrow_mut().hover_enter(
+            slot,
+            Some(rect),
+            pill_w,
+            165,
+            std::time::Instant::now(),
+        ) {
             cx.notify();
         }
     }
 
     fn ab_hover_clear(&mut self, cx: &mut Context<Self>) {
-        if self.ab_liq.borrow_mut().hover_clear(std::time::Instant::now()) {
+        if self
+            .ab_liq
+            .borrow_mut()
+            .hover_clear(std::time::Instant::now())
+        {
             cx.notify();
         }
     }
@@ -2911,7 +3532,6 @@ impl Workbench {
         let slot_h = f32::from(theme::u(36.));
         let pill_h = (slot_h - 6.).max(20.);
         let pill_w = (bar_w - 8.).max(20.);
-        let pill_top = |slot: usize| slot as f32 * slot_h + (slot_h - pill_h) * 0.5;
         let motion = !cx.reduce_motion();
         let primary_slot = self.primary_ab_slot();
         let now = std::time::Instant::now();
@@ -2920,7 +3540,10 @@ impl Workbench {
             None
         } else {
             let mut ab = self.ab_liq.borrow_mut();
-            let act_rect = primary_slot.map(|s| crate::ui::liquid::Rect1D { pos: pill_top(s), len: pill_h });
+            let act_rect = primary_slot.map(|s| crate::ui::liquid::Rect1D {
+                pos: self.ab_slot_top(s, slot_h, pill_h),
+                len: pill_h,
+            });
             ab.sync_active(primary_slot, act_rect, pill_w, 225, now);
             ab.sample_frame(pill_w, now).map(|fr| {
                 let st = crate::ui::liquid::LiquidStyle {
@@ -2941,7 +3564,12 @@ impl Workbench {
             })
         };
 
-        let slot_box = |id: &'static str, slot: usize, icon: Icon, active: bool, tip: &'static str, cx: &mut Context<Self>| {
+        let slot_box_el = |id: ElementId,
+                           slot: usize,
+                           icon: AnyElement,
+                           active: bool,
+                           tip: SharedString,
+                           cx: &mut Context<Self>| {
             let static_active = active && !motion;
             let secondary_active = active && motion && primary_slot != Some(slot);
             div()
@@ -2953,7 +3581,11 @@ impl Workbench {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .text_color(c(if active { theme::FG_STRONG } else { theme::FG_DIM }))
+                .text_color(c(if active {
+                    theme::FG_STRONG
+                } else {
+                    theme::FG_DIM
+                }))
                 .when(!active, |d| d.hover(|s| s.text_color(c(theme::FG))))
                 .when(static_active, |d| {
                     d.child(
@@ -2983,16 +3615,39 @@ impl Workbench {
                             .border_color(c(theme::ACCENT).opacity(0.24)),
                     )
                 })
-                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tr(tip)).build(w, cx))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
                 .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
                     if *entered {
                         this.ab_hover_enter(slot, cx);
                     }
                 }))
-                .child(icon.size(theme::u(17.)))
+                .child(icon)
         };
 
-        let view_item = |id: &'static str, slot: usize, icon: Icon, view: SideView, this: &Self, cx: &mut Context<Self>| {
+        let slot_box = |id: &'static str,
+                        slot: usize,
+                        icon: Icon,
+                        active: bool,
+                        tip: &'static str,
+                        cx: &mut Context<Self>| {
+            slot_box_el(
+                ElementId::Name(id.into()),
+                slot,
+                icon.size(theme::u(17.)).into_any_element(),
+                active,
+                tr(tip).into(),
+                cx,
+            )
+        };
+
+        let view_item = |id: &'static str,
+                         slot: usize,
+                         icon: Icon,
+                         view: SideView,
+                         this: &Self,
+                         cx: &mut Context<Self>| {
             let active = this.view_shown(view);
             let weak = cx.entity().downgrade();
             div()
@@ -3018,6 +3673,9 @@ impl Workbench {
         let mcbe_active = self.mcbe.page && !self.settings_open;
         let wiztree_active = self.wiztree.page && !self.settings_open;
         let mcbe_on = self.has_mcbe_workspace();
+        let ext_base = if mcbe_on { 8 } else { 7 };
+        let ext_containers = crate::ext::vsc_registry::activitybar_containers();
+        let has_ext = !ext_containers.is_empty();
         let slots = v_flex()
             .id("ab-slots")
             .relative()
@@ -3028,14 +3686,35 @@ impl Workbench {
                 }
             }))
             .children(liquid_layer)
-            .child(view_item("ab-explorer", 0, Icon::new(IconName::FolderOpen), SideView::Explorer, self, cx))
-            .child(view_item("ab-search", 1, Icon::new(IconName::Search), SideView::Search, self, cx))
+            .child(view_item(
+                "ab-explorer",
+                0,
+                Icon::new(IconName::FolderOpen),
+                SideView::Explorer,
+                self,
+                cx,
+            ))
+            .child(view_item(
+                "ab-search",
+                1,
+                Icon::new(IconName::Search),
+                SideView::Search,
+                self,
+                cx,
+            ))
             .child({
                 let n = self.scm.status.count();
                 let incoming = self.scm_has_incoming();
                 div()
                     .relative()
-                    .child(view_item("ab-scm", 2, Icon::new(gpui_kit::assets::IconName::GitBranch), SideView::Scm, self, cx))
+                    .child(view_item(
+                        "ab-scm",
+                        2,
+                        Icon::new(gpui_kit::assets::IconName::GitBranch),
+                        SideView::Scm,
+                        self,
+                        cx,
+                    ))
                     .when(incoming, |d| {
                         d.child(
                             div()
@@ -3066,19 +3745,51 @@ impl Workbench {
                                 .text_color(c(theme::ON_ACCENT))
                                 .text_size(theme::u(9.5))
                                 .font_weight(FontWeight::BOLD)
-                                .child(if n > 99 { "99+".to_string() } else { n.to_string() }),
+                                .child(if n > 99 {
+                                    "99+".to_string()
+                                } else {
+                                    n.to_string()
+                                }),
                         )
                     })
             })
-            .child(view_item("ab-run", 3, Icon::new(IconName::Play), SideView::Run, self, cx))
-            .child(view_item("ab-ext", 4, Icon::new(gpui_kit::assets::IconName::Blocks), SideView::Extensions, self, cx))
-            .child(view_item("ab-agent", 5, Icon::new(gpui_kit::assets::IconName::MessageSquareCode), SideView::Agent, self, cx))
+            .child(view_item(
+                "ab-run",
+                3,
+                Icon::new(IconName::Play),
+                SideView::Run,
+                self,
+                cx,
+            ))
+            .child(view_item(
+                "ab-ext",
+                4,
+                Icon::new(gpui_kit::assets::IconName::Blocks),
+                SideView::Extensions,
+                self,
+                cx,
+            ))
+            .child(view_item(
+                "ab-agent",
+                5,
+                Icon::new(gpui_kit::assets::IconName::MessageSquareCode),
+                SideView::Agent,
+                self,
+                cx,
+            ))
             .when(mcbe_on, |d| {
                 d.child(
                     div()
                         .id("ab-mcbe-page")
                         .relative()
-                        .child(slot_box("ab-mcbe", 6, Icon::new(crate::fluxicon::MCBE), mcbe_active, "Minecraft Bedrock", cx))
+                        .child(slot_box(
+                            "ab-mcbe",
+                            6,
+                            Icon::new(crate::ext::mcbe_view::MCBE_ICON),
+                            mcbe_active,
+                            "Minecraft Bedrock",
+                            cx,
+                        ))
                         .on_click(cx.listener(|this, _, w, cx| this.toggle_mcbe(w, cx))),
                 )
             })
@@ -3086,9 +3797,55 @@ impl Workbench {
                 div()
                     .id("ab-wiztree-page")
                     .relative()
-                    .child(slot_box("ab-wiztree", if mcbe_on { 7 } else { 6 }, Icon::new(gpui_kit::assets::IconName::HardDrive), wiztree_active, "Disk Usage (WizTree)", cx))
+                    .child(slot_box(
+                        "ab-wiztree",
+                        if mcbe_on { 7 } else { 6 },
+                        Icon::new(gpui_kit::assets::IconName::HardDrive),
+                        wiztree_active,
+                        "Disk Usage (WizTree)",
+                        cx,
+                    ))
                     .on_click(cx.listener(|this, _, w, cx| this.toggle_wiztree(w, cx))),
-            );
+            )
+            .when(has_ext, |d| {
+                d.child(
+                    div()
+                        .w_full()
+                        .h(px(9.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(div().w(theme::u(20.)).h(px(1.)).bg(c(theme::BORDER))),
+                )
+            })
+            .children(ext_containers.into_iter().enumerate().map(|(ix, cdesc)| {
+                let view = SideView::Ext(ix as u16);
+                let slot = ext_base + ix;
+                let active = self.view_shown(view);
+                let cid = cdesc.id.clone();
+                let icon_el = crate::ext::vsc_view::render_ext_icon(&cdesc.icon, theme::u(17.));
+                let weak = cx.entity().downgrade();
+                div()
+                    .id(("ab-vsc-ext", ix))
+                    .child(slot_box_el(
+                        ElementId::from(("ab-vsc-slot", ix)),
+                        slot,
+                        icon_el,
+                        active,
+                        cdesc.title.into(),
+                        cx,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_view(view, cx);
+                        if this.view_shown(view) {
+                            this.activate_ext_container(&cid, cx);
+                        }
+                    }))
+                    .context_menu(move |menu, _, cx| match weak.upgrade() {
+                        Some(wb) => wb.update(cx, |this, cx| this.view_side_menu(view, menu, cx)),
+                        None => menu,
+                    })
+            }));
 
         v_flex()
             .w(theme::u(40.))
@@ -3106,20 +3863,29 @@ impl Workbench {
         self.render_view_panel(self.view, false, window, cx)
     }
 
-    pub(crate) fn render_view_panel(&self, view: SideView, right: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let title = match view {
-            SideView::Explorer => tr("EXPLORER"),
-            SideView::Search => tr("SEARCH"),
-            SideView::Run => tr("RUN"),
-            SideView::Extensions => tr("EXTENSIONS"),
-            SideView::Scm => tr("SOURCE CONTROL"),
-            SideView::Agent => crate::agent::agent_name(),
-            SideView::Mcbe => tr("MINECRAFT BEDROCK"),
-        };
+    pub(crate) fn render_view_panel(
+        &self,
+        view: SideView,
+        right: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let title: SharedString = match (view, self.root.as_deref().and_then(Path::file_name)) {
-            (SideView::Explorer, Some(_)) if !self.workspace.extra.is_empty() => tr("WORKSPACE").into(),
+            (SideView::Explorer, Some(_)) if !self.workspace.extra.is_empty() => {
+                tr("WORKSPACE").into()
+            }
             (SideView::Explorer, Some(name)) => name.to_string_lossy().to_uppercase().into(),
-            _ => title.into(),
+            (SideView::Ext(_), _) => self.view_display_label(view).to_uppercase().into(),
+            _ => match view {
+                SideView::Explorer => tr("EXPLORER").into(),
+                SideView::Search => tr("SEARCH").into(),
+                SideView::Run => tr("RUN").into(),
+                SideView::Extensions => tr("EXTENSIONS").into(),
+                SideView::Scm => tr("SOURCE CONTROL").into(),
+                SideView::Agent => crate::agent::agent_name().into(),
+                SideView::Mcbe => tr("MINECRAFT BEDROCK").into(),
+                SideView::Ext(_) => tr("EXTENSION").into(),
+            },
         };
         let title_el: AnyElement = {
             let label = div()
@@ -3135,7 +3901,8 @@ impl Workbench {
                 label
                     .with_animation(
                         SharedString::from(format!("ws-title-{ws_anim}")),
-                        Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(Duration::from_millis(200))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |d, t| d.opacity(0.25 + 0.75 * t).ml(px((1. - t) * 6.)),
                     )
                     .into_any_element()
@@ -3168,14 +3935,37 @@ impl Workbench {
                 h.child(div().flex_none().child(self.render_scm_header(cx)))
             })
             .when(view == SideView::Mcbe, |h| {
+                h.child(div().flex_none().child(tool_button(
+                    "mcbe-refresh",
+                    IconName::RefreshCw,
+                    tr("Refresh"),
+                    cx,
+                    |this, _, cx| this.mcbe_refresh(cx),
+                )))
+            })
+            .when_some(self.ext_container_id(view).map(str::to_string), |h, cid| {
+                let dock_icon = if right {
+                    IconName::PanelLeft
+                } else {
+                    IconName::PanelRight
+                };
+                let dock_tip = tr(if right {
+                    "Move to Left Side Bar"
+                } else {
+                    "Move to Right Side Bar"
+                });
                 h.child(
-                    div().flex_none().child(tool_button(
-                        "mcbe-refresh",
-                        IconName::RefreshCw,
-                        tr("Refresh"),
-                        cx,
-                        |this, _, cx| this.mcbe_refresh(cx),
-                    )),
+                    h_flex()
+                        .flex_none()
+                        .gap_0p5()
+                        .child(self.render_vsc_header_actions(&cid, cx))
+                        .child(tool_button(
+                            if right { "vsc-move-l" } else { "vsc-move-r" },
+                            dock_icon,
+                            dock_tip,
+                            cx,
+                            move |this, _, cx| this.move_view(view, !right, cx),
+                        )),
                 )
             })
             .when(view == SideView::Agent, |h| {
@@ -3230,27 +4020,37 @@ impl Workbench {
             SideView::Scm => self.render_scm(cx),
             SideView::Agent => self.render_agent(window, cx),
             SideView::Mcbe => self.render_mcbe_view(cx),
+            SideView::Ext(ix) => self.render_vsc_sidebar_view(ix, window, cx),
         };
         let (_, view_dir, view_seq) = self.side_view_anim.get();
-        let animated_body: AnyElement = if !right && view_seq > 0 && !cx.reduce_motion() {
-            div()
-                .flex_1()
-                .min_h_0()
-                .size_full()
-                .overflow_hidden()
-                .child(body)
-                .with_animation(
-                    SharedString::from(format!("side-tab-{view_seq}")),
-                    Animation::new(Duration::from_millis(180)),
-                    move |d, t| {
-                        let s = crate::ui::liquid::critically_damped(t, 9.5);
-                        d.opacity(0.28 + 0.72 * s).mt(px(view_dir as f32 * 9.0 * (1.0 - s)))
-                    },
-                )
-                .into_any_element()
-        } else {
-            div().flex_1().min_h_0().size_full().child(body).into_any_element()
-        };
+        let skip_side_anim = matches!(view, SideView::Ext(_))
+            && crate::ext::native_webview::NativeWebviewManager::is_available();
+        let animated_body: AnyElement =
+            if !right && !skip_side_anim && view_seq > 0 && !cx.reduce_motion() {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(body)
+                    .with_animation(
+                        SharedString::from(format!("side-tab-{view_seq}")),
+                        Animation::new(Duration::from_millis(180)),
+                        move |d, t| {
+                            let s = crate::ui::liquid::critically_damped(t, 9.5);
+                            d.opacity(0.28 + 0.72 * s)
+                                .mt(px(view_dir as f32 * 9.0 * (1.0 - s)))
+                        },
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .size_full()
+                    .child(body)
+                    .into_any_element()
+            };
         v_flex()
             .size_full()
             .bg(c(theme::BG_SIDE))
@@ -3270,23 +4070,61 @@ impl Workbench {
         let projects = self.render_ext_run(if file_leads { None } else { lead }, cx);
         let has_projects = projects.is_some();
         let file_running = self.out_proc.is_some() && self.ext.running.is_none();
-        let mut v = v_flex().id("run-view").size_full().overflow_y_scroll().px_3().pt_1().pb_4().gap(theme::u(20.)).when_some(projects, |v, p| v.child(p));
+        let mut v = v_flex()
+            .id("run-view")
+            .size_full()
+            .overflow_y_scroll()
+            .px_3()
+            .pt_1()
+            .pb_4()
+            .gap(theme::u(20.))
+            .when_some(projects, |v, p| v.child(p));
         if let Some(d) = runnable {
             let label: SharedString = crate::trf!("Run {f}"; f => d.name).into();
             let tip: SharedString = crate::trf!("Run {f} (F5)"; f => d.name).into();
-            let run = |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.on_run_file(&RunFile, w, cx);
+            let run = |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| {
+                this.on_run_file(&RunFile, w, cx)
+            };
             let body = if !file_leads {
-                crate::ext::view::run_row("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, tip)
-                    .on_click(cx.listener(move |this, _, w, cx| run(this, w, cx)))
-                    .when(file_running, |r| r.child(self.run_stop("run-file-stop", 20., cx)))
-                    .when(!file_running, |r| r.child(div().flex_none().text_xs().text_color(c(theme::FG_DIM)).child("F5")))
-                    .into_any_element()
+                crate::ext::view::run_row(
+                    "run-file".into(),
+                    gpui_kit::assets::IconName::Play,
+                    label,
+                    file_running,
+                    tip,
+                )
+                .on_click(cx.listener(move |this, _, w, cx| run(this, w, cx)))
+                .when(file_running, |r| {
+                    r.child(self.run_stop("run-file-stop", 20., cx))
+                })
+                .when(!file_running, |r| {
+                    r.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(c(theme::FG_DIM))
+                            .child("F5"),
+                    )
+                })
+                .into_any_element()
             } else {
                 h_flex()
                     .w_full()
                     .gap_1p5()
-                    .child(crate::ext::view::run_main_button("run-file".into(), gpui_kit::assets::IconName::Play, label, file_running, true, tip).on_click(cx.listener(move |this, _, w, cx| run(this, w, cx))))
-                    .when(file_running, |h| h.child(self.run_stop("run-file-stop", 30., cx)))
+                    .child(
+                        crate::ext::view::run_main_button(
+                            "run-file".into(),
+                            gpui_kit::assets::IconName::Play,
+                            label,
+                            file_running,
+                            true,
+                            tip,
+                        )
+                        .on_click(cx.listener(move |this, _, w, cx| run(this, w, cx))),
+                    )
+                    .when(file_running, |h| {
+                        h.child(self.run_stop("run-file-stop", 30., cx))
+                    })
                     .into_any_element()
             };
             v = v.child(
@@ -3294,7 +4132,15 @@ impl Workbench {
                     .w_full()
                     .gap_1()
                     .when(has_projects, |b| {
-                        b.child(div().h(px(1.)).bg(c(theme::BORDER))).child(div().px_2().pt_3().text_xs().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_MUTED)).child(tr("This file")))
+                        b.child(div().h(px(1.)).bg(c(theme::BORDER))).child(
+                            div()
+                                .px_2()
+                                .pt_3()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(c(theme::FG_MUTED))
+                                .child(tr("This file")),
+                        )
                     })
                     .child(body),
             );
@@ -3331,9 +4177,23 @@ impl Workbench {
                 (None, Some(_)) => (tr("Nothing to run yet").into(), tr("No project here has an installed extension. Open a script and press F5, or find an extension for your project.").into()),
             };
             let button = if self.root.is_none() {
-                self.action_button("run-open-folder", tr("Open folder"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)).into_any_element()
+                self.action_button(
+                    "run-open-folder",
+                    tr("Open folder"),
+                    ui::Kind::Plain,
+                    cx,
+                    |this, w, cx| this.on_open_folder(&OpenFolder, w, cx),
+                )
+                .into_any_element()
             } else {
-                self.action_button("run-browse-ext", tr("Browse extensions"), ui::Kind::Plain, cx, |this, _, cx| this.show_view(SideView::Extensions, cx)).into_any_element()
+                self.action_button(
+                    "run-browse-ext",
+                    tr("Browse extensions"),
+                    ui::Kind::Plain,
+                    cx,
+                    |this, _, cx| this.show_view(SideView::Extensions, cx),
+                )
+                .into_any_element()
             };
             v = v.child(
                 v_flex()
@@ -3341,21 +4201,37 @@ impl Workbench {
                     .px_2()
                     .pt_2()
                     .gap_1()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(c(theme::FG_STRONG)).child(title))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(c(theme::FG_STRONG))
+                            .child(title),
+                    )
                     .child(div().text_xs().text_color(c(theme::FG_MUTED)).child(text))
                     .child(h_flex().pt_2().child(button)),
             );
         }
         if file_running && runnable.is_none() {
-            let what = self.out_run.as_ref().map(|r| r.command.clone()).unwrap_or_default();
+            let what = self
+                .out_run
+                .as_ref()
+                .map(|r| r.command.clone())
+                .unwrap_or_default();
             v = v.child(
-                crate::ext::view::run_row("run-file-bg".into(), gpui_kit::assets::IconName::Play, crate::trf!("Running {what}"; what => what).into(), true, tr("Show the output").into())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.panel_open = true;
-                        this.panel_tab = PanelTab::Output;
-                        cx.notify();
-                    }))
-                    .child(self.run_stop("run-file-bg-stop", 20., cx)),
+                crate::ext::view::run_row(
+                    "run-file-bg".into(),
+                    gpui_kit::assets::IconName::Play,
+                    crate::trf!("Running {what}"; what => what).into(),
+                    true,
+                    tr("Show the output").into(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.panel_open = true;
+                    this.panel_tab = PanelTab::Output;
+                    cx.notify();
+                }))
+                .child(self.run_stop("run-file-bg-stop", 20., cx)),
             );
         }
         v.into_any_element()
@@ -3363,14 +4239,27 @@ impl Workbench {
 
     fn tab_hover_enter(&mut self, ix: usize, left_px: f32, width_px: f32, cx: &mut Context<Self>) {
         let bar_h = f32::from(theme::u(29.));
-        let rect = crate::ui::liquid::Rect1D { pos: left_px + 2., len: (width_px - 4.).max(4.) };
-        if self.tab_liq.borrow_mut().hover_enter(ix, Some(rect), bar_h, 155, std::time::Instant::now()) {
+        let rect = crate::ui::liquid::Rect1D {
+            pos: left_px + 2.,
+            len: (width_px - 4.).max(4.),
+        };
+        if self.tab_liq.borrow_mut().hover_enter(
+            ix,
+            Some(rect),
+            bar_h,
+            155,
+            std::time::Instant::now(),
+        ) {
             cx.notify();
         }
     }
 
     fn tab_hover_clear(&mut self, cx: &mut Context<Self>) {
-        if self.tab_liq.borrow_mut().hover_clear(std::time::Instant::now()) {
+        if self
+            .tab_liq
+            .borrow_mut()
+            .hover_clear(std::time::Instant::now())
+        {
             cx.notify();
         }
     }
@@ -3391,7 +4280,8 @@ impl Workbench {
         let max_scroll_x = (total_w - viewport_w).max(0.);
         let scroll_x = (-f32::from(self.tabs_scroll.offset().x)).clamp(0., max_scroll_x);
         self.tabs_scroll_x.set(scroll_x);
-        let (range, left_w, right_w) = visible_tab_window_from_offsets(&tab_lefts, scroll_x, viewport_w);
+        let (range, left_w, right_w) =
+            visible_tab_window_from_offsets(&tab_lefts, scroll_x, viewport_w);
         let motion = !cx.reduce_motion();
         let opened_tab = self.opened_tab.clone();
         let bar_h = f32::from(theme::u(29.));
@@ -3405,7 +4295,10 @@ impl Workbench {
             let mut liq = self.tab_liq.borrow_mut();
             let rect_for = |i: usize| -> Option<crate::ui::liquid::Rect1D> {
                 let w = *widths.get(i)?;
-                Some(crate::ui::liquid::Rect1D { pos: tab_lefts[i] - scroll_x + 2., len: (w - 4.).max(4.) })
+                Some(crate::ui::liquid::Rect1D {
+                    pos: tab_lefts[i] - scroll_x + 2.,
+                    len: (w - 4.).max(4.),
+                })
             };
             let act_rect = self.active.and_then(rect_for);
             if scrolled {
@@ -3490,19 +4383,32 @@ impl Workbench {
                     .border_color(c(theme::BORDER))
                     .relative()
                     .cursor_pointer()
-                    .when(active && !motion, |s| {
-                        s.bg(c(theme::BG_EDITOR))
+                    .when(active && !motion, |s| s.bg(c(theme::BG_EDITOR)))
+                    .when(!active && !motion, |s| {
+                        s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG)))
                     })
-                    .when(!active && !motion, |s| s.hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG))))
-                    .when(!active && motion, |s| s.hover(|s| s.text_color(c(theme::FG))))
+                    .when(!active && motion, |s| {
+                        s.hover(|s| s.text_color(c(theme::FG)))
+                    })
                     .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
                         if *entered {
                             this.tab_hover_enter(ix, left_in_view, w, cx);
                         }
                     }))
-                    .text_color(if active { c(theme::FG_STRONG) } else { c(theme::FG_MUTED) })
+                    .text_color(if active {
+                        c(theme::FG_STRONG)
+                    } else {
+                        c(theme::FG_MUTED)
+                    })
                     .child(files::file_icon_el(&d.name, theme::u(15.)))
-                    .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(d.name.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .whitespace_nowrap()
+                            .child(d.name.clone()),
+                    )
                     .when(errs > 0 || warns > 0, |s| {
                         let (badge_icon, col, count) = if errs > 0 {
                             (IconName::CircleX, theme::DANGER, errs)
@@ -3516,7 +4422,11 @@ impl Workbench {
                                 .text_xs()
                                 .text_color(c(col))
                                 .child(Icon::new(badge_icon).size(theme::u(11.)))
-                                .child(if count > 99 { "99+".to_string() } else { count.to_string() }),
+                                .child(if count > 99 {
+                                    "99+".to_string()
+                                } else {
+                                    count.to_string()
+                                }),
                         )
                     })
                     .child(
@@ -3528,7 +4438,11 @@ impl Workbench {
                             .items_center()
                             .justify_center()
                             .rounded(px(4.))
-                            .text_color(if d.dirty { c(theme::ACCENT_TEXT) } else { c(theme::FG_MUTED) })
+                            .text_color(if d.dirty {
+                                c(theme::ACCENT_TEXT)
+                            } else {
+                                c(theme::FG_MUTED)
+                            })
                             .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
                             .child(if d.dirty { "●" } else { "×" })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -3545,7 +4459,10 @@ impl Workbench {
                         let path = d.path.clone();
                         let rel = self.rel_display(&d.path.to_string_lossy());
                         move |menu, _, _| {
-                            let item = |label: &'static str, f: Box<dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>)>| {
+                            let item = |label: &'static str,
+                                        f: Box<
+                                dyn Fn(&mut Workbench, &mut Window, &mut Context<Workbench>),
+                            >| {
                                 let weak = weak.clone();
                                 PopupMenuItem::new(tr(label)).on_click(move |_, w, cx| {
                                     _ = weak.update(cx, |this, cx| f(this, w, cx));
@@ -3553,17 +4470,58 @@ impl Workbench {
                             };
                             let (full, rel) = (path.to_string_lossy().into_owned(), rel.clone());
                             let reveal = path.clone();
-                            menu.item(item("Close", Box::new(move |this, w, cx| this.close(ix, w, cx))))
-                                .item(item("Close Others", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i != ix && !d.dirty))))
-                                .item(item("Close to the Right", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |i, d| i > ix && !d.dirty))))
-                                .item(item("Close Saved", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
-                                .item(item("Close All", Box::new(move |this, w, cx| this.close_tabs_where(w, cx, |_, d| !d.dirty))))
-                                .separator()
-                                .item(item("Copy Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(full.clone())))))
-                                .item(item("Copy Relative Path", Box::new(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(rel.replace('\\', "/"))))))
-                                .separator()
-                                .item(item("Reveal in File Explorer", Box::new(move |_, _, cx| cx.reveal_path(&reveal))))
-                                .item(item("Go to File...", Box::new(|_, w, cx| w.dispatch_action(Box::new(QuickOpenFile), cx))))
+                            menu.item(item(
+                                "Close",
+                                Box::new(move |this, w, cx| this.close(ix, w, cx)),
+                            ))
+                            .item(item(
+                                "Close Others",
+                                Box::new(move |this, w, cx| {
+                                    this.close_tabs_where(w, cx, |i, d| i != ix && !d.dirty)
+                                }),
+                            ))
+                            .item(item(
+                                "Close to the Right",
+                                Box::new(move |this, w, cx| {
+                                    this.close_tabs_where(w, cx, |i, d| i > ix && !d.dirty)
+                                }),
+                            ))
+                            .item(item(
+                                "Close Saved",
+                                Box::new(move |this, w, cx| {
+                                    this.close_tabs_where(w, cx, |_, d| !d.dirty)
+                                }),
+                            ))
+                            .item(item(
+                                "Close All",
+                                Box::new(move |this, w, cx| {
+                                    this.close_tabs_where(w, cx, |_, d| !d.dirty)
+                                }),
+                            ))
+                            .separator()
+                            .item(item(
+                                "Copy Path",
+                                Box::new(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(full.clone()))
+                                }),
+                            ))
+                            .item(item(
+                                "Copy Relative Path",
+                                Box::new(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        rel.replace('\\', "/"),
+                                    ))
+                                }),
+                            ))
+                            .separator()
+                            .item(item(
+                                "Reveal in File Explorer",
+                                Box::new(move |_, _, cx| cx.reveal_path(&reveal)),
+                            ))
+                            .item(item(
+                                "Go to File...",
+                                Box::new(|_, w, cx| w.dispatch_action(Box::new(QuickOpenFile), cx)),
+                            ))
                         }
                     });
                 if motion {
@@ -3572,7 +4530,8 @@ impl Workbench {
                             return tab
                                 .with_animation(
                                     SharedString::from(format!("tab-open-{seq}")),
-                                    Animation::new(Duration::from_millis(150)).with_easing(gpui_kit::ease_out_quint()),
+                                    Animation::new(Duration::from_millis(150))
+                                        .with_easing(gpui_kit::ease_out_quint()),
                                     |el, t| el.opacity(0.2 + 0.8 * t),
                                 )
                                 .into_any_element();
@@ -3608,7 +4567,11 @@ impl Workbench {
                     .track_scroll(&self.tabs_scroll)
                     .on_scroll(cx.listener(move |this, ev: &ScrollEvent, _, cx| {
                         let d = ev.delta.pixel_delta(px(36.));
-                        let delta = if d.x.abs() > px(0.5) { f32::from(d.x) } else { f32::from(d.y) };
+                        let delta = if d.x.abs() > px(0.5) {
+                            f32::from(d.x)
+                        } else {
+                            f32::from(d.y)
+                        };
                         if delta.abs() < 0.5 {
                             return;
                         }
@@ -3624,15 +4587,33 @@ impl Workbench {
                             cx.notify();
                         }
                     }))
-                    .when(left_w > 0.5, |h| h.child(div().flex_none().w(px(left_w)).h_full()))
+                    .when(left_w > 0.5, |h| {
+                        h.child(div().flex_none().w(px(left_w)).h_full())
+                    })
                     .children(visible_tabs)
-                    .when(right_w > 0.5, |h| h.child(div().flex_none().w(px(right_w)).h_full())),
+                    .when(right_w > 0.5, |h| {
+                        h.child(div().flex_none().w(px(right_w)).h_full())
+                    }),
             )
     }
 
-    pub(crate) fn close_tabs_where(&mut self, window: &mut Window, cx: &mut Context<Self>, close: impl Fn(usize, &Doc) -> bool) {
-        let active = self.active.and_then(|a| self.docs.get(a)).map(|d| d.path.clone());
-        let doomed: Vec<usize> = self.docs.iter().enumerate().filter(|(i, d)| close(*i, d)).map(|(i, _)| i).collect();
+    pub(crate) fn close_tabs_where(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        close: impl Fn(usize, &Doc) -> bool,
+    ) {
+        let active = self
+            .active
+            .and_then(|a| self.docs.get(a))
+            .map(|d| d.path.clone());
+        let doomed: Vec<usize> = self
+            .docs
+            .iter()
+            .enumerate()
+            .filter(|(i, d)| close(*i, d))
+            .map(|(i, _)| i)
+            .collect();
         for &i in doomed.iter().rev() {
             let closed = self.docs.remove(i);
             if !closed.read_only {
@@ -3645,7 +4626,9 @@ impl Workbench {
         if n > 24 {
             self.closed_tabs.drain(..n - 24);
         }
-        self.active = active.and_then(|p| self.docs.iter().position(|d| d.path == p)).or((!self.docs.is_empty()).then(|| self.docs.len() - 1));
+        self.active = active
+            .and_then(|p| self.docs.iter().position(|d| d.path == p))
+            .or((!self.docs.is_empty()).then(|| self.docs.len() - 1));
         match self.active {
             Some(a) => self.activate(a, window, cx),
             None => {
@@ -3686,7 +4669,13 @@ impl Workbench {
             .flex_none()
             .pr_2()
             .gap_2()
-            .child(div().flex_1().min_w_0().overflow_hidden().child(self.render_breadcrumbs(ix)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.render_breadcrumbs(ix)),
+            )
             .child(tools)
     }
 
@@ -3716,7 +4705,9 @@ impl Workbench {
                     .text_color(c(theme::DANGER))
                     .hover(|s| s.bg(c(theme::DANGER).opacity(0.24)))
                     .active(|s| s.opacity(0.85))
-                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                    })
                     .on_click(cx.listener(|this, _, w, cx| this.on_stop_run(&StopRun, w, cx)))
                     .child(Icon::new(IconName::Square).size(theme::u(11.)))
                     .child(tr("Stop"))
@@ -3739,7 +4730,9 @@ impl Workbench {
                 .text_color(c(theme::GREEN))
                 .hover(|s| s.bg(c(theme::BG_HOVER)))
                 .active(|s| s.bg(c(theme::BG_ELEVATED)))
-                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
+                })
                 .on_click(cx.listener(|this, _, w, cx| this.on_run_file(&RunFile, w, cx)))
                 .child(Icon::new(IconName::Play).size(theme::u(12.)))
                 .child(tr("Run"))
@@ -3751,7 +4744,12 @@ impl Workbench {
         let on = self.docs[ix].wraps(self.settings.word_wrap);
         ui::tool_button("hdr-wrap", gpui_kit::assets::IconName::TextWrap, on)
             .tooltip(move |w, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(if on { tr("Word wrap is on for this file (Alt+Z)") } else { tr("Wrap long lines in this file (Alt+Z)") }).build(w, cx)
+                gpui_kit::component::tooltip::Tooltip::new(if on {
+                    tr("Word wrap is on for this file (Alt+Z)")
+                } else {
+                    tr("Wrap long lines in this file (Alt+Z)")
+                })
+                .build(w, cx)
             })
             .on_click(cx.listener(|this, _, w, cx| this.toggle_wrap(w, cx)))
             .into_any_element()
@@ -3783,8 +4781,16 @@ impl Workbench {
             .text_xs()
             .text_color(c(theme::FG_MUTED))
             .children(parts.into_iter().enumerate().flat_map(move |(i, p)| {
-                let sep = (i > 0).then(|| div().text_color(c(theme::FG_DIM)).child("›").into_any_element());
-                let name = div().when(i == last, |d| d.text_color(c(theme::FG))).child(p).into_any_element();
+                let sep = (i > 0).then(|| {
+                    div()
+                        .text_color(c(theme::FG_DIM))
+                        .child("›")
+                        .into_any_element()
+                });
+                let name = div()
+                    .when(i == last, |d| d.text_color(c(theme::FG)))
+                    .child(p)
+                    .into_any_element();
                 sep.into_iter().chain(std::iter::once(name))
             }))
     }
@@ -3813,14 +4819,24 @@ impl Workbench {
             self.wash.set((self.active.is_some(), gen));
         }
         let wash_layer = |fade_in: bool| {
-            let layer = div().absolute().top_0().left_0().size_full().bg(theme::editor_wash());
+            let layer = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .bg(theme::editor_wash());
             if gen == 0 || !motion {
                 return layer.when(!fade_in, |d| d.opacity(0.)).into_any_element();
             }
             layer
                 .with_animation(
                     SharedString::from(format!("wash-{gen}")),
-                    Animation::new(std::time::Duration::from_millis(if fade_in { 260 } else { 320 })).with_easing(gpui_kit::ease_in_out),
+                    Animation::new(std::time::Duration::from_millis(if fade_in {
+                        260
+                    } else {
+                        320
+                    }))
+                    .with_easing(gpui_kit::ease_in_out),
                     move |d, t| d.opacity(if fade_in { t } else { 1. - t }),
                 )
                 .into_any_element()
@@ -3971,9 +4987,21 @@ impl Workbench {
                 .justify_center()
                 .overflow_hidden()
                 .when(!backdrop, |d| d.bg(theme::editor_wash()))
-                .when(backdrop, |d| d.child(div().absolute().top_0().left_0().size_full().bg(theme::welcome_tint())).child(wash_layer(false)))
+                .when(backdrop, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(theme::welcome_tint()),
+                    )
+                    .child(wash_layer(false))
+                })
                 .child(self.welcome_probe(cx))
-                .when(self.welcome_w.get() >= 84., |d| d.child(ui::meander(48., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))))
+                .when(self.welcome_w.get() >= 84., |d| {
+                    d.child(ui::meander(48., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)))
+                })
                 .into_any_element(),
             None => v_flex()
                 .id("welcome")
@@ -3981,7 +5009,17 @@ impl Workbench {
                 .size_full()
                 .overflow_y_scroll()
                 .when(!backdrop, |d| d.bg(theme::editor_wash()))
-                .when(backdrop, |d| d.child(div().absolute().top_0().left_0().size_full().bg(theme::welcome_tint())).child(wash_layer(false)))
+                .when(backdrop, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(theme::welcome_tint()),
+                    )
+                    .child(wash_layer(false))
+                })
                 .child(self.welcome_probe(cx))
                 .child(
                     v_flex()
@@ -3999,17 +5037,49 @@ impl Workbench {
                                 .max_w(theme::u(420.))
                                 .items_center()
                                 .gap_1()
-                                .child(ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT)).mb_4())
-                                .child(div().max_w_full().truncate().text_size(theme::u(32.)).font_weight(FontWeight::SEMIBOLD).text_color(c(theme::FG_STRONG)).child(tr("FluxCode")))
-                                .child(div().w_full().text_center().text_sm().text_color(c(theme::FG_MUTED)).child(tr("A native code editor that runs as one process."))),
+                                .child(
+                                    ui::meander(72., c(theme::FG_STRONG), c(theme::ACCENT_TEXT))
+                                        .mb_4(),
+                                )
+                                .child(
+                                    div()
+                                        .max_w_full()
+                                        .truncate()
+                                        .text_size(theme::u(32.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(c(theme::FG_STRONG))
+                                        .child(tr("FluxCode")),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .text_center()
+                                        .text_sm()
+                                        .text_color(c(theme::FG_MUTED))
+                                        .child(tr(
+                                            "A native code editor that runs as one process.",
+                                        )),
+                                ),
                         )
                         .child(
                             h_flex()
                                 .flex_wrap()
                                 .justify_center()
                                 .gap_2()
-                                .child(self.action_button("w-open-folder", tr("Open folder"), ui::Kind::Primary, cx, |this, w, cx| this.on_open_folder(&OpenFolder, w, cx)))
-                                .child(self.action_button("w-open-file", tr("Open file"), ui::Kind::Plain, cx, |this, w, cx| this.on_open_file(&OpenFile, w, cx))),
+                                .child(self.action_button(
+                                    "w-open-folder",
+                                    tr("Open folder"),
+                                    ui::Kind::Primary,
+                                    cx,
+                                    |this, w, cx| this.on_open_folder(&OpenFolder, w, cx),
+                                ))
+                                .child(self.action_button(
+                                    "w-open-file",
+                                    tr("Open file"),
+                                    ui::Kind::Plain,
+                                    cx,
+                                    |this, w, cx| this.on_open_file(&OpenFile, w, cx),
+                                )),
                         )
                         .child(
                             v_flex()
@@ -4018,10 +5088,10 @@ impl Workbench {
                                 .gap_2()
                                 .pt_2()
                                 .child(shortcut(tr("Find in files"), "Ctrl+Shift+F"))
-                        .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
-                        .child(shortcut(tr("Run file"), "F5"))
-                        .child(shortcut(tr("AI agent"), "Ctrl+L"))
-                        .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
+                                .child(shortcut(tr("Toggle terminal"), "Ctrl+`"))
+                                .child(shortcut(tr("Run file"), "F5"))
+                                .child(shortcut(tr("AI agent"), "Ctrl+L"))
+                                .child(shortcut(tr("Next color theme"), "Ctrl+K Ctrl+T"))
                                 .child(shortcut(tr("Extensions"), "Ctrl+Shift+X"))
                                 .child(shortcut(tr("Settings"), "Ctrl+,")),
                         ),
@@ -4057,17 +5127,31 @@ impl Workbench {
         let (pos, lang) = match self.active {
             Some(ix) if self.docs[ix].image.is_some() => {
                 let im = self.docs[ix].image.as_ref().unwrap();
-                (im.size.map(|(w, h)| format!("{w} × {h}")).unwrap_or_default(), "Image")
+                (
+                    im.size
+                        .map(|(w, h)| format!("{w} × {h}"))
+                        .unwrap_or_default(),
+                    "Image",
+                )
             }
             Some(ix) => {
                 let d = &self.docs[ix];
                 let p = d.cursor_position(cx);
-                (crate::trf!("Ln {0}, Col {1}"; 0 => p.line + 1, 1 => p.character + 1), d.label)
+                (
+                    crate::trf!("Ln {0}, Col {1}"; 0 => p.line + 1, 1 => p.character + 1),
+                    d.label,
+                )
             }
             None => (String::new(), ""),
         };
-        let is_image = self.active.is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
-        let crlf = self.active.filter(|_| !is_image).map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" }).unwrap_or("");
+        let is_image = self
+            .active
+            .is_some_and(|a| self.docs[a].image.is_some() || self.docs[a].read_only);
+        let crlf = self
+            .active
+            .filter(|_| !is_image)
+            .map(|a| if self.docs[a].crlf { "CRLF" } else { "LF" })
+            .unwrap_or("");
         let running = self.out_proc.is_some() || self.terms.iter().any(|t| t.proc.is_some());
         let code_errs: usize = self.docs.iter().map(|d| d.error_count).sum();
         let code_warns: usize = self.docs.iter().map(|d| d.warn_count).sum();
@@ -4134,7 +5218,11 @@ impl Workbench {
             )
             .when_some(
                 self.scm.repo.as_ref().map(|_| {
-                    self.scm.status.branch.clone().unwrap_or_else(|| tr("Detached HEAD").to_string())
+                    self.scm
+                        .status
+                        .branch
+                        .clone()
+                        .unwrap_or_else(|| tr("Detached HEAD").to_string())
                 }),
                 |h, b| {
                     let st = &self.scm.status;
@@ -4160,9 +5248,9 @@ impl Workbench {
                                     .size(theme::u(13.)),
                             )
                             .child(div().min_w_0().truncate().child(format!("{b}{dirty}")))
-                            .on_click(
-                                cx.listener(|this, _, w, cx| this.on_scm_checkout(&ScmCheckout, w, cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.on_scm_checkout(&ScmCheckout, w, cx)
+                            })),
                     )
                     .when(st.branch.is_some() && st.head.is_some(), |h| {
                         h.child(
@@ -4191,7 +5279,9 @@ impl Workbench {
                                     sync
                                 })
                                 .when(!self.scm.is_busy(), |h| {
-                                    h.on_click(cx.listener(|this, _, w, cx| this.on_scm_sync(&ScmSync, w, cx)))
+                                    h.on_click(cx.listener(|this, _, w, cx| {
+                                        this.on_scm_sync(&ScmSync, w, cx)
+                                    }))
                                 }),
                         )
                     })
@@ -4217,7 +5307,9 @@ impl Workbench {
                                 .bg(c(theme::GREEN)),
                         )
                         .child(tr("Running"))
-                        .on_click(cx.listener(|this, _, w, cx| this.on_toggle_terminal(&ToggleTerminal, w, cx))),
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.on_toggle_terminal(&ToggleTerminal, w, cx)
+                        })),
                 )
             })
             .when(total_errs > 0 || code_warns > 0, |h| {
@@ -4231,7 +5323,12 @@ impl Workbench {
                         .gap_1p5()
                         .cursor_pointer()
                         .hover(|s| s.bg(c(theme::BG_HOVER)))
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Show Problems (Ctrl+Shift+M)")).build(w, cx))
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tr(
+                                "Show Problems (Ctrl+Shift+M)",
+                            ))
+                            .build(w, cx)
+                        })
                         .when(total_errs > 0, |r| {
                             r.child(
                                 h_flex()
@@ -4258,7 +5355,9 @@ impl Workbench {
                                     .child(code_warns.to_string()),
                             )
                         })
-                        .on_click(cx.listener(|this, _, w, cx| this.on_show_problems(&ShowProblems, w, cx))),
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.on_show_problems(&ShowProblems, w, cx)
+                        })),
                 )
             })
             .child(
@@ -4270,6 +5369,46 @@ impl Workbench {
                     .text_color(c(theme::FG))
                     .child(self.status.clone()),
             )
+            .when(wide && !self.ext_host.status_bar.is_empty(), |h| {
+                h.children(
+                    self.ext_host
+                        .status_bar
+                        .iter()
+                        .take(4)
+                        .enumerate()
+                        .map(|(i, item)| {
+                            let tip = item.tooltip.clone();
+                            let cmd = item.command.clone();
+                            let clickable = cmd.is_some();
+                            let mut seg_el = div()
+                                .id(("sb-vsc", i))
+                                .flex_none()
+                                .max_w(theme::u(140.))
+                                .truncate()
+                                .h_full()
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .child(item.text.clone());
+                            if clickable {
+                                seg_el =
+                                    seg_el.cursor_pointer().hover(|s| s.bg(c(theme::BG_HOVER)));
+                            }
+                            if !tip.is_empty() {
+                                seg_el = seg_el.tooltip(move |w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                        .build(w, cx)
+                                });
+                            }
+                            if let Some(cmd_id) = cmd {
+                                seg_el = seg_el.on_click(cx.listener(move |this, _, w, cx| {
+                                    this.execute_ext_command(&cmd_id, Vec::new(), w, cx);
+                                }));
+                            }
+                            seg_el
+                        }),
+                )
+            })
             .child(self.render_agent_hint(!medium, cx))
             .when(!pos.is_empty(), |h| {
                 h.when(wide, |h| h.child(self.render_copilot_hint(cx)))
@@ -4319,7 +5458,12 @@ pub(crate) fn tool_button(
     cx: &mut Context<Workbench>,
     f: impl Fn(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static,
 ) -> impl IntoElement {
-    Button::new(id).icon(icon).ghost().xsmall().tooltip(tip).on_click(cx.listener(move |this, _, w, cx| f(this, w, cx)))
+    Button::new(id)
+        .icon(icon)
+        .ghost()
+        .xsmall()
+        .tooltip(tip)
+        .on_click(cx.listener(move |this, _, w, cx| f(this, w, cx)))
 }
 
 fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
@@ -4327,7 +5471,14 @@ fn shortcut(label: &'static str, keys: &'static str) -> impl IntoElement {
         .w_full()
         .gap_2()
         .text_sm()
-        .child(div().flex_1().min_w_0().truncate().text_color(c(theme::FG_MUTED)).child(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(c(theme::FG_MUTED))
+                .child(label),
+        )
         .children(keys.split(['+', ' ']).map(|k| {
             div()
                 .flex_none()
@@ -4351,7 +5502,13 @@ fn human_size(b: u64) -> String {
 }
 
 fn clip(e: AnyElement) -> AnyElement {
-    div().size_full().min_w_0().min_h_0().overflow_hidden().child(e).into_any_element()
+    div()
+        .size_full()
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden()
+        .child(e)
+        .into_any_element()
 }
 
 const MAX_LINES: usize = 10_000;
@@ -4427,7 +5584,9 @@ impl Render for Workbench {
             if !self.status.is_empty() {
                 let shown = self.status.clone();
                 cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(std::time::Duration::from_secs(6)).await;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(6))
+                        .await;
                     _ = this.update(cx, |this, cx| {
                         if this.status == shown {
                             this.status = SharedString::default();
@@ -4440,7 +5599,9 @@ impl Render for Workbench {
         }
         if std::mem::take(&mut self.agent.placeholder_dirty) {
             let name = crate::agent::agent_name();
-            self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
+            self.agent.input.update(cx, |s, cx| {
+                s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx)
+            });
         }
         if !self.agent.follow_q.is_empty() {
             self.apply_agent_follow(window, cx);
@@ -4453,7 +5614,9 @@ impl Render for Workbench {
         }
         if self.scm.clear_message {
             self.scm.clear_message = false;
-            self.scm.message.update(cx, |s, cx| s.set_value("", window, cx));
+            self.scm
+                .message
+                .update(cx, |s, cx| s.set_value("", window, cx));
         }
         window.set_rem_size(theme::rem());
         apply_glass(window);
@@ -4476,7 +5639,11 @@ impl Render for Workbench {
         }
         let (prev_view, _, mut view_seq) = self.side_view_anim.get();
         if prev_view != self.view {
-            let view_dir = if Self::side_view_slot(self.view) >= Self::side_view_slot(prev_view) { 1 } else { -1 };
+            let view_dir = if self.side_view_slot(self.view) >= self.side_view_slot(prev_view) {
+                1
+            } else {
+                -1
+            };
             view_seq = view_seq.wrapping_add(1);
             self.side_view_anim.set((self.view, view_dir, view_seq));
         }
@@ -4484,10 +5651,46 @@ impl Render for Workbench {
         let full = self.agent_docked_visible() && self.agent_full && !self.settings_open;
         let side_visible = self.sidebar_open || self.side_closing.is_some();
         let right_on = self.right_dock_on() && !full && !self.settings_open;
-        let right_close = (!right_on && !full && !self.settings_open && motion).then_some(self.right_closing).flatten();
+        let right_close = (!right_on && !full && !self.settings_open && motion)
+            .then_some(self.right_closing)
+            .flatten();
         let right_visible = right_on || right_close.is_some();
+        self.wv_frame_seq = self.wv_frame_seq.wrapping_add(1);
+        let wv_frame_seq = self.wv_frame_seq;
+        let preview_blocked = {
+            #[cfg(feature = "embedded-preview")]
+            {
+                self.preview_ask
+            }
+            #[cfg(not(feature = "embedded-preview"))]
+            {
+                false
+            }
+        };
+        let ext_wv_blocked = self.settings_open
+            || self.quick.open
+            || self.theme_menu
+            || self.menubar.open_index().is_some()
+            || self.agent.show_options
+            || self.agent.lightbox.is_some()
+            || self.workspace.ask.is_some()
+            || self.workspace.ask_closing.is_some()
+            || self.whats_new.is_some()
+            || full
+            || self.side_closing.is_some()
+            || self.right_closing.is_some()
+            || preview_blocked;
+        self.native_webviews.begin_frame(
+            wv_frame_seq,
+            ext_wv_blocked,
+            theme::palette().side,
+            crate::wintitle::capture_main_hwnd(),
+        );
         let panel_visible = self.panel_open || (motion && self.panel_closing.is_some());
-        let editor_full_page = self.wiztree.page || self.mcbe.page || self.ext.page.is_some() || self.whats_new.is_some();
+        let editor_full_page = self.wiztree.page
+            || self.mcbe.page
+            || self.ext.page.is_some()
+            || self.whats_new.is_some();
         let vis = compute_visible_regions(
             self.settings_open,
             full,
@@ -4516,12 +5719,22 @@ impl Render for Workbench {
             let editor_view: AnyElement = if vis.preview {
                 h_resizable("editor-preview-split")
                     .child(resizable_panel().child(clip(self.render_editor_area(window, cx))))
-                    .child(resizable_panel().size(px(520.)).size_range(px(240.)..px(1400.)).child(self.render_preview(cx)))
+                    .child(
+                        resizable_panel()
+                            .size(px(520.))
+                            .size_range(px(240.)..px(1400.))
+                            .child(self.render_preview(cx)),
+                    )
                     .into_any_element()
             } else {
                 self.render_editor_area(window, cx)
             };
-            let editor_view = div().relative().size_full().child(editor_view).child(self.render_drop_hint()).into_any_element();
+            let editor_view = div()
+                .relative()
+                .size_full()
+                .child(editor_view)
+                .child(self.render_drop_hint())
+                .into_any_element();
             Some(if !vis.panel {
                 editor_view
             } else if self.panel_open {
@@ -4531,7 +5744,8 @@ impl Render for Workbench {
                         .child(self.render_panel(window, cx))
                         .with_animation(
                             SharedString::from(format!("panel-in-{panel_gen}")),
-                            Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                            Animation::new(Duration::from_millis(PANE_ANIM_MS))
+                                .with_easing(gpui_kit::ease_out_quint()),
                             |d, t| d.opacity(0.3 + 0.7 * t).mt(px((1. - t) * 10.)),
                         )
                         .into_any_element()
@@ -4540,7 +5754,12 @@ impl Render for Workbench {
                 };
                 v_resizable("editor-panel-split")
                     .child(resizable_panel().child(clip(editor_view)))
-                    .child(resizable_panel().size(px(240.)).size_range(px(80.)..px(900.)).child(clip(panel_body)))
+                    .child(
+                        resizable_panel()
+                            .size(px(240.))
+                            .size_range(px(80.)..px(900.))
+                            .child(clip(panel_body)),
+                    )
                     .into_any_element()
             } else if let Some(seq) = self.panel_closing.filter(|_| motion) {
                 let closing_panel = div()
@@ -4550,7 +5769,8 @@ impl Render for Workbench {
                     .child(self.render_panel(window, cx))
                     .with_animation(
                         SharedString::from(format!("panel-out-{seq}")),
-                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(Duration::from_millis(PANE_ANIM_MS))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |d, t| d.h(px((220. * (1. - t)).max(0.))).opacity(1. - t),
                     );
                 v_flex()
@@ -4572,10 +5792,13 @@ impl Render for Workbench {
                 .bg(c(theme::BG_SIDE))
                 .hover(|s| s.bg(c(theme::ACCENT)))
                 .when(this.resizing == which, |d| d.bg(c(theme::ACCENT)))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                    this.resizing = which;
-                    cx.notify();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.resizing = which;
+                        cx.notify();
+                    }),
+                )
         };
         let (was_open, mut side_gen) = self.side_anim.get();
         if was_open != self.sidebar_open {
@@ -4584,27 +5807,35 @@ impl Render for Workbench {
             }
             self.side_anim.set((self.sidebar_open, side_gen));
         }
-        let side_column = |this: &Self, window: &mut Window, cx: &mut Context<Self>| -> AnyElement {
-            let col = div().w(px(side_w)).flex_none().h_full().overflow_hidden().child(this.render_side_bar(window, cx));
-            if let Some(seq) = this.side_closing.filter(|_| !this.sidebar_open && motion) {
-                return col
-                    .with_animation(
-                        SharedString::from(format!("side-out-{seq}")),
-                        Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
-                        move |d, t| d.w(px((side_w * (1. - t)).max(0.))).opacity(1. - t),
-                    )
-                    .into_any_element();
-            }
-            if side_gen == 0 || !motion {
-                return col.into_any_element();
-            }
-            col.with_animation(
-                SharedString::from(format!("side-in-{side_gen}")),
-                Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
-                move |d, t| d.w(px((side_w * t).max(1.))).opacity(0.3 + 0.7 * t),
-            )
-            .into_any_element()
-        };
+        let side_column =
+            |this: &Self, window: &mut Window, cx: &mut Context<Self>| -> AnyElement {
+                let col = div()
+                    .w(px(side_w))
+                    .flex_none()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(this.render_side_bar(window, cx));
+                if let Some(seq) = this.side_closing.filter(|_| !this.sidebar_open && motion) {
+                    return col
+                        .with_animation(
+                            SharedString::from(format!("side-out-{seq}")),
+                            Animation::new(Duration::from_millis(PANE_ANIM_MS))
+                                .with_easing(gpui_kit::ease_out_quint()),
+                            move |d, t| d.w(px((side_w * (1. - t)).max(0.))).opacity(1. - t),
+                        )
+                        .into_any_element();
+                }
+                if side_gen == 0 || !motion {
+                    return col.into_any_element();
+                }
+                col.with_animation(
+                    SharedString::from(format!("side-in-{side_gen}")),
+                    Animation::new(Duration::from_millis(200))
+                        .with_easing(gpui_kit::ease_out_quint()),
+                    move |d, t| d.w(px((side_w * t).max(1.))).opacity(0.3 + 0.7 * t),
+                )
+                .into_any_element()
+            };
         let (was_full, mut full_gen) = self.full_anim.get();
         if was_full != vis.agent_full {
             full_gen += 1;
@@ -4624,7 +5855,8 @@ impl Render for Workbench {
                 return el
                     .with_animation(
                         SharedString::from(format!("{key}-{full_gen}")),
-                        Animation::new(Duration::from_millis(200)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(Duration::from_millis(200))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |d, t| d.opacity(0.35 + 0.65 * t),
                     )
                     .into_any_element();
@@ -4633,7 +5865,8 @@ impl Render for Workbench {
                 return el
                     .with_animation(
                         SharedString::from(format!("settings-ret-{settings_gen}")),
-                        Animation::new(Duration::from_millis(160)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(Duration::from_millis(160))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |d, t| d.opacity(0.35 + 0.65 * t),
                     )
                     .into_any_element();
@@ -4641,12 +5874,18 @@ impl Render for Workbench {
             el.into_any_element()
         };
         let center: AnyElement = if vis.settings {
-            let box_el = div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_settings(window, cx));
+            let box_el = div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_hidden()
+                .child(self.render_settings(window, cx));
             if settings_gen > 0 && motion {
                 box_el
                     .with_animation(
                         SharedString::from(format!("settings-open-{settings_gen}")),
-                        Animation::new(Duration::from_millis(170)).with_easing(gpui_kit::ease_out_quint()),
+                        Animation::new(Duration::from_millis(170))
+                            .with_easing(gpui_kit::ease_out_quint()),
                         |d, t| d.opacity(0.2 + 0.8 * t).mt(px((1. - t) * 8.)),
                     )
                     .into_any_element()
@@ -4654,14 +5893,24 @@ impl Render for Workbench {
                 box_el.into_any_element()
             }
         } else if vis.agent_full {
-            let agent = fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(self.render_agent_full(window, cx)), "full-in");
+            let agent = fade(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(self.render_agent_full(window, cx)),
+                "full-in",
+            );
             if vis.sidebar {
                 h_flex()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .child(side_column(self, window, cx))
-                    .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
+                    .when(self.sidebar_open, |h| {
+                        h.child(handle("sidebar-resize", 1, self, cx))
+                    })
                     .child(agent)
                     .into_any_element()
             } else {
@@ -4675,11 +5924,29 @@ impl Render for Workbench {
                     .min_w_0()
                     .h_full()
                     .child(side_column(self, window, cx))
-                    .when(self.sidebar_open, |h| h.child(handle("sidebar-resize", 1, self, cx)))
-                    .child(fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(ep), "editor-in"))
+                    .when(self.sidebar_open, |h| {
+                        h.child(handle("sidebar-resize", 1, self, cx))
+                    })
+                    .child(fade(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(ep),
+                        "editor-in",
+                    ))
                     .into_any_element()
             } else {
-                fade(div().flex_1().min_w_0().h_full().overflow_hidden().child(ep), "editor-in")
+                fade(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .overflow_hidden()
+                        .child(ep),
+                    "editor-in",
+                )
             }
         };
         let (was_right, mut right_gen) = self.right_anim.get();
@@ -4692,18 +5959,25 @@ impl Render for Workbench {
         let center: AnyElement = if !vis.right_dock {
             center
         } else {
-            let dock = div().w(px(agent_w)).flex_none().h_full().overflow_hidden().child(self.render_right_dock(window, cx));
+            let dock = div()
+                .w(px(agent_w))
+                .flex_none()
+                .h_full()
+                .overflow_hidden()
+                .child(self.render_right_dock(window, cx));
             let dock: AnyElement = if let Some(seq) = right_close {
                 dock.with_animation(
                     SharedString::from(format!("right-out-{seq}")),
-                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                    Animation::new(Duration::from_millis(PANE_ANIM_MS))
+                        .with_easing(gpui_kit::ease_out_quint()),
                     move |d, t| d.w(px((agent_w * (1. - t)).max(0.))).opacity(1. - t),
                 )
                 .into_any_element()
             } else if right_gen > 0 && motion {
                 dock.with_animation(
                     SharedString::from(format!("right-in-{right_gen}")),
-                    Animation::new(Duration::from_millis(PANE_ANIM_MS)).with_easing(gpui_kit::ease_out_quint()),
+                    Animation::new(Duration::from_millis(PANE_ANIM_MS))
+                        .with_easing(gpui_kit::ease_out_quint()),
                     move |d, t| d.w(px((agent_w * t).max(1.))).opacity(0.35 + 0.65 * t),
                 )
                 .into_any_element()
@@ -4714,7 +5988,14 @@ impl Render for Workbench {
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(center))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .overflow_hidden()
+                        .child(center),
+                )
                 .when(right_on, |h| h.child(handle("agent-resize", 2, self, cx)))
                 .child(dock)
                 .into_any_element()
@@ -4724,10 +6005,20 @@ impl Render for Workbench {
             .flex_1()
             .min_h_0()
             .size_full()
-            .child(h_flex().size_full().child(self.render_activity_bar(cx)).child(center))
+            .child(
+                h_flex()
+                    .size_full()
+                    .child(self.render_activity_bar(cx))
+                    .child(center),
+            )
             .children(self.render_global_ink_overlay(cx));
         let backdrop = self.settings.background().map(|p| {
-            img(p.to_path_buf()).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover)
+            img(p.to_path_buf())
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .object_fit(ObjectFit::Cover)
         });
         v_flex()
             .id("workbench")
@@ -4760,17 +6051,28 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_term_escape))
             .on_action(cx.listener(Self::on_term_clear))
             .on_action(cx.listener(Self::on_go_to_problem))
+            .on_action(cx.listener(Self::on_prev_problem))
             .on_action(cx.listener(Self::on_scm_show))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
                 let total = f32::from(window.viewport_size().width);
                 let x = f32::from(ev.position.x);
                 match this.resizing {
-                    1 => this.sidebar_width = (x - f32::from(theme::u(40.))).clamp(160., (total * 0.45).max(200.)),
+                    1 => {
+                        this.sidebar_width =
+                            (x - f32::from(theme::u(40.))).clamp(160., (total * 0.45).max(200.))
+                    }
                     2 => this.agent_width = (total - x).clamp(260., (total * 0.6).max(300.)),
                     3 | 4 => {
-                        let Some((x0, w0)) = this.agent.full.drag else { return };
-                        let w = if this.resizing == 3 { w0 + (x - x0) } else { w0 - (x - x0) };
-                        let w = w.clamp(crate::agent::full_bounds().0, crate::agent::full_bounds().1);
+                        let Some((x0, w0)) = this.agent.full.drag else {
+                            return;
+                        };
+                        let w = if this.resizing == 3 {
+                            w0 + (x - x0)
+                        } else {
+                            w0 - (x - x0)
+                        };
+                        let w =
+                            w.clamp(crate::agent::full_bounds().0, crate::agent::full_bounds().1);
                         if this.resizing == 3 {
                             this.settings.full_left_w = w;
                         } else {
@@ -4778,7 +6080,11 @@ impl Render for Workbench {
                         }
                     }
                     5 => this.scm_drag_pane(f32::from(ev.position.y)),
-                    6 => this.diff_drag_ruler(f32::from(ev.position.y), cx),
+                    6 => {
+                        if !this.diff_drag_ruler(f32::from(ev.position.y), cx) {
+                            return;
+                        }
+                    }
                     _ => return,
                 }
                 cx.notify();
@@ -4823,9 +6129,15 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_agent_insert_code))
             .on_action(cx.listener(Self::on_agent_show_options))
             .on_action(cx.listener(Self::on_toggle_agent))
-            .on_action(cx.listener(|this, _: &AgentAccessRead, _, cx| this.agent_set_access("read", cx)))
-            .on_action(cx.listener(|this, _: &AgentAccessWrite, _, cx| this.agent_set_access("write", cx)))
-            .on_action(cx.listener(|this, _: &AgentAccessFull, _, cx| this.agent_set_access("full", cx)))
+            .on_action(
+                cx.listener(|this, _: &AgentAccessRead, _, cx| this.agent_set_access("read", cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &AgentAccessWrite, _, cx| this.agent_set_access("write", cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &AgentAccessFull, _, cx| this.agent_set_access("full", cx)),
+            )
             .on_action(cx.listener(Self::on_scm_commit_push))
             .on_action(cx.listener(Self::on_scm_commit_sync))
             .on_action(cx.listener(Self::on_scm_commit_amend))
@@ -4840,8 +6152,16 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_scm_remove_git))
             .on_action(cx.listener(|this, _: &CheckUpdates, _, cx| this.check_updates_now(cx)))
             .on_action(cx.listener(Self::on_save))
+            .on_action(cx.listener(Self::on_save_as))
             .on_action(cx.listener(Self::on_save_all))
+            .on_action(cx.listener(Self::on_new_text_file))
+            .on_action(cx.listener(Self::on_new_window))
+            .on_action(cx.listener(Self::on_toggle_auto_save))
+            .on_action(cx.listener(Self::on_revert_file))
             .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(Self::on_close_other_tabs))
+            .on_action(cx.listener(Self::on_close_saved_tabs))
+            .on_action(cx.listener(Self::on_close_folder))
             .on_action(cx.listener(Self::on_open_folder))
             .on_action(cx.listener(Self::on_add_folder_to_workspace))
             .on_action(cx.listener(Self::on_open_folder_in_wsl))
@@ -4878,6 +6198,10 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_reload_preview))
             .on_action(cx.listener(Self::on_remove_folder))
             .on_action(cx.listener(Self::on_toggle_line_comment))
+            .on_action(cx.listener(Self::on_toggle_block_comment))
+            .on_action(cx.listener(Self::on_duplicate_selection))
+            .on_action(cx.listener(Self::on_expand_selection))
+            .on_action(cx.listener(Self::on_shrink_selection))
             .on_action(cx.listener(Self::on_move_line_up))
             .on_action(cx.listener(Self::on_move_line_down))
             .on_action(cx.listener(Self::on_copy_line_up))
@@ -4890,6 +6214,36 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::on_reopen_closed_tab))
             .on_action(cx.listener(Self::on_close_all_tabs))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
+            .on_action(cx.listener(Self::on_toggle_fullscreen))
+            .on_action(cx.listener(Self::on_toggle_line_numbers))
+            .on_action(cx.listener(Self::on_toggle_render_whitespace))
+            .on_action(cx.listener(Self::on_toggle_glass))
+            .on_action(cx.listener(Self::on_run_selected_text))
+            .on_action(cx.listener(Self::on_focus_menu_bar))
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicF, w, cx| this.open_menu_by_mnemonic(0, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicE, w, cx| this.open_menu_by_mnemonic(1, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicS, w, cx| this.open_menu_by_mnemonic(2, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicV, w, cx| this.open_menu_by_mnemonic(3, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicG, w, cx| this.open_menu_by_mnemonic(4, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicR, w, cx| this.open_menu_by_mnemonic(5, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicT, w, cx| this.open_menu_by_mnemonic(6, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MenuMnemonicH, w, cx| this.open_menu_by_mnemonic(7, w, cx)),
+            )
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_zoom_reset))
@@ -4921,11 +6275,15 @@ impl Render for Workbench {
                     this.workbench_nav_forward(w, cx);
                 }),
             )
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)))
+            .on_drop(
+                cx.listener(|this, paths: &ExternalPaths, w, cx| this.on_drop_paths(paths, w, cx)),
+            )
             .child(self.render_title_bar(window, cx))
             .child(main)
             .child(self.render_status_bar(window, cx))
-            .when(self.quick.open, |v| v.child(self.render_quick_open(window, cx)))
+            .when(self.quick.open, |v| {
+                v.child(self.render_quick_open(window, cx))
+            })
             .children(self.render_drop_ask(cx))
             .children(self.render_preview_ask(cx))
             .children(self.render_update(cx))
@@ -4933,8 +6291,42 @@ impl Render for Workbench {
             .children(self.render_theme_menu(cx))
             .children(self.render_agent_settings(window, cx))
             .children(self.render_lightbox(window, cx))
+            .children(self.render_menubar_overlay(window, cx))
             .child(selection_guard())
+            .child(native_wv_commit(
+                wv_frame_seq,
+                self.native_webviews.clone(),
+                cx.entity().downgrade(),
+            ))
     }
+}
+
+fn native_wv_commit(
+    frame_seq: u64,
+    mgr: crate::ext::native_webview::NativeWebviewManager,
+    weak: WeakEntity<Workbench>,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, _, cx| {
+            let out = mgr.end_frame(frame_seq);
+            if out.evicted_handles.is_empty() && out.visibility_changes.is_empty() {
+                return;
+            }
+            cx.defer(move |cx| {
+                _ = weak.update(cx, |this, _| {
+                    for (h, vis) in out.visibility_changes {
+                        this.ext_host.host.set_webview_visibility(&h, vis);
+                    }
+                    for h in out.evicted_handles {
+                        this.ext_host.host.dispose_webview(&h);
+                    }
+                });
+            });
+        },
+    )
+    .absolute()
+    .size(px(0.))
 }
 
 fn selection_guard() -> impl IntoElement {
@@ -4942,7 +6334,10 @@ fn selection_guard() -> impl IntoElement {
         |_, _, _| {},
         |_, _, window, _| {
             window.on_mouse_event(|ev: &MouseDownEvent, phase, window, cx| {
-                if phase.bubble() && ev.button == MouseButton::Left && !gpui_kit::base::TextSelection::is_selectable_at(ev.position, window, cx) {
+                if phase.bubble()
+                    && ev.button == MouseButton::Left
+                    && !gpui_kit::base::TextSelection::is_selectable_at(ev.position, window, cx)
+                {
                     gpui_kit::component::GlobalState::suppress_text_selection(cx);
                 }
             });
@@ -4980,7 +6375,11 @@ struct PreparedFile {
 
 fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
     let nbt = crate::nbt::decode_file(path, &bytes);
-    let view = if nbt.is_none() { crate::viewer::view(path, &bytes) } else { None };
+    let view = if nbt.is_none() {
+        crate::viewer::view(path, &bytes)
+    } else {
+        None
+    };
     let read_only = view.is_some();
     let nbt_format = nbt.as_ref().map(|d| d.format);
     let (text, crlf, mut lang, mut label, banner) = match (nbt, view) {
@@ -4995,23 +6394,36 @@ fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
     };
     let stats = crate::accel::scan_file_stats(text.as_bytes(), 300);
     let large = text.len() > LARGE_FILE_BYTES;
-    let very_complex = !read_only && nbt_format.is_none() && stats.max_line > MAX_COMPLEX_LINE_BYTES;
+    let very_complex =
+        !read_only && nbt_format.is_none() && stats.max_line > MAX_COMPLEX_LINE_BYTES;
     let complex = !read_only && (large || very_complex);
     if complex {
         lang = "text";
         label = "Plain Text";
     }
-    let drawable = if read_only || nbt_format.is_some() { None } else { crate::fluxdoc::view::drawable_kind(path) };
+    let drawable = if read_only || nbt_format.is_some() {
+        None
+    } else {
+        crate::fluxdoc::view::drawable_kind(path)
+    };
     let is_markdown = drawable == Some(true);
     let flux_lazy = drawable.is_some() && text.len() > LARGE_FILE_BYTES;
     let (file_text_for_flux, text) = match (drawable.is_some(), flux_lazy) {
-        (true, true) => (if is_markdown { crate::fluxdoc::gfm::to_flux(&text) } else { text }, String::new()),
+        (true, true) => (
+            if is_markdown {
+                crate::fluxdoc::gfm::to_flux(&text)
+            } else {
+                text
+            },
+            String::new(),
+        ),
         (true, false) if is_markdown => (crate::fluxdoc::gfm::to_flux(&text), text),
         (true, false) => (text.clone(), text),
         _ => (String::new(), text),
     };
     let is_diff = crate::diff_view::is_diff(lang) && !complex;
-    let long_lines = !read_only && text.len() <= MAX_AUTO_WRAP_BYTES && stats.dominated_by_long_lines();
+    let long_lines =
+        !read_only && text.len() <= MAX_AUTO_WRAP_BYTES && stats.dominated_by_long_lines();
     PreparedFile {
         text,
         crlf,
@@ -5031,14 +6443,22 @@ fn prepare_file(path: &Path, bytes: Vec<u8>) -> PreparedFile {
 }
 
 fn read_off_thread(path: &Path) -> bool {
-    std::fs::metadata(path).map(|m| m.len() > READ_OFF_THREAD_BYTES).unwrap_or(false)
+    std::fs::metadata(path)
+        .map(|m| m.len() > READ_OFF_THREAD_BYTES)
+        .unwrap_or(false)
 }
 
-pub(crate) fn remote_dir_pub(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
+pub(crate) fn remote_dir_pub(
+    target: &crate::remote::WslTarget,
+    path: &std::path::Path,
+) -> Option<Vec<crate::files::Node>> {
     remote_dir(target, path)
 }
 
-fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Option<Vec<crate::files::Node>> {
+fn remote_dir(
+    target: &crate::remote::WslTarget,
+    path: &std::path::Path,
+) -> Option<Vec<crate::files::Node>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     let entries = crate::remote::with_client(&distro, |c| c.list(&linux).ok())??;
@@ -5046,20 +6466,33 @@ fn remote_dir(target: &crate::remote::WslTarget, path: &std::path::Path) -> Opti
     Some(crate::files::nodes_from_remote(path, entries))
 }
 
-fn remote_listing(target: &crate::remote::WslTarget, root: &std::path::Path, multi: bool) -> Option<Vec<crate::files::Node>> {
+fn remote_listing(
+    target: &crate::remote::WslTarget,
+    root: &std::path::Path,
+    multi: bool,
+) -> Option<Vec<crate::files::Node>> {
     if !multi {
         return remote_dir(target, root);
     }
     None
 }
 
-fn remote_read(target: &crate::remote::WslTarget, path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
+fn remote_read(
+    target: &crate::remote::WslTarget,
+    path: &std::path::Path,
+    limit: u64,
+) -> Option<Vec<u8>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.read(&linux, limit).ok()).flatten()
 }
 
-fn remote_write(target: &crate::remote::WslTarget, path: &std::path::Path, bytes: &[u8], crlf: bool) -> Option<()> {
+fn remote_write(
+    target: &crate::remote::WslTarget,
+    path: &std::path::Path,
+    bytes: &[u8],
+    crlf: bool,
+) -> Option<()> {
     let distro = target.distro.clone();
     let linux = target.linux_path(path)?;
     crate::remote::with_client(&distro, |c| c.write(&linux, bytes, crlf).ok()).flatten()
@@ -5089,11 +6522,20 @@ pub(crate) fn write_doc_to_disk(
     core::write_text(path, text, crlf)
 }
 
-fn remote_scan(target: &crate::remote::WslTarget, root: &std::path::Path, max: usize) -> Option<Vec<String>> {
+fn remote_scan(
+    target: &crate::remote::WslTarget,
+    root: &std::path::Path,
+    max: usize,
+) -> Option<Vec<String>> {
     let distro = target.distro.clone();
     let linux = target.linux_path(root)?;
     let paths = crate::remote::with_client(&distro, |c| c.scan(&linux, max).ok()).flatten()?;
-    Some(paths.into_iter().map(|p| target.unc_path(&p).to_string_lossy().into_owned()).collect())
+    Some(
+        paths
+            .into_iter()
+            .map(|p| target.unc_path(&p).to_string_lossy().into_owned())
+            .collect(),
+    )
 }
 
 static TAB_SCROLL_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -5121,7 +6563,9 @@ fn step_tab_scroll(
             if this.active != Some(ix) {
                 return;
             }
-            let Some(target) = this.tab_scroll_target_for(ix, start) else { return };
+            let Some(target) = this.tab_scroll_target_for(ix, start) else {
+                return;
+            };
             let x = if t >= 1. || (target - start).abs() < 0.75 {
                 target
             } else {
@@ -5138,7 +6582,13 @@ fn step_tab_scroll(
     });
 }
 
-pub(crate) fn tab_scroll_target(widths: &[f32], ix: usize, cur: f32, viewport_w: f32, scale: f32) -> f32 {
+pub(crate) fn tab_scroll_target(
+    widths: &[f32],
+    ix: usize,
+    cur: f32,
+    viewport_w: f32,
+    scale: f32,
+) -> f32 {
     if ix >= widths.len() {
         return cur.max(0.);
     }
@@ -5163,7 +6613,9 @@ pub(crate) fn tab_scroll_target(widths: &[f32], ix: usize, cur: f32, viewport_w:
 pub(crate) fn tab_width(name: &str, has_diag: bool, scale: f32) -> f32 {
     let chars = name.chars().count().clamp(4, 28) as f32;
     let badge = if has_diag { 28. } else { 0. };
-    ((64. + chars * 7.6 + badge) * scale).clamp(96. * scale, 240. * scale).round()
+    ((64. + chars * 7.6 + badge) * scale)
+        .clamp(96. * scale, 240. * scale)
+        .round()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5201,7 +6653,11 @@ pub(crate) fn compute_visible_regions(
     }
 }
 
-pub(crate) fn visible_tab_window_from_offsets(offsets: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
+pub(crate) fn visible_tab_window_from_offsets(
+    offsets: &[f32],
+    scroll_x: f32,
+    viewport_w: f32,
+) -> (std::ops::Range<usize>, f32, f32) {
     let n = offsets.len().saturating_sub(1);
     if n == 0 {
         return (0..0, 0., 0.);
@@ -5221,7 +6677,11 @@ pub(crate) fn visible_tab_window_from_offsets(offsets: &[f32], scroll_x: f32, vi
 }
 
 #[cfg(test)]
-pub(crate) fn visible_tab_window(widths: &[f32], scroll_x: f32, viewport_w: f32) -> (std::ops::Range<usize>, f32, f32) {
+pub(crate) fn visible_tab_window(
+    widths: &[f32],
+    scroll_x: f32,
+    viewport_w: f32,
+) -> (std::ops::Range<usize>, f32, f32) {
     if widths.is_empty() {
         return (0..0, 0., 0.);
     }
@@ -5235,7 +6695,10 @@ pub(crate) fn visible_tab_window(widths: &[f32], scroll_x: f32, viewport_w: f32)
     visible_tab_window_from_offsets(&offsets, scroll_x, viewport_w)
 }
 
-pub(crate) fn select_eviction_indices(entries: &[(usize, bool, u64)], max_warm: usize) -> Vec<usize> {
+pub(crate) fn select_eviction_indices(
+    entries: &[(usize, bool, u64)],
+    max_warm: usize,
+) -> Vec<usize> {
     if entries.len() <= max_warm {
         return Vec::new();
     }
@@ -5246,7 +6709,11 @@ pub(crate) fn select_eviction_indices(entries: &[(usize, bool, u64)], max_warm: 
         .map(|&(ix, _, used)| (ix, used))
         .collect();
     candidates.sort_by_key(|&(_, used)| used);
-    candidates.into_iter().take(excess).map(|(ix, _)| ix).collect()
+    candidates
+        .into_iter()
+        .take(excess)
+        .map(|(ix, _)| ix)
+        .collect()
 }
 
 fn read_head(path: &Path) -> Result<Vec<u8>, String> {
@@ -5256,23 +6723,38 @@ fn read_head(path: &Path) -> Result<Vec<u8>, String> {
         return std::fs::read(path).map_err(|e| e.to_string());
     }
     let mut buf = vec![0; 64 * 1024];
-    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut buf)).map_err(|e| e.to_string())?;
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut buf))
+        .map_err(|e| e.to_string())?;
     buf.truncate(n);
     if !buf.contains(&0) {
-        return Err(crate::trf!("{0} is too large to open ({1} MB)."; 0 => path.display(), 1 => meta.len() / 1024 / 1024));
+        return Err(
+            crate::trf!("{0} is too large to open ({1} MB)."; 0 => path.display(), 1 => meta.len() / 1024 / 1024),
+        );
     }
     Ok(buf)
 }
 
 impl Workbench {
     pub(crate) fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.search_input.update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
-        self.settings_search.update(cx, |s, cx| s.set_placeholder(tr("Search settings…"), window, cx));
-        self.github_input.update(cx, |s, cx| s.set_placeholder(tr("Personal access token"), window, cx));
-        self.quick.input.update(cx, |s, cx| s.set_placeholder(tr("Type part of a file name"), window, cx));
-        self.scm.message.update(cx, |s, cx| s.set_placeholder(tr("Commit message"), window, cx));
+        self.search_input
+            .update(cx, |s, cx| s.set_placeholder(tr("Search"), window, cx));
+        self.settings_search.update(cx, |s, cx| {
+            s.set_placeholder(tr("Search settings…"), window, cx)
+        });
+        self.github_input.update(cx, |s, cx| {
+            s.set_placeholder(tr("Personal access token"), window, cx)
+        });
+        self.quick.input.update(cx, |s, cx| {
+            s.set_placeholder(tr("Type part of a file name"), window, cx)
+        });
+        self.scm.message.update(cx, |s, cx| {
+            s.set_placeholder(tr("Commit message"), window, cx)
+        });
         let name = crate::agent::agent_name();
-        self.agent.input.update(cx, |s, cx| s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx));
+        self.agent.input.update(cx, |s, cx| {
+            s.set_placeholder(crate::trf!("Ask {name}…"; name => name), window, cx)
+        });
         cx.notify();
     }
 }
@@ -5334,13 +6816,21 @@ pub(crate) struct SmoothScroll {
 }
 
 impl Workbench {
-    pub(crate) fn smooth_scroll_layer(&self, target: ScrollTarget, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn smooth_scroll_layer(
+        &self,
+        target: ScrollTarget,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         canvas(
             |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
             move |_, hitbox, window, _| {
                 window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture || ev.delta.precise() || ev.modifiers.control || !hitbox.is_hovered(window) {
+                    if phase != DispatchPhase::Capture
+                        || ev.delta.precise()
+                        || ev.modifiers.control
+                        || !hitbox.is_hovered(window)
+                    {
                         return;
                     }
                     cx.stop_propagation();
@@ -5355,7 +6845,13 @@ impl Workbench {
         .size_full()
     }
 
-    fn smooth_scroll(&mut self, target: ScrollTarget, delta: ScrollDelta, window: &mut Window, cx: &mut Context<Self>) {
+    fn smooth_scroll(
+        &mut self,
+        target: ScrollTarget,
+        delta: ScrollDelta,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let speed = self.settings.scroll_speed();
         let d = delta.pixel_delta(target.line_height(cx));
         let d = point(d.x * speed, d.y * speed);
@@ -5382,7 +6878,16 @@ impl Workbench {
                 s.stuck = 0;
                 s.bottom = bottom;
             }
-            None => self.smooth = Some(SmoothScroll { target, to, prev: None, stuck: 0, last: std::time::Instant::now(), bottom }),
+            None => {
+                self.smooth = Some(SmoothScroll {
+                    target,
+                    to,
+                    prev: None,
+                    stuck: 0,
+                    last: std::time::Instant::now(),
+                    bottom,
+                })
+            }
         }
         if key == crate::agent::CHAT_SCROLL_KEY {
             self.agent.follow = bottom;
@@ -5405,7 +6910,9 @@ impl Workbench {
     }
 
     fn smooth_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(s) = self.smooth.as_mut() else { return };
+        let Some(s) = self.smooth.as_mut() else {
+            return;
+        };
         let target = s.target.clone();
         if let (true, ScrollTarget::Handle(_, h)) = (s.bottom, &target) {
             s.to.y = -h.max_offset().y;
@@ -5456,7 +6963,12 @@ impl Workbench {
             .cursor_pointer()
             .when(open, |h| h.text_color(c(theme::FG)))
             .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Open or close the AI agent (Ctrl+L)")).build(w, cx))
+            .tooltip(|w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tr(
+                    "Open or close the AI agent (Ctrl+L)",
+                ))
+                .build(w, cx)
+            })
             .on_click(cx.listener(|this, _, w, cx| this.on_toggle_agent(&ToggleAgent, w, cx)))
             .child(
                 Icon::new(gpui_kit::assets::IconName::MessageSquareCode)
@@ -5507,12 +7019,22 @@ impl Workbench {
             .cursor_pointer()
             .text_color(c(theme::FG_DIM))
             .hover(|s| s.bg(c(theme::BG_HOVER)).text_color(c(theme::FG_STRONG)))
-            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Copilot suggestions are not set up yet. Click to open Settings.")).build(w, cx))
+            .tooltip(|w, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tr(
+                    "Copilot suggestions are not set up yet. Click to open Settings.",
+                ))
+                .build(w, cx)
+            })
             .on_click(cx.listener(|_, _, w, cx| w.dispatch_action(Box::new(ShowSettings), cx)))
             .child(if installing {
-                gpui_kit::component::spinner::Spinner::new().icon(gpui_kit::assets::IconName::LoaderCircle).xsmall().into_any_element()
+                gpui_kit::component::spinner::Spinner::new()
+                    .icon(gpui_kit::assets::IconName::LoaderCircle)
+                    .xsmall()
+                    .into_any_element()
             } else {
-                Icon::new(gpui_kit::assets::IconName::Bot).size(theme::u(13.)).into_any_element()
+                Icon::new(gpui_kit::assets::IconName::Bot)
+                    .size(theme::u(13.))
+                    .into_any_element()
             })
             .child(label)
             .into_any_element()
@@ -5522,8 +7044,9 @@ impl Workbench {
 #[cfg(test)]
 mod fit_tests {
     use super::{
-        compute_visible_regions, fit_columns, push_nav_stack, select_eviction_indices, tab_scroll_target, tab_width,
-        visible_tab_window, visible_tab_window_from_offsets, NavTarget,
+        compute_visible_regions, fit_columns, push_nav_stack, select_eviction_indices,
+        tab_scroll_target, tab_width, visible_tab_window, visible_tab_window_from_offsets,
+        NavTarget,
     };
     use std::path::PathBuf;
 
@@ -5542,10 +7065,16 @@ mod fit_tests {
 
     #[test]
     fn virtual_tabs_render_only_visible_window_for_500_tabs() {
-        let widths: Vec<f32> = (0..500).map(|i| tab_width(&format!("file_{i}.json"), false, 1.0)).collect();
+        let widths: Vec<f32> = (0..500)
+            .map(|i| tab_width(&format!("file_{i}.json"), false, 1.0))
+            .collect();
         let total: f32 = widths.iter().sum();
         let (range, left, right) = visible_tab_window(&widths, 12_000., 800.);
-        assert!(range.len() < 16, "expected <16 rendered tabs out of 500, got {}", range.len());
+        assert!(
+            range.len() < 16,
+            "expected <16 rendered tabs out of 500, got {}",
+            range.len()
+        );
         assert!(left > 11_000. && right > 10_000.);
         let rendered_w: f32 = widths[range].iter().sum();
         assert!((left + rendered_w + right - total).abs() < 0.5);
@@ -5556,7 +7085,7 @@ mod fit_tests {
         // (index, pinned, last_used)
         let entries = vec![
             (0, false, 1),
-            (1, true, 2),  // dirty or active -> never evicted
+            (1, true, 2), // dirty or active -> never evicted
             (2, false, 3),
             (3, false, 9),
             (4, false, 4),
@@ -5588,24 +7117,48 @@ mod fit_tests {
         push_nav_stack(&mut stack, NavTarget::WizTree);
         assert_eq!(stack, vec![NavTarget::WizTree]);
         for i in 0..70 {
-            push_nav_stack(&mut stack, NavTarget::File(PathBuf::from(format!("f{i}.rs"))));
+            push_nav_stack(
+                &mut stack,
+                NavTarget::File(PathBuf::from(format!("f{i}.rs"))),
+            );
         }
         assert_eq!(stack.len(), 60);
-        assert_eq!(stack.last(), Some(&NavTarget::File(PathBuf::from("f69.rs"))));
+        assert_eq!(
+            stack.last(),
+            Some(&NavTarget::File(PathBuf::from("f69.rs")))
+        );
     }
 
     #[test]
     fn occlusion_culling_skips_hidden_subtrees() {
         let settings = compute_visible_regions(true, true, true, true, true, true, true);
         assert!(settings.settings);
-        assert!(!settings.editor_area && !settings.panel && !settings.preview && !settings.sidebar && !settings.right_dock && !settings.agent_full);
+        assert!(
+            !settings.editor_area
+                && !settings.panel
+                && !settings.preview
+                && !settings.sidebar
+                && !settings.right_dock
+                && !settings.agent_full
+        );
 
         let full_agent = compute_visible_regions(false, true, true, true, true, true, false);
         assert!(full_agent.agent_full && full_agent.sidebar);
-        assert!(!full_agent.editor_area && !full_agent.panel && !full_agent.preview && !full_agent.right_dock);
+        assert!(
+            !full_agent.editor_area
+                && !full_agent.panel
+                && !full_agent.preview
+                && !full_agent.right_dock
+        );
 
         let normal = compute_visible_regions(false, false, true, true, true, true, false);
-        assert!(normal.editor_area && normal.panel && normal.preview && normal.sidebar && normal.right_dock);
+        assert!(
+            normal.editor_area
+                && normal.panel
+                && normal.preview
+                && normal.sidebar
+                && normal.right_dock
+        );
 
         let wiz = compute_visible_regions(false, false, true, false, false, true, true);
         assert!(wiz.editor_area && !wiz.preview && !wiz.panel);
@@ -5628,7 +7181,11 @@ mod fit_tests {
             assert!((l + (offsets[r.end] - offsets[r.start]) + rw - offsets[1000]).abs() < 0.5);
         }
         let elapsed = t0.elapsed();
-        eprintln!("1,000 O(log N) tab window queries over 1,000 tabs: {:?} (avg rendered tabs={:.1})", elapsed, rendered as f64 / 1000.0);
+        eprintln!(
+            "1,000 O(log N) tab window queries over 1,000 tabs: {:?} (avg rendered tabs={:.1})",
+            elapsed,
+            rendered as f64 / 1000.0
+        );
         assert!(elapsed.as_millis() < 20);
     }
 }
@@ -5636,8 +7193,16 @@ mod fit_tests {
 fn apply_glass(window: &mut Window) {
     use std::sync::atomic::{AtomicU8, Ordering};
     static APPLIED: AtomicU8 = AtomicU8::new(0);
-    let want = if theme::glass() && !crate::scene::active() && !theme::has_backdrop() { 2 } else { 1 };
+    let want = if theme::glass() && !crate::scene::active() && !theme::has_backdrop() {
+        2
+    } else {
+        1
+    };
     if APPLIED.swap(want, Ordering::Relaxed) != want {
-        window.set_background_appearance(if want == 2 { WindowBackgroundAppearance::Blurred } else { WindowBackgroundAppearance::Opaque });
+        window.set_background_appearance(if want == 2 {
+            WindowBackgroundAppearance::Blurred
+        } else {
+            WindowBackgroundAppearance::Opaque
+        });
     }
 }

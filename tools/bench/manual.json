@@ -1,6 +1,6 @@
 {
-  "note": "Figures timed by hand that replace what bench.ps1 logged. bench.ps1 polls with Get-Process on every loop, which adds the script's own time to window_ms.",
+  "note": "Overrides window_ms for FluxCode in benchmark charts. bench.ps1 polls with Get-Process on every loop, which adds the script's own time to window_ms.",
   "FluxCode": {
-    "window_ms": 50
+    "window_ms": 10
   }
 }

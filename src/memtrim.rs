@@ -56,7 +56,10 @@ impl FlatStrings {
     #[inline]
     pub fn get(&self, ix: usize) -> Option<&str> {
         let end = *self.ends.get(ix)? as usize;
-        let start = ix.checked_sub(1).and_then(|p| self.ends.get(p).copied()).unwrap_or(0) as usize;
+        let start = ix
+            .checked_sub(1)
+            .and_then(|p| self.ends.get(p).copied())
+            .unwrap_or(0) as usize;
         self.buf.get(start..end)
     }
 
@@ -127,7 +130,10 @@ impl Default for MemoryGovernor {
 impl MemoryGovernor {
     pub fn on_blur(&mut self, now: Instant) {
         if let Some(prev) = self.last_blur_at {
-            let gap = now.saturating_duration_since(prev).as_secs_f64().clamp(2.0, 120.0);
+            let gap = now
+                .saturating_duration_since(prev)
+                .as_secs_f64()
+                .clamp(2.0, 120.0);
             const ALPHA: f64 = 0.35;
             self.ema_gap_secs = (ALPHA * gap + (1.0 - ALPHA) * self.ema_gap_secs).clamp(5.0, 60.0);
         }
@@ -164,7 +170,11 @@ impl MemoryGovernor {
         self.last_ws_mb = ws_mb;
         self.last_sample_at = Some(now);
 
-        let eq = if background { EQ_BACKGROUND_MB } else { EQ_ACTIVE_MB };
+        let eq = if background {
+            EQ_BACKGROUND_MB
+        } else {
+            EQ_ACTIVE_MB
+        };
         if ws_mb <= 0.1 {
             return force;
         }
@@ -228,7 +238,12 @@ pub fn set_eco_qos(enable: bool) {
         #[link(name = "kernel32")]
         extern "system" {
             fn GetCurrentProcess() -> isize;
-            fn SetProcessInformation(proc: isize, class: u32, info: *const std::ffi::c_void, len: u32) -> i32;
+            fn SetProcessInformation(
+                proc: isize,
+                class: u32,
+                info: *const std::ffi::c_void,
+                len: u32,
+            ) -> i32;
         }
         const PROCESS_POWER_THROTTLING: u32 = 4;
         const EXECUTION_SPEED: u32 = 0x1;
@@ -275,7 +290,10 @@ pub fn trim() {
             malloc_trim(0);
         }
     }
-    governor().lock().unwrap_or_else(|e| e.into_inner()).mark_trimmed(Instant::now());
+    governor()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .mark_trimmed(Instant::now());
 }
 
 pub fn trim_if_needed(force: bool, background: bool) {

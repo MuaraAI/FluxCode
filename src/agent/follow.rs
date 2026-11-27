@@ -1,4 +1,3 @@
-
 use crate::core;
 use crate::workbench::Workbench;
 use gpui_kit::component::input::Position;
@@ -31,9 +30,15 @@ impl Workbench {
     }
 
     pub(crate) fn apply_agent_follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(p) = self.agent.follow_q.pop() else { return };
+        let Some(p) = self.agent.follow_q.pop() else {
+            return;
+        };
         self.agent.follow_q.clear();
-        if self.active.is_some_and(|a| self.docs[a].dirty && self.docs[a].path != p) || self.agent.user_nav.is_some_and(|t| t.elapsed() < HANDS_OFF) {
+        if self
+            .active
+            .is_some_and(|a| self.docs[a].dirty && self.docs[a].path != p)
+            || self.agent.user_nav.is_some_and(|t| t.elapsed() < HANDS_OFF)
+        {
             return;
         }
         self.agent_finish_replay(window, cx);
@@ -52,14 +57,27 @@ impl Workbench {
             Some(ix) => self.activate(ix, window, cx),
             None => self.open_file_now(p.clone(), window, cx),
         }
-        if let Some(h) = had.filter(|h| !self.docs.iter().any(|d| d.editor.as_ref().is_some_and(|e| e.focus_handle(cx) == *h))) {
+        if let Some(h) = had.filter(|h| {
+            !self
+                .docs
+                .iter()
+                .any(|d| d.editor.as_ref().is_some_and(|e| e.focus_handle(cx) == *h))
+        }) {
             h.focus(window, cx);
         }
-        let Some(ix) = self.docs.iter().position(|d| d.path == p) else { return };
-        let Some(ed) = self.ensure_doc_editor(ix, window, cx) else { return };
+        let Some(ix) = self.docs.iter().position(|d| d.path == p) else {
+            return;
+        };
+        let Some(ed) = self.ensure_doc_editor(ix, window, cx) else {
+            return;
+        };
         self.agent.reloads.retain(|x| *x != p);
         let steps = frames_for(f.text.len().max(before.len()));
-        let frames = if steps == 0 { Vec::new() } else { crate::diff::typing_frames(&before, &f.text, steps) };
+        let frames = if steps == 0 {
+            Vec::new()
+        } else {
+            crate::diff::typing_frames(&before, &f.text, steps)
+        };
         if frames.is_empty() {
             let line = ed.read(cx).cursor_position().line;
             ed.update(cx, |s, cx| {
@@ -75,12 +93,19 @@ impl Workbench {
         self.agent.replay = Some((p.clone(), f.text));
         cx.spawn_in(window, async move |this, cx| {
             for (text, line) in frames {
-                cx.background_executor().timer(Duration::from_millis(FRAME_MS)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(FRAME_MS))
+                    .await;
                 let go = this.update_in(cx, |this, window, cx| {
                     if this.agent.replay_gen != gen {
                         return false;
                     }
-                    let Some(ed) = this.docs.iter().find(|d| d.path == p && !d.dirty).and_then(|d| d.editor.as_ref()) else {
+                    let Some(ed) = this
+                        .docs
+                        .iter()
+                        .find(|d| d.path == p && !d.dirty)
+                        .and_then(|d| d.editor.as_ref())
+                    else {
                         return false;
                     };
                     ed.update(cx, |s, cx| {
@@ -104,9 +129,16 @@ impl Workbench {
     }
 
     fn agent_finish_replay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((p, text)) = self.agent.replay.take() else { return };
+        let Some((p, text)) = self.agent.replay.take() else {
+            return;
+        };
         self.agent.replay_gen += 1;
-        if let Some(ed) = self.docs.iter().find(|d| d.path == p && !d.dirty).and_then(|d| d.editor.as_ref()) {
+        if let Some(ed) = self
+            .docs
+            .iter()
+            .find(|d| d.path == p && !d.dirty)
+            .and_then(|d| d.editor.as_ref())
+        {
             if ed.read(cx).value().to_string() != text {
                 let line = ed.read(cx).cursor_position().line;
                 ed.update(cx, |s, cx| {

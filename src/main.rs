@@ -1,41 +1,44 @@
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[macro_use]
 mod i18n;
-mod i18n_id;
 mod accel;
 mod acp;
-mod boot;
-mod browser;
-mod commands;
-mod copilot;
-mod editor_cmds;
 mod agent;
 mod agent_ask;
 mod agent_ctx;
+mod boot;
+mod browser;
+mod commands;
 mod complete;
+mod copilot;
 mod core;
 mod diagnostics;
 mod diff;
 mod diff_view;
 mod docs;
+mod editor_cmds;
 mod explorer;
 mod ext;
 mod files;
-mod fluxicon;
 mod flux_anim;
 mod fluxdoc;
+mod gflow;
 mod github;
+mod i18n_id;
 mod instance;
+mod memtrim;
+mod menubar;
+mod motion_check;
 mod nbt;
 mod panel;
-mod memtrim;
 mod preview;
 mod preview_ui;
 mod proc;
 mod quick;
 mod remote;
+mod scene;
+mod scene_art;
 mod scm;
 mod scm_git;
 mod scm_graph;
@@ -43,12 +46,10 @@ mod scm_incoming;
 mod scm_refs;
 mod scm_watch;
 mod search;
-mod scene;
-mod scene_art;
-mod motion_check;
-mod sidedock;
 mod settings;
 mod shell;
+mod sidedock;
+mod smart_link;
 mod term;
 mod theme;
 mod theme_menu;
@@ -84,6 +85,7 @@ fn main() {
         Some("--register-shell") => std::process::exit(shell::cli(true)),
         Some("--unregister-shell") => std::process::exit(shell::cli(false)),
         Some("--wiztree") => std::process::exit(wiztree::cli(&argv[2..])),
+        Some("--gflow-mcp") => std::process::exit(gflow::mcp_cli()),
         _ => {}
     }
     boot::start();
@@ -147,7 +149,8 @@ fn main() {
         boot::mark("open window");
         gpui_kit::open_window(options, cx, move |window, cx| {
             boot::mark("window created");
-            let wb = cx.new(|cx| workbench::Workbench::new(root.clone(), files.clone(), window, cx));
+            let wb =
+                cx.new(|cx| workbench::Workbench::new(root.clone(), files.clone(), window, cx));
             cx.new(|cx| scene::Shell::new(wb, cx))
         })
         .expect("failed to open the FluxCode window");
@@ -158,8 +161,14 @@ struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        if let Some(bytes) = fluxicon::load(path) {
+        if let Some(bytes) = ext::mcbe_view::load_mcbe_asset(path) {
             return Ok(Some(std::borrow::Cow::Borrowed(bytes)));
+        }
+        if let Some(bytes) = ext::vsx_icons::load_bundled_asset(path) {
+            return Ok(Some(std::borrow::Cow::Owned(bytes)));
+        }
+        if let Some(bytes) = ext::vsc_registry::load_icon_asset(path) {
+            return Ok(Some(std::borrow::Cow::Owned(bytes)));
         }
         if let Some(bytes) = files::FileIcons.load(path)? {
             return Ok(Some(bytes));
@@ -173,7 +182,6 @@ impl AssetSource for AppAssets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(files::FileIcons.list(path)?);
-        paths.extend(fluxicon::paths().filter(|p| p.starts_with(path)).map(SharedString::from));
         paths.sort();
         paths.dedup();
         Ok(paths)

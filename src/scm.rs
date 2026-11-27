@@ -1,8 +1,8 @@
-
 use crate::i18n::tr;
 use crate::theme::{self, c};
 use crate::workbench::*;
 use gpui_kit::assets::IconName as Ico;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     h_flex,
@@ -16,7 +16,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use gpui_kit::component::tooltip::Tooltip;
 
 use crate::scm_git::{git_step, run_step, snapshot, FileChange, Group, RemoteAction, Step};
 pub use crate::scm_git::{parse_log, Commit, RepoStatus};
@@ -349,7 +348,6 @@ impl Scm {
             sub,
         )
     }
-
 }
 
 pub fn code_color(code: char) -> theme::Tok {
@@ -361,12 +359,16 @@ pub fn code_color(code: char) -> theme::Tok {
     }
 }
 
-
 fn find_url(s: &str) -> Option<String> {
     let i = s.find("https://")?;
-    Some(s[i..].split_whitespace().next()?.trim_end_matches(['.', ',', ')']).to_string())
+    Some(
+        s[i..]
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(['.', ',', ')'])
+            .to_string(),
+    )
 }
-
 
 fn group_title(group: Group) -> &'static str {
     match group {
@@ -398,7 +400,10 @@ enum ChangeTreeRow<'a> {
     File(usize, usize),
 }
 
-fn change_tree_rows<'a>(files: &'a [FileChange], collapsed: &HashSet<String>) -> Vec<ChangeTreeRow<'a>> {
+fn change_tree_rows<'a>(
+    files: &'a [FileChange],
+    collapsed: &HashSet<String>,
+) -> Vec<ChangeTreeRow<'a>> {
     let mut sorted: Vec<_> = files.iter().enumerate().collect();
     sorted.sort_unstable_by(|(_, a), (_, b)| a.path.cmp(&b.path));
     let mut folders = HashSet::new();
@@ -470,7 +475,9 @@ impl Workbench {
     }
 
     pub(crate) fn scm_refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else { return };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
         if self.scm.refreshing || self.scm.is_busy() {
             self.scm.again = true;
             return;
@@ -482,7 +489,9 @@ impl Workbench {
         let with_log = self.scm.show_graph;
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
-            let snap = cx.background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) }).await;
+            let snap = cx
+                .background_spawn(async move { snapshot(&root, with_log, wsl.as_ref()) })
+                .await;
             _ = this.update(cx, |this, cx| {
                 if this.scm.workspace_generation != generation {
                     return;
@@ -518,7 +527,9 @@ impl Workbench {
                         .chain(snap.status.conflicts.iter().map(|ch| (ch, '!')))
                     {
                         let full = repo.join(&ch.path);
-                        let key = |path: &std::path::Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
+                        let key = |path: &std::path::Path| {
+                            path.to_string_lossy().replace('/', "\\").to_lowercase()
+                        };
                         marks.entry(key(&full)).or_insert(mark);
                         let mut p = full.parent();
                         while let Some(d) = p {
@@ -567,8 +578,16 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn scm_run(&mut self, label: &str, steps: Vec<Step>, cx: &mut Context<Self>, done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static) {
-        let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else { return };
+    pub(crate) fn scm_run(
+        &mut self,
+        label: &str,
+        steps: Vec<Step>,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(&mut Self, &str, &mut Context<Self>) + 'static,
+    ) {
+        let Some(dir) = self.scm.repo.clone().or_else(|| self.root.clone()) else {
+            return;
+        };
         if self.scm.is_busy() {
             self.status = tr("Source Control is busy, try again in a moment").into();
             cx.notify();
@@ -577,7 +596,9 @@ impl Workbench {
         let reload = steps.iter().any(|step| {
             matches!(
                 step,
-                Step::Remote(RemoteAction::Pull | RemoteAction::Sync) | Step::WorkspaceGit(_) | Step::Resolve { .. }
+                Step::Remote(RemoteAction::Pull | RemoteAction::Sync)
+                    | Step::WorkspaceGit(_)
+                    | Step::Resolve { .. }
             )
         });
         let generation = self.scm.workspace_generation;
@@ -607,7 +628,10 @@ impl Workbench {
                     Err(e) => {
                         if e.contains("already exists") {
                             if let Some(url) = find_url(&e) {
-                                this.scm.note = Some(("A pull request for this branch already exists".into(), Some(url)));
+                                this.scm.note = Some((
+                                    "A pull request for this branch already exists".into(),
+                                    Some(url),
+                                ));
                             } else {
                                 this.scm.error = Some(e);
                             }
@@ -617,7 +641,12 @@ impl Workbench {
                     }
                 }
                 if reload {
-                    this.agent.reloads.extend(this.docs.iter().filter(|d| !d.dirty).map(|d| d.path.clone()));
+                    this.agent.reloads.extend(
+                        this.docs
+                            .iter()
+                            .filter(|d| !d.dirty)
+                            .map(|d| d.path.clone()),
+                    );
                     this.refresh_tree(cx);
                 }
                 this.scm_refresh(cx);
@@ -627,11 +656,24 @@ impl Workbench {
         .detach();
     }
 
-    pub(crate) fn scm_commit(&mut self, after: After, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn scm_commit(
+        &mut self,
+        after: After,
+        amend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit_with_options(after, amend, false, window, cx);
     }
 
-    fn scm_commit_with_options(&mut self, after: After, amend: bool, signoff: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn scm_commit_with_options(
+        &mut self,
+        after: After,
+        amend: bool,
+        signoff: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let msg = self.scm.message.read(cx).value().trim().to_string();
         if let Err(key) = self.scm.status.check_commit(&msg, amend) {
             self.scm.error = Some(tr(key).to_string());
@@ -661,9 +703,14 @@ impl Workbench {
     fn scm_after_commit(&mut self, after: After, cx: &mut Context<Self>) {
         match after {
             After::Nothing => {}
-            After::Push => self.scm_run(tr("Pushing…"), vec![Step::Remote(RemoteAction::Push)], cx, |this, _, _| {
-                this.status = tr("Committed and pushed").into();
-            }),
+            After::Push => self.scm_run(
+                tr("Pushing…"),
+                vec![Step::Remote(RemoteAction::Push)],
+                cx,
+                |this, _, _| {
+                    this.status = tr("Committed and pushed").into();
+                },
+            ),
             After::Sync => self.scm_sync(cx),
         }
     }
@@ -678,9 +725,14 @@ impl Workbench {
     }
 
     pub(crate) fn scm_sync(&mut self, cx: &mut Context<Self>) {
-        self.scm_run(tr("Syncing…"), vec![Step::Remote(RemoteAction::Sync)], cx, |this, _, _| {
-            this.status = tr("Synced with the remote").into();
-        });
+        self.scm_run(
+            tr("Syncing…"),
+            vec![Step::Remote(RemoteAction::Sync)],
+            cx,
+            |this, _, _| {
+                this.status = tr("Synced with the remote").into();
+            },
+        );
     }
 
     fn scm_create_pr(&mut self, cx: &mut Context<Self>) {
@@ -690,7 +742,11 @@ impl Workbench {
             return;
         }
         let mut steps = vec![Step::Remote(RemoteAction::Push)];
-        steps.push(Step::Gh(vec!["pr".into(), "create".into(), "--fill".into()]));
+        steps.push(Step::Gh(vec![
+            "pr".into(),
+            "create".into(),
+            "--fill".into(),
+        ]));
         self.scm_run("Creating pull request…", steps, cx, |this, out, _| {
             let url = find_url(out);
             this.scm.note = Some(("Pull request created".into(), url));
@@ -698,7 +754,9 @@ impl Workbench {
     }
 
     fn scm_load_actions(&mut self, cx: &mut Context<Self>) {
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         if !crate::github::gh_on_path() {
             self.scm.error = Some("GitHub Actions needs the GitHub CLI (gh).".into());
             cx.notify();
@@ -756,17 +814,35 @@ impl Workbench {
     }
 
     fn scm_run_workflow(&mut self, wf: Workflow, cx: &mut Context<Self>) {
-        let branch = self.scm.status.branch.clone().unwrap_or_else(|| "main".into());
-        let steps = vec![Step::Gh(vec!["workflow".into(), "run".into(), wf.id.clone(), "--ref".into(), branch.clone()])];
+        let branch = self
+            .scm
+            .status
+            .branch
+            .clone()
+            .unwrap_or_else(|| "main".into());
+        let steps = vec![Step::Gh(vec![
+            "workflow".into(),
+            "run".into(),
+            wf.id.clone(),
+            "--ref".into(),
+            branch.clone(),
+        ])];
         let name = wf.name.clone();
-        self.scm_run(&format!("Starting {name}…"), steps, cx, move |this, _, cx| {
-            this.scm.note = Some((format!("Started \"{name}\" on {branch}"), None));
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
-                _ = this.update(cx, |this, cx| this.scm_load_actions(cx));
-            })
-            .detach();
-        });
+        self.scm_run(
+            &format!("Starting {name}…"),
+            steps,
+            cx,
+            move |this, _, cx| {
+                this.scm.note = Some((format!("Started \"{name}\" on {branch}"), None));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(4))
+                        .await;
+                    _ = this.update(cx, |this, cx| this.scm_load_actions(cx));
+                })
+                .detach();
+            },
+        );
     }
 
     pub(crate) fn scm_paths(
@@ -802,7 +878,9 @@ impl Workbench {
             }
             if crate::scm_git::file_paths(&files).iter().any(|p| {
                 let full = repo.join(p);
-                self.docs.iter().any(|doc| doc.dirty && crate::panel::same_path(&doc.path, &full))
+                self.docs
+                    .iter()
+                    .any(|doc| doc.dirty && crate::panel::same_path(&doc.path, &full))
             }) {
                 self.scm.error =
                     Some(tr("Save or close the modified editor before discarding.").to_string());
@@ -919,7 +997,9 @@ impl Workbench {
         if self.scm.commit_files.contains_key(&hash) {
             return;
         }
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         let wsl = self.wsl.clone();
         cx.spawn(async move |this, cx| {
             let h = hash.clone();
@@ -965,7 +1045,9 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(dir) = self.scm.repo.clone() else { return };
+        let Some(dir) = self.scm.repo.clone() else {
+            return;
+        };
         let wsl = self.wsl.clone();
         let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
         let full_path = dir.join(&path);
@@ -1089,11 +1171,15 @@ impl Workbench {
         }
     }
 
-
     pub(crate) fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.scm;
         if self.root.is_none() {
-            return div().p_3().text_sm().text_color(c(theme::FG_DIM)).child(tr("Open a folder to use Source Control.")).into_any_element();
+            return div()
+                .p_3()
+                .text_sm()
+                .text_color(c(theme::FG_DIM))
+                .child(tr("Open a folder to use Source Control."))
+                .into_any_element();
         }
         if s.repo.is_none() {
             let status = if s.refreshing || s.last_refresh.is_none() {
@@ -1130,9 +1216,12 @@ impl Workbench {
                             })),
                     )
                 })
-                .when_some(s.busy.clone().or_else(|| s.fetching.then(|| tr("Fetching…").into())), |v, status| {
-                    v.child(div().text_xs().child(status))
-                })
+                .when_some(
+                    s.busy
+                        .clone()
+                        .or_else(|| s.fetching.then(|| tr("Fetching…").into())),
+                    |v, status| v.child(div().text_xs().child(status)),
+                )
                 .when_some(s.error.clone(), |v, error| {
                     v.child(div().text_color(c(theme::DANGER)).child(error))
                 })
@@ -1181,12 +1270,21 @@ impl Workbench {
         let mut top = v_flex().w_full().min_w_0().flex_none().pt_1p5();
         if s.confirm_uninit {
             let home = std::env::var("USERPROFILE").unwrap_or_default();
-            let mut where_: String = s.repo.as_ref().map(|r| r.display().to_string()).unwrap_or_default();
+            let mut where_: String = s
+                .repo
+                .as_ref()
+                .map(|r| r.display().to_string())
+                .unwrap_or_default();
             let full: SharedString = where_.clone().into();
             if !home.is_empty() && where_.starts_with(&home) {
                 where_ = format!("~{}", &where_[home.len()..]);
             }
-            let folder = s.repo.as_ref().and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let folder = s
+                .repo
+                .as_ref()
+                .and_then(|r| r.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             top = top.child(
                 v_flex()
                     .flex_none()
@@ -1245,14 +1343,23 @@ impl Workbench {
                 .px_3()
                 .pb_2()
                 .gap_1p5()
-                .child(div().key_context("ScmMessage").child(crate::ui::McInput::new(&s.message).small()))
+                .child(
+                    div()
+                        .key_context("ScmMessage")
+                        .child(crate::ui::McInput::new(&s.message).small()),
+                )
                 .child(commit_row)
                 .when(s.watch.unavailable, |v| {
                     v.child(div().text_xs().text_color(c(theme::FG_MUTED)).child(tr(
                         "File watching is unavailable. Use Refresh to check for changes.",
                     )))
                 })
-                .when_some(s.busy.clone().or_else(|| s.fetching.then(|| tr("Fetching…").into())), |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)))
+                .when_some(
+                    s.busy
+                        .clone()
+                        .or_else(|| s.fetching.then(|| tr("Fetching…").into())),
+                    |v, b| v.child(div().text_xs().text_color(c(theme::BLUE)).child(b)),
+                )
                 .when_some(s.error.clone().or_else(|| s.repo_error.clone()), |v, e| {
                     v.child(
                         div()
@@ -1263,7 +1370,16 @@ impl Workbench {
                             .bg(c(theme::BG_ELEVATED))
                             .text_xs()
                             .text_color(c(theme::DANGER))
-                            .child(e.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")),
+                            .child(
+                                e.lines()
+                                    .rev()
+                                    .take(4)
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                            ),
                     )
                 })
                 .when_some(s.note.clone(), |v, (text, url)| {
@@ -1387,134 +1503,139 @@ impl Workbench {
             .active
             .and_then(|i| self.docs.get(i))
             .map(|d| d.path.clone());
-        let file_row =
-            |i: usize, depth: usize, group: Group, ch: &FileChange, this: &Self, cx: &mut Context<Self>| {
-                let kind = group as u8;
-                let name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
-                let dir = if this.scm.show_tree {
-                    String::new()
-                } else {
-                    ch.path.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default()
-                };
-                let col = if group == Group::Conflicts {
-                    theme::DANGER
-                } else {
-                    code_color(ch.code)
-                };
-                let deleted = ch.code == 'D';
-                let full = this.scm.repo.as_ref().map(|r| r.join(&ch.path));
-                let staged = kind == 1;
-                let busy = this.scm.is_busy();
-                let is_active = this.scm.repo.as_ref().is_some_and(|repo| {
-                    active_doc_path.as_ref() == Some(&Self::scm_diff_key(repo, group, &ch.path))
-                });
-                let (ch_click, discard_path, full_open) = (ch.clone(), ch.path.clone(), full);
-                scm_row()
-                    .id(("scm-f", i * 4 + kind as usize))
-                    .group("scm-row")
-                    .relative()
-                    .pl(theme::u(22. + depth.min(12) as f32 * 12.))
-                    .pr(px(SCROLLBAR_PAD))
-                    .gap_1p5()
-                    .items_center()
-                    .text_size(theme::u(13.))
-                    .cursor_pointer()
-                    .when(is_active, |h| h.bg(c(theme::SELECT)))
-                    .hover(|s| s.bg(c(theme::BG_HOVER)))
-                    .child(crate::files::file_icon_el(&name, theme::u(14.)))
-                    .child(
-                        div()
-                            .flex_shrink(1.)
-                            .min_w_0()
-                            .truncate()
-                            .text_color(c(theme::FG))
-                            .when(deleted, |d| d.line_through())
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(c(theme::FG_DIM))
-                            .child(dir),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(theme::u(12.))
-                            .text_right()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(c(col))
-                            .child(ch.code.to_string()),
-                    )
-                    // Overlay actions on hover so unhovered rows use the full width for filename and path.
-                    .child(
-                        h_flex()
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .right(px(SCROLLBAR_PAD) + theme::u(14.))
-                            .items_center()
-                            .gap_px()
-                            .pl_1p5()
-                            .pr_0p5()
-                            .bg(c(theme::BG_HOVER))
-                            .invisible()
-                            .group_hover("scm-row", |s| s.visible())
-                            .when(!deleted, |h| {
-                                h.child(
-                                    Button::new(("scm-open", i * 4 + kind as usize))
-                                        .icon(Icon::new(Ico::FileCode))
-                                        .ghost()
-                                        .xsmall()
-                                        .tooltip(tr("Open file"))
-                                        .on_click(cx.listener(move |this, _, w, cx| {
-                                            cx.stop_propagation();
-                                            if let Some(f) =
-                                                full_open.clone().filter(|f| f.is_file())
-                                            {
-                                                this.open_file(f, w, cx);
-                                            }
-                                        })),
-                                )
-                            })
-                            .child(
-                                Button::new(("scm-discard", i * 4 + kind as usize))
-                                    .icon(Icon::new(Ico::Undo2))
+        let file_row = |i: usize,
+                        depth: usize,
+                        group: Group,
+                        ch: &FileChange,
+                        this: &Self,
+                        cx: &mut Context<Self>| {
+            let kind = group as u8;
+            let name = ch.path.rsplit('/').next().unwrap_or(&ch.path).to_string();
+            let dir = if this.scm.show_tree {
+                String::new()
+            } else {
+                ch.path
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent.to_string())
+                    .unwrap_or_default()
+            };
+            let col = if group == Group::Conflicts {
+                theme::DANGER
+            } else {
+                code_color(ch.code)
+            };
+            let deleted = ch.code == 'D';
+            let full = this.scm.repo.as_ref().map(|r| r.join(&ch.path));
+            let staged = kind == 1;
+            let busy = this.scm.is_busy();
+            let is_active = this.scm.repo.as_ref().is_some_and(|repo| {
+                active_doc_path.as_ref() == Some(&Self::scm_diff_key(repo, group, &ch.path))
+            });
+            let (ch_click, discard_path, full_open) = (ch.clone(), ch.path.clone(), full);
+            scm_row()
+                .id(("scm-f", i * 4 + kind as usize))
+                .group("scm-row")
+                .relative()
+                .pl(theme::u(22. + depth.min(12) as f32 * 12.))
+                .pr(px(SCROLLBAR_PAD))
+                .gap_1p5()
+                .items_center()
+                .text_size(theme::u(13.))
+                .cursor_pointer()
+                .when(is_active, |h| h.bg(c(theme::SELECT)))
+                .hover(|s| s.bg(c(theme::BG_HOVER)))
+                .child(crate::files::file_icon_el(&name, theme::u(14.)))
+                .child(
+                    div()
+                        .flex_shrink(1.)
+                        .min_w_0()
+                        .truncate()
+                        .text_color(c(theme::FG))
+                        .when(deleted, |d| d.line_through())
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(c(theme::FG_DIM))
+                        .child(dir),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(theme::u(12.))
+                        .text_right()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(c(col))
+                        .child(ch.code.to_string()),
+                )
+                // Overlay actions on hover so unhovered rows use the full width for filename and path.
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(SCROLLBAR_PAD) + theme::u(14.))
+                        .items_center()
+                        .gap_px()
+                        .pl_1p5()
+                        .pr_0p5()
+                        .bg(c(theme::BG_HOVER))
+                        .invisible()
+                        .group_hover("scm-row", |s| s.visible())
+                        .when(!deleted, |h| {
+                            h.child(
+                                Button::new(("scm-open", i * 4 + kind as usize))
+                                    .icon(Icon::new(Ico::FileCode))
                                     .ghost()
                                     .xsmall()
-                                    .disabled(busy)
-                                    .tooltip(tr("Discard"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .tooltip(tr("Open file"))
+                                    .on_click(cx.listener(move |this, _, w, cx| {
                                         cx.stop_propagation();
-                                        this.scm_paths(group, Some(discard_path.clone()), true, cx);
+                                        if let Some(f) = full_open.clone().filter(|f| f.is_file()) {
+                                            this.open_file(f, w, cx);
+                                        }
                                     })),
                             )
-                            .child({
-                                let p = ch.path.clone();
-                                Button::new(("scm-stage", i * 4 + kind as usize))
-                                    .icon(Icon::new(if staged {
-                                        IconName::Minus
-                                    } else {
-                                        IconName::Plus
-                                    }))
-                                    .ghost()
-                                    .xsmall()
-                                    .disabled(busy)
-                                    .tooltip(if staged { tr("Unstage") } else { tr("Stage") })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.scm_paths(group, Some(p.clone()), false, cx);
-                                    }))
-                            }),
-                    )
-                    .on_click(cx.listener(move |this, _, w, cx| {
-                        this.scm_show_diff(ch_click.clone(), group, w, cx);
-                    }))
-            };
+                        })
+                        .child(
+                            Button::new(("scm-discard", i * 4 + kind as usize))
+                                .icon(Icon::new(Ico::Undo2))
+                                .ghost()
+                                .xsmall()
+                                .disabled(busy)
+                                .tooltip(tr("Discard"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.scm_paths(group, Some(discard_path.clone()), true, cx);
+                                })),
+                        )
+                        .child({
+                            let p = ch.path.clone();
+                            Button::new(("scm-stage", i * 4 + kind as usize))
+                                .icon(Icon::new(if staged {
+                                    IconName::Minus
+                                } else {
+                                    IconName::Plus
+                                }))
+                                .ghost()
+                                .xsmall()
+                                .disabled(busy)
+                                .tooltip(if staged { tr("Unstage") } else { tr("Stage") })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.scm_paths(group, Some(p.clone()), false, cx);
+                                }))
+                        }),
+                )
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    this.scm_show_diff(ch_click.clone(), group, w, cx);
+                }))
+        };
 
         struct PaneBuilt {
             spec: PaneSpec,
@@ -1612,7 +1733,8 @@ impl Workbench {
             let displayed = &files[..files.len().min(limit)];
             let collapsed = &s.collapsed_folders[group as usize];
             let tree = (s.show_tree && open).then(|| change_tree_rows(displayed, collapsed));
-            let rows_n = (tree.as_ref().map_or(displayed.len(), Vec::len) + usize::from(more > 0)).max(1);
+            let rows_n =
+                (tree.as_ref().map_or(displayed.len(), Vec::len) + usize::from(more > 0)).max(1);
             let extra = if group == Group::Untracked && files.len() > MAX_ROWS {
                 190.
             } else {
@@ -1872,8 +1994,15 @@ impl Workbench {
                                 h.child(div().flex_none().text_size(theme::u(10.)).text_color(c(theme::FG_DIM)).child(format!("+{}", badges.len() - 2)))
                             })
                             .tooltip({
-                                let refs = if cm.refs.is_empty() { String::new() } else { format!("\n{}", cm.refs.join(", ")) };
-                                let tip = format!("{}  {}\n{} · {}{refs}", cm.short, cm.subject, cm.author, cm.when);
+                            let refs = if cm.refs.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\n{}", cm.refs.join(", "))
+                            };
+                            let tip = format!(
+                                "{}  {}\n{} · {}{refs}",
+                                cm.short, cm.subject, cm.author, cm.when
+                            );
                                 move |w, cx| Tooltip::new(tip.clone()).build(w, cx)
                             })
                             .on_click(cx.listener(move |this, _, _, cx| this.scm_toggle_commit(hash.clone(), cx))),
@@ -2276,28 +2405,37 @@ impl Workbench {
             stack = stack.child(box_el);
         }
 
-        let heading = section("scm-changes-view", tr("Changes").to_uppercase(), 0, s.show_changes_view)
-            .border_t_1()
-            .border_b_1()
-            .border_color(c(theme::BORDER))
-            .when(s.show_changes_view, |h| {
-                h.child(
-                    Button::new("scm-view-mode")
-                        .label(if s.show_tree { tr("List") } else { tr("Tree") })
-                        .ghost()
-                        .xsmall()
-                        .tooltip(if s.show_tree { tr("View as List") } else { tr("View as Tree") })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.scm.show_tree = !this.scm.show_tree;
-                            cx.notify();
-                        })),
-                )
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.scm.show_changes_view = !this.scm.show_changes_view;
-                cx.notify();
-            }));
+        let heading = section(
+            "scm-changes-view",
+            tr("Changes").to_uppercase(),
+            0,
+            s.show_changes_view,
+        )
+        .border_t_1()
+        .border_b_1()
+        .border_color(c(theme::BORDER))
+        .when(s.show_changes_view, |h| {
+            h.child(
+                Button::new("scm-view-mode")
+                    .label(if s.show_tree { tr("List") } else { tr("Tree") })
+                    .ghost()
+                    .xsmall()
+                    .tooltip(if s.show_tree {
+                        tr("View as List")
+                    } else {
+                        tr("View as Tree")
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.scm.show_tree = !this.scm.show_tree;
+                        cx.notify();
+                    })),
+            )
+        })
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.scm.show_changes_view = !this.scm.show_changes_view;
+            cx.notify();
+        }));
 
         v_flex()
             .size_full()
@@ -2305,8 +2443,12 @@ impl Workbench {
             .bg(c(theme::BG_SIDE))
             .child(heading)
             .when(
-                s.show_changes_view || s.is_busy() || s.error.is_some() || s.repo_error.is_some()
-                    || s.confirm_discard.is_some() || s.confirm_uninit,
+                s.show_changes_view
+                    || s.is_busy()
+                    || s.error.is_some()
+                    || s.repo_error.is_some()
+                    || s.confirm_discard.is_some()
+                    || s.confirm_uninit,
                 |v| v.child(top),
             )
             .child(stack)
@@ -2342,12 +2484,18 @@ impl Workbench {
                                 .menu(tr("Sync (Pull, then Push)"), Box::new(ScmSync))
                                 .menu(tr("Fetch"), Box::new(ScmFetch))
                                 .menu(tr("Git: Checkout Branch or Tag"), Box::new(ScmCheckout))
-                                .menu(tr("Git: Branches, Tags, Remotes and Stashes"), Box::new(ScmManage))
-                                .menu(tr("Git: Show Current File History"), Box::new(ScmFileHistory))
+                                .menu(
+                                    tr("Git: Branches, Tags, Remotes and Stashes"),
+                                    Box::new(ScmManage),
+                                )
+                                .menu(
+                                    tr("Git: Show Current File History"),
+                                    Box::new(ScmFileHistory),
+                                )
                                 .separator()
                                 .menu(tr("Commit & Push"), Box::new(ScmCommitPush))
                                 .menu(tr("Commit (Amend)"), Box::new(ScmCommitAmend))
-                            .menu(tr("Commit (Sign Off)"), Box::new(ScmCommitSignoff))
+                                .menu(tr("Commit (Sign Off)"), Box::new(ScmCommitSignoff))
                                 .separator()
                                 .menu(tr("Stage All Changes"), Box::new(ScmStageAll))
                                 .menu(tr("Unstage All Changes"), Box::new(ScmUnstageAll))
@@ -2361,7 +2509,6 @@ impl Workbench {
             })
     }
 
-
     pub(crate) fn on_scm_show(&mut self, _: &ScmShow, _: &mut Window, cx: &mut Context<Self>) {
         self.view = SideView::Scm;
         self.sidebar_open = true;
@@ -2369,40 +2516,85 @@ impl Workbench {
         self.scm_refresh(cx);
         cx.notify();
     }
-    pub(crate) fn on_scm_commit_push(&mut self, _: &ScmCommitPush, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_push(
+        &mut self,
+        _: &ScmCommitPush,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Push, false, w, cx);
     }
-    pub(crate) fn on_scm_commit_sync(&mut self, _: &ScmCommitSync, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_sync(
+        &mut self,
+        _: &ScmCommitSync,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Sync, false, w, cx);
     }
-    pub(crate) fn on_scm_commit_default(&mut self, _: &ScmCommitDefault, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_default(
+        &mut self,
+        _: &ScmCommitDefault,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Nothing, false, w, cx);
     }
-    pub(crate) fn on_scm_commit_signoff(&mut self, _: &ScmCommitSignoff, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_signoff(
+        &mut self,
+        _: &ScmCommitSignoff,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit_with_options(After::Nothing, false, true, w, cx);
     }
-    pub(crate) fn on_scm_commit_amend(&mut self, _: &ScmCommitAmend, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_commit_amend(
+        &mut self,
+        _: &ScmCommitAmend,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_commit(After::Nothing, true, w, cx);
     }
     pub(crate) fn on_scm_pull(&mut self, _: &ScmPull, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run(tr("Pulling…"), vec![Step::Remote(RemoteAction::Pull)], cx, |this, _, _| {
-            this.status = tr("Pulled").into();
-        });
+        self.scm_run(
+            tr("Pulling…"),
+            vec![Step::Remote(RemoteAction::Pull)],
+            cx,
+            |this, _, _| {
+                this.status = tr("Pulled").into();
+            },
+        );
     }
     pub(crate) fn on_scm_push(&mut self, _: &ScmPush, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run(tr("Pushing…"), vec![Step::Remote(RemoteAction::Push)], cx, |this, _, _| {
-            this.status = tr("Pushed").into();
-        });
+        self.scm_run(
+            tr("Pushing…"),
+            vec![Step::Remote(RemoteAction::Push)],
+            cx,
+            |this, _, _| {
+                this.status = tr("Pushed").into();
+            },
+        );
     }
     pub(crate) fn on_scm_sync(&mut self, _: &ScmSync, _: &mut Window, cx: &mut Context<Self>) {
         self.scm_sync(cx);
     }
     pub(crate) fn on_scm_fetch(&mut self, _: &ScmFetch, _: &mut Window, cx: &mut Context<Self>) {
-        self.scm_run(tr("Fetching…"), vec![Step::Remote(RemoteAction::Fetch)], cx, |this, _, _| {
-            this.status = tr("Fetched").into();
-        });
+        self.scm_run(
+            tr("Fetching…"),
+            vec![Step::Remote(RemoteAction::Fetch)],
+            cx,
+            |this, _, _| {
+                this.status = tr("Fetched").into();
+            },
+        );
     }
-    pub(crate) fn on_scm_remove_git(&mut self, _: &ScmRemoveGit, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_remove_git(
+        &mut self,
+        _: &ScmRemoveGit,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.scm.repo.is_some() {
             self.scm.confirm_uninit = true;
             self.view = SideView::Scm;
@@ -2413,7 +2605,9 @@ impl Workbench {
 
     fn scm_remove_git(&mut self, cx: &mut Context<Self>) {
         self.scm.confirm_uninit = false;
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let git = repo.join(".git");
         self.scm.busy = Some(tr("Removing Git…").into());
         cx.notify();
@@ -2439,7 +2633,9 @@ impl Workbench {
     }
 
     fn scm_ignore(&mut self, pattern: String, cx: &mut Context<Self>) {
-        let Some(repo) = self.scm.repo.clone() else { return };
+        let Some(repo) = self.scm.repo.clone() else {
+            return;
+        };
         let path = repo.join(".gitignore");
         let mut text = std::fs::read_to_string(&path).unwrap_or_default();
         if text.lines().any(|l| l.trim() == pattern) {
@@ -2458,7 +2654,12 @@ impl Workbench {
         cx.notify();
     }
 
-    pub(crate) fn on_scm_stage_all(&mut self, _: &ScmStageAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_stage_all(
+        &mut self,
+        _: &ScmStageAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.scm.repo.is_some() {
             self.scm_run(
                 tr("Staging…"),
@@ -2468,24 +2669,47 @@ impl Workbench {
             );
         }
     }
-    pub(crate) fn on_scm_unstage_all(&mut self, _: &ScmUnstageAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_unstage_all(
+        &mut self,
+        _: &ScmUnstageAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_paths(Group::Staged, None, false, cx);
     }
-    pub(crate) fn on_scm_create_pr(&mut self, _: &ScmCreatePr, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_create_pr(
+        &mut self,
+        _: &ScmCreatePr,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scm_create_pr(cx);
     }
-    pub(crate) fn on_scm_open_github(&mut self, _: &ScmOpenGithub, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_scm_open_github(
+        &mut self,
+        _: &ScmOpenGithub,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let branch = self.scm.status.branch.clone();
-        self.scm_run("Opening GitHub…", vec![git_step(&["remote", "get-url", "origin"])], cx, move |_, out, cx| {
-            let url = out.trim().trim_end_matches(".git").replace("git@github.com:", "https://github.com/");
-            let url = match &branch {
-                Some(b) if url.starts_with("https://github.com/") => format!("{url}/tree/{b}"),
-                _ => url,
-            };
-            if url.starts_with("http") {
-                cx.open_url(&url);
-            }
-        });
+        self.scm_run(
+            "Opening GitHub…",
+            vec![git_step(&["remote", "get-url", "origin"])],
+            cx,
+            move |_, out, cx| {
+                let url = out
+                    .trim()
+                    .trim_end_matches(".git")
+                    .replace("git@github.com:", "https://github.com/");
+                let url = match &branch {
+                    Some(b) if url.starts_with("https://github.com/") => format!("{url}/tree/{b}"),
+                    _ => url,
+                };
+                if url.starts_with("http") {
+                    cx.open_url(&url);
+                }
+            },
+        );
     }
 }
 
@@ -2502,15 +2726,31 @@ mod tests {
     #[test]
     fn changes_tree_groups_paths_and_hides_only_collapsed_descendants() {
         use ChangeTreeRow::{File, Folder};
-        let files = ["src/lib.rs", "README.md", "src/nested/main.rs", "other/end.rs"]
-            .map(|path| FileChange { path: path.into(), code: 'M', orig: None });
+        let files = [
+            "src/lib.rs",
+            "README.md",
+            "src/nested/main.rs",
+            "other/end.rs",
+        ]
+        .map(|path| FileChange {
+            path: path.into(),
+            code: 'M',
+            orig: None,
+        });
         assert_eq!(
             change_tree_rows(&files, &["src".to_string()].into_iter().collect()),
             vec![File(1, 0), Folder("other", 0), File(3, 1), Folder("src", 0)]
         );
         assert_eq!(
             change_tree_rows(&files, &["src/nested".to_string()].into_iter().collect()),
-            vec![File(1, 0), Folder("other", 0), File(3, 1), Folder("src", 0), File(0, 1), Folder("src/nested", 1)]
+            vec![
+                File(1, 0),
+                Folder("other", 0),
+                File(3, 1),
+                Folder("src", 0),
+                File(0, 1),
+                Folder("src/nested", 1)
+            ]
         );
     }
 
@@ -2525,7 +2765,10 @@ mod tests {
 
     #[test]
     fn urls() {
-        assert_eq!(find_url("Creating pull request\nhttps://github.com/o/r/pull/7\n").as_deref(), Some("https://github.com/o/r/pull/7"));
+        assert_eq!(
+            find_url("Creating pull request\nhttps://github.com/o/r/pull/7\n").as_deref(),
+            Some("https://github.com/o/r/pull/7")
+        );
     }
 
     #[test]

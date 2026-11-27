@@ -1,4 +1,3 @@
-
 use lsp_types::InlineCompletionItem;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -68,7 +67,10 @@ struct Shared {
 
 impl Shared {
     fn ping(&self) {
-        self.watchers.lock().unwrap().retain(|w| w.unbounded_send(()).is_ok());
+        self.watchers
+            .lock()
+            .unwrap()
+            .retain(|w| w.unbounded_send(()).is_ok());
     }
 }
 
@@ -122,7 +124,11 @@ impl Copilot {
 
     pub fn untried(&self) -> bool {
         let st = self.shared.state.lock().unwrap();
-        self.enabled() && !st.started && !st.starting && st.start_error.is_none() && !st.not_installed
+        self.enabled()
+            && !st.started
+            && !st.starting
+            && st.start_error.is_none()
+            && !st.not_installed
     }
 
     pub fn user(&self) -> Option<String> {
@@ -208,7 +214,9 @@ impl Copilot {
         if let Some(mut child) = child {
             let mut end = move || {
                 #[cfg(windows)]
-                let _ = crate::proc::command("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).status();
+                let _ = crate::proc::command("taskkill")
+                    .args(["/T", "/F", "/PID", &child.id().to_string()])
+                    .status();
                 let _ = child.kill();
                 let _ = child.wait();
             };
@@ -279,11 +287,19 @@ impl Copilot {
     }
 
     fn check_status(&self) {
-        let Ok(v) = self.request("checkStatus", Some(serde_json::json!({})), Duration::from_secs(15)) else {
+        let Ok(v) = self.request(
+            "checkStatus",
+            Some(serde_json::json!({})),
+            Duration::from_secs(15),
+        ) else {
             return;
         };
         let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        let user = v.get("user").and_then(|s| s.as_str()).unwrap_or("").to_string();
+        let user = v
+            .get("user")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
         let (kind, message) = match status {
             "OK" | "MaybeOK" | "AlreadySignedIn" => ("Normal", String::new()),
             "NotSignedIn" => ("Error", String::new()),
@@ -297,7 +313,10 @@ impl Copilot {
         {
             let mut st = self.shared.state.lock().unwrap();
             if st.status.kind.is_empty() || kind == "Normal" || status == "NotSignedIn" {
-                st.status = ServerStatus { kind: kind.to_string(), message };
+                st.status = ServerStatus {
+                    kind: kind.to_string(),
+                    message,
+                };
             }
             st.user = (!user.is_empty()).then_some(user);
         }
@@ -541,7 +560,6 @@ fn folder_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-
 fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -635,7 +653,6 @@ fn open_url_native(uri: &str) -> bool {
     let r = Command::new("xdg-open").arg(uri).spawn();
     r.is_ok()
 }
-
 
 fn write_message(stdin: &mut ChildStdin, msg: &Value) -> Result<(), String> {
     let body = serde_json::to_string(msg).map_err(|e| e.to_string())?;
@@ -772,7 +789,6 @@ fn send_raw(shared: &Arc<Shared>, msg: &Value) {
         let _ = write_message(stdin, msg);
     }
 }
-
 
 impl Copilot {
     pub fn inline(
@@ -943,7 +959,6 @@ fn to_ghost_text(
     Some(ghost.to_string())
 }
 
-
 fn lsp_position(text: &str, offset: usize) -> (u32, u32) {
     let before = &text[..offset.min(text.len())];
     let line = before.matches('\n').count() as u32;
@@ -1052,15 +1067,24 @@ mod tests {
     fn npm_install_error_puts_eacces_hint_first() {
         let stderr = "\nnpm error code EACCES\nnpm error syscall mkdir\nnpm error path /usr/lib/node_modules\n";
         let msg = npm_install_error(stderr, "exit status: 243");
-        assert!(msg.starts_with("npm's global folder is not writable"), "{msg}");
+        assert!(
+            msg.starts_with("npm's global folder is not writable"),
+            "{msg}"
+        );
         assert!(msg.ends_with("npm error code EACCES"), "{msg}");
         assert!(!msg.contains('\n'));
     }
 
     #[test]
     fn npm_install_error_falls_back_to_exit_status() {
-        assert_eq!(npm_install_error("  \n", "exit status: 1"), "npm exited with exit status: 1");
-        assert_eq!(npm_install_error("npm error 404 Not Found\nmore", "x"), "npm error 404 Not Found");
+        assert_eq!(
+            npm_install_error("  \n", "exit status: 1"),
+            "npm exited with exit status: 1"
+        );
+        assert_eq!(
+            npm_install_error("npm error 404 Not Found\nmore", "x"),
+            "npm error 404 Not Found"
+        );
     }
 
     #[test]

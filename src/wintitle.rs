@@ -54,6 +54,11 @@ pub enum TrayAction {
 }
 
 #[cfg(windows)]
+pub(crate) fn register_child_host_class(class_name: *const u16) -> bool {
+    bg::register_child_host_class(class_name)
+}
+
+#[cfg(windows)]
 mod bg {
     use super::TrayAction;
     use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -209,6 +214,32 @@ mod bg {
 
     fn wide_z(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    extern "system" fn default_child_proc(
+        hwnd: isize,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    pub(super) fn register_child_host_class(class_name: *const u16) -> bool {
+        let hinst = unsafe { GetModuleHandleW(std::ptr::null()) };
+        let wc = WndClassW {
+            style: 0,
+            wnd_proc: default_child_proc,
+            cls_extra: 0,
+            wnd_extra: 0,
+            instance: hinst,
+            icon: 0,
+            cursor: 0,
+            background: 0,
+            menu_name: std::ptr::null(),
+            class_name,
+        };
+        unsafe { RegisterClassW(&wc) != 0 }
     }
 
     fn app_icon() -> isize {
