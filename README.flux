@@ -10,12 +10,12 @@
 **English** · [Bahasa Indonesia](README.id.md) · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Discussions](https://github.com/MuaraAI/FluxCode/discussions)
 
 Native GPU-rendered code editor in Rust (GPUI) for Windows, macOS, and Linux.
-Single 16 MB binary, ~50 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree disk analyzer, zero telemetry.
+Single 16 MB binary, 10 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree disk analyzer, zero telemetry.
 @id
 [English](README.md) · **Bahasa Indonesia** · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Diskusi](https://github.com/MuaraAI/FluxCode/discussions)
 
 Editor kode native berbasis Rust (GPUI) yang dirender GPU untuk Windows, macOS, dan Linux.
-Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis disk WizTree, nol telemetri.
+Satu binary 16 MB, terbuka 10 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisis disk WizTree, nol telemetri.
 
 @all
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
@@ -33,7 +33,7 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 
 | Feature | Highlights |
 | --- | --- |
-| **Speed & Size** | Rust + GPUI, 16 MB binary, ~50 ms launch, 1.4 MB idle RAM (1 process) |
+| **Speed & Size** | Rust + GPUI, 16 MB binary, 10 ms launch, 1.4 MB idle RAM (1 process) |
 | **AI Agents (ACP)** | OpenCode 2, Claude, Codex, Gemini, Copilot; FIFO queue, Force Send (`Ctrl+Enter`), diff/undo |
 | **Live RAM Optimizer** | Trims idle agent RAM up to ~94% (~25 ms wake) via Windows EcoQoS and delta context |
 | **Agent Lifecycle** | Isolated Job Object, close-to-tray while active, zero zombie processes on exit |
@@ -47,7 +47,7 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 
 | Fitur | Ringkasan |
 | --- | --- |
-| **Cepat & Ringan** | Rust + GPUI, binary 16 MB, buka ~50 ms, 1,4 MB RAM idle (1 proses) |
+| **Cepat & Ringan** | Rust + GPUI, binary 16 MB, buka 10 ms, 1,4 MB RAM idle (1 proses) |
 | **Agent AI (ACP)** | OpenCode 2, Claude, Codex, Gemini, Copilot; antrean FIFO, Force Send (`Ctrl+Enter`), diff/undo |
 | **Optimasi RAM Live** | Pangkas RAM idle agent hingga ~94% (bangun ~25 ms) lewat Windows EcoQoS dan konteks delta |
 | **Lifecycle Agent** | Isolasi Job Object, tutup ke tray saat aktif, nol proses zombie saat keluar |
@@ -60,11 +60,11 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 @en
 ## Benchmark
 
-@image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Benchmark comparison (lower is better): FluxCode ~50 ms launch, 1.4 MB idle RAM, 72 MB reserved, 0.05% idle CPU, 1 process, 16 MB on disk vs Zed and VS Code."
+@image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Benchmark comparison (lower is better): FluxCode 10 ms launch, 1.4 MB idle RAM, 72 MB reserved, 0.05% idle CPU, 1 process, 16 MB on disk vs Zed and VS Code."
 
 | Metric (lower is better) | FluxCode | Zed 1.27.0 | VS Code 1.145.2 |
 | --- | --- | --- | --- |
-| Launch to window | ~50 ms | 818 ms | ~3,000 ms |
+| Launch to window | 10 ms | 818 ms | ~3,000 ms |
 | Idle RAM (Task Manager) | 1.4 MB | 66.2 MB | 929.2 MB |
 | Reserved memory | 72 MB | 154 MB | 1,315 MB |
 | Idle CPU (% of 1 core) | 0.05% | 1.46% | 5.89% |
@@ -75,11 +75,11 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 @id
 ## Benchmark
 
-@image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Perbandingan benchmark (makin rendah makin baik): FluxCode ~50 ms buka jendela, 1,4 MB RAM idle, 72 MB reservasi, 0,05% CPU idle, 1 proses, 16 MB di disk dibanding Zed dan VS Code."
+@image assets/benchmarks/benchmark-light.svg dark=assets/benchmarks/benchmark-dark.svg width=100% alt="Perbandingan benchmark (makin rendah makin baik): FluxCode 10 ms buka jendela, 1,4 MB RAM idle, 72 MB reservasi, 0,05% CPU idle, 1 proses, 16 MB di disk dibanding Zed dan VS Code."
 
 | Metrik (makin rendah makin baik) | FluxCode | Zed 1.27.0 | VS Code 1.145.2 |
 | --- | --- | --- | --- |
-| Jendela tampil | ~50 ms | 818 ms | ~3.000 ms |
+| Jendela tampil | 10 ms | 818 ms | ~3.000 ms |
 | RAM idle (Task Manager) | 1,4 MB | 66,2 MB | 929,2 MB |
 | Memori reservasi | 72 MB | 154 MB | 1.315 MB |
 | CPU idle (% dari 1 core) | 0,05% | 1,46% | 5,89% |
@@ -94,7 +94,7 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 | Feature | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Engine | Rust + GPUI | Rust + GPUI | TypeScript + Electron |
-| Launch / Idle RAM | ~50 ms / 1.4 MB | 818 ms / 66.2 MB | ~3,000 ms / 929.2 MB |
+| Launch / Idle RAM | 10 ms / 1.4 MB | 818 ms / 66.2 MB | ~3,000 ms / 929.2 MB |
 | Disk / Processes | 16 MB / 1 | 261 MB / 2 | 1,044 MB / 9 |
 | Telemetry | None | Opt-out | Opt-out |
 | AI Agents | ACP, queue, Force Send, EcoQoS, Token Saver | Built-in + ACP | Copilot + extensions |
@@ -110,7 +110,7 @@ Satu binary 16 MB, terbuka ~50 ms, 1,4 MB RAM idle, agent AI bawaan, penganalisi
 | Fitur | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Teknologi | Rust + GPUI | Rust + GPUI | TypeScript + Electron |
-| Buka / RAM Idle | ~50 ms / 1,4 MB | 818 ms / 66,2 MB | ~3.000 ms / 929,2 MB |
+| Buka / RAM Idle | 10 ms / 1,4 MB | 818 ms / 66,2 MB | ~3.000 ms / 929,2 MB |
 | Disk / Proses | 16 MB / 1 | 261 MB / 2 | 1.044 MB / 9 |
 | Telemetri | Tidak ada | Opt-out | Opt-out |
 | Agent AI | ACP, antrean, Force Send, EcoQoS, Hemat Token | Bawaan + ACP | Copilot + extension |

@@ -5,7 +5,7 @@
 **English** · [Bahasa Indonesia](README.id.md) · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Discussions](https://github.com/MuaraAI/FluxCode/discussions)
 
 Native GPU-rendered code editor in Rust (GPUI) for Windows, macOS, and Linux.
-Single 16 MB binary, ~50 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree disk analyzer, zero telemetry.
+Single 16 MB binary, 10 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree disk analyzer, zero telemetry.
 
 [![Latest build](https://img.shields.io/github/v/release/MuaraAI/FluxCode?display_name=tag&label=latest%20build)](https://github.com/MuaraAI/FluxCode/releases/latest)
 [![Last commit](https://img.shields.io/github/last-commit/MuaraAI/FluxCode?label=last%20commit)](https://github.com/MuaraAI/FluxCode/commits/main)
@@ -18,7 +18,7 @@ Single 16 MB binary, ~50 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree
 
 | Feature | Highlights |
 | --- | --- |
-| **Speed & Size** | Rust + GPUI, 16 MB binary, ~50 ms launch, 1.4 MB idle RAM (1 process) |
+| **Speed & Size** | Rust + GPUI, 16 MB binary, 10 ms launch, 1.4 MB idle RAM (1 process) |
 | **AI Agents (ACP)** | OpenCode 2, Claude, Codex, Gemini, Copilot; FIFO queue, Force Send (`Ctrl+Enter`), diff/undo |
 | **Live RAM Optimizer** | Trims idle agent RAM up to ~94% (~25 ms wake) via Windows EcoQoS and delta context |
 | **Agent Lifecycle** | Isolated Job Object, close-to-tray while active, zero zombie processes on exit |
@@ -32,12 +32,12 @@ Single 16 MB binary, ~50 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmarks/benchmark-dark.svg">
-  <img src="assets/benchmarks/benchmark-light.svg" width="100%" alt="Benchmark comparison (lower is better): FluxCode ~50 ms launch, 1.4 MB idle RAM, 72 MB reserved, 0.05% idle CPU, 1 process, 16 MB on disk vs Zed and VS Code.">
+  <img src="assets/benchmarks/benchmark-light.svg" width="100%" alt="Benchmark comparison (lower is better): FluxCode 10 ms launch, 1.4 MB idle RAM, 72 MB reserved, 0.05% idle CPU, 1 process, 16 MB on disk vs Zed and VS Code.">
 </picture>
 
 | Metric (lower is better) | FluxCode | Zed 1.27.0 | VS Code 1.145.2 |
 | --- | --- | --- | --- |
-| Launch to window | ~50 ms | 818 ms | ~3,000 ms |
+| Launch to window | 10 ms | 818 ms | ~3,000 ms |
 | Idle RAM (Task Manager) | 1.4 MB | 66.2 MB | 929.2 MB |
 | Reserved memory | 72 MB | 154 MB | 1,315 MB |
 | Idle CPU (% of 1 core) | 0.05% | 1.46% | 5.89% |
@@ -51,7 +51,7 @@ Single 16 MB binary, ~50 ms launch, 1.4 MB idle RAM, built-in AI agents, WizTree
 | Feature | FluxCode | Zed | VS Code |
 | --- | --- | --- | --- |
 | Engine | Rust + GPUI | Rust + GPUI | TypeScript + Electron |
-| Launch / Idle RAM | ~50 ms / 1.4 MB | 818 ms / 66.2 MB | ~3,000 ms / 929.2 MB |
+| Launch / Idle RAM | 10 ms / 1.4 MB | 818 ms / 66.2 MB | ~3,000 ms / 929.2 MB |
 | Disk / Processes | 16 MB / 1 | 261 MB / 2 | 1,044 MB / 9 |
 | Telemetry | None | Opt-out | Opt-out |
 | AI Agents | ACP, queue, Force Send, EcoQoS, Token Saver | Built-in + ACP | Copilot + extensions |

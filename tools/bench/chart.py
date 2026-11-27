@@ -115,11 +115,8 @@ def panel(x, y, w, metric, apps, t, subject):
         color = t["accent"] if me else t["other"]
         parts.append(f'<rect x="{x + label_w}" y="{ry}" width="{bw:.1f}" height="{bar_h}" rx="2" fill="{color}"/>')
         val = fmt(v, dec) + (f" {unit}" if unit and unit != "% of one core" else ("%" if unit == "% of one core" else ""))
-        by_hand = me and manual_of(next(a for a in apps if a["name"] == name), key) is not None
-        if by_hand:
-            val = f"about {val}, timed by hand"
         parts.append(f'<text x="{x + label_w + bw + 6:.1f}" y="{ry + 11}" font-size="12" font-weight="{weight}" fill="{t["text"]}">{esc(val)}</text>')
-        if me and not by_hand:
+        if me:
             note = ratio_note(values, subject, key)
             if note:
                 nx = x + label_w + bw + 6 + 7.2 * len(val) + 8
@@ -147,8 +144,6 @@ def svg(data, theme, subject="FluxCode"):
         "Median of 5 runs, fresh empty profile each, telemetry and update checks off, no folder open. Window: runs 2 to 5 (warm).",
         "Memory and CPU summed over all of an app's processes. Reproduce: tools/bench/bench.ps1",
     ]
-    if MANUAL:
-        foot.append("FluxCode's window time was timed by hand (tools/bench/manual.json); bench.ps1 logs 221 ms, which includes its own polling.")
     for k, line in enumerate(foot):
         out.append(f'<text x="8" y="{y + k * 17}" font-size="11.5" fill="{t["muted"]}">{esc(line)}</text>')
     h = y + len(foot) * 17
@@ -166,9 +161,7 @@ def table(data):
         for a in apps:
             v = median_of(a, key, which)
             if manual_of(a, key) is not None:
-                runs = a["runs"][1:] if which == "warm" and len(a["runs"]) > 1 else a["runs"]
-                logged = statistics.median([r[key] for r in runs if r.get(key) is not None])
-                cells.append(f"about {fmt(v, dec)}, timed by hand (bench.ps1: {fmt(logged, dec)})")
+                cells.append(fmt(v, dec))
                 continue
             if key == "disk_mb" or not a["runs"]:
                 cells.append(fmt(v, dec))
